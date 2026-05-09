@@ -152,6 +152,8 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+	// Repository 用于检查和下载更新的 GitHub 仓库，格式为 owner/repo。
+	Repository string `mapstructure:"repository"`
 }
 
 type IdempotencyConfig struct {
@@ -1657,6 +1659,9 @@ func setDefaults() {
 	viper.SetDefault("idempotency.max_stored_response_len", 64*1024)
 	viper.SetDefault("idempotency.cleanup_interval_seconds", 60)
 	viper.SetDefault("idempotency.cleanup_batch_size", 500)
+
+	// Update
+	viper.SetDefault("update.repository", "DoodleXu/sub2api")
 
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
