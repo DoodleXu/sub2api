@@ -927,6 +927,7 @@
       :base-url="publicSettings?.api_base_url || ''"
       :platform="selectedKey?.group?.platform || null"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
+      :supported-models="selectedKeySupportedModels"
       @close="closeUseKeyModal"
     />
 
@@ -1069,6 +1070,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform } from '@/types'
+import userChannelsAPI, { type UserAvailableChannel, type UserSupportedModel } from '@/api/channels'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
@@ -1116,6 +1118,7 @@ const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
 const userGroupRates = ref<Record<number, number>>({})
+const availableChannels = ref<UserAvailableChannel[]>([])
 
 const pagination = ref({
   page: 1,
@@ -1354,6 +1357,39 @@ const loadPublicSettings = async () => {
     console.error('Failed to load public settings:', error)
   }
 }
+
+const loadAvailableChannels = async () => {
+  try {
+    availableChannels.value = await userChannelsAPI.getAvailable()
+  } catch (error) {
+    console.error('Failed to load available channels:', error)
+  }
+}
+
+const selectedKeySupportedModels = computed<UserSupportedModel[]>(() => {
+  const key = selectedKey.value
+  const groupId = key?.group_id
+  const platform = key?.group?.platform
+  if (!key || groupId === null || !platform) return []
+
+  const models: UserSupportedModel[] = []
+  const seen = new Set<string>()
+
+  for (const channel of availableChannels.value) {
+    for (const section of channel.platforms) {
+      if (section.platform !== platform) continue
+      if (!section.groups.some((group) => group.id === groupId)) continue
+      for (const model of section.supported_models) {
+        const dedupeKey = `${model.platform}:${model.name}`
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        models.push(model)
+      }
+    }
+  }
+
+  return models
+})
 
 const openUseKeyModal = (key: ApiKey) => {
   selectedKey.value = key
@@ -1805,6 +1841,7 @@ onMounted(() => {
   loadGroups()
   loadUserGroupRates()
   loadPublicSettings()
+  loadAvailableChannels()
   document.addEventListener('click', closeGroupSelector)
   resetTimer = setInterval(() => { now.value = new Date() }, 60000)
 })

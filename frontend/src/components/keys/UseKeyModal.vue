@@ -140,6 +140,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import type { GroupPlatform } from '@/types'
+import type { UserSupportedModel } from '@/api/channels'
 
 interface Props {
   show: boolean
@@ -147,6 +148,7 @@ interface Props {
   baseUrl: string
   platform: GroupPlatform | null
   allowMessagesDispatch?: boolean
+  supportedModels?: UserSupportedModel[]
 }
 
 interface Emits {
@@ -954,6 +956,69 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       }
     }
   }
+  const anthropicModelMetadata: Record<string, { name: string; limit: { context: number; output: number }; modalities: { input: string[]; output: string[] } }> = {
+    'claude-opus-4-6': {
+      name: 'Claude Opus 4.6',
+      limit: {
+        context: 1000000,
+        output: 128000
+      },
+      modalities: {
+        input: ['text', 'image'],
+        output: ['text']
+      }
+    },
+    'claude-sonnet-4-6': {
+      name: 'Claude Sonnet 4.6',
+      limit: {
+        context: 1000000,
+        output: 64000
+      },
+      modalities: {
+        input: ['text', 'image'],
+        output: ['text']
+      }
+    }
+  }
+
+  const anthropicModelName = (modelId: string) =>
+    modelId
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+
+  const anthropicModels = (() => {
+    const configuredModels = (props.supportedModels ?? [])
+      .filter((model) => model.platform === 'anthropic')
+      .map((model) => model.name)
+    const modelIds = Array.from(new Set(
+      configuredModels.length > 0
+        ? configuredModels
+        : ['claude-opus-4-6', 'claude-sonnet-4-6']
+    ))
+
+    return Object.fromEntries(
+      modelIds.map((modelId) => {
+        const metadata = anthropicModelMetadata[modelId]
+        return [
+          modelId,
+          metadata ?? {
+            name: anthropicModelName(modelId),
+            limit: {
+              context: 1000000,
+              output: 64000
+            },
+            modalities: {
+              input: ['text'],
+              output: ['text']
+            }
+          }
+        ]
+      })
+    )
+  })()
+
   const claudeModels = {
     'claude-opus-4-6-thinking': {
       name: 'Claude 4.6 Opus (Thinking)',
@@ -996,6 +1061,7 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].models = geminiModels
   } else if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
+    provider[platform].models = anthropicModels
   } else if (platform === 'antigravity-claude') {
     provider[platform].npm = '@ai-sdk/anthropic'
     provider[platform].name = 'Antigravity (Claude)'
