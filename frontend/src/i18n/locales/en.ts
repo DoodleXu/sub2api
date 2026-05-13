@@ -3793,9 +3793,9 @@ export default {
         statsTitleDaily: 'Daily Usage Statistics',
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
-        gemini3Pro: 'G3P',
-        gemini3Flash: 'G3F',
-        gemini3Image: 'G31FI',
+        gemini3Pro: 'Gemini 3 Pro',
+        gemini3Flash: 'Gemini 3 Flash',
+        gemini3Image: 'Gemini 3 Image',
         claude: 'Claude',
         passiveSampled: 'Passive',
         activeQuery: 'Query'

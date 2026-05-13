@@ -3127,9 +3127,9 @@ export default {
         statsTitleDaily: '每日用量统计',
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
-        gemini3Pro: 'G3P',
-        gemini3Flash: 'G3F',
-        gemini3Image: 'G31FI',
+        gemini3Pro: 'Gemini 3 Pro',
+        gemini3Flash: 'Gemini 3 Flash',
+        gemini3Image: 'Gemini 3 Image',
         claude: 'Claude',
         passiveSampled: '被动采样',
         activeQuery: '查询'
