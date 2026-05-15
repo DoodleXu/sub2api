@@ -365,6 +365,81 @@ func (_u *PaymentOrderUpdate) ClearSubscriptionDays() *PaymentOrderUpdate {
 	return _u
 }
 
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdate) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderUpdate {
+	_u.mutation.ResetUpgradeFromSubscriptionID()
+	_u.mutation.SetUpgradeFromSubscriptionID(v)
+	return _u
+}
+
+// SetNillableUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableUpgradeFromSubscriptionID(v *int64) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetUpgradeFromSubscriptionID(*v)
+	}
+	return _u
+}
+
+// AddUpgradeFromSubscriptionID adds value to the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdate) AddUpgradeFromSubscriptionID(v int64) *PaymentOrderUpdate {
+	_u.mutation.AddUpgradeFromSubscriptionID(v)
+	return _u
+}
+
+// ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdate) ClearUpgradeFromSubscriptionID() *PaymentOrderUpdate {
+	_u.mutation.ClearUpgradeFromSubscriptionID()
+	return _u
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (_u *PaymentOrderUpdate) SetUpgradeCreditAmount(v float64) *PaymentOrderUpdate {
+	_u.mutation.ResetUpgradeCreditAmount()
+	_u.mutation.SetUpgradeCreditAmount(v)
+	return _u
+}
+
+// SetNillableUpgradeCreditAmount sets the "upgrade_credit_amount" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableUpgradeCreditAmount(v *float64) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetUpgradeCreditAmount(*v)
+	}
+	return _u
+}
+
+// AddUpgradeCreditAmount adds value to the "upgrade_credit_amount" field.
+func (_u *PaymentOrderUpdate) AddUpgradeCreditAmount(v float64) *PaymentOrderUpdate {
+	_u.mutation.AddUpgradeCreditAmount(v)
+	return _u
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdate) SetUpgradeCreditDays(v int) *PaymentOrderUpdate {
+	_u.mutation.ResetUpgradeCreditDays()
+	_u.mutation.SetUpgradeCreditDays(v)
+	return _u
+}
+
+// SetNillableUpgradeCreditDays sets the "upgrade_credit_days" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableUpgradeCreditDays(v *int) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetUpgradeCreditDays(*v)
+	}
+	return _u
+}
+
+// AddUpgradeCreditDays adds value to the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdate) AddUpgradeCreditDays(v int) *PaymentOrderUpdate {
+	_u.mutation.AddUpgradeCreditDays(v)
+	return _u
+}
+
+// ClearUpgradeCreditDays clears the value of the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdate) ClearUpgradeCreditDays() *PaymentOrderUpdate {
+	_u.mutation.ClearUpgradeCreditDays()
+	return _u
+}
+
 // SetProviderInstanceID sets the "provider_instance_id" field.
 func (_u *PaymentOrderUpdate) SetProviderInstanceID(v string) *PaymentOrderUpdate {
 	_u.mutation.SetProviderInstanceID(v)
@@ -941,6 +1016,30 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if _u.mutation.SubscriptionDaysCleared() {
 		_spec.ClearField(paymentorder.FieldSubscriptionDays, field.TypeInt)
 	}
+	if value, ok := _u.mutation.UpgradeFromSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeFromSubscriptionID(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
+	}
+	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
+		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.UpgradeCreditAmount(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeCreditAmount(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.UpgradeCreditDays(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeCreditDays(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeCreditDays, field.TypeInt, value)
+	}
+	if _u.mutation.UpgradeCreditDaysCleared() {
+		_spec.ClearField(paymentorder.FieldUpgradeCreditDays, field.TypeInt)
+	}
 	if value, ok := _u.mutation.ProviderInstanceID(); ok {
 		_spec.SetField(paymentorder.FieldProviderInstanceID, field.TypeString, value)
 	}
@@ -1425,6 +1524,81 @@ func (_u *PaymentOrderUpdateOne) AddSubscriptionDays(v int) *PaymentOrderUpdateO
 // ClearSubscriptionDays clears the value of the "subscription_days" field.
 func (_u *PaymentOrderUpdateOne) ClearSubscriptionDays() *PaymentOrderUpdateOne {
 	_u.mutation.ClearSubscriptionDays()
+	return _u
+}
+
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderUpdateOne {
+	_u.mutation.ResetUpgradeFromSubscriptionID()
+	_u.mutation.SetUpgradeFromSubscriptionID(v)
+	return _u
+}
+
+// SetNillableUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableUpgradeFromSubscriptionID(v *int64) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetUpgradeFromSubscriptionID(*v)
+	}
+	return _u
+}
+
+// AddUpgradeFromSubscriptionID adds value to the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) AddUpgradeFromSubscriptionID(v int64) *PaymentOrderUpdateOne {
+	_u.mutation.AddUpgradeFromSubscriptionID(v)
+	return _u
+}
+
+// ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpdateOne {
+	_u.mutation.ClearUpgradeFromSubscriptionID()
+	return _u
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (_u *PaymentOrderUpdateOne) SetUpgradeCreditAmount(v float64) *PaymentOrderUpdateOne {
+	_u.mutation.ResetUpgradeCreditAmount()
+	_u.mutation.SetUpgradeCreditAmount(v)
+	return _u
+}
+
+// SetNillableUpgradeCreditAmount sets the "upgrade_credit_amount" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableUpgradeCreditAmount(v *float64) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetUpgradeCreditAmount(*v)
+	}
+	return _u
+}
+
+// AddUpgradeCreditAmount adds value to the "upgrade_credit_amount" field.
+func (_u *PaymentOrderUpdateOne) AddUpgradeCreditAmount(v float64) *PaymentOrderUpdateOne {
+	_u.mutation.AddUpgradeCreditAmount(v)
+	return _u
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdateOne) SetUpgradeCreditDays(v int) *PaymentOrderUpdateOne {
+	_u.mutation.ResetUpgradeCreditDays()
+	_u.mutation.SetUpgradeCreditDays(v)
+	return _u
+}
+
+// SetNillableUpgradeCreditDays sets the "upgrade_credit_days" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableUpgradeCreditDays(v *int) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetUpgradeCreditDays(*v)
+	}
+	return _u
+}
+
+// AddUpgradeCreditDays adds value to the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdateOne) AddUpgradeCreditDays(v int) *PaymentOrderUpdateOne {
+	_u.mutation.AddUpgradeCreditDays(v)
+	return _u
+}
+
+// ClearUpgradeCreditDays clears the value of the "upgrade_credit_days" field.
+func (_u *PaymentOrderUpdateOne) ClearUpgradeCreditDays() *PaymentOrderUpdateOne {
+	_u.mutation.ClearUpgradeCreditDays()
 	return _u
 }
 
@@ -2033,6 +2207,30 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if _u.mutation.SubscriptionDaysCleared() {
 		_spec.ClearField(paymentorder.FieldSubscriptionDays, field.TypeInt)
+	}
+	if value, ok := _u.mutation.UpgradeFromSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeFromSubscriptionID(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
+	}
+	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
+		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.UpgradeCreditAmount(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeCreditAmount(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.UpgradeCreditDays(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditDays, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedUpgradeCreditDays(); ok {
+		_spec.AddField(paymentorder.FieldUpgradeCreditDays, field.TypeInt, value)
+	}
+	if _u.mutation.UpgradeCreditDaysCleared() {
+		_spec.ClearField(paymentorder.FieldUpgradeCreditDays, field.TypeInt)
 	}
 	if value, ok := _u.mutation.ProviderInstanceID(); ok {
 		_spec.SetField(paymentorder.FieldProviderInstanceID, field.TypeString, value)

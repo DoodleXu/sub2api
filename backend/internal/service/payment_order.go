@@ -48,11 +48,22 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if user.Status != payment.EntityStatusActive {
 		return nil, infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
 	}
+	var upgradeCredit *subscriptionUpgradeCredit
+	if plan != nil && req.UpgradeFromSubscriptionID > 0 {
+		upgradeCredit, err = s.prepareSubscriptionUpgradeCredit(ctx, req.UserID, plan, req.UpgradeFromSubscriptionID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	orderAmount := req.Amount
 	limitAmount := req.Amount
 	if plan != nil {
 		orderAmount = plan.Price
 		limitAmount = plan.Price
+		if upgradeCredit != nil && upgradeCredit.CreditAmount > 0 {
+			orderAmount = subscriptionUpgradePayableAmount(plan.Price, upgradeCredit.CreditAmount)
+			limitAmount = orderAmount
+		}
 	} else if req.OrderType == payment.OrderTypeBalance {
 		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
 	}
@@ -95,7 +106,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if oauthResp != nil {
 		return oauthResp, nil
 	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel)
+	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, upgradeCredit)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +155,7 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
-func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
+func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection, upgradeCredit *subscriptionUpgradeCredit) (*dbent.PaymentOrder, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -203,6 +214,11 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	}
 	if plan != nil {
 		b.SetPlanID(plan.ID).SetSubscriptionGroupID(plan.GroupID).SetSubscriptionDays(psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit))
+	}
+	if upgradeCredit != nil && upgradeCredit.SubscriptionID > 0 {
+		b.SetUpgradeFromSubscriptionID(upgradeCredit.SubscriptionID).
+			SetUpgradeCreditAmount(upgradeCredit.CreditAmount).
+			SetUpgradeCreditDays(upgradeCredit.CreditDays)
 	}
 	order, err := b.Save(ctx)
 	if err != nil {

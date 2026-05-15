@@ -70,19 +70,20 @@ func generateRandomString(n int) string {
 }
 
 type CreateOrderRequest struct {
-	UserID          int64
-	Amount          float64
-	PaymentType     string
-	OpenID          string
-	ClientIP        string
-	IsMobile        bool
-	IsWeChatBrowser bool
-	SrcHost         string
-	SrcURL          string
-	ReturnURL       string
-	PaymentSource   string
-	OrderType       string
-	PlanID          int64
+	UserID                    int64
+	Amount                    float64
+	PaymentType               string
+	OpenID                    string
+	ClientIP                  string
+	IsMobile                  bool
+	IsWeChatBrowser           bool
+	SrcHost                   string
+	SrcURL                    string
+	ReturnURL                 string
+	PaymentSource             string
+	OrderType                 string
+	PlanID                    int64
+	UpgradeFromSubscriptionID int64
 }
 
 type CreateOrderResponse struct {
@@ -109,6 +110,18 @@ type CreateOrderResponse struct {
 	ResumeToken  string                          `json:"resume_token,omitempty"`
 }
 
+type SubscriptionUpgradeOption struct {
+	SubscriptionID int64   `json:"subscription_id"`
+	GroupID        int64   `json:"group_id"`
+	GroupName      string  `json:"group_name"`
+	GroupPlatform  string  `json:"group_platform"`
+	ExpiresAt      string  `json:"expires_at"`
+	DaysRemaining  int     `json:"days_remaining"`
+	CreditAmount   float64 `json:"credit_amount"`
+	CreditDays     int     `json:"credit_days"`
+	PayableAmount  float64 `json:"payable_amount"`
+}
+
 type OrderListParams struct {
 	Page        int
 	PageSize    int
@@ -126,9 +139,9 @@ type RefundPlan struct {
 	Reason          string
 	Force           bool
 	DeductBalance   bool
+	SubDaysToDeduct int
 	DeductionType   string
 	BalanceToDeduct float64
-	SubDaysToDeduct int
 	SubscriptionID  int64
 }
 
@@ -138,6 +151,13 @@ type RefundResult struct {
 	RequireForce    bool    `json:"require_force,omitempty"`
 	BalanceDeducted float64 `json:"balance_deducted,omitempty"`
 	SubDaysDeducted int     `json:"subscription_days_deducted,omitempty"`
+}
+
+type RefundPreview struct {
+	SubscriptionRemainingDays         int        `json:"subscription_remaining_days,omitempty"`
+	SubscriptionExpiresAt             *time.Time `json:"subscription_expires_at,omitempty"`
+	SuggestedRefundAmount             float64    `json:"suggested_refund_amount,omitempty"`
+	SuggestedSubscriptionDaysToDeduct int        `json:"suggested_subscription_days_to_deduct,omitempty"`
 }
 
 type DashboardStats struct {

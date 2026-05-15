@@ -47,9 +47,21 @@
         </div>
       </div>
 
-      <!-- Deduct Balance -->
+      <!-- Deduct Entitlement -->
       <div>
-        <div class="flex items-center gap-2">
+        <div v-if="isSubscriptionOrder" class="flex items-center gap-2">
+          <input
+            id="deduct-subscription"
+            v-model="form.deduct_balance"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <label for="deduct-subscription" class="text-sm text-gray-700 dark:text-gray-300">
+            {{ t('payment.admin.deductSubscription') }}
+          </label>
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.deductSubscriptionHint') }}</span>
+        </div>
+        <div v-else class="flex items-center gap-2">
           <input
             id="deduct-balance"
             v-model="form.deduct_balance"
@@ -74,9 +86,25 @@
           </div>
         </div>
 
+        <div v-if="isSubscriptionOrder && form.deduct_balance" class="mt-3">
+          <label class="input-label">{{ t('payment.admin.subscriptionDaysToDeduct') }}</label>
+          <input
+            v-model.number="form.subscription_days_to_deduct"
+            type="number"
+            min="1"
+            :max="order?.subscription_days || undefined"
+            step="1"
+            class="input mt-1"
+            required
+          />
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('payment.admin.subscriptionRemainingHint', { days: subscriptionRemainingDays || calculatedSubscriptionRefundDays }) }}
+          </p>
+        </div>
+
         <!-- Insufficient balance warning -->
         <div
-          v-if="form.deduct_balance && balanceInsufficient"
+          v-if="!isSubscriptionOrder && form.deduct_balance && balanceInsufficient"
           class="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
         >
           {{ t('payment.admin.insufficientBalance') }}
@@ -87,7 +115,7 @@
           v-if="!form.deduct_balance"
           class="mt-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
         >
-          {{ t('payment.admin.noDeduction') }}
+          {{ isSubscriptionOrder ? t('payment.admin.noSubscriptionDeduction') : t('payment.admin.noDeduction') }}
         </div>
       </div>
 
@@ -153,7 +181,7 @@
         <button
           type="submit"
           form="refund-form"
-          :disabled="submitting || form.amount <= 0 || (requireForce && !form.force)"
+          :disabled="submitting || form.amount <= 0 || (requireForce && !form.force) || (isSubscriptionOrder && form.deduct_balance && form.subscription_days_to_deduct <= 0)"
           class="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-dark-800"
         >
           {{ submitting ? t('common.processing') : t('payment.admin.confirmRefund') }}
@@ -182,7 +210,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'confirm', data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }): void
+  (e: 'confirm', data: { amount: number; reason: string; deduct_balance: boolean; force: boolean; subscription_days_to_deduct?: number }): void
   (e: 'cancel'): void
 }>()
 
@@ -191,7 +219,10 @@ const form = reactive({
   reason: '',
   deduct_balance: true,
   force: false,
+  subscription_days_to_deduct: 0,
 })
+
+const isSubscriptionOrder = computed(() => props.order?.order_type === 'subscription')
 
 // In REFUND_REQUESTED status, refund_amount is the REQUESTED amount, not actually refunded.
 // Only PARTIALLY_REFUNDED / REFUNDED have real refund amounts.
@@ -207,22 +238,79 @@ const maxRefundable = computed(() => {
   return props.order.amount - actuallyRefunded.value
 })
 
+const subscriptionRemainingDays = computed(() => {
+  if (!isSubscriptionOrder.value) return 0
+  const days = props.order?.subscription_remaining_days || 0
+  const orderDays = props.order?.subscription_days || 0
+  if (days <= 0) return 0
+  return orderDays > 0 ? Math.min(days, orderDays) : days
+})
+
+const suggestedSubscriptionRefundAmount = computed(() => {
+  if (!isSubscriptionOrder.value || !props.order) return 0
+  const suggested = props.order.suggested_refund_amount || 0
+  if (suggested > 0) return Math.min(maxRefundable.value, floorCurrency(suggested))
+  return calculateRefundAmountFromDays(subscriptionRemainingDays.value)
+})
+
 const balanceInsufficient = computed(() => {
   if (props.userBalance == null || !props.order) return false
   return props.userBalance < props.order.amount
 })
+
+const calculatedSubscriptionRefundDays = computed(() => {
+  const totalDays = props.order?.subscription_days || 0
+  const orderAmount = props.order?.amount || 0
+  if (!isSubscriptionOrder.value || totalDays <= 0 || orderAmount <= 0 || form.amount <= 0) return 0
+  return Math.min(totalDays, Math.max(1, Math.ceil((totalDays * form.amount) / orderAmount)))
+})
+
+function floorCurrency(value: number): number {
+  return Math.floor(value * 100) / 100
+}
+
+function calculateRefundAmountFromDays(days: number): number {
+  const totalDays = props.order?.subscription_days || 0
+  const orderAmount = props.order?.amount || 0
+  if (!isSubscriptionOrder.value || totalDays <= 0 || orderAmount <= 0 || days <= 0) return 0
+  return Math.min(maxRefundable.value, floorCurrency((orderAmount * Math.min(days, totalDays)) / totalDays))
+}
+
+let syncingDaysFromAmount = false
 
 watch(() => props.show, (val) => {
   if (val && props.order) {
     // For REFUND_REQUESTED, pre-fill with the requested amount
     if (props.order.status === 'REFUND_REQUESTED' && props.order.refund_amount) {
       form.amount = props.order.refund_amount
+    } else if (isSubscriptionOrder.value) {
+      form.amount = suggestedSubscriptionRefundAmount.value || maxRefundable.value
     } else {
       form.amount = maxRefundable.value
     }
     form.reason = props.order.refund_request_reason || ''
     form.deduct_balance = true
+    form.subscription_days_to_deduct = props.order.suggested_subscription_days_to_deduct || subscriptionRemainingDays.value || calculatedSubscriptionRefundDays.value
     form.force = false
+  }
+})
+
+watch(() => form.amount, () => {
+  if (isSubscriptionOrder.value && form.deduct_balance) {
+    syncingDaysFromAmount = true
+    form.subscription_days_to_deduct = calculatedSubscriptionRefundDays.value
+    queueMicrotask(() => {
+      syncingDaysFromAmount = false
+    })
+  }
+})
+
+watch(() => form.subscription_days_to_deduct, () => {
+  if (isSubscriptionOrder.value && form.deduct_balance && !syncingDaysFromAmount) {
+    const amount = calculateRefundAmountFromDays(form.subscription_days_to_deduct)
+    if (amount > 0 && Math.abs(amount - form.amount) >= 0.01) {
+      form.amount = amount
+    }
   }
 })
 
@@ -233,6 +321,7 @@ function formatDateTime(dateStr: string): string {
 function handleSubmit() {
   if (form.amount <= 0 || form.amount > maxRefundable.value) return
   if (props.requireForce && !form.force) return
+  if (isSubscriptionOrder.value && form.deduct_balance && form.subscription_days_to_deduct <= 0) return
   emit('confirm', { ...form })
 }
 </script>

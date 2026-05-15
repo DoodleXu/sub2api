@@ -111,7 +111,7 @@ func TestPrepareRefundRejectsLegacyGuessedProviderInstance(t *testing.T) {
 		entClient: client,
 	}
 
-	plan, result, err := svc.PrepareRefund(ctx, order.ID, 0, "", false, false)
+	plan, result, err := svc.PrepareRefund(ctx, order.ID, 0, "", false, false, 0)
 	require.Nil(t, plan)
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -207,4 +207,34 @@ func TestValidateRefundProviderResponseAcceptsPending(t *testing.T) {
 	require.NoError(t, validateRefundProviderResponse(&payment.RefundResponse{Status: payment.ProviderStatusSuccess}))
 	require.Error(t, validateRefundProviderResponse(&payment.RefundResponse{Status: payment.ProviderStatusFailed}))
 	require.Error(t, validateRefundProviderResponse(nil))
+}
+
+func TestSubscriptionRefundCalculationsUseDaysAndCurrencyFloor(t *testing.T) {
+	require.Equal(t, 33.33, calculateSubscriptionRefundAmountByDays(30, 100, 10))
+	require.Equal(t, 100.0, calculateSubscriptionRefundAmountByDays(30, 100, 31))
+	require.Equal(t, 1, calculateSubscriptionRefundDays(30, 100, 0.01))
+	require.Equal(t, 4, calculateSubscriptionRefundDays(30, 100, 10.01))
+	require.Equal(t, 30, calculateSubscriptionRefundDays(30, 100, 100.01))
+}
+
+func TestBuildRefundPreviewCapsPartiallyRefundedSubscription(t *testing.T) {
+	days := 30
+	completedAt := time.Now().Add(-20 * 24 * time.Hour)
+	groupID := int64(11)
+	order := &dbent.PaymentOrder{
+		UserID:              7,
+		Amount:              100,
+		Status:              OrderStatusPartiallyRefunded,
+		RefundAmount:        80,
+		OrderType:           payment.OrderTypeSubscription,
+		SubscriptionGroupID: &groupID,
+		SubscriptionDays:    &days,
+		CompletedAt:         &completedAt,
+	}
+
+	preview := (&PaymentService{}).BuildRefundPreview(context.Background(), order)
+
+	require.Equal(t, 10, preview.SubscriptionRemainingDays)
+	require.Equal(t, 20.0, preview.SuggestedRefundAmount)
+	require.Equal(t, 10, preview.SuggestedSubscriptionDaysToDeduct)
 }

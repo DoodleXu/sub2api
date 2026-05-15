@@ -50,6 +50,12 @@ const (
 	FieldSubscriptionGroupID = "subscription_group_id"
 	// FieldSubscriptionDays holds the string denoting the subscription_days field in the database.
 	FieldSubscriptionDays = "subscription_days"
+	// FieldUpgradeFromSubscriptionID holds the string denoting the upgrade_from_subscription_id field in the database.
+	FieldUpgradeFromSubscriptionID = "upgrade_from_subscription_id"
+	// FieldUpgradeCreditAmount holds the string denoting the upgrade_credit_amount field in the database.
+	FieldUpgradeCreditAmount = "upgrade_credit_amount"
+	// FieldUpgradeCreditDays holds the string denoting the upgrade_credit_days field in the database.
+	FieldUpgradeCreditDays = "upgrade_credit_days"
 	// FieldProviderInstanceID holds the string denoting the provider_instance_id field in the database.
 	FieldProviderInstanceID = "provider_instance_id"
 	// FieldProviderKey holds the string denoting the provider_key field in the database.
@@ -126,6 +132,9 @@ var Columns = []string{
 	FieldPlanID,
 	FieldSubscriptionGroupID,
 	FieldSubscriptionDays,
+	FieldUpgradeFromSubscriptionID,
+	FieldUpgradeCreditAmount,
+	FieldUpgradeCreditDays,
 	FieldProviderInstanceID,
 	FieldProviderKey,
 	FieldProviderSnapshot,
@@ -180,6 +189,8 @@ var (
 	DefaultOrderType string
 	// OrderTypeValidator is a validator for the "order_type" field. It is called by the builders before save.
 	OrderTypeValidator func(string) error
+	// DefaultUpgradeCreditAmount holds the default value on creation for the "upgrade_credit_amount" field.
+	DefaultUpgradeCreditAmount float64
 	// ProviderInstanceIDValidator is a validator for the "provider_instance_id" field. It is called by the builders before save.
 	ProviderInstanceIDValidator func(string) error
 	// ProviderKeyValidator is a validator for the "provider_key" field. It is called by the builders before save.
@@ -302,6 +313,21 @@ func BySubscriptionGroupID(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionDays orders the results by the subscription_days field.
 func BySubscriptionDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionDays, opts...).ToFunc()
+}
+
+// ByUpgradeFromSubscriptionID orders the results by the upgrade_from_subscription_id field.
+func ByUpgradeFromSubscriptionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUpgradeFromSubscriptionID, opts...).ToFunc()
+}
+
+// ByUpgradeCreditAmount orders the results by the upgrade_credit_amount field.
+func ByUpgradeCreditAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUpgradeCreditAmount, opts...).ToFunc()
+}
+
+// ByUpgradeCreditDays orders the results by the upgrade_credit_days field.
+func ByUpgradeCreditDays(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUpgradeCreditDays, opts...).ToFunc()
 }
 
 // ByProviderInstanceID orders the results by the provider_instance_id field.

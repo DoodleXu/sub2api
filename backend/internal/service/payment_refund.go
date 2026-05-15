@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentproviderinstance"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/shopspring/decimal"
 )
 
 // --- Refund Flow ---
@@ -198,12 +199,12 @@ func (s *PaymentService) validateRefundRequest(ctx context.Context, oid, uid int
 	return o, nil
 }
 
-func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float64, reason string, force, deduct bool) (*RefundPlan, *RefundResult, error) {
+func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float64, reason string, force, deduct bool, subDaysToDeduct int) (*RefundPlan, *RefundResult, error) {
 	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
-	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed}
+	ok := []string{OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded}
 	if !psSliceContains(ok, o.Status) {
 		return nil, nil, infraerrors.BadRequest("INVALID_STATUS", "order status does not allow refund")
 	}
@@ -227,7 +228,12 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 		amt = o.Amount
 	}
 	orderCurrency := PaymentOrderCurrency(o)
-	if amt-o.Amount > paymentAmountToleranceForCurrency(orderCurrency) {
+	alreadyRefunded := 0.0
+	if o.Status == OrderStatusPartiallyRefunded {
+		alreadyRefunded = o.RefundAmount
+	}
+	remainingRefundable := o.Amount - alreadyRefunded
+	if amt-remainingRefundable > paymentAmountToleranceForCurrency(orderCurrency) {
 		return nil, nil, infraerrors.BadRequest("REFUND_AMOUNT_EXCEEDED", "refund amount exceeds recharge")
 	}
 	ga := calculateGatewayRefundAmount(o.Amount, o.PayAmount, amt, orderCurrency)
@@ -238,7 +244,7 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	if rr == "" {
 		rr = fmt.Sprintf("refund order:%d", o.ID)
 	}
-	p := &RefundPlan{OrderID: oid, Order: o, RefundAmount: amt, GatewayAmount: ga, Reason: rr, Force: force, DeductBalance: deduct, DeductionType: payment.DeductionTypeNone}
+	p := &RefundPlan{OrderID: oid, Order: o, RefundAmount: amt, GatewayAmount: ga, Reason: rr, Force: force, DeductBalance: deduct, SubDaysToDeduct: subDaysToDeduct, DeductionType: payment.DeductionTypeNone}
 	if deduct {
 		if er := s.prepDeduct(ctx, o, p, force); er != nil {
 			return nil, er, nil
@@ -247,11 +253,50 @@ func (s *PaymentService) PrepareRefund(ctx context.Context, oid int64, amt float
 	return p, nil, nil
 }
 
+func (s *PaymentService) BuildRefundPreview(ctx context.Context, o *dbent.PaymentOrder) RefundPreview {
+	if o == nil || o.OrderType != payment.OrderTypeSubscription || o.SubscriptionGroupID == nil || o.SubscriptionDays == nil || *o.SubscriptionDays <= 0 || o.Amount <= 0 {
+		return RefundPreview{}
+	}
+	remainingDays := 0
+	var expiresAt *time.Time
+	if s != nil && s.subscriptionSvc != nil {
+		if sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID); err == nil && sub != nil {
+			remainingDays = daysRemainingFromNow(sub.ExpiresAt)
+			exp := sub.ExpiresAt
+			expiresAt = &exp
+		}
+	}
+	if remainingDays <= 0 {
+		remainingDays = estimateOrderSubscriptionRemainingDays(o)
+	}
+	if remainingDays <= 0 {
+		return RefundPreview{SubscriptionExpiresAt: expiresAt}
+	}
+	if remainingDays > *o.SubscriptionDays {
+		remainingDays = *o.SubscriptionDays
+	}
+	refundAmount := calculateSubscriptionRefundAmountByDays(*o.SubscriptionDays, o.Amount, remainingDays)
+	if o.Status == OrderStatusPartiallyRefunded {
+		refundAmount = math.Min(refundAmount, math.Max(0, o.Amount-o.RefundAmount))
+	}
+	return RefundPreview{
+		SubscriptionRemainingDays:         remainingDays,
+		SubscriptionExpiresAt:             expiresAt,
+		SuggestedRefundAmount:             refundAmount,
+		SuggestedSubscriptionDaysToDeduct: remainingDays,
+	}
+}
+
 func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, p *RefundPlan, force bool) *RefundResult {
 	if o.OrderType == payment.OrderTypeSubscription {
 		p.DeductionType = payment.DeductionTypeSubscription
 		if o.SubscriptionGroupID != nil && o.SubscriptionDays != nil {
-			p.SubDaysToDeduct = *o.SubscriptionDays
+			if p.SubDaysToDeduct <= 0 {
+				p.SubDaysToDeduct = calculateSubscriptionRefundDays(*o.SubscriptionDays, o.Amount, p.RefundAmount)
+			}
+			if p.SubDaysToDeduct > *o.SubscriptionDays {
+				p.SubDaysToDeduct = *o.SubscriptionDays
+			}
 			sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID)
 			if err == nil && sub != nil {
 				p.SubscriptionID = sub.ID
@@ -273,8 +318,53 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 	return nil
 }
 
+func calculateSubscriptionRefundAmountByDays(orderDays int, orderAmount float64, days int) float64 {
+	if orderDays <= 0 || orderAmount <= 0 || days <= 0 {
+		return 0
+	}
+	if days > orderDays {
+		days = orderDays
+	}
+	return decimal.NewFromFloat(orderAmount).
+		Mul(decimal.NewFromInt(int64(days))).
+		Div(decimal.NewFromInt(int64(orderDays))).
+		Shift(2).
+		Floor().
+		Shift(-2).
+		InexactFloat64()
+}
+
+func calculateSubscriptionRefundDays(orderDays int, orderAmount, refundAmount float64) int {
+	if orderDays <= 0 || orderAmount <= 0 || refundAmount <= 0 {
+		return 0
+	}
+	days := int(math.Ceil(float64(orderDays) * refundAmount / orderAmount))
+	if days < 1 {
+		return 1
+	}
+	if days > orderDays {
+		return orderDays
+	}
+	return days
+}
+
+func estimateOrderSubscriptionRemainingDays(o *dbent.PaymentOrder) int {
+	if o == nil || o.SubscriptionDays == nil || *o.SubscriptionDays <= 0 {
+		return 0
+	}
+	start := o.CompletedAt
+	if start == nil {
+		start = o.PaidAt
+	}
+	if start == nil {
+		start = &o.CreatedAt
+	}
+	expiresAt := start.Add(time.Duration(*o.SubscriptionDays) * 24 * time.Hour)
+	return daysRemainingFromNow(expiresAt)
+}
+
 func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
-	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(p.OrderID), paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed)).SetStatus(OrderStatusRefunding).Save(ctx)
+	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(p.OrderID), paymentorder.StatusIn(OrderStatusCompleted, OrderStatusRefundRequested, OrderStatusRefundFailed, OrderStatusPartiallyRefunded)).SetStatus(OrderStatusRefunding).Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("lock: %w", err)
 	}
@@ -398,15 +488,19 @@ func (s *PaymentService) handleGwFail(ctx context.Context, p *RefundPlan, gErr e
 
 func (s *PaymentService) markRefundOk(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
 	fs := OrderStatusRefunded
-	if p.RefundAmount < p.Order.Amount {
+	totalRefunded := p.RefundAmount
+	if p.Order.Status == OrderStatusPartiallyRefunded {
+		totalRefunded += p.Order.RefundAmount
+	}
+	if totalRefunded < p.Order.Amount {
 		fs = OrderStatusPartiallyRefunded
 	}
 	now := time.Now()
-	_, err := s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(fs).SetRefundAmount(p.RefundAmount).SetRefundReason(p.Reason).SetRefundAt(now).SetForceRefund(p.Force).Save(ctx)
+	_, err := s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(fs).SetRefundAmount(totalRefunded).SetRefundReason(p.Reason).SetRefundAt(now).SetForceRefund(p.Force).Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mark refund: %w", err)
 	}
-	s.writeAuditLog(ctx, p.OrderID, "REFUND_SUCCESS", "admin", map[string]any{"refundAmount": p.RefundAmount, "reason": p.Reason, "balanceDeducted": p.BalanceToDeduct, "force": p.Force})
+	s.writeAuditLog(ctx, p.OrderID, "REFUND_SUCCESS", "admin", map[string]any{"refundAmount": p.RefundAmount, "totalRefunded": totalRefunded, "reason": p.Reason, "balanceDeducted": p.BalanceToDeduct, "subscriptionDaysDeducted": p.SubDaysToDeduct, "force": p.Force})
 	return &RefundResult{Success: true, BalanceDeducted: p.BalanceToDeduct, SubDaysDeducted: p.SubDaysToDeduct}, nil
 }
 
@@ -432,6 +526,8 @@ func (s *PaymentService) restoreStatus(ctx context.Context, p *RefundPlan) {
 	rs := OrderStatusCompleted
 	if p.Order.Status == OrderStatusRefundRequested {
 		rs = OrderStatusRefundRequested
+	} else if p.Order.Status == OrderStatusPartiallyRefunded {
+		rs = OrderStatusPartiallyRefunded
 	}
 	_, _ = s.entClient.PaymentOrder.UpdateOneID(p.OrderID).SetStatus(rs).Save(ctx)
 }

@@ -12,7 +12,8 @@ import type {
   CheckoutInfoResponse,
   CreateOrderRequest,
   CreateOrderResult,
-  PaymentOrder
+  PaymentOrder,
+  SubscriptionUpgradeOption
 } from '@/types/payment'
 import type { BasePaginationResponse } from '@/types'
 
@@ -85,5 +86,10 @@ export const paymentAPI = {
   /** Get provider instance IDs that allow user refund */
   getRefundEligibleProviders() {
     return apiClient.get<{ provider_instance_ids: string[] }>('/payment/orders/refund-eligible-providers')
+  },
+
+  /** Get active paid subscriptions that can offset a subscription purchase */
+  getSubscriptionUpgradeOptions(planId: number) {
+    return apiClient.get<{ options: SubscriptionUpgradeOption[] }>('/payment/subscription-upgrade-options', { params: { plan_id: planId } })
   }
 }

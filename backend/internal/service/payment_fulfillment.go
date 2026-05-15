@@ -357,6 +357,23 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder) error
 		slog.Info("subscription already assigned for order, skipping", "orderID", o.ID, "groupID", gid)
 		return s.markCompleted(ctx, o, "SUBSCRIPTION_SUCCESS")
 	}
+	if o.UpgradeFromSubscriptionID != nil && *o.UpgradeFromSubscriptionID > 0 {
+		sub, err := s.subscriptionSvc.GetByID(ctx, *o.UpgradeFromSubscriptionID)
+		if err != nil {
+			return fmt.Errorf("get upgrade source subscription: %w", err)
+		}
+		if err := validateSubscriptionUpgradeSourceForFulfillment(sub, o); err != nil {
+			return err
+		}
+		if err := s.subscriptionSvc.RevokeSubscription(ctx, sub.ID); err != nil {
+			return fmt.Errorf("revoke upgrade source subscription: %w", err)
+		}
+		s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_UPGRADE_CREDIT_APPLIED", "system", map[string]any{
+			"subscriptionID": sub.ID,
+			"creditAmount":   o.UpgradeCreditAmount,
+			"creditDays":     o.UpgradeCreditDays,
+		})
+	}
 	orderNote := fmt.Sprintf("payment order %d", o.ID)
 	_, _, err = s.subscriptionSvc.AssignOrExtendSubscription(ctx, &AssignSubscriptionInput{UserID: o.UserID, GroupID: gid, ValidityDays: days, AssignedBy: 0, Notes: orderNote})
 	if err != nil {

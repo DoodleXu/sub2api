@@ -94,6 +94,15 @@ export interface PaymentOrder {
   refund_requested_by?: number
   refund_request_reason?: string
   plan_id?: number
+  subscription_group_id?: number
+  subscription_days?: number
+  subscription_remaining_days?: number
+  subscription_expires_at?: string
+  suggested_refund_amount?: number
+  suggested_subscription_days_to_deduct?: number
+  upgrade_from_subscription_id?: number
+  upgrade_credit_amount?: number
+  upgrade_credit_days?: number
   provider_instance_id?: string
 }
 
@@ -156,11 +165,24 @@ export interface CreateOrderRequest {
   payment_type: string
   order_type: string
   plan_id?: number
+  upgrade_from_subscription_id?: number
   return_url?: string
   payment_source?: string
   openid?: string
   wechat_resume_token?: string
   is_mobile?: boolean
+}
+
+export interface SubscriptionUpgradeOption {
+  subscription_id: number
+  group_id: number
+  group_name: string
+  group_platform: string
+  expires_at: string
+  days_remaining: number
+  credit_amount: number
+  credit_days: number
+  payable_amount: number
 }
 
 export type CreateOrderResultType = 'order_created' | 'oauth_required' | 'jsapi_ready'

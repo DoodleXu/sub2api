@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"context"
 	"strconv"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -67,7 +69,7 @@ func (h *PaymentHandler) ListOrders(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Paginated(c, sanitizeAdminPaymentOrdersForResponse(orders), int64(total), page, pageSize)
+	response.Paginated(c, h.adminPaymentOrdersForResponse(c.Request.Context(), orders), int64(total), page, pageSize)
 }
 
 // GetOrderDetail returns detailed information about a single order.
@@ -83,7 +85,7 @@ func (h *PaymentHandler) GetOrderDetail(c *gin.Context) {
 		return
 	}
 	auditLogs, _ := h.paymentService.GetOrderAuditLogs(c.Request.Context(), orderID)
-	response.Success(c, gin.H{"order": sanitizeAdminPaymentOrderForResponse(order), "auditLogs": auditLogs})
+	response.Success(c, gin.H{"order": h.adminPaymentOrderForResponse(c.Request.Context(), order), "auditLogs": auditLogs})
 }
 
 // CancelOrder cancels a pending order (admin).
@@ -115,32 +117,64 @@ func (h *PaymentHandler) RetryFulfillment(c *gin.Context) {
 	response.Success(c, gin.H{"message": "fulfillment retried"})
 }
 
-func sanitizeAdminPaymentOrdersForResponse(orders []*dbent.PaymentOrder) []*dbent.PaymentOrder {
-	if len(orders) == 0 {
-		return orders
+// PreviewRefund returns the current suggested refund amount and entitlement
+// deduction for an order without mutating provider or subscription state.
+// GET /api/v1/admin/payment/orders/:id/refund-preview
+func (h *PaymentHandler) PreviewRefund(c *gin.Context) {
+	orderID, ok := parseIDParam(c, "id")
+	if !ok {
+		return
 	}
-	out := make([]*dbent.PaymentOrder, 0, len(orders))
+	order, err := h.paymentService.GetOrderByID(c.Request.Context(), orderID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, h.paymentService.BuildRefundPreview(c.Request.Context(), order))
+}
+
+type adminPaymentOrderResponse struct {
+	*dbent.PaymentOrder
+	SubscriptionRemainingDays         int        `json:"subscription_remaining_days,omitempty"`
+	SubscriptionExpiresAt             *time.Time `json:"subscription_expires_at,omitempty"`
+	SuggestedRefundAmount             float64    `json:"suggested_refund_amount,omitempty"`
+	SuggestedSubscriptionDaysToDeduct int        `json:"suggested_subscription_days_to_deduct,omitempty"`
+}
+
+func (h *PaymentHandler) adminPaymentOrdersForResponse(ctx context.Context, orders []*dbent.PaymentOrder) []*adminPaymentOrderResponse {
+	if len(orders) == 0 {
+		return nil
+	}
+	out := make([]*adminPaymentOrderResponse, 0, len(orders))
 	for _, order := range orders {
-		out = append(out, sanitizeAdminPaymentOrderForResponse(order))
+		out = append(out, h.adminPaymentOrderForResponse(ctx, order))
 	}
 	return out
 }
 
-func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder) *dbent.PaymentOrder {
+func (h *PaymentHandler) adminPaymentOrderForResponse(ctx context.Context, order *dbent.PaymentOrder) *adminPaymentOrderResponse {
 	if order == nil {
 		return nil
 	}
 	cloned := *order
 	cloned.ProviderSnapshot = nil
-	return &cloned
+	preview := h.paymentService.BuildRefundPreview(ctx, &cloned)
+	return &adminPaymentOrderResponse{
+		PaymentOrder:                      &cloned,
+		SubscriptionRemainingDays:         preview.SubscriptionRemainingDays,
+		SubscriptionExpiresAt:             preview.SubscriptionExpiresAt,
+		SuggestedRefundAmount:             preview.SuggestedRefundAmount,
+		SuggestedSubscriptionDaysToDeduct: preview.SuggestedSubscriptionDaysToDeduct,
+	}
 }
 
 // AdminProcessRefundRequest is the request body for admin refund processing.
 type AdminProcessRefundRequest struct {
-	Amount        float64 `json:"amount"`
-	Reason        string  `json:"reason"`
-	Force         bool    `json:"force"`
-	DeductBalance bool    `json:"deduct_balance"`
+	Amount                   float64 `json:"amount"`
+	Reason                   string  `json:"reason"`
+	Force                    bool    `json:"force"`
+	DeductBalance            bool    `json:"deduct_balance"`
+	SubscriptionDaysToDeduct int     `json:"subscription_days_to_deduct"`
 }
 
 // ProcessRefund processes a refund for an order (admin).
@@ -157,7 +191,7 @@ func (h *PaymentHandler) ProcessRefund(c *gin.Context) {
 		return
 	}
 
-	plan, earlyResult, err := h.paymentService.PrepareRefund(c.Request.Context(), orderID, req.Amount, req.Reason, req.Force, req.DeductBalance)
+	plan, earlyResult, err := h.paymentService.PrepareRefund(c.Request.Context(), orderID, req.Amount, req.Reason, req.Force, req.DeductBalance, req.SubscriptionDaysToDeduct)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

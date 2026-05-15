@@ -145,6 +145,21 @@ func SubscriptionDays(v int) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldSubscriptionDays, v))
 }
 
+// UpgradeFromSubscriptionID applies equality check predicate on the "upgrade_from_subscription_id" field. It's identical to UpgradeFromSubscriptionIDEQ.
+func UpgradeFromSubscriptionID(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeCreditAmount applies equality check predicate on the "upgrade_credit_amount" field. It's identical to UpgradeCreditAmountEQ.
+func UpgradeCreditAmount(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditDays applies equality check predicate on the "upgrade_credit_days" field. It's identical to UpgradeCreditDaysEQ.
+func UpgradeCreditDays(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeCreditDays, v))
+}
+
 // ProviderInstanceID applies equality check predicate on the "provider_instance_id" field. It's identical to ProviderInstanceIDEQ.
 func ProviderInstanceID(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldProviderInstanceID, v))
@@ -1288,6 +1303,146 @@ func SubscriptionDaysIsNil() predicate.PaymentOrder {
 // SubscriptionDaysNotNil applies the NotNil predicate on the "subscription_days" field.
 func SubscriptionDaysNotNil() predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldNotNull(FieldSubscriptionDays))
+}
+
+// UpgradeFromSubscriptionIDEQ applies the EQ predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDEQ(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDNEQ applies the NEQ predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDNEQ(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDIn applies the In predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDIn(vs ...int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldUpgradeFromSubscriptionID, vs...))
+}
+
+// UpgradeFromSubscriptionIDNotIn applies the NotIn predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDNotIn(vs ...int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldUpgradeFromSubscriptionID, vs...))
+}
+
+// UpgradeFromSubscriptionIDGT applies the GT predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDGT(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDGTE applies the GTE predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDGTE(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDLT applies the LT predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDLT(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDLTE applies the LTE predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDLTE(v int64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldUpgradeFromSubscriptionID, v))
+}
+
+// UpgradeFromSubscriptionIDIsNil applies the IsNil predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDIsNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIsNull(FieldUpgradeFromSubscriptionID))
+}
+
+// UpgradeFromSubscriptionIDNotNil applies the NotNil predicate on the "upgrade_from_subscription_id" field.
+func UpgradeFromSubscriptionIDNotNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotNull(FieldUpgradeFromSubscriptionID))
+}
+
+// UpgradeCreditAmountEQ applies the EQ predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountEQ(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditAmountNEQ applies the NEQ predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountNEQ(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditAmountIn applies the In predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountIn(vs ...float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldUpgradeCreditAmount, vs...))
+}
+
+// UpgradeCreditAmountNotIn applies the NotIn predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountNotIn(vs ...float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldUpgradeCreditAmount, vs...))
+}
+
+// UpgradeCreditAmountGT applies the GT predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountGT(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditAmountGTE applies the GTE predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountGTE(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditAmountLT applies the LT predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountLT(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditAmountLTE applies the LTE predicate on the "upgrade_credit_amount" field.
+func UpgradeCreditAmountLTE(v float64) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldUpgradeCreditAmount, v))
+}
+
+// UpgradeCreditDaysEQ applies the EQ predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysEQ(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysNEQ applies the NEQ predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysNEQ(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysIn applies the In predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysIn(vs ...int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldUpgradeCreditDays, vs...))
+}
+
+// UpgradeCreditDaysNotIn applies the NotIn predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysNotIn(vs ...int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldUpgradeCreditDays, vs...))
+}
+
+// UpgradeCreditDaysGT applies the GT predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysGT(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysGTE applies the GTE predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysGTE(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysLT applies the LT predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysLT(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysLTE applies the LTE predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysLTE(v int) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldUpgradeCreditDays, v))
+}
+
+// UpgradeCreditDaysIsNil applies the IsNil predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysIsNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIsNull(FieldUpgradeCreditDays))
+}
+
+// UpgradeCreditDaysNotNil applies the NotNil predicate on the "upgrade_credit_days" field.
+func UpgradeCreditDaysNotNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotNull(FieldUpgradeCreditDays))
 }
 
 // ProviderInstanceIDEQ applies the EQ predicate on the "provider_instance_id" field.

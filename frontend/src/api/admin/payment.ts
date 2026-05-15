@@ -104,8 +104,18 @@ export const adminPaymentAPI = {
   },
 
   /** Process a refund */
-  refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean }) {
+  refundOrder(id: number, data: { amount: number; reason: string; deduct_balance?: boolean; force?: boolean; subscription_days_to_deduct?: number }) {
     return apiClient.post(`/admin/payment/orders/${id}/refund`, data)
+  },
+
+  /** Preview refund entitlement deduction */
+  previewRefund(id: number) {
+    return apiClient.get<{
+      subscription_remaining_days?: number
+      subscription_expires_at?: string
+      suggested_refund_amount?: number
+      suggested_subscription_days_to_deduct?: number
+    }>(`/admin/payment/orders/${id}/refund-preview`)
   },
 
   // ==================== Channels ====================

@@ -87,6 +87,15 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Int("subscription_days").
 			Optional().
 			Nillable(),
+		field.Int64("upgrade_from_subscription_id").
+			Optional().
+			Nillable(),
+		field.Float("upgrade_credit_amount").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}).
+			Default(0),
+		field.Int("upgrade_credit_days").
+			Optional().
+			Nillable(),
 		field.String("provider_instance_id").
 			Optional().
 			Nillable().
@@ -195,5 +204,6 @@ func (PaymentOrder) Indexes() []ent.Index {
 		index.Fields("paid_at"),
 		index.Fields("payment_type", "paid_at"),
 		index.Fields("order_type"),
+		index.Fields("upgrade_from_subscription_id"),
 	}
 }

@@ -211,6 +211,48 @@ func (_c *PaymentOrderCreate) SetNillableSubscriptionDays(v *int) *PaymentOrderC
 	return _c
 }
 
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (_c *PaymentOrderCreate) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderCreate {
+	_c.mutation.SetUpgradeFromSubscriptionID(v)
+	return _c
+}
+
+// SetNillableUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableUpgradeFromSubscriptionID(v *int64) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetUpgradeFromSubscriptionID(*v)
+	}
+	return _c
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (_c *PaymentOrderCreate) SetUpgradeCreditAmount(v float64) *PaymentOrderCreate {
+	_c.mutation.SetUpgradeCreditAmount(v)
+	return _c
+}
+
+// SetNillableUpgradeCreditAmount sets the "upgrade_credit_amount" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableUpgradeCreditAmount(v *float64) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetUpgradeCreditAmount(*v)
+	}
+	return _c
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (_c *PaymentOrderCreate) SetUpgradeCreditDays(v int) *PaymentOrderCreate {
+	_c.mutation.SetUpgradeCreditDays(v)
+	return _c
+}
+
+// SetNillableUpgradeCreditDays sets the "upgrade_credit_days" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableUpgradeCreditDays(v *int) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetUpgradeCreditDays(*v)
+	}
+	return _c
+}
+
 // SetProviderInstanceID sets the "provider_instance_id" field.
 func (_c *PaymentOrderCreate) SetProviderInstanceID(v string) *PaymentOrderCreate {
 	_c.mutation.SetProviderInstanceID(v)
@@ -525,6 +567,10 @@ func (_c *PaymentOrderCreate) defaults() {
 		v := paymentorder.DefaultOrderType
 		_c.mutation.SetOrderType(v)
 	}
+	if _, ok := _c.mutation.UpgradeCreditAmount(); !ok {
+		v := paymentorder.DefaultUpgradeCreditAmount
+		_c.mutation.SetUpgradeCreditAmount(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := paymentorder.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -616,6 +662,9 @@ func (_c *PaymentOrderCreate) check() error {
 		if err := paymentorder.OrderTypeValidator(v); err != nil {
 			return &ValidationError{Name: "order_type", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.order_type": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.UpgradeCreditAmount(); !ok {
+		return &ValidationError{Name: "upgrade_credit_amount", err: errors.New(`ent: missing required field "PaymentOrder.upgrade_credit_amount"`)}
 	}
 	if v, ok := _c.mutation.ProviderInstanceID(); ok {
 		if err := paymentorder.ProviderInstanceIDValidator(v); err != nil {
@@ -768,6 +817,18 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.SubscriptionDays(); ok {
 		_spec.SetField(paymentorder.FieldSubscriptionDays, field.TypeInt, value)
 		_node.SubscriptionDays = &value
+	}
+	if value, ok := _c.mutation.UpgradeFromSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
+		_node.UpgradeFromSubscriptionID = &value
+	}
+	if value, ok := _c.mutation.UpgradeCreditAmount(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
+		_node.UpgradeCreditAmount = value
+	}
+	if value, ok := _c.mutation.UpgradeCreditDays(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeCreditDays, field.TypeInt, value)
+		_node.UpgradeCreditDays = &value
 	}
 	if value, ok := _c.mutation.ProviderInstanceID(); ok {
 		_spec.SetField(paymentorder.FieldProviderInstanceID, field.TypeString, value)
@@ -1213,6 +1274,72 @@ func (u *PaymentOrderUpsert) AddSubscriptionDays(v int) *PaymentOrderUpsert {
 // ClearSubscriptionDays clears the value of the "subscription_days" field.
 func (u *PaymentOrderUpsert) ClearSubscriptionDays() *PaymentOrderUpsert {
 	u.SetNull(paymentorder.FieldSubscriptionDays)
+	return u
+}
+
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsert) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldUpgradeFromSubscriptionID, v)
+	return u
+}
+
+// UpdateUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateUpgradeFromSubscriptionID() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldUpgradeFromSubscriptionID)
+	return u
+}
+
+// AddUpgradeFromSubscriptionID adds v to the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsert) AddUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsert {
+	u.Add(paymentorder.FieldUpgradeFromSubscriptionID, v)
+	return u
+}
+
+// ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsert) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsert {
+	u.SetNull(paymentorder.FieldUpgradeFromSubscriptionID)
+	return u
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsert) SetUpgradeCreditAmount(v float64) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldUpgradeCreditAmount, v)
+	return u
+}
+
+// UpdateUpgradeCreditAmount sets the "upgrade_credit_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateUpgradeCreditAmount() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldUpgradeCreditAmount)
+	return u
+}
+
+// AddUpgradeCreditAmount adds v to the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsert) AddUpgradeCreditAmount(v float64) *PaymentOrderUpsert {
+	u.Add(paymentorder.FieldUpgradeCreditAmount, v)
+	return u
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsert) SetUpgradeCreditDays(v int) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldUpgradeCreditDays, v)
+	return u
+}
+
+// UpdateUpgradeCreditDays sets the "upgrade_credit_days" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateUpgradeCreditDays() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldUpgradeCreditDays)
+	return u
+}
+
+// AddUpgradeCreditDays adds v to the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsert) AddUpgradeCreditDays(v int) *PaymentOrderUpsert {
+	u.Add(paymentorder.FieldUpgradeCreditDays, v)
+	return u
+}
+
+// ClearUpgradeCreditDays clears the value of the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsert) ClearUpgradeCreditDays() *PaymentOrderUpsert {
+	u.SetNull(paymentorder.FieldUpgradeCreditDays)
 	return u
 }
 
@@ -1925,6 +2052,83 @@ func (u *PaymentOrderUpsertOne) UpdateSubscriptionDays() *PaymentOrderUpsertOne 
 func (u *PaymentOrderUpsertOne) ClearSubscriptionDays() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearSubscriptionDays()
+	})
+}
+
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertOne) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeFromSubscriptionID(v)
+	})
+}
+
+// AddUpgradeFromSubscriptionID adds v to the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertOne) AddUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeFromSubscriptionID(v)
+	})
+}
+
+// UpdateUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateUpgradeFromSubscriptionID() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeFromSubscriptionID()
+	})
+}
+
+// ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsertOne) SetUpgradeCreditAmount(v float64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeCreditAmount(v)
+	})
+}
+
+// AddUpgradeCreditAmount adds v to the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsertOne) AddUpgradeCreditAmount(v float64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeCreditAmount(v)
+	})
+}
+
+// UpdateUpgradeCreditAmount sets the "upgrade_credit_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateUpgradeCreditAmount() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeCreditAmount()
+	})
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertOne) SetUpgradeCreditDays(v int) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeCreditDays(v)
+	})
+}
+
+// AddUpgradeCreditDays adds v to the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertOne) AddUpgradeCreditDays(v int) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeCreditDays(v)
+	})
+}
+
+// UpdateUpgradeCreditDays sets the "upgrade_credit_days" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateUpgradeCreditDays() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeCreditDays()
+	})
+}
+
+// ClearUpgradeCreditDays clears the value of the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertOne) ClearUpgradeCreditDays() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearUpgradeCreditDays()
 	})
 }
 
@@ -2857,6 +3061,83 @@ func (u *PaymentOrderUpsertBulk) UpdateSubscriptionDays() *PaymentOrderUpsertBul
 func (u *PaymentOrderUpsertBulk) ClearSubscriptionDays() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearSubscriptionDays()
+	})
+}
+
+// SetUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) SetUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeFromSubscriptionID(v)
+	})
+}
+
+// AddUpgradeFromSubscriptionID adds v to the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) AddUpgradeFromSubscriptionID(v int64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeFromSubscriptionID(v)
+	})
+}
+
+// UpdateUpgradeFromSubscriptionID sets the "upgrade_from_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateUpgradeFromSubscriptionID() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeFromSubscriptionID()
+	})
+}
+
+// ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsertBulk) SetUpgradeCreditAmount(v float64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeCreditAmount(v)
+	})
+}
+
+// AddUpgradeCreditAmount adds v to the "upgrade_credit_amount" field.
+func (u *PaymentOrderUpsertBulk) AddUpgradeCreditAmount(v float64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeCreditAmount(v)
+	})
+}
+
+// UpdateUpgradeCreditAmount sets the "upgrade_credit_amount" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateUpgradeCreditAmount() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeCreditAmount()
+	})
+}
+
+// SetUpgradeCreditDays sets the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertBulk) SetUpgradeCreditDays(v int) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeCreditDays(v)
+	})
+}
+
+// AddUpgradeCreditDays adds v to the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertBulk) AddUpgradeCreditDays(v int) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddUpgradeCreditDays(v)
+	})
+}
+
+// UpdateUpgradeCreditDays sets the "upgrade_credit_days" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateUpgradeCreditDays() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeCreditDays()
+	})
+}
+
+// ClearUpgradeCreditDays clears the value of the "upgrade_credit_days" field.
+func (u *PaymentOrderUpsertBulk) ClearUpgradeCreditDays() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearUpgradeCreditDays()
 	})
 }
 

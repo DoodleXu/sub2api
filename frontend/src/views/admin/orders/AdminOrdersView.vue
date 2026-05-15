@@ -223,13 +223,23 @@ async function handleRetryOrder(order: PaymentOrder) {
   catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
 }
 
-function openRefundDialog(order: PaymentOrder) { selectedOrder.value = order; showRefundDialog.value = true }
+async function openRefundDialog(order: PaymentOrder) {
+  selectedOrder.value = order
+  showRefundDialog.value = true
+  if (order.order_type !== 'subscription') return
+  try {
+    const res = await adminPaymentAPI.previewRefund(order.id)
+    selectedOrder.value = { ...order, ...res.data }
+  } catch (_err: unknown) {
+    // Keep the order data already loaded in the table/detail response.
+  }
+}
 
-async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean }) {
+async function handleRefund(data: { amount: number; reason: string; deduct_balance: boolean; force: boolean; subscription_days_to_deduct?: number }) {
   if (!selectedOrder.value) return
   refundSubmitting.value = true
   try {
-    await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force })
+    await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force, subscription_days_to_deduct: data.subscription_days_to_deduct })
     appStore.showSuccess(t('payment.admin.refundSuccess')); showRefundDialog.value = false; loadOrders()
   } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
   finally { refundSubmitting.value = false }
