@@ -590,8 +590,7 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		field = dbaccount.FieldID
 		defaultOrder = false
 	case "status":
-		field = dbaccount.FieldStatus
-		defaultOrder = false
+		return accountStatusOrder(sortOrder)
 	case "schedulable":
 		field = dbaccount.FieldSchedulable
 		defaultOrder = false
@@ -619,6 +618,47 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountStatusOrder(sortOrder string) []func(*entsql.Selector) {
+	return []func(*entsql.Selector){
+		func(s *entsql.Selector) {
+			statusCol := s.C(dbaccount.FieldStatus)
+			schedulableCol := s.C(dbaccount.FieldSchedulable)
+			rateLimitResetCol := s.C(dbaccount.FieldRateLimitResetAt)
+			tempUnschedulableCol := s.C(dbaccount.FieldTempUnschedulableUntil)
+
+			statusRankExpr := "CASE" +
+				" WHEN " + statusCol + " = '" + service.StatusActive + "'" +
+				" AND " + schedulableCol + " = TRUE" +
+				" AND (" + rateLimitResetCol + " IS NULL OR " + rateLimitResetCol + " <= NOW())" +
+				" AND (" + tempUnschedulableCol + " IS NULL OR " + tempUnschedulableCol + " <= NOW()) THEN 1" +
+				" WHEN " + statusCol + " = '" + service.StatusActive + "'" +
+				" AND " + schedulableCol + " = FALSE" +
+				" AND (" + rateLimitResetCol + " IS NULL OR " + rateLimitResetCol + " <= NOW())" +
+				" AND (" + tempUnschedulableCol + " IS NULL OR " + tempUnschedulableCol + " <= NOW()) THEN 2" +
+				" WHEN " + statusCol + " = '" + service.StatusActive + "'" +
+				" AND " + rateLimitResetCol + " IS NOT NULL" +
+				" AND " + rateLimitResetCol + " > NOW() THEN 3" +
+				" WHEN " + statusCol + " = '" + service.StatusActive + "'" +
+				" AND " + tempUnschedulableCol + " IS NOT NULL" +
+				" AND " + tempUnschedulableCol + " > NOW() THEN 4" +
+				" WHEN " + statusCol + " = '" + service.StatusError + "' THEN 5" +
+				" WHEN " + statusCol + " = '" + service.StatusDisabled + "' THEN 6" +
+				" ELSE 7 END"
+
+			if sortOrder == pagination.SortOrderDesc {
+				s.OrderExpr(entsql.Expr(statusRankExpr + " DESC"))
+				s.OrderExpr(entsql.Expr(rateLimitResetCol + " DESC NULLS LAST"))
+				s.OrderBy(entsql.Desc(s.C(dbaccount.FieldID)))
+				return
+			}
+
+			s.OrderExpr(entsql.Expr(statusRankExpr + " ASC"))
+			s.OrderExpr(entsql.Expr(rateLimitResetCol + " ASC NULLS LAST"))
+			s.OrderBy(entsql.Asc(s.C(dbaccount.FieldID)))
+		},
+	}
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
