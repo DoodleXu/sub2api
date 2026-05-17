@@ -260,6 +260,28 @@ describe('buildCreateOrderPayload', () => {
       payment_source: 'wechat_in_app_resume',
     })
   })
+
+  it('keeps subscription upgrade source on subscription orders', () => {
+    expect(buildCreateOrderPayload({
+      amount: 19.99,
+      paymentType: 'wxpay_direct',
+      orderType: 'subscription',
+      planId: 9,
+      upgradeFromSubscriptionId: 321,
+      origin: 'https://app.example.com/',
+      isMobile: true,
+      isWechatBrowser: true,
+    })).toEqual({
+      amount: 19.99,
+      payment_type: 'wxpay',
+      order_type: 'subscription',
+      plan_id: 9,
+      upgrade_from_subscription_id: 321,
+      return_url: 'https://app.example.com/payment/result',
+      is_mobile: true,
+      payment_source: 'wechat_in_app_resume',
+    })
+  })
 })
 
 describe('readPaymentRecoverySnapshot', () => {
