@@ -23,6 +23,20 @@
         </div>
       </div>
     </template>
+    <template v-if="showUpgradeCredit" #cell-upgrade_credit="{ row }">
+      <div v-if="row.upgrade_credit_amount > 0" class="text-sm">
+        <div class="font-medium text-emerald-600 dark:text-emerald-400">
+          -¥{{ row.upgrade_credit_amount.toFixed(2) }}
+        </div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('payment.orders.creditDays', { days: row.upgrade_credit_days || 0 }) }}
+        </div>
+        <div v-if="row.upgrade_from_subscription_id" class="text-xs text-gray-400">
+          #{{ row.upgrade_from_subscription_id }}
+        </div>
+      </div>
+      <span v-else class="text-xs text-gray-400">-</span>
+    </template>
     <template #cell-payment_type="{ value }">
       <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('payment.methods.' + value, value) }}</span>
     </template>
@@ -52,6 +66,7 @@ const props = defineProps<{
   orders: PaymentOrder[]
   loading: boolean
   showUser?: boolean
+  showUpgradeCredit?: boolean
 }>()
 
 function formatDate(dateStr: string) { return new Date(dateStr).toLocaleString() }
@@ -66,6 +81,11 @@ const columns = computed((): Column[] => {
   }
   cols.push(
     { key: 'pay_amount', label: t('payment.orders.payAmount') },
+  )
+  if (props.showUpgradeCredit) {
+    cols.push({ key: 'upgrade_credit', label: t('payment.orders.subscriptionCredit') })
+  }
+  cols.push(
     { key: 'payment_type', label: t('payment.orders.paymentMethod') },
     { key: 'status', label: t('payment.orders.status') },
     { key: 'created_at', label: t('payment.orders.createdAt') },

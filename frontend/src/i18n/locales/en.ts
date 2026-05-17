@@ -6476,6 +6476,10 @@ export default {
       orderType: 'Order Type',
       actions: 'Actions',
       requestRefund: 'Request Refund',
+      subscriptionCredit: 'Subscription Credit',
+      creditDays: '{days} day(s)',
+      creditDaysLabel: 'Credit Days',
+      creditSourceSubscription: 'Source Subscription',
     },
     result: {
       success: 'Payment Successful',

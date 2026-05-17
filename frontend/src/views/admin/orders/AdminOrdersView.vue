@@ -19,7 +19,7 @@
       </div>
 
       <!-- Table -->
-      <OrderTable :orders="orders" :loading="ordersLoading" show-user>
+      <OrderTable :orders="orders" :loading="ordersLoading" show-user show-upgrade-credit>
         <template #actions="{ row }">
           <div class="flex items-center gap-1">
             <button @click="showOrderDetail(row)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-dark-600">
@@ -69,6 +69,14 @@
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.createdAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.created_at) }}</p></div>
           <div><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.expiresAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.expires_at) }}</p></div>
           <div v-if="selectedOrder.paid_at"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.paidAt') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(selectedOrder.paid_at) }}</p></div>
+          <div v-if="selectedOrder.upgrade_credit_amount && selectedOrder.upgrade_credit_amount > 0" class="col-span-2 rounded-lg bg-emerald-50 p-3 dark:bg-emerald-900/20">
+            <p class="mb-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">{{ t('payment.orders.subscriptionCredit') }}</p>
+            <div class="grid grid-cols-2 gap-4">
+              <div><p class="text-xs text-emerald-700/80 dark:text-emerald-300/80">{{ t('payment.upgrade.creditAmount') }}</p><p class="text-sm font-semibold text-emerald-800 dark:text-emerald-200">-¥{{ selectedOrder.upgrade_credit_amount.toFixed(2) }}</p></div>
+              <div v-if="selectedOrder.upgrade_credit_days"><p class="text-xs text-emerald-700/80 dark:text-emerald-300/80">{{ t('payment.orders.creditDaysLabel') }}</p><p class="text-sm text-emerald-800 dark:text-emerald-200">{{ selectedOrder.upgrade_credit_days }}</p></div>
+              <div v-if="selectedOrder.upgrade_from_subscription_id"><p class="text-xs text-emerald-700/80 dark:text-emerald-300/80">{{ t('payment.orders.creditSourceSubscription') }}</p><p class="font-mono text-sm text-emerald-800 dark:text-emerald-200">#{{ selectedOrder.upgrade_from_subscription_id }}</p></div>
+            </div>
+          </div>
           <div v-if="selectedOrder.refund_amount"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundAmount') }}</p><p class="text-sm font-medium text-red-600 dark:text-red-400">{{ selectedOrder.order_type === 'balance' ? '$' : '¥' }}{{ selectedOrder.refund_amount.toFixed(2) }}</p></div>
           <div v-if="selectedOrder.refund_reason" class="col-span-2"><p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.admin.refundReason') }}</p><p class="text-sm text-gray-700 dark:text-gray-300">{{ selectedOrder.refund_reason }}</p></div>
           <!-- Refund request info -->

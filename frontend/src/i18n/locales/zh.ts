@@ -6661,6 +6661,10 @@ export default {
       orderType: '订单类型',
       actions: '操作',
       requestRefund: '申请退款',
+      subscriptionCredit: '订阅折抵',
+      creditDays: '{days} 天',
+      creditDaysLabel: '折抵天数',
+      creditSourceSubscription: '来源订阅',
     },
     result: {
       success: '支付成功',
