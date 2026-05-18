@@ -372,6 +372,7 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 		IgnoreCountTokensErrors:         true,  // count_tokens 404 是预期行为，默认忽略
 		IgnoreContextCanceled:           true,  // Default to true - client disconnects are not errors
 		IgnoreNoAvailableAccounts:       false, // Default to false - this is a real routing issue
+		IgnoreDisabledApiKeyErrors:      false, // 默认不忽略，禁用 key 的调用可用于发现客户端配置问题
 		IgnoreInsufficientBalanceErrors: false, // 默认不忽略，余额不足可能需要关注
 		DisplayOpenAITokenStats:         false,
 		DisplayAlertEvents:              true,

@@ -5169,6 +5169,8 @@ export default {
         ignoreNoAvailableAccountsHint: '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
         ignoreInvalidApiKeyErrors: '忽略无效 API Key 错误',
         ignoreInvalidApiKeyErrorsHint: '启用后，无效或缺失 API Key 的错误（INVALID_API_KEY、API_KEY_REQUIRED）将不会写入错误日志。',
+        ignoreDisabledApiKeyErrors: '忽略已禁用的 Key 报错',
+        ignoreDisabledApiKeyErrorsHint: '启用后，已禁用 API Key 的错误（API_KEY_DISABLED）将不会写入错误日志。',
         ignoreInsufficientBalanceErrors: '忽略余额不足错误',
         ignoreInsufficientBalanceErrorsHint: '启用后，账号余额不足（Insufficient balance）的错误将不会写入错误日志。',
         autoRefresh: '自动刷新',

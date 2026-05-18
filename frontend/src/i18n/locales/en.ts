@@ -5006,6 +5006,8 @@ export default {
         ignoreNoAvailableAccountsHint: 'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
         ignoreInvalidApiKeyErrors: 'Ignore invalid API key errors',
         ignoreInvalidApiKeyErrorsHint: 'When enabled, invalid or missing API key errors (INVALID_API_KEY, API_KEY_REQUIRED) will not be written to the error log.',
+        ignoreDisabledApiKeyErrors: 'Ignore disabled API key errors',
+        ignoreDisabledApiKeyErrorsHint: 'When enabled, disabled API key errors (API_KEY_DISABLED) will not be written to the error log.',
         ignoreInsufficientBalanceErrors: 'Ignore Insufficient Balance Errors',
         ignoreInsufficientBalanceErrorsHint: 'When enabled, insufficient account balance errors will not be written to the error log.',
         autoRefresh: 'Auto Refresh',

@@ -71,12 +71,13 @@ func TestGetOpsAdvancedSettings_BackfillsNewDisplayFlagsFromDefaults(t *testing.
 		"aggregation": map[string]any{
 			"aggregation_enabled": false,
 		},
-		"ignore_count_tokens_errors":    true,
-		"ignore_context_canceled":       true,
-		"ignore_no_available_accounts":  false,
-		"ignore_invalid_api_key_errors": false,
-		"auto_refresh_enabled":          false,
-		"auto_refresh_interval_seconds": 30,
+		"ignore_count_tokens_errors":     true,
+		"ignore_context_canceled":        true,
+		"ignore_no_available_accounts":   false,
+		"ignore_invalid_api_key_errors":  false,
+		"ignore_disabled_api_key_errors": true,
+		"auto_refresh_enabled":           false,
+		"auto_refresh_interval_seconds":  30,
 	}
 	raw, err := json.Marshal(legacyCfg)
 	if err != nil {
@@ -93,5 +94,8 @@ func TestGetOpsAdvancedSettings_BackfillsNewDisplayFlagsFromDefaults(t *testing.
 	}
 	if !cfg.DisplayAlertEvents {
 		t.Fatalf("DisplayAlertEvents = false, want true default backfill")
+	}
+	if !cfg.IgnoreDisabledApiKeyErrors {
+		t.Fatalf("IgnoreDisabledApiKeyErrors = false, want legacy value preserved")
 	}
 }
