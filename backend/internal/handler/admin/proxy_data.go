@@ -63,6 +63,8 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 	}
 
 	payload := DataPayload{
+		Type:       coreDataType,
+		Version:    dataVersion,
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
 		Proxies:    dataProxies,
 		Accounts:   []DataAccount{},
