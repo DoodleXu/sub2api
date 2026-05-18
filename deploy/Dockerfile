@@ -9,6 +9,7 @@
 ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.26.3-alpine
 ARG ALPINE_IMAGE=alpine:3.20
+ARG PNPM_VERSION=9
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 
@@ -16,14 +17,15 @@ ARG GOSUMDB=sum.golang.google.cn
 # Stage 1: Frontend Builder
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS frontend-builder
+ARG PNPM_VERSION
 
 WORKDIR /app/frontend
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install pnpm (pin to major 9 to match CI/release)
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Install dependencies first (better caching)
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Copy frontend source and build
