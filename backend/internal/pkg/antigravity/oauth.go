@@ -133,6 +133,11 @@ func GetUserAgentForContext(ctx context.Context) string {
 	return BuildUserAgent(GetUserAgentVersionForContext(ctx))
 }
 
+// GetIDEVersion 返回 Antigravity API metadata 中使用的默认 IDE 版本。
+func GetIDEVersion() string {
+	return GetUserAgentVersionForContext(context.Background())
+}
+
 // GetUserAgent 返回当前配置的 User-Agent。
 func GetUserAgent() string {
 	return GetUserAgentForContext(context.Background())

@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func requireSameResolvedPath(t *testing.T, got, want string) {
+	t.Helper()
+	resolvedGot, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("resolve got path %q: %v", got, err)
+	}
+	resolvedWant, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("resolve want path %q: %v", want, err)
+	}
+	if resolvedGot != resolvedWant {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
 func TestCleanPageImageRelativePath(t *testing.T) {
 	tests := []struct {
 		name string
@@ -59,18 +74,14 @@ func TestResolvePageImagePath(t *testing.T) {
 		t.Fatal("expected direct image path to be accepted")
 	}
 	want := filepath.Join(base, "logo.png")
-	if got != want {
-		t.Fatalf("path = %q, want %q", got, want)
-	}
+	requireSameResolvedPath(t, got, want)
 
 	got, ok = resolvePageImagePath(pagesDir, base, "images/logo.png")
 	if !ok {
 		t.Fatal("expected nested image path to be accepted")
 	}
 	want = filepath.Join(base, "images", "logo.png")
-	if got != want {
-		t.Fatalf("path = %q, want %q", got, want)
-	}
+	requireSameResolvedPath(t, got, want)
 
 	if got, ok := resolvePageImagePath(pagesDir, base, "../guide.md"); ok {
 		t.Fatalf("expected traversal to be rejected, got %q", got)
