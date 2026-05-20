@@ -1,45 +1,86 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { createI18n } from 'vue-i18n'
 import SubscriptionPlanCard from '../SubscriptionPlanCard.vue'
 
-vi.mock('vue-i18n', async () => {
-  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
-  return {
-    ...actual,
-    useI18n: () => ({
-      t: (key: string) => key,
-    }),
-  }
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en',
+  fallbackWarn: false,
+  missingWarn: false,
+  messages: {
+    en: {
+      payment: {
+        days: 'days',
+        models: 'Models',
+        planCard: {
+          quota: 'Quota',
+          rate: 'Rate',
+          unlimited: 'Unlimited',
+        },
+        subscribeNow: 'Subscribe now',
+      },
+    },
+  },
 })
+
+const mountPlanCard = (overrides: Record<string, unknown> = {}) =>
+  mount(SubscriptionPlanCard, {
+    props: {
+      plan: {
+        id: 1,
+        group_id: 10,
+        group_platform: 'openai',
+        name: 'Pro',
+        description: '',
+        price: 10,
+        original_price: null,
+        features: [],
+        rate_multiplier: 1,
+        validity_days: 30,
+        validity_unit: 'day',
+        daily_limit_usd: null,
+        weekly_limit_usd: null,
+        monthly_limit_usd: null,
+        supported_model_scopes: ['claude', 'gemini_text', 'gemini_image'],
+        is_active: true,
+        for_sale: true,
+        sort_order: 1,
+        ...overrides,
+      },
+    },
+    global: { plugins: [i18n] },
+  })
 
 describe('SubscriptionPlanCard', () => {
   it('renders subscription price with ¥ while keeping quota limits in $', () => {
-    const wrapper = mount(SubscriptionPlanCard, {
-      props: {
-        plan: {
-          id: 1,
-          group_id: 2,
-          name: '标准订阅',
-          description: '',
-          price: 128,
-          original_price: 168,
-          validity_days: 30,
-          validity_unit: 'day',
-          rate_multiplier: 1,
-          daily_limit_usd: 100,
-          weekly_limit_usd: 200,
-          monthly_limit_usd: null,
-          features: [],
-          group_platform: 'openai',
-          sort_order: 1,
-          for_sale: true,
-        },
-      },
+    const wrapper = mountPlanCard({
+      name: '标准订阅',
+      price: 128,
+      original_price: 168,
+      daily_limit_usd: 100,
+      weekly_limit_usd: 200,
     })
 
     expect(wrapper.text()).toContain('¥128')
     expect(wrapper.text()).toContain('¥168')
     expect(wrapper.text()).toContain('$100')
     expect(wrapper.text()).toContain('$200')
+  })
+
+  it('does not show Antigravity model scopes for OpenAI plans', () => {
+    const text = mountPlanCard({ group_platform: 'openai' }).text()
+
+    expect(text).not.toContain('Claude')
+    expect(text).not.toContain('Gemini')
+    expect(text).not.toContain('Imagen')
+  })
+
+  it('shows model scopes for Antigravity plans', () => {
+    const text = mountPlanCard({ group_platform: 'antigravity' }).text()
+
+    expect(text).toContain('Claude')
+    expect(text).toContain('Gemini')
+    expect(text).toContain('Imagen')
   })
 })

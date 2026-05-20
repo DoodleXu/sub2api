@@ -111,3 +111,13 @@ func TestResolvePageImagePathRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("expected symlink escape to be rejected, got %q", got)
 	}
 }
+
+func mustEvalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("eval symlinks for %q: %v", path, err)
+	}
+	return realPath
+}
