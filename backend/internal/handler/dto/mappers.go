@@ -214,6 +214,8 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Priority:                a.Priority,
 		RateMultiplier:          a.BillingRateMultiplier(),
 		TotalCostCNY:            a.TotalCostCNY,
+		TotalAccountCost:        a.TotalAccountCost,
+		CostCNYPerUSD:           a.CostCNYPerUSD,
 		Status:                  a.Status,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,

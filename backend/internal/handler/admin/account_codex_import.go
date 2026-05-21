@@ -31,6 +31,7 @@ type CodexSessionImportRequest struct {
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
+	TotalCostCNY            *float64       `json:"total_cost_cny"`
 	LoadFactor              *int           `json:"load_factor"`
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
@@ -125,6 +126,10 @@ func (h *AccountHandler) ImportCodexSession(c *gin.Context) {
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
+		return
+	}
+	if req.TotalCostCNY != nil && *req.TotalCostCNY < 0 {
+		response.BadRequest(c, "total_cost_cny must be >= 0")
 		return
 	}
 	if req.LoadFactor != nil && *req.LoadFactor > 10000 {
@@ -252,6 +257,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				Concurrency:        req.Concurrency,
 				Priority:           req.Priority,
 				RateMultiplier:     req.RateMultiplier,
+				TotalCostCNY:       req.TotalCostCNY,
 				LoadFactor:         req.LoadFactor,
 				ExpiresAt:          effectiveExpiresAt,
 				AutoPauseOnExpired: autoPauseOnExpired,
@@ -309,6 +315,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			Concurrency:           concurrency,
 			Priority:              priority,
 			RateMultiplier:        req.RateMultiplier,
+			TotalCostCNY:          req.TotalCostCNY,
 			LoadFactor:            req.LoadFactor,
 			GroupIDs:              req.GroupIDs,
 			ExpiresAt:             effectiveExpiresAt,

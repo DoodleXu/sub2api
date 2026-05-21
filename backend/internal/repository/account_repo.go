@@ -576,6 +576,9 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := r.attachAccountCostStats(ctx, outAccounts); err != nil {
+		return nil, nil, err
+	}
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
 }
 
@@ -1674,6 +1677,65 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 		proxyMap[p.ID] = proxyEntityToService(p)
 	}
 	return proxyMap, nil
+}
+
+func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountIDs []int64) (map[int64]float64, error) {
+	result := make(map[int64]float64, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			account_id,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS total_account_cost
+		FROM usage_logs
+		WHERE account_id = ANY($1)
+		GROUP BY account_id
+	`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var accountID int64
+		var cost float64
+		if err := rows.Scan(&accountID, &cost); err != nil {
+			return nil, err
+		}
+		result[accountID] = cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *accountRepository) attachAccountCostStats(ctx context.Context, accounts []service.Account) error {
+	if len(accounts) == 0 {
+		return nil
+	}
+	accountIDs := make([]int64, 0, len(accounts))
+	for i := range accounts {
+		accountIDs = append(accountIDs, accounts[i].ID)
+	}
+	costs, err := r.loadTotalAccountCosts(ctx, accountIDs)
+	if err != nil {
+		return err
+	}
+	for i := range accounts {
+		totalAccountCost := costs[accounts[i].ID]
+		accounts[i].TotalAccountCost = totalAccountCost
+		if accounts[i].TotalCostCNY <= 0 {
+			continue
+		}
+		if totalAccountCost > 0 {
+			accounts[i].CostCNYPerUSD = accounts[i].TotalCostCNY / totalAccountCost
+		}
+	}
+	return nil
 }
 
 func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []int64) (map[int64][]*service.Group, map[int64][]int64, map[int64][]service.AccountGroup, error) {

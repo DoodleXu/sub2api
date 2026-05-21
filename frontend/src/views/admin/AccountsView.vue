@@ -297,7 +297,7 @@
           </template>
           <template #cell-total_cost_cny="{ row }">
             <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-              ¥{{ (row.total_cost_cny ?? 0).toFixed(2) }}
+              {{ formatCostPerUsd(row) }}
             </span>
           </template>
           <template #cell-priority="{ value }">
@@ -1132,7 +1132,7 @@ const allColumns = computed(() => {
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
-    { key: 'total_cost_cny', label: t('admin.accounts.columns.totalCostCny'), sortable: true },
+    { key: 'total_cost_cny', label: t('admin.accounts.columns.totalCostCny'), sortable: false },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
@@ -1343,6 +1343,22 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
     console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
   }
+}
+
+const formatCostPerUsd = (account: Account): string => {
+  const totalCny = Number(account.total_cost_cny ?? 0)
+  if (!Number.isFinite(totalCny) || totalCny <= 0) {
+    return '-'
+  }
+  const backendCostPerUsd = Number(account.cost_cny_per_usd ?? 0)
+  if (Number.isFinite(backendCostPerUsd) && backendCostPerUsd > 0) {
+    return `¥${backendCostPerUsd.toFixed(2)}`
+  }
+  const totalAccountCost = Number(account.total_account_cost ?? 0)
+  if (!Number.isFinite(totalCny) || !Number.isFinite(totalAccountCost) || totalAccountCost <= 0) {
+    return `¥${totalCny.toFixed(2)}`
+  }
+  return `¥${(totalCny / totalAccountCost).toFixed(2)}`
 }
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>

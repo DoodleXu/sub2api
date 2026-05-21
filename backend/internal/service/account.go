@@ -31,6 +31,8 @@ type Account struct {
 	// 使用指针用于兼容旧版本调度缓存（Redis）中缺字段的情况：nil 表示按 1.0 处理。
 	RateMultiplier     *float64
 	TotalCostCNY       float64
+	TotalAccountCost   float64
+	CostCNYPerUSD      float64
 	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
 	Status             string
 	ErrorMessage       string

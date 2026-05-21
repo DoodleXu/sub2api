@@ -814,6 +814,8 @@ export interface Account {
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   total_cost_cny?: number
+  total_account_cost?: number
+  cost_cny_per_usd?: number
   status: 'active' | 'inactive' | 'error'
   error_message: string | null
   last_used_at: string | null
@@ -1131,6 +1133,7 @@ export interface CodexSessionImportRequest {
   concurrency?: number
   priority?: number
   rate_multiplier?: number
+  total_cost_cny?: number
   load_factor?: number | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
