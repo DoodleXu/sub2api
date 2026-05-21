@@ -6855,7 +6855,13 @@ export default {
     noPlans: '暂无可用订阅套餐',
     upgrade: {
       useCredit: '使用已有订阅折抵',
+      enableCredit: '启用订阅折抵',
       useCreditHint: '选择一份仍在有效期内的付费订阅，按剩余天数折算抵扣本次订阅金额。',
+      loadingCreditOptions: '正在检查可折抵订阅...',
+      loadFailed: '加载可折抵订阅失败，请稍后重试。',
+      noEligibleSubscriptions: '当前没有可折抵订阅。仅同一订阅分组内、仍在有效期内且来自有效付费订单的订阅可用于折抵。',
+      noEligibleSubscriptionsWithActive: '当前活跃订阅暂不可折抵。请确认旧订阅与新套餐属于同一订阅分组，并且旧订阅来自有效付费订单。',
+      retry: '重试',
       selectSubscription: '选择折抵订阅',
       creditAmount: '订阅折抵',
       creditDaysHint: '将取消原订阅并折抵剩余 {days} 天价值',

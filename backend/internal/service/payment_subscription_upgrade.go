@@ -83,23 +83,22 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 		return subscriptionUpgradeCredit{}, infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
 	}
 
-	lastOrder, err := s.entClient.PaymentOrder.Query().
+	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
 			paymentorder.UserIDEQ(userID),
 			paymentorder.OrderTypeEQ(payment.OrderTypeSubscription),
 			paymentorder.SubscriptionGroupIDEQ(sub.GroupID),
 			paymentorder.StatusIn(OrderStatusCompleted, OrderStatusPartiallyRefunded),
 			paymentorder.SubscriptionDaysNotNil(),
+			paymentorder.CreatedAtGTE(subscriptionUpgradeOrderWindowStart(sub)),
 		).
-		Order(dbent.Desc(paymentorder.FieldCompletedAt), dbent.Desc(paymentorder.FieldCreatedAt)).
-		First(ctx)
+		Order(dbent.Asc(paymentorder.FieldCreatedAt)).
+		All(ctx)
 	if err != nil {
-		if dbent.IsNotFound(err) {
-			return subscriptionUpgradeCredit{}, nil
-		}
 		return subscriptionUpgradeCredit{}, err
 	}
-	if lastOrder.SubscriptionDays == nil || *lastOrder.SubscriptionDays <= 0 || lastOrder.Amount <= 0 {
+	paidAmount, paidDays := subscriptionUpgradePaidTotals(orders)
+	if paidDays <= 0 || paidAmount <= 0 {
 		return subscriptionUpgradeCredit{}, nil
 	}
 
@@ -107,7 +106,7 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 	if remainingDays <= 0 {
 		return subscriptionUpgradeCredit{}, nil
 	}
-	unit := decimal.NewFromFloat(lastOrder.Amount).Div(decimal.NewFromInt(int64(*lastOrder.SubscriptionDays)))
+	unit := decimal.NewFromFloat(paidAmount).Div(decimal.NewFromInt(int64(paidDays)))
 	rawCredit := unit.Mul(decimal.NewFromInt(int64(remainingDays))).Round(2).InexactFloat64()
 	if rawCredit <= 0 {
 		return subscriptionUpgradeCredit{}, nil
@@ -147,6 +146,44 @@ func subscriptionUpgradeCreditAmount(targetPrice, rawCredit float64) float64 {
 		rawCredit = maxCredit
 	}
 	return decimal.NewFromFloat(rawCredit).Round(2).InexactFloat64()
+}
+
+func subscriptionUpgradePaidAmount(order *dbent.PaymentOrder) float64 {
+	if order == nil || order.Amount <= 0 {
+		return 0
+	}
+	if order.Status != OrderStatusPartiallyRefunded || order.RefundAmount <= 0 {
+		return order.Amount
+	}
+	paid := decimal.NewFromFloat(order.Amount).Sub(decimal.NewFromFloat(order.RefundAmount)).Round(2).InexactFloat64()
+	if paid <= 0 {
+		return 0
+	}
+	return paid
+}
+
+func subscriptionUpgradePaidTotals(orders []*dbent.PaymentOrder) (float64, int) {
+	totalPaid := decimal.Zero
+	totalDays := 0
+	for _, order := range orders {
+		if order == nil || order.SubscriptionDays == nil || *order.SubscriptionDays <= 0 {
+			continue
+		}
+		paid := subscriptionUpgradePaidAmount(order)
+		if paid <= 0 {
+			continue
+		}
+		totalPaid = totalPaid.Add(decimal.NewFromFloat(paid))
+		totalDays += *order.SubscriptionDays
+	}
+	return totalPaid.Round(2).InexactFloat64(), totalDays
+}
+
+func subscriptionUpgradeOrderWindowStart(sub *UserSubscription) time.Time {
+	if sub == nil || sub.StartsAt.IsZero() {
+		return time.Time{}
+	}
+	return sub.StartsAt.Add(-time.Hour)
 }
 
 func subscriptionUpgradePayableAmount(targetPrice, credit float64) float64 {

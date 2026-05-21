@@ -6671,7 +6671,13 @@ export default {
     noPlans: 'No subscription plans available',
     upgrade: {
       useCredit: 'Apply existing subscription credit',
+      enableCredit: 'Apply subscription credit',
       useCreditHint: 'Select an active paid subscription and apply its remaining-day value to this purchase.',
+      loadingCreditOptions: 'Checking eligible subscriptions...',
+      loadFailed: 'Failed to load subscription credit options. Please try again later.',
+      noEligibleSubscriptions: 'No eligible subscription credit is available. Only active subscriptions from a valid paid order in the same subscription group can be credited.',
+      noEligibleSubscriptionsWithActive: 'Your active subscriptions are not eligible for credit. Make sure the old subscription and the new plan belong to the same subscription group and the old subscription came from a valid paid order.',
+      retry: 'Retry',
       selectSubscription: 'Select subscription to credit',
       creditAmount: 'Subscription Credit',
       creditDaysHint: 'The original subscription will be cancelled and {days} remaining day(s) will be credited',

@@ -18,6 +18,7 @@ const showError = vi.hoisted(() => vi.fn())
 const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
+const getSubscriptionUpgradeOptions = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-router', async () => {
@@ -77,6 +78,7 @@ vi.mock('@/stores', () => ({
 vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
+    getSubscriptionUpgradeOptions,
   },
 }))
 
@@ -197,6 +199,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     showInfo.mockReset()
     showWarning.mockReset()
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
+    getSubscriptionUpgradeOptions.mockReset().mockResolvedValue({ data: { options: [] } })
     bridgeInvoke.mockReset()
     window.localStorage.clear()
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = {
@@ -414,5 +417,25 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(showWarning).toHaveBeenCalledWith('payment.errors.mobilePaymentFallbackToQr')
     expect(showError).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('weixin://wxpay/bizpayurl?pr=fallback-native')
+  })
+
+  it('shows a retryable message when subscription credit options fail to load', async () => {
+    routeState.query = { tab: 'subscription', group: '3' }
+    getCheckoutInfo.mockResolvedValue(checkoutInfoWithPlansFixture())
+    getSubscriptionUpgradeOptions.mockRejectedValueOnce(new Error('network failed'))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(getSubscriptionUpgradeOptions).toHaveBeenCalledWith(7)
+    expect((wrapper.vm as unknown as { upgradeOptionsError: string }).upgradeOptionsError).toBe('network failed')
   })
 })

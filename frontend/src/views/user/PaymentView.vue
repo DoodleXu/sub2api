@@ -146,37 +146,69 @@
                   @select="selectedMethod = $event"
                 />
               </div>
-              <div v-if="showUpgradeCreditSelector" class="card p-6">
-                <label class="flex items-start gap-3">
-                  <input
-                    v-model="useUpgradeCredit"
-                    type="checkbox"
-                    class="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <span class="min-w-0 flex-1">
-                    <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.upgrade.useCredit') }}</span>
-                    <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.useCreditHint') }}</span>
-                  </span>
-                </label>
-                <div v-if="useUpgradeCredit" class="mt-4 space-y-3">
-                  <div v-if="upgradeOptions.length > 1">
-                    <label class="input-label">{{ t('payment.upgrade.selectSubscription') }}</label>
-                    <select v-model.number="selectedUpgradeSubscriptionId" class="input mt-1 w-full">
-                      <option v-for="option in upgradeOptions" :key="option.subscription_id" :value="option.subscription_id">
-                        {{ upgradeOptionLabel(option) }}
-                      </option>
-                    </select>
-                  </div>
-                  <div v-if="selectedUpgradeOption" class="rounded-lg bg-emerald-50 p-3 text-sm dark:bg-emerald-900/20">
-                    <div class="flex justify-between">
-                      <span class="text-emerald-700 dark:text-emerald-300">{{ t('payment.upgrade.creditAmount') }}</span>
-                      <span class="font-semibold text-emerald-800 dark:text-emerald-200">-{{ formatSelectedPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
-                    </div>
-                    <div class="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">
-                      {{ t('payment.upgrade.creditDaysHint', { days: selectedUpgradeOption.credit_days }) }}
+              <div v-if="selectedPlan" class="card p-6">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.upgrade.useCredit') }}</div>
+                    <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      <template v-if="loadingUpgradeOptions">
+                        {{ t('payment.upgrade.loadingCreditOptions') }}
+                      </template>
+                      <template v-else-if="upgradeOptionsError">
+                        {{ upgradeOptionsError }}
+                      </template>
+                      <template v-else-if="upgradeOptionsChecked">
+                        <span v-if="upgradeOptions.length > 0">{{ t('payment.upgrade.useCreditHint') }}</span>
+                        <span v-else-if="activeSubscriptions.length > 0">{{ t('payment.upgrade.noEligibleSubscriptionsWithActive') }}</span>
+                        <span v-else>{{ t('payment.upgrade.noEligibleSubscriptions') }}</span>
+                      </template>
                     </div>
                   </div>
+                  <button
+                    v-if="upgradeOptionsError && selectedPlan"
+                    type="button"
+                    class="btn btn-secondary shrink-0 px-3 py-1.5 text-xs"
+                    @click="loadUpgradeOptions(selectedPlan.id)"
+                  >
+                    {{ t('payment.upgrade.retry') }}
+                  </button>
                 </div>
+                <div v-if="loadingUpgradeOptions" class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('payment.upgrade.loadingCreditOptions') }}
+                </div>
+                <template v-else-if="upgradeOptionsError" />
+                <template v-else-if="upgradeOptions.length > 0">
+                  <label class="mt-4 flex items-start gap-3">
+                    <input
+                      v-model="useUpgradeCredit"
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span class="min-w-0 flex-1">
+                      <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('payment.upgrade.enableCredit') }}</span>
+                      <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.useCreditHint') }}</span>
+                    </span>
+                  </label>
+                  <div v-if="useUpgradeCredit" class="mt-4 space-y-3">
+                    <div v-if="upgradeOptions.length > 1">
+                      <label class="input-label">{{ t('payment.upgrade.selectSubscription') }}</label>
+                      <select v-model.number="selectedUpgradeSubscriptionId" class="input mt-1 w-full">
+                        <option v-for="option in upgradeOptions" :key="option.subscription_id" :value="option.subscription_id">
+                          {{ upgradeOptionLabel(option) }}
+                        </option>
+                      </select>
+                    </div>
+                    <div v-if="selectedUpgradeOption" class="rounded-lg bg-emerald-50 p-3 text-sm dark:bg-emerald-900/20">
+                      <div class="flex justify-between">
+                        <span class="text-emerald-700 dark:text-emerald-300">{{ t('payment.upgrade.creditAmount') }}</span>
+                        <span class="font-semibold text-emerald-800 dark:text-emerald-200">-{{ formatSelectedPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
+                      </div>
+                      <div class="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">
+                        {{ t('payment.upgrade.creditDaysHint', { days: selectedUpgradeOption.credit_days }) }}
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </div>
               <div v-if="selectedPlan.price > 0" class="card p-6">
                 <div class="space-y-2 text-sm">
@@ -344,6 +376,8 @@ const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
 const upgradeOptions = ref<SubscriptionUpgradeOption[]>([])
 const loadingUpgradeOptions = ref(false)
+const upgradeOptionsChecked = ref(false)
+const upgradeOptionsError = ref('')
 const useUpgradeCredit = ref(false)
 const selectedUpgradeSubscriptionId = ref<number | null>(null)
 
@@ -640,8 +674,6 @@ const selectedUpgradeOption = computed(() => {
   return upgradeOptions.value.find(option => option.subscription_id === selectedUpgradeSubscriptionId.value) || null
 })
 
-const showUpgradeCreditSelector = computed(() => upgradeOptions.value.length > 0)
-
 const subscriptionPayableAmount = computed(() => {
   const price = selectedPlan.value?.price ?? 0
   if (!selectedUpgradeOption.value) return price
@@ -761,6 +793,8 @@ async function confirmSubscribe() {
 
 function resetUpgradeCreditState() {
   upgradeOptions.value = []
+  upgradeOptionsChecked.value = false
+  upgradeOptionsError.value = ''
   useUpgradeCredit.value = false
   selectedUpgradeSubscriptionId.value = null
 }
@@ -771,11 +805,14 @@ async function loadUpgradeOptions(planId: number) {
   try {
     const res = await paymentAPI.getSubscriptionUpgradeOptions(planId)
     upgradeOptions.value = res.data.options || []
+    upgradeOptionsChecked.value = true
     if (upgradeOptions.value.length === 1) {
       selectedUpgradeSubscriptionId.value = upgradeOptions.value[0].subscription_id
     }
-  } catch {
+  } catch (err: unknown) {
     upgradeOptions.value = []
+    upgradeOptionsChecked.value = true
+    upgradeOptionsError.value = extractI18nErrorMessage(err, t, 'payment.errors', t('payment.upgrade.loadFailed'))
   } finally {
     loadingUpgradeOptions.value = false
   }
