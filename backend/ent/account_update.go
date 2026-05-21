@@ -241,6 +241,27 @@ func (_u *AccountUpdate) AddRateMultiplier(v float64) *AccountUpdate {
 	return _u
 }
 
+// SetTotalCostCny sets the "total_cost_cny" field.
+func (_u *AccountUpdate) SetTotalCostCny(v float64) *AccountUpdate {
+	_u.mutation.ResetTotalCostCny()
+	_u.mutation.SetTotalCostCny(v)
+	return _u
+}
+
+// SetNillableTotalCostCny sets the "total_cost_cny" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableTotalCostCny(v *float64) *AccountUpdate {
+	if v != nil {
+		_u.SetTotalCostCny(*v)
+	}
+	return _u
+}
+
+// AddTotalCostCny adds value to the "total_cost_cny" field.
+func (_u *AccountUpdate) AddTotalCostCny(v float64) *AccountUpdate {
+	_u.mutation.AddTotalCostCny(v)
+	return _u
+}
+
 // SetStatus sets the "status" field.
 func (_u *AccountUpdate) SetStatus(v string) *AccountUpdate {
 	_u.mutation.SetStatus(v)
@@ -732,6 +753,12 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(account.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.TotalCostCny(); ok {
+		_spec.SetField(account.FieldTotalCostCny, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedTotalCostCny(); ok {
+		_spec.AddField(account.FieldTotalCostCny, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
 	}
@@ -1165,6 +1192,27 @@ func (_u *AccountUpdateOne) SetNillableRateMultiplier(v *float64) *AccountUpdate
 // AddRateMultiplier adds value to the "rate_multiplier" field.
 func (_u *AccountUpdateOne) AddRateMultiplier(v float64) *AccountUpdateOne {
 	_u.mutation.AddRateMultiplier(v)
+	return _u
+}
+
+// SetTotalCostCny sets the "total_cost_cny" field.
+func (_u *AccountUpdateOne) SetTotalCostCny(v float64) *AccountUpdateOne {
+	_u.mutation.ResetTotalCostCny()
+	_u.mutation.SetTotalCostCny(v)
+	return _u
+}
+
+// SetNillableTotalCostCny sets the "total_cost_cny" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableTotalCostCny(v *float64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetTotalCostCny(*v)
+	}
+	return _u
+}
+
+// AddTotalCostCny adds value to the "total_cost_cny" field.
+func (_u *AccountUpdateOne) AddTotalCostCny(v float64) *AccountUpdateOne {
+	_u.mutation.AddTotalCostCny(v)
 	return _u
 }
 
@@ -1688,6 +1736,12 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(account.FieldRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.TotalCostCny(); ok {
+		_spec.SetField(account.FieldTotalCostCny, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedTotalCostCny(); ok {
+		_spec.AddField(account.FieldTotalCostCny, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)

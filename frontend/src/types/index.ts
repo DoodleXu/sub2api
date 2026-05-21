@@ -813,6 +813,7 @@ export interface Account {
   current_concurrency?: number // Real-time concurrency count from Redis
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
+  total_cost_cny?: number
   status: 'active' | 'inactive' | 'error'
   error_message: string | null
   last_used_at: string | null
@@ -1003,6 +1004,7 @@ export interface CreateAccountRequest {
   load_factor?: number | null
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
+  total_cost_cny?: number
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
@@ -1020,6 +1022,8 @@ export interface UpdateAccountRequest {
   load_factor?: number | null
   priority?: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
+  total_cost_cny?: number
+  add_cost_cny?: number
   schedulable?: boolean
   status?: 'active' | 'inactive' | 'error'
   group_ids?: number[]
@@ -1347,6 +1351,8 @@ export interface DashboardStats {
   total_cost: number // 累计标准计费
   total_actual_cost: number // 累计实际扣除
   total_account_cost: number // 累计账号成本
+  total_cost_cny: number // 累计人民币成本
+  average_cost_cny_per_usd: number // 整体每美元人民币成本
 
   // 今日 Token 使用统计
   today_requests: number
@@ -1393,6 +1399,8 @@ export interface TrendDataPoint {
   total_tokens: number
   cost: number // 标准计费
   actual_cost: number // 实际扣除
+  account_cost: number // 账号成本
+  cost_cny_per_usd: number // 每美元人民币成本
 }
 
 export interface ModelStat {

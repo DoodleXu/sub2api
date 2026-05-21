@@ -43,6 +43,8 @@ const (
 	FieldPriority = "priority"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
 	FieldRateMultiplier = "rate_multiplier"
+	// FieldTotalCostCny holds the string denoting the total_cost_cny field in the database.
+	FieldTotalCostCny = "total_cost_cny"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldErrorMessage holds the string denoting the error_message field in the database.
@@ -126,6 +128,7 @@ var Columns = []string{
 	FieldLoadFactor,
 	FieldPriority,
 	FieldRateMultiplier,
+	FieldTotalCostCny,
 	FieldStatus,
 	FieldErrorMessage,
 	FieldLastUsedAt,
@@ -188,6 +191,8 @@ var (
 	DefaultPriority int
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
 	DefaultRateMultiplier float64
+	// DefaultTotalCostCny holds the default value on creation for the "total_cost_cny" field.
+	DefaultTotalCostCny float64
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -266,6 +271,11 @@ func ByPriority(opts ...sql.OrderTermOption) OrderOption {
 // ByRateMultiplier orders the results by the rate_multiplier field.
 func ByRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRateMultiplier, opts...).ToFunc()
+}
+
+// ByTotalCostCny orders the results by the total_cost_cny field.
+func ByTotalCostCny(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTotalCostCny, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

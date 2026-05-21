@@ -29,26 +29,22 @@
             </div>
           </div>
 
-          <!-- Service Accounts -->
+          <!-- Average Cost -->
           <div class="card p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
-                <Icon name="server" size="md" class="text-purple-600 dark:text-purple-400" :stroke-width="2" />
+              <div class="rounded-lg bg-cyan-100 p-2 dark:bg-cyan-900/30">
+                <Icon name="dollar" size="md" class="text-cyan-600 dark:text-cyan-400" :stroke-width="2" />
               </div>
               <div>
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {{ t('admin.dashboard.accounts') }}
+                  {{ t('admin.dashboard.averageCost') }}
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
-                  {{ stats.total_accounts }}
+                  ¥{{ formatCnyCost(stats.average_cost_cny_per_usd || 0) }}
                 </p>
                 <p class="text-xs">
-                  <span class="text-green-600 dark:text-green-400"
-                    >{{ stats.normal_accounts }} {{ t('common.active') }}</span
-                  >
-                  <span v-if="stats.error_accounts > 0" class="ml-1 text-red-500"
-                    >{{ stats.error_accounts }} {{ t('common.error') }}</span
-                  >
+                  <span class="text-cyan-600 dark:text-cyan-400">{{ t('admin.dashboard.perUsd') }}</span>
+                  <span class="ml-1 text-gray-500 dark:text-gray-400">¥{{ formatCnyCost(stats.total_cost_cny || 0) }}</span>
                 </p>
               </div>
             </div>
@@ -266,6 +262,24 @@
               @ranking-click="goToUserUsage"
             />
             <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
+          </div>
+
+          <div class="card p-4">
+            <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.dashboard.costTrend') }}
+            </h3>
+            <div class="h-64">
+              <div v-if="chartsLoading" class="flex h-full items-center justify-center">
+                <LoadingSpinner size="md" />
+              </div>
+              <Line v-else-if="costTrendChartData" :data="costTrendChartData" :options="costLineOptions" />
+              <div
+                v-else
+                class="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ t('admin.dashboard.noDataAvailable') }}
+              </div>
+            </div>
           </div>
 
           <!-- User Usage Trend (Full Width) -->
@@ -520,6 +534,46 @@ const userTrendChartData = computed(() => {
   }
 })
 
+const costTrendChartData = computed(() => {
+  const points = trendData.value.filter((point) => (point.cost_cny_per_usd || 0) > 0)
+  if (!points.length) return null
+  return {
+    labels: points.map((point) => point.date),
+    datasets: [
+      {
+        label: t('admin.dashboard.averageCost'),
+        data: points.map((point) => point.cost_cny_per_usd),
+        borderColor: '#0891b2',
+        backgroundColor: 'rgba(8, 145, 178, 0.14)',
+        fill: true,
+        tension: 0.3
+      }
+    ]
+  }
+})
+
+const costLineOptions = computed(() => ({
+  ...lineOptions.value,
+  plugins: {
+    ...lineOptions.value.plugins,
+    tooltip: {
+      callbacks: {
+        label: (context: any) => `${context.dataset.label}: ¥${formatCnyCost(Number(context.raw))}/${t('admin.dashboard.usd')}`
+      }
+    }
+  },
+  scales: {
+    ...lineOptions.value.scales,
+    y: {
+      ...lineOptions.value.scales.y,
+      ticks: {
+        ...lineOptions.value.scales.y.ticks,
+        callback: (value: string | number) => `¥${formatCnyCost(Number(value))}`
+      }
+    }
+  }
+}))
+
 // Format helpers
 const formatTokens = (value: number | undefined): string => {
   if (value === undefined || value === null) return '0'
@@ -546,6 +600,11 @@ const formatCost = (value: number): string => {
     return value.toFixed(3)
   }
   return value.toFixed(4)
+}
+
+const formatCnyCost = (value: number): string => {
+  if (!Number.isFinite(value)) return '0.00'
+  return value >= 1000 ? `${(value / 1000).toFixed(2)}K` : value.toFixed(2)
 }
 
 const formatDuration = (ms: number): string => {

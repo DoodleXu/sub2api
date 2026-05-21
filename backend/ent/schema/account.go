@@ -110,6 +110,12 @@ func (Account) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
 
+		// total_cost_cny: 账号累计人民币成本。
+		// 用于按累计账号美元成本计算整体每美元人民币成本。
+		field.Float("total_cost_cny").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(18,4)"}).
+			Default(0),
+
 		// status: 账户状态，如 "active", "error", "disabled"
 		field.String("status").
 			MaxLen(20).

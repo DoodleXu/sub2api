@@ -269,6 +269,7 @@ type CreateAccountInput struct {
 	Concurrency        int
 	Priority           int
 	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
+	TotalCostCNY       *float64 // 账号累计人民币成本（>=0）
 	LoadFactor         *int
 	GroupIDs           []int64
 	ExpiresAt          *int64
@@ -290,6 +291,8 @@ type UpdateAccountInput struct {
 	Concurrency           *int     // 使用指针区分"未提供"和"设置为0"
 	Priority              *int     // 使用指针区分"未提供"和"设置为0"
 	RateMultiplier        *float64 // 账号计费倍率（>=0，允许 0）
+	TotalCostCNY          *float64 // 账号累计人民币成本（>=0）
+	AddCostCNY            *float64 // API Key 账号增量人民币成本（>=0）
 	LoadFactor            *int
 	Status                string
 	GroupIDs              *[]int64
@@ -307,6 +310,7 @@ type BulkUpdateAccountsInput struct {
 	Concurrency    *int
 	Priority       *int
 	RateMultiplier *float64 // 账号计费倍率（>=0，允许 0）
+	TotalCostCNY   *float64 // 账号累计人民币成本（>=0）
 	LoadFactor     *int
 	Status         string
 	Schedulable    *bool
@@ -2411,6 +2415,12 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 		account.RateMultiplier = input.RateMultiplier
 	}
+	if input.TotalCostCNY != nil {
+		if *input.TotalCostCNY < 0 {
+			return nil, errors.New("total_cost_cny must be >= 0")
+		}
+		account.TotalCostCNY = *input.TotalCostCNY
+	}
 	if input.LoadFactor != nil && *input.LoadFactor > 0 {
 		if *input.LoadFactor > 10000 {
 			return nil, errors.New("load_factor must be <= 10000")
@@ -2526,6 +2536,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, errors.New("rate_multiplier must be >= 0")
 		}
 		account.RateMultiplier = input.RateMultiplier
+	}
+	if input.TotalCostCNY != nil {
+		if *input.TotalCostCNY < 0 {
+			return nil, errors.New("total_cost_cny must be >= 0")
+		}
+		account.TotalCostCNY = *input.TotalCostCNY
+	}
+	if input.AddCostCNY != nil {
+		if *input.AddCostCNY < 0 {
+			return nil, errors.New("add_cost_cny must be >= 0")
+		}
+		if account.Type != AccountTypeAPIKey {
+			return nil, errors.New("add_cost_cny only supports apikey accounts")
+		}
+		account.TotalCostCNY += *input.AddCostCNY
 	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
@@ -2644,6 +2669,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, errors.New("rate_multiplier must be >= 0")
 		}
 	}
+	if input.TotalCostCNY != nil {
+		if *input.TotalCostCNY < 0 {
+			return nil, errors.New("total_cost_cny must be >= 0")
+		}
+	}
 
 	// Prepare bulk updates for columns and JSONB fields.
 	repoUpdates := AccountBulkUpdate{
@@ -2664,6 +2694,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.RateMultiplier != nil {
 		repoUpdates.RateMultiplier = input.RateMultiplier
+	}
+	if input.TotalCostCNY != nil {
+		repoUpdates.TotalCostCNY = input.TotalCostCNY
 	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {

@@ -59,6 +59,8 @@ type DashboardStats struct {
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
 	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本
+	TotalCostCNY             float64 `json:"total_cost_cny"`     // 累计人民币成本
+	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd"`
 
 	// 今日 Token 使用统计
 	TodayRequests            int64   `json:"today_requests"`
@@ -90,6 +92,8 @@ type TrendDataPoint struct {
 	TotalTokens         int64   `json:"total_tokens"`
 	Cost                float64 `json:"cost"`        // 标准计费
 	ActualCost          float64 `json:"actual_cost"` // 实际扣除
+	AccountCost         float64 `json:"account_cost"`
+	CostCNYPerUSD       float64 `json:"cost_cny_per_usd"`
 }
 
 // ModelStat represents usage statistics for a single model

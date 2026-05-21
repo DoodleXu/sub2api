@@ -164,6 +164,7 @@ type Account struct {
 	LoadFactor         *int            `json:"load_factor,omitempty"`
 	Priority           int             `json:"priority"`
 	RateMultiplier     float64         `json:"rate_multiplier"`
+	TotalCostCNY       float64         `json:"total_cost_cny"`
 	Status             string          `json:"status"`
 	ErrorMessage       string          `json:"error_message"`
 	LastUsedAt         *time.Time      `json:"last_used_at"`

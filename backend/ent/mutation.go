@@ -2292,6 +2292,8 @@ type AccountMutation struct {
 	addpriority               *int
 	rate_multiplier           *float64
 	addrate_multiplier        *float64
+	total_cost_cny            *float64
+	addtotal_cost_cny         *float64
 	status                    *string
 	error_message             *string
 	last_used_at              *time.Time
@@ -3053,6 +3055,62 @@ func (m *AccountMutation) AddedRateMultiplier() (r float64, exists bool) {
 func (m *AccountMutation) ResetRateMultiplier() {
 	m.rate_multiplier = nil
 	m.addrate_multiplier = nil
+}
+
+// SetTotalCostCny sets the "total_cost_cny" field.
+func (m *AccountMutation) SetTotalCostCny(f float64) {
+	m.total_cost_cny = &f
+	m.addtotal_cost_cny = nil
+}
+
+// TotalCostCny returns the value of the "total_cost_cny" field in the mutation.
+func (m *AccountMutation) TotalCostCny() (r float64, exists bool) {
+	v := m.total_cost_cny
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTotalCostCny returns the old "total_cost_cny" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldTotalCostCny(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTotalCostCny is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTotalCostCny requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTotalCostCny: %w", err)
+	}
+	return oldValue.TotalCostCny, nil
+}
+
+// AddTotalCostCny adds f to the "total_cost_cny" field.
+func (m *AccountMutation) AddTotalCostCny(f float64) {
+	if m.addtotal_cost_cny != nil {
+		*m.addtotal_cost_cny += f
+	} else {
+		m.addtotal_cost_cny = &f
+	}
+}
+
+// AddedTotalCostCny returns the value that was added to the "total_cost_cny" field in this mutation.
+func (m *AccountMutation) AddedTotalCostCny() (r float64, exists bool) {
+	v := m.addtotal_cost_cny
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTotalCostCny resets all changes to the "total_cost_cny" field.
+func (m *AccountMutation) ResetTotalCostCny() {
+	m.total_cost_cny = nil
+	m.addtotal_cost_cny = nil
 }
 
 // SetStatus sets the "status" field.
@@ -3871,7 +3929,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 29)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -3913,6 +3971,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, account.FieldRateMultiplier)
+	}
+	if m.total_cost_cny != nil {
+		fields = append(fields, account.FieldTotalCostCny)
 	}
 	if m.status != nil {
 		fields = append(fields, account.FieldStatus)
@@ -3992,6 +4053,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.Priority()
 	case account.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case account.FieldTotalCostCny:
+		return m.TotalCostCny()
 	case account.FieldStatus:
 		return m.Status()
 	case account.FieldErrorMessage:
@@ -4057,6 +4120,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldPriority(ctx)
 	case account.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case account.FieldTotalCostCny:
+		return m.OldTotalCostCny(ctx)
 	case account.FieldStatus:
 		return m.OldStatus(ctx)
 	case account.FieldErrorMessage:
@@ -4192,6 +4257,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRateMultiplier(v)
 		return nil
+	case account.FieldTotalCostCny:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTotalCostCny(v)
+		return nil
 	case account.FieldStatus:
 		v, ok := value.(string)
 		if !ok {
@@ -4310,6 +4382,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, account.FieldRateMultiplier)
 	}
+	if m.addtotal_cost_cny != nil {
+		fields = append(fields, account.FieldTotalCostCny)
+	}
 	return fields
 }
 
@@ -4326,6 +4401,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPriority()
 	case account.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case account.FieldTotalCostCny:
+		return m.AddedTotalCostCny()
 	}
 	return nil, false
 }
@@ -4362,6 +4439,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case account.FieldTotalCostCny:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTotalCostCny(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Account numeric field %s", name)
@@ -4524,6 +4608,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldRateMultiplier:
 		m.ResetRateMultiplier()
+		return nil
+	case account.FieldTotalCostCny:
+		m.ResetTotalCostCny()
 		return nil
 	case account.FieldStatus:
 		m.ResetStatus()

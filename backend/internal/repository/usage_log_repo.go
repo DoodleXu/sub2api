@@ -1575,7 +1575,8 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 			COUNT(CASE WHEN status = $1 AND schedulable = true THEN 1 END) as normal_accounts,
 			COUNT(CASE WHEN status = $2 THEN 1 END) as error_accounts,
 			COUNT(CASE WHEN rate_limited_at IS NOT NULL AND rate_limit_reset_at > $3 THEN 1 END) as ratelimit_accounts,
-			COUNT(CASE WHEN overload_until IS NOT NULL AND overload_until > $4 THEN 1 END) as overload_accounts
+			COUNT(CASE WHEN overload_until IS NOT NULL AND overload_until > $4 THEN 1 END) as overload_accounts,
+			COALESCE(SUM(total_cost_cny), 0) as total_cost_cny
 		FROM accounts
 		WHERE deleted_at IS NULL
 	`
@@ -1589,8 +1590,12 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 		&stats.ErrorAccounts,
 		&stats.RateLimitAccounts,
 		&stats.OverloadAccounts,
+		&stats.TotalCostCNY,
 	); err != nil {
 		return err
+	}
+	if stats.TotalAccountCost > 0 {
+		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
 	}
 
 	return nil
@@ -1631,6 +1636,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
 	if stats.TotalRequests > 0 {
 		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
+	}
+	if stats.TotalAccountCost > 0 {
+		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
 	}
 
 	todayStatsQuery := `
@@ -1750,6 +1758,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
 	if stats.TotalRequests > 0 {
 		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
+	}
+	if stats.TotalAccountCost > 0 {
+		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
 	}
 
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
@@ -2697,7 +2708,9 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost,
+			0 as cost_cny_per_usd
 		FROM usage_logs
 		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
 		GROUP BY date
@@ -2719,6 +2732,9 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 
 	results, err = scanTrendRows(rows)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -3066,7 +3082,39 @@ func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, start
 	if err != nil {
 		return nil, err
 	}
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
+		return nil, err
+	}
 	return results, nil
+}
+
+func (r *usageLogRepository) applyCostCNYPerUSD(ctx context.Context, startTime time.Time, points []TrendDataPoint) error {
+	if len(points) == 0 {
+		return nil
+	}
+	var totalCostCNY float64
+	if err := scanSingleRow(ctx, r.sql, `SELECT COALESCE(SUM(total_cost_cny), 0) FROM accounts WHERE deleted_at IS NULL`, nil, &totalCostCNY); err != nil {
+		return err
+	}
+	if totalCostCNY <= 0 {
+		return nil
+	}
+	var cumulativeAccountCost float64
+	beforeStartQuery := `
+		SELECT COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0)
+		FROM usage_logs
+		WHERE created_at < $1
+	`
+	if err := scanSingleRow(ctx, r.sql, beforeStartQuery, []any{startTime}, &cumulativeAccountCost); err != nil {
+		return err
+	}
+	for i := range points {
+		cumulativeAccountCost += points[i].AccountCost
+		if cumulativeAccountCost > 0 {
+			points[i].CostCNYPerUSD = totalCostCNY / cumulativeAccountCost
+		}
+	}
+	return nil
 }
 
 func shouldUsePreaggregatedTrend(granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) bool {
@@ -3100,7 +3148,9 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 				cache_read_tokens,
 				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
 				total_cost as cost,
-				actual_cost
+				actual_cost,
+				account_cost,
+				0 as cost_cny_per_usd
 			FROM usage_dashboard_hourly
 			WHERE bucket_start >= $1 AND bucket_start < $2
 			ORDER BY bucket_start ASC
@@ -3116,7 +3166,9 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 				cache_read_tokens,
 				(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
 				total_cost as cost,
-				actual_cost
+				actual_cost,
+				account_cost,
+				0 as cost_cny_per_usd
 			FROM usage_dashboard_daily
 			WHERE bucket_date >= $1::date AND bucket_date < $2::date
 			ORDER BY bucket_date ASC
@@ -3138,6 +3190,9 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 
 	results, err = scanTrendRows(rows)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -4424,6 +4479,8 @@ func scanTrendRows(rows *sql.Rows) ([]TrendDataPoint, error) {
 			&row.TotalTokens,
 			&row.Cost,
 			&row.ActualCost,
+			&row.AccountCost,
+			&row.CostCNYPerUSD,
 		); err != nil {
 			return nil, err
 		}

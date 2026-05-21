@@ -98,6 +98,7 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	if account.RateMultiplier != nil {
 		builder.SetRateMultiplier(*account.RateMultiplier)
 	}
+	builder.SetTotalCostCny(account.TotalCostCNY)
 	if account.LoadFactor != nil {
 		builder.SetLoadFactor(*account.LoadFactor)
 	}
@@ -335,6 +336,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	if account.RateMultiplier != nil {
 		builder.SetRateMultiplier(*account.RateMultiplier)
 	}
+	builder.SetTotalCostCny(account.TotalCostCNY)
 	if account.LoadFactor != nil {
 		builder.SetLoadFactor(*account.LoadFactor)
 	} else {
@@ -1442,6 +1444,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.RateMultiplier)
 		idx++
 	}
+	if updates.TotalCostCNY != nil {
+		setClauses = append(setClauses, "total_cost_cny = $"+itoa(idx))
+		args = append(args, *updates.TotalCostCNY)
+		idx++
+	}
 	if updates.LoadFactor != nil {
 		if *updates.LoadFactor <= 0 {
 			setClauses = append(setClauses, "load_factor = NULL")
@@ -1773,6 +1780,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Concurrency:             m.Concurrency,
 		Priority:                m.Priority,
 		RateMultiplier:          &rateMultiplier,
+		TotalCostCNY:            m.TotalCostCny,
 		LoadFactor:              m.LoadFactor,
 		Status:                  m.Status,
 		ErrorMessage:            derefString(m.ErrorMessage),

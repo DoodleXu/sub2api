@@ -84,6 +84,7 @@ type AccountBulkUpdate struct {
 	Concurrency    *int
 	Priority       *int
 	RateMultiplier *float64
+	TotalCostCNY   *float64
 	LoadFactor     *int
 	Status         *string
 	Schedulable    *bool

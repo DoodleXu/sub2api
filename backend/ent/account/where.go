@@ -115,6 +115,11 @@ func RateMultiplier(v float64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldRateMultiplier, v))
 }
 
+// TotalCostCny applies equality check predicate on the "total_cost_cny" field. It's identical to TotalCostCnyEQ.
+func TotalCostCny(v float64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTotalCostCny, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldStatus, v))
@@ -783,6 +788,46 @@ func RateMultiplierLT(v float64) predicate.Account {
 // RateMultiplierLTE applies the LTE predicate on the "rate_multiplier" field.
 func RateMultiplierLTE(v float64) predicate.Account {
 	return predicate.Account(sql.FieldLTE(FieldRateMultiplier, v))
+}
+
+// TotalCostCnyEQ applies the EQ predicate on the "total_cost_cny" field.
+func TotalCostCnyEQ(v float64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTotalCostCny, v))
+}
+
+// TotalCostCnyNEQ applies the NEQ predicate on the "total_cost_cny" field.
+func TotalCostCnyNEQ(v float64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldTotalCostCny, v))
+}
+
+// TotalCostCnyIn applies the In predicate on the "total_cost_cny" field.
+func TotalCostCnyIn(vs ...float64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldTotalCostCny, vs...))
+}
+
+// TotalCostCnyNotIn applies the NotIn predicate on the "total_cost_cny" field.
+func TotalCostCnyNotIn(vs ...float64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldTotalCostCny, vs...))
+}
+
+// TotalCostCnyGT applies the GT predicate on the "total_cost_cny" field.
+func TotalCostCnyGT(v float64) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldTotalCostCny, v))
+}
+
+// TotalCostCnyGTE applies the GTE predicate on the "total_cost_cny" field.
+func TotalCostCnyGTE(v float64) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldTotalCostCny, v))
+}
+
+// TotalCostCnyLT applies the LT predicate on the "total_cost_cny" field.
+func TotalCostCnyLT(v float64) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldTotalCostCny, v))
+}
+
+// TotalCostCnyLTE applies the LTE predicate on the "total_cost_cny" field.
+func TotalCostCnyLTE(v float64) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldTotalCostCny, v))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.
