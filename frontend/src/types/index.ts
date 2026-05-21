@@ -1356,6 +1356,8 @@ export interface DashboardStats {
   total_account_cost: number // 累计账号成本
   total_cost_cny: number // 累计人民币成本
   average_cost_cny_per_usd: number // 整体每美元人民币成本
+  anthropic_cost_cny_per_usd: number // Anthropic 每美元人民币成本
+  openai_cost_cny_per_usd: number // OpenAI 每美元人民币成本
 
   // 今日 Token 使用统计
   today_requests: number

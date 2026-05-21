@@ -105,6 +105,8 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"total_account_cost":          stats.TotalAccountCost,
 		"total_cost_cny":              stats.TotalCostCNY,
 		"average_cost_cny_per_usd":    stats.AverageCostCNYPerUSD,
+		"anthropic_cost_cny_per_usd":  stats.AnthropicCostCNYPerUSD,
+		"openai_cost_cny_per_usd":     stats.OpenAICostCNYPerUSD,
 
 		// 今日 Token 使用统计
 		"today_requests":              stats.TodayRequests,

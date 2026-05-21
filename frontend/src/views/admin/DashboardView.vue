@@ -41,10 +41,26 @@
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   ¥{{ formatCnyCost(stats.average_cost_cny_per_usd || 0) }}
+                  <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.dashboard.perUsd') }}</span>
                 </p>
                 <p class="text-xs">
-                  <span class="text-cyan-600 dark:text-cyan-400">{{ t('admin.dashboard.perUsd') }}</span>
-                  <span class="ml-1 text-gray-500 dark:text-gray-400">¥{{ formatCnyCost(stats.total_cost_cny || 0) }}</span>
+                  <span
+                    class="text-green-600 dark:text-green-400"
+                    :title="t('admin.dashboard.openaiAverageCost')"
+                    >¥{{ formatCnyCost(stats.openai_cost_cny_per_usd || 0) }}</span
+                  >
+                  <span class="text-gray-400 dark:text-gray-500"> / </span>
+                  <span
+                    class="text-orange-500 dark:text-orange-400"
+                    :title="t('admin.dashboard.anthropicAverageCost')"
+                    >¥{{ formatCnyCost(stats.anthropic_cost_cny_per_usd || 0) }}</span
+                  >
+                  <span class="text-gray-400 dark:text-gray-500"> / </span>
+                  <span
+                    class="text-gray-400 dark:text-gray-500"
+                    :title="t('admin.dashboard.totalCostCny')"
+                    >¥{{ formatCnyCost(stats.total_cost_cny || 0) }}</span
+                  >
                 </p>
               </div>
             </div>

@@ -352,11 +352,20 @@ func TestUsageLogRepositoryGetUsageTrendWithFiltersRequestTypePriority(t *testin
 
 	mock.ExpectQuery("AND \\(request_type = \\$3 OR \\(request_type = 0 AND stream = TRUE AND openai_ws_mode = FALSE\\)\\)").
 		WithArgs(start, end, requestType).
-		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost"}))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost", "cost_cny_per_usd"}).
+			AddRow("2025-01-01", int64(2), int64(10), int64(20), int64(3), int64(4), int64(37), 1.5, 1.2, 4.0, 0.0))
+	mock.ExpectQuery("SELECT COALESCE\\(SUM\\(total_cost_cny\\), 0\\) FROM accounts WHERE deleted_at IS NULL AND EXISTS .*request_type = \\$1").
+		WithArgs(requestType).
+		WillReturnRows(sqlmock.NewRows([]string{"total_cost_cny"}).AddRow(10.0))
+	mock.ExpectQuery("SELECT COALESCE\\(SUM\\(COALESCE\\(account_stats_cost, total_cost\\) \\* COALESCE\\(account_rate_multiplier, 1\\)\\), 0\\).*created_at < \\$1.*request_type = \\$2").
+		WithArgs(start, requestType).
+		WillReturnRows(sqlmock.NewRows([]string{"total_account_cost"}).AddRow(1.0))
 
 	trend, err := repo.GetUsageTrendWithFilters(context.Background(), start, end, "day", 0, 0, 0, 0, "", &requestType, &stream, nil)
 	require.NoError(t, err)
-	require.Empty(t, trend)
+	require.Len(t, trend, 1)
+	require.Equal(t, 4.0, trend[0].AccountCost)
+	require.Equal(t, 2.0, trend[0].CostCNYPerUSD)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

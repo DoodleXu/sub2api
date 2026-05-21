@@ -61,6 +61,8 @@ type DashboardStats struct {
 	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本
 	TotalCostCNY             float64 `json:"total_cost_cny"`     // 累计人民币成本
 	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd"`
+	AnthropicCostCNYPerUSD   float64 `json:"anthropic_cost_cny_per_usd"`
+	OpenAICostCNYPerUSD      float64 `json:"openai_cost_cny_per_usd"`
 
 	// 今日 Token 使用统计
 	TodayRequests            int64   `json:"today_requests"`

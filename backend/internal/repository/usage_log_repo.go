@@ -1597,7 +1597,6 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 	if stats.TotalAccountCost > 0 {
 		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
 	}
-
 	return nil
 }
 
@@ -1639,6 +1638,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 	}
 	if stats.TotalAccountCost > 0 {
 		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
+	}
+	if err := r.fillDashboardPlatformCostStats(ctx, stats); err != nil {
+		return err
 	}
 
 	todayStatsQuery := `
@@ -1762,6 +1764,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	if stats.TotalAccountCost > 0 {
 		stats.AverageCostCNYPerUSD = stats.TotalCostCNY / stats.TotalAccountCost
 	}
+	if err := r.fillDashboardPlatformCostStats(ctx, stats); err != nil {
+		return err
+	}
 
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
 
@@ -1783,6 +1788,62 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 		return err
 	}
 
+	return nil
+}
+
+func (r *usageLogRepository) fillDashboardPlatformCostStats(ctx context.Context, stats *DashboardStats) error {
+	query := `
+		WITH group_cny_by_platform AS (
+			SELECT
+				ag.group_id,
+				a.platform,
+				SUM(a.total_cost_cny) AS total_cost_cny
+			FROM accounts a
+			JOIN account_groups ag ON ag.account_id = a.id
+			WHERE a.deleted_at IS NULL
+				AND a.platform IN ($1, $2)
+			GROUP BY ag.group_id, a.platform
+		),
+		group_account_cost_by_platform AS (
+			SELECT
+				ul.group_id,
+				a.platform,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost
+			FROM usage_logs ul
+			JOIN accounts a ON a.id = ul.account_id
+			WHERE ul.group_id IS NOT NULL
+				AND a.platform IN ($1, $2)
+			GROUP BY ul.group_id, a.platform
+		)
+		SELECT
+			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
+			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
+			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
+			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost
+		FROM group_cny_by_platform cny
+		JOIN group_account_cost_by_platform cost
+			ON cost.group_id = cny.group_id
+			AND cost.platform = cny.platform
+	`
+	var anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64
+	if err := scanSingleRow(
+		ctx,
+		r.sql,
+		query,
+		[]any{service.PlatformAnthropic, service.PlatformOpenAI},
+		&anthropicCostCNY,
+		&anthropicAccountCost,
+		&openAICostCNY,
+		&openAIAccountCost,
+	); err != nil {
+		return err
+	}
+	if anthropicAccountCost > 0 {
+		stats.AnthropicCostCNYPerUSD = anthropicCostCNY / anthropicAccountCost
+	}
+	if openAIAccountCost > 0 {
+		stats.OpenAICostCNYPerUSD = openAICostCNY / openAIAccountCost
+	}
 	return nil
 }
 
@@ -2734,7 +2795,7 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 	if err != nil {
 		return nil, err
 	}
-	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results, userID, 0, 0, 0, "", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -3035,12 +3096,41 @@ func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, start
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
+			COALESCE(SUM(actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost,
+			0 as cost_cny_per_usd
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
 	`, dateFormat)
 
 	args := []any{startTime, endTime}
+	query, args = appendUsageTrendFilters(query, args, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	query += " GROUP BY date ORDER BY date ASC"
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// 保持主错误优先；仅在无错误时回传 Close 失败。
+		// 同时清空返回值，避免误用不完整结果。
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results, err = scanTrendRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func appendUsageTrendFilters(query string, args []any, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (string, []any) {
 	if userID > 0 {
 		query += fmt.Sprintf(" AND user_id = $%d", len(args)+1)
 		args = append(args, userID)
@@ -3063,37 +3153,25 @@ func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, start
 		query += fmt.Sprintf(" AND billing_type = $%d", len(args)+1)
 		args = append(args, int16(*billingType))
 	}
-	query += " GROUP BY date ORDER BY date ASC"
-
-	rows, err := r.sql.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		// 保持主错误优先；仅在无错误时回传 Close 失败。
-		// 同时清空返回值，避免误用不完整结果。
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = closeErr
-			results = nil
-		}
-	}()
-
-	results, err = scanTrendRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return query, args
 }
 
-func (r *usageLogRepository) applyCostCNYPerUSD(ctx context.Context, startTime time.Time, points []TrendDataPoint) error {
+func (r *usageLogRepository) applyCostCNYPerUSD(ctx context.Context, startTime time.Time, points []TrendDataPoint, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) error {
 	if len(points) == 0 {
 		return nil
 	}
 	var totalCostCNY float64
-	if err := scanSingleRow(ctx, r.sql, `SELECT COALESCE(SUM(total_cost_cny), 0) FROM accounts WHERE deleted_at IS NULL`, nil, &totalCostCNY); err != nil {
+	totalCostQuery := `SELECT COALESCE(SUM(total_cost_cny), 0) FROM accounts WHERE deleted_at IS NULL`
+	totalCostArgs := []any{}
+	if accountID > 0 {
+		totalCostQuery += fmt.Sprintf(" AND id = $%d", len(totalCostArgs)+1)
+		totalCostArgs = append(totalCostArgs, accountID)
+	} else if hasUsageTrendFilters(userID, apiKeyID, groupID, model, requestType, stream, billingType) {
+		existsQuery := "SELECT 1 FROM usage_logs WHERE usage_logs.account_id = accounts.id"
+		existsQuery, totalCostArgs = appendUsageTrendFilters(existsQuery, totalCostArgs, userID, apiKeyID, 0, groupID, model, requestType, stream, billingType)
+		totalCostQuery += " AND EXISTS (" + existsQuery + ")"
+	}
+	if err := scanSingleRow(ctx, r.sql, totalCostQuery, totalCostArgs, &totalCostCNY); err != nil {
 		return err
 	}
 	if totalCostCNY <= 0 {
@@ -3105,7 +3183,9 @@ func (r *usageLogRepository) applyCostCNYPerUSD(ctx context.Context, startTime t
 		FROM usage_logs
 		WHERE created_at < $1
 	`
-	if err := scanSingleRow(ctx, r.sql, beforeStartQuery, []any{startTime}, &cumulativeAccountCost); err != nil {
+	beforeStartArgs := []any{startTime}
+	beforeStartQuery, beforeStartArgs = appendUsageTrendFilters(beforeStartQuery, beforeStartArgs, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	if err := scanSingleRow(ctx, r.sql, beforeStartQuery, beforeStartArgs, &cumulativeAccountCost); err != nil {
 		return err
 	}
 	for i := range points {
@@ -3115,6 +3195,16 @@ func (r *usageLogRepository) applyCostCNYPerUSD(ctx context.Context, startTime t
 		}
 	}
 	return nil
+}
+
+func hasUsageTrendFilters(userID, apiKeyID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) bool {
+	return userID > 0 ||
+		apiKeyID > 0 ||
+		groupID > 0 ||
+		strings.TrimSpace(model) != "" ||
+		requestType != nil ||
+		stream != nil ||
+		billingType != nil
 }
 
 func shouldUsePreaggregatedTrend(granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) bool {
@@ -3192,7 +3282,7 @@ func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, st
 	if err != nil {
 		return nil, err
 	}
-	if err := r.applyCostCNYPerUSD(ctx, startTime, results); err != nil {
+	if err := r.applyCostCNYPerUSD(ctx, startTime, results, 0, 0, 0, 0, "", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return results, nil
