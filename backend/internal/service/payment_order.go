@@ -733,6 +733,9 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	if req.PlanID > 0 {
 		q.Set("plan_id", strconv.FormatInt(req.PlanID, 10))
 	}
+	if req.UpgradeFromSubscriptionID > 0 {
+		q.Set("upgrade_from_subscription_id", strconv.FormatInt(req.UpgradeFromSubscriptionID, 10))
+	}
 	if scope = strings.TrimSpace(scope); scope != "" {
 		q.Set("scope", scope)
 	}

@@ -187,11 +187,12 @@ func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
 	})
 
 	resp, err := svc.maybeBuildWeChatOAuthRequiredResponse(context.Background(), CreateOrderRequest{
-		Amount:          12.5,
-		PaymentType:     payment.TypeWxpay,
-		IsWeChatBrowser: true,
-		SrcURL:          "https://merchant.example/payment?from=wechat",
-		OrderType:       payment.OrderTypeBalance,
+		Amount:                    12.5,
+		PaymentType:               payment.TypeWxpay,
+		IsWeChatBrowser:           true,
+		SrcURL:                    "https://merchant.example/payment?from=wechat",
+		OrderType:                 payment.OrderTypeBalance,
+		UpgradeFromSubscriptionID: 77,
 	}, 12.5, 12.88, 0.03)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -214,7 +215,7 @@ func TestMaybeBuildWeChatOAuthRequiredResponse(t *testing.T) {
 	if resp.OAuth.RedirectURL != "/auth/wechat/payment/callback" {
 		t.Fatalf("redirect_url = %q, want %q", resp.OAuth.RedirectURL, "/auth/wechat/payment/callback")
 	}
-	if resp.OAuth.AuthorizeURL != "/api/v1/auth/oauth/wechat/payment/start?amount=12.5&order_type=balance&payment_type=wxpay&redirect=%2Fpurchase%3Ffrom%3Dwechat&scope=snsapi_base" {
+	if resp.OAuth.AuthorizeURL != "/api/v1/auth/oauth/wechat/payment/start?amount=12.5&order_type=balance&payment_type=wxpay&redirect=%2Fpurchase%3Ffrom%3Dwechat&scope=snsapi_base&upgrade_from_subscription_id=77" {
 		t.Fatalf("authorize_url = %q", resp.OAuth.AuthorizeURL)
 	}
 }

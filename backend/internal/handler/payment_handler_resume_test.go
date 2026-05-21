@@ -34,11 +34,12 @@ func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	}
 
 	err := applyWeChatPaymentResumeClaims(&req, &service.WeChatPaymentResumeClaims{
-		OpenID:      "openid-123",
-		PaymentType: payment.TypeWxpay,
-		Amount:      "12.50",
-		OrderType:   payment.OrderTypeSubscription,
-		PlanID:      7,
+		OpenID:                    "openid-123",
+		PaymentType:               payment.TypeWxpay,
+		Amount:                    "12.50",
+		OrderType:                 payment.OrderTypeSubscription,
+		PlanID:                    7,
+		UpgradeFromSubscriptionID: 77,
 	})
 	if err != nil {
 		t.Fatalf("applyWeChatPaymentResumeClaims returned error: %v", err)
@@ -54,6 +55,9 @@ func TestApplyWeChatPaymentResumeClaims(t *testing.T) {
 	}
 	if req.PlanID != 7 {
 		t.Fatalf("plan_id = %d, want 7", req.PlanID)
+	}
+	if req.UpgradeFromSubscriptionID != 77 {
+		t.Fatalf("upgrade_from_subscription_id = %d, want 77", req.UpgradeFromSubscriptionID)
 	}
 }
 
@@ -110,6 +114,9 @@ func TestVerifyOrderPublicReturnsLegacyOrderState(t *testing.T) {
 		SetPaymentType(payment.TypeAlipay).
 		SetPaymentTradeNo("trade-public-verify").
 		SetOrderType(payment.OrderTypeBalance).
+		SetUpgradeFromSubscriptionID(77).
+		SetUpgradeCreditAmount(99.99).
+		SetUpgradeCreditDays(20).
 		SetStatus(service.OrderStatusPending).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
@@ -137,18 +144,21 @@ func TestVerifyOrderPublicReturnsLegacyOrderState(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			ID           int64   `json:"id"`
-			OutTradeNo   string  `json:"out_trade_no"`
-			Amount       float64 `json:"amount"`
-			PayAmount    float64 `json:"pay_amount"`
-			FeeRate      float64 `json:"fee_rate"`
-			Currency     string  `json:"currency"`
-			PaymentType  string  `json:"payment_type"`
-			OrderType    string  `json:"order_type"`
-			Status       string  `json:"status"`
-			RefundAmount float64 `json:"refund_amount"`
-			CreatedAt    string  `json:"created_at"`
-			ExpiresAt    string  `json:"expires_at"`
+			ID                        int64   `json:"id"`
+			OutTradeNo                string  `json:"out_trade_no"`
+			Amount                    float64 `json:"amount"`
+			PayAmount                 float64 `json:"pay_amount"`
+			FeeRate                   float64 `json:"fee_rate"`
+			Currency                  string  `json:"currency"`
+			PaymentType               string  `json:"payment_type"`
+			OrderType                 string  `json:"order_type"`
+			Status                    string  `json:"status"`
+			RefundAmount              float64 `json:"refund_amount"`
+			UpgradeFromSubscriptionID *int64  `json:"upgrade_from_subscription_id"`
+			UpgradeCreditAmount       float64 `json:"upgrade_credit_amount"`
+			UpgradeCreditDays         *int    `json:"upgrade_credit_days"`
+			CreatedAt                 string  `json:"created_at"`
+			ExpiresAt                 string  `json:"expires_at"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
@@ -162,6 +172,11 @@ func TestVerifyOrderPublicReturnsLegacyOrderState(t *testing.T) {
 	require.Equal(t, payment.OrderTypeBalance, resp.Data.OrderType)
 	require.Equal(t, service.OrderStatusPending, resp.Data.Status)
 	require.Equal(t, 0.0, resp.Data.RefundAmount)
+	require.NotNil(t, resp.Data.UpgradeFromSubscriptionID)
+	require.Equal(t, int64(77), *resp.Data.UpgradeFromSubscriptionID)
+	require.Equal(t, 99.99, resp.Data.UpgradeCreditAmount)
+	require.NotNil(t, resp.Data.UpgradeCreditDays)
+	require.Equal(t, 20, *resp.Data.UpgradeCreditDays)
 	require.NotEmpty(t, resp.Data.CreatedAt)
 	require.NotEmpty(t, resp.Data.ExpiresAt)
 }

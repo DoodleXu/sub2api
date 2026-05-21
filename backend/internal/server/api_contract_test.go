@@ -5,6 +5,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"math"
@@ -14,16 +15,22 @@ import (
 	"testing"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func TestAPIContracts(t *testing.T) {
@@ -593,6 +600,44 @@ func TestAPIContracts(t *testing.T) {
 					"page": 1,
 					"page_size": 10,
 					"pages": 1
+				}
+			}`,
+		},
+		{
+			name: "POST /api/v1/payment/public/orders/verify includes subscription upgrade credit fields",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				deps.seedPaymentUpgradeOrder(t)
+			},
+			method: http.MethodPost,
+			path:   "/api/v1/payment/public/orders/verify",
+			body:   `{"out_trade_no":"sub2_contract_upgrade"}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": {
+					"id": 1,
+					"out_trade_no": "sub2_contract_upgrade",
+					"amount": 0.01,
+					"pay_amount": 0.01,
+					"fee_rate": 0,
+					"currency": "CNY",
+					"payment_type": "easypay",
+					"order_type": "subscription",
+					"status": "PENDING",
+					"created_at": "2025-01-02T03:04:05Z",
+					"expires_at": "2025-01-02T03:34:05Z",
+					"refund_amount": 0,
+					"plan_id": 200,
+					"subscription_group_id": 10,
+					"subscription_days": 30,
+					"upgrade_from_subscription_id": 77,
+					"upgrade_credit_amount": 99.99,
+					"upgrade_credit_days": 20
 				}
 			}`,
 		},
@@ -1199,6 +1244,7 @@ type contractDeps struct {
 	usageRepo   *stubUsageLogRepo
 	settingRepo *stubSettingRepo
 	redeemRepo  *stubRedeemCodeRepo
+	paymentDB   *dbent.Client
 }
 
 func newContractDeps(t *testing.T) *contractDeps {
@@ -1253,6 +1299,10 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
+	paymentClient := newContractPaymentClient(t)
+	paymentConfigService := service.NewPaymentConfigService(paymentClient, settingRepo, nil)
+	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
+	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService, nil)
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
@@ -1305,6 +1355,9 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Redeem.Use(jwtAuth)
 	v1Redeem.GET("/redeem/history", redeemHandler.GetHistory)
 
+	v1Payment := v1.Group("/payment")
+	v1Payment.POST("/public/orders/verify", paymentHandler.VerifyOrderPublic)
+
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
@@ -1320,7 +1373,24 @@ func newContractDeps(t *testing.T) *contractDeps {
 		usageRepo:   usageRepo,
 		settingRepo: settingRepo,
 		redeemRepo:  redeemRepo,
+		paymentDB:   paymentClient,
 	}
+}
+
+func newContractPaymentClient(t *testing.T) *dbent.Client {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:api_contract_payment?mode=memory&cache=shared")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
 func doRequest(t *testing.T, router http.Handler, method, path, body string, headers map[string]string) (int, string) {
@@ -1341,6 +1411,44 @@ func doRequest(t *testing.T, router http.Handler, method, path, body string, hea
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func (d *contractDeps) seedPaymentUpgradeOrder(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+
+	user, err := d.paymentDB.User.Create().
+		SetEmail("alice@example.com").
+		SetPasswordHash("hash").
+		SetUsername("alice").
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = d.paymentDB.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail("alice@example.com").
+		SetUserName("alice").
+		SetAmount(0.01).
+		SetPayAmount(0.01).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-1").
+		SetOutTradeNo("sub2_contract_upgrade").
+		SetPaymentType(payment.TypeEasyPay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetPlanID(200).
+		SetSubscriptionGroupID(10).
+		SetSubscriptionDays(30).
+		SetUpgradeFromSubscriptionID(77).
+		SetUpgradeCreditAmount(99.99).
+		SetUpgradeCreditDays(20).
+		SetStatus(service.OrderStatusPending).
+		SetCreatedAt(d.now).
+		SetExpiresAt(d.now.Add(30 * time.Minute)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+}
 
 type stubUserRepo struct {
 	users map[int64]*service.User
