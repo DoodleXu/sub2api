@@ -1467,12 +1467,26 @@ const accountMatchesCurrentFilters = (account: Account) => {
   if (search && !account.name.toLowerCase().includes(search)) return false
   return true
 }
-const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Account => ({
-  ...updatedAccount,
-  current_concurrency: updatedAccount.current_concurrency ?? oldAccount.current_concurrency,
-  current_window_cost: updatedAccount.current_window_cost ?? oldAccount.current_window_cost,
-  active_sessions: updatedAccount.active_sessions ?? oldAccount.active_sessions
-})
+const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Account => {
+  const mergedAccount: Account = {
+    ...updatedAccount,
+    current_concurrency: updatedAccount.current_concurrency ?? oldAccount.current_concurrency,
+    current_window_cost: updatedAccount.current_window_cost ?? oldAccount.current_window_cost,
+    active_sessions: updatedAccount.active_sessions ?? oldAccount.active_sessions,
+    total_account_cost: updatedAccount.total_account_cost ?? oldAccount.total_account_cost,
+    cost_cny_per_usd: updatedAccount.cost_cny_per_usd ?? oldAccount.cost_cny_per_usd
+  }
+
+  const totalCny = Number(mergedAccount.total_cost_cny ?? 0)
+  const totalAccountCost = Number(mergedAccount.total_account_cost ?? 0)
+  if (Number.isFinite(totalCny) && totalCny > 0 && Number.isFinite(totalAccountCost) && totalAccountCost > 0) {
+    mergedAccount.cost_cny_per_usd = totalCny / totalAccountCost
+  } else if (!Number.isFinite(totalCny) || totalCny <= 0) {
+    mergedAccount.cost_cny_per_usd = 0
+  }
+
+  return mergedAccount
+}
 
 const syncPaginationAfterLocalRemoval = () => {
   const nextTotal = Math.max(0, pagination.total - 1)
