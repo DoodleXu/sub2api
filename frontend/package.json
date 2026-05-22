@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "pnpm": {
+    "overrides": {
+      "js-cookie": "3.0.6"
+    },
     "onlyBuiltDependencies": [
       "esbuild",
       "vue-demi"
