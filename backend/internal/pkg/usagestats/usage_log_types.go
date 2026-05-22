@@ -94,8 +94,6 @@ type TrendDataPoint struct {
 	TotalTokens         int64   `json:"total_tokens"`
 	Cost                float64 `json:"cost"`        // 标准计费
 	ActualCost          float64 `json:"actual_cost"` // 实际扣除
-	AccountCost         float64 `json:"account_cost"`
-	CostCNYPerUSD       float64 `json:"cost_cny_per_usd"`
 }
 
 // ModelStat represents usage statistics for a single model

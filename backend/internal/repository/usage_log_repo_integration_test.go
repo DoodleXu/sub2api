@@ -832,43 +832,6 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	s.Require().InEpsilon(2.5, stats.AnthropicCostCNYPerUSD, 0.0001)
 }
 
-func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageFallsBackWhenAccountCostAggregatesIncomplete() {
-	now := time.Now().UTC()
-	todayStart := truncateToDayUTC(now)
-	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-fallback@example.com"})
-	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny-fallback", Name: "k"})
-	account := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:         "costed-fallback-openai",
-		Platform:     service.PlatformOpenAI,
-		TotalCostCNY: 30,
-	})
-
-	_, err := s.repo.Create(s.ctx, &service.UsageLog{
-		UserID:     user.ID,
-		APIKeyID:   apiKey.ID,
-		AccountID:  account.ID,
-		Model:      "gpt-4o",
-		TotalCost:  10,
-		ActualCost: 10,
-		CreatedAt:  todayStart.Add(1 * time.Hour),
-	})
-	s.Require().NoError(err)
-
-	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
-	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, now.Add(24*time.Hour)))
-	_, err = s.tx.ExecContext(s.ctx, `
-		UPDATE usage_dashboard_account_cost_daily
-		SET account_cost = 1
-		WHERE bucket_date = $1::date AND account_id = $2
-	`, todayStart, account.ID)
-	s.Require().NoError(err)
-
-	stats, err := s.repo.GetDashboardStats(s.ctx)
-	s.Require().NoError(err)
-	s.Require().InEpsilon(3.0, stats.AverageCostCNYPerUSD, 0.0001, "incomplete account cost aggregates must fall back to raw usage_logs")
-	s.Require().InEpsilon(3.0, stats.OpenAICostCNYPerUSD, 0.0001)
-}
-
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)
@@ -1133,24 +1096,6 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	s.Require().Equal(int64(150), hour2Row.totalDurationMs)
 	s.Require().Equal(int64(1), hour2Row.activeUsers)
 
-	var hour1AccountCost float64
-	err = scanSingleRow(s.ctx, s.tx, `
-		SELECT account_cost
-		FROM usage_dashboard_account_cost_hourly
-		WHERE bucket_start = $1 AND account_id = $2
-	`, []any{hour1, account.ID}, &hour1AccountCost)
-	s.Require().NoError(err)
-	s.Require().Equal(1.5, hour1AccountCost)
-
-	var hour2AccountCost float64
-	err = scanSingleRow(s.ctx, s.tx, `
-		SELECT account_cost
-		FROM usage_dashboard_account_cost_hourly
-		WHERE bucket_start = $1 AND account_id = $2
-	`, []any{hour2, account.ID}, &hour2AccountCost)
-	s.Require().NoError(err)
-	s.Require().Equal(0.7, hour2AccountCost)
-
 	var daily struct {
 		totalRequests       int64
 		inputTokens         int64
@@ -1182,23 +1127,29 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	s.Require().Equal(int64(450), daily.totalDurationMs)
 	s.Require().Equal(int64(2), daily.activeUsers)
 
-	var dailyAccountCost float64
-	err = scanSingleRow(s.ctx, s.tx, `
-		SELECT account_cost
-		FROM usage_dashboard_account_cost_daily
-		WHERE bucket_date = $1::date AND account_id = $2
-	`, []any{dayStart, account.ID}, &dailyAccountCost)
-	s.Require().NoError(err)
-	s.Require().Equal(2.2, dailyAccountCost)
-
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, hour2.Add(5*time.Minute), hour2.Add(10*time.Minute)))
+	daily = struct {
+		totalRequests       int64
+		inputTokens         int64
+		outputTokens        int64
+		cacheCreationTokens int64
+		cacheReadTokens     int64
+		totalCost           float64
+		actualCost          float64
+		totalDurationMs     int64
+		activeUsers         int64
+	}{}
 	err = scanSingleRow(s.ctx, s.tx, `
-		SELECT account_cost
-		FROM usage_dashboard_account_cost_daily
-		WHERE bucket_date = $1::date AND account_id = $2
-	`, []any{dayStart, account.ID}, &dailyAccountCost)
+		SELECT total_requests, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+		       total_cost, actual_cost, total_duration_ms, active_users
+		FROM usage_dashboard_daily
+		WHERE bucket_date = $1::date
+	`, []any{dayStart}, &daily.totalRequests, &daily.inputTokens, &daily.outputTokens,
+		&daily.cacheCreationTokens, &daily.cacheReadTokens, &daily.totalCost, &daily.actualCost,
+		&daily.totalDurationMs, &daily.activeUsers,
+	)
 	s.Require().NoError(err)
-	s.Require().Equal(2.2, dailyAccountCost, "partial scheduled aggregation must not overwrite daily account cost with a partial-day value")
+	s.Require().Equal(2.2, daily.totalCost, "partial scheduled aggregation must not overwrite daily totals with a partial-day value")
 }
 
 // --- GetBatchUserUsageStats ---

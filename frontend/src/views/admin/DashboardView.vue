@@ -280,24 +280,6 @@
             <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
           </div>
 
-          <div class="card p-4">
-            <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
-              {{ t('admin.dashboard.costTrend') }}
-            </h3>
-            <div class="h-64">
-              <div v-if="chartsLoading" class="flex h-full items-center justify-center">
-                <LoadingSpinner size="md" />
-              </div>
-              <Line v-else-if="costTrendChartData" :data="costTrendChartData" :options="costLineOptions" />
-              <div
-                v-else
-                class="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400"
-              >
-                {{ t('admin.dashboard.noDataAvailable') }}
-              </div>
-            </div>
-          </div>
-
           <!-- User Usage Trend (Full Width) -->
           <div class="card p-4">
             <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
@@ -549,46 +531,6 @@ const userTrendChartData = computed(() => {
     datasets
   }
 })
-
-const costTrendChartData = computed(() => {
-  const points = trendData.value.filter((point) => (point.cost_cny_per_usd || 0) > 0)
-  if (!points.length) return null
-  return {
-    labels: points.map((point) => point.date),
-    datasets: [
-      {
-        label: t('admin.dashboard.averageCost'),
-        data: points.map((point) => point.cost_cny_per_usd),
-        borderColor: '#0891b2',
-        backgroundColor: 'rgba(8, 145, 178, 0.14)',
-        fill: true,
-        tension: 0.3
-      }
-    ]
-  }
-})
-
-const costLineOptions = computed(() => ({
-  ...lineOptions.value,
-  plugins: {
-    ...lineOptions.value.plugins,
-    tooltip: {
-      callbacks: {
-        label: (context: any) => `${context.dataset.label}: ¥${formatCnyCost(Number(context.raw))}/${t('admin.dashboard.usd')}`
-      }
-    }
-  },
-  scales: {
-    ...lineOptions.value.scales,
-    y: {
-      ...lineOptions.value.scales.y,
-      ticks: {
-        ...lineOptions.value.scales.y.ticks,
-        callback: (value: string | number) => `¥${formatCnyCost(Number(value))}`
-      }
-    }
-  }
-}))
 
 // Format helpers
 const formatTokens = (value: number | undefined): string => {

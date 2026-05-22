@@ -1404,8 +1404,6 @@ export interface TrendDataPoint {
   total_tokens: number
   cost: number // 标准计费
   actual_cost: number // 实际扣除
-  account_cost: number // 账号成本
-  cost_cny_per_usd: number // 每美元人民币成本
 }
 
 export interface ModelStat {
