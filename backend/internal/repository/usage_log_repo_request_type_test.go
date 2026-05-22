@@ -369,6 +369,31 @@ func TestUsageLogRepositoryGetUsageTrendWithFiltersRequestTypePriority(t *testin
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageLogRepositoryGetUsageTrendUnfilteredUsesPreaggregatedCostBaseline(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+
+	mock.ExpectQuery("FROM usage_dashboard_daily").
+		WithArgs(start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost", "cost_cny_per_usd"}).
+			AddRow("2025-01-02", int64(2), int64(10), int64(20), int64(3), int64(4), int64(37), 1.5, 1.2, 4.0, 0.0))
+	mock.ExpectQuery("SELECT COALESCE\\(SUM\\(total_cost_cny\\), 0\\) FROM accounts WHERE deleted_at IS NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"total_cost_cny"}).AddRow(10.0))
+	mock.ExpectQuery("(?s)WITH bounds AS .*usage_dashboard_daily.*usage_dashboard_hourly").
+		WithArgs(start, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"account_cost"}).AddRow(1.0))
+
+	trend, err := repo.GetUsageTrendWithFilters(context.Background(), start, end, "day", 0, 0, 0, 0, "", nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, trend, 1)
+	require.Equal(t, 4.0, trend[0].AccountCost)
+	require.Equal(t, 2.0, trend[0].CostCNYPerUSD)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageLogRepositoryGetModelStatsWithFiltersRequestTypePriority(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
