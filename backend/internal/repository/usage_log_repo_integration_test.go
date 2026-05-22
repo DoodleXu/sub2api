@@ -765,6 +765,73 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 	s.Require().Equal(wantTpm, stats.Tpm, "Tpm mismatch")
 }
 
+func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() {
+	now := time.Now().UTC()
+	todayStart := truncateToDayUTC(now)
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny", Name: "k"})
+
+	costedOpenAI := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "costed-openai",
+		Platform:     service.PlatformOpenAI,
+		TotalCostCNY: 10,
+	})
+	uncostedOpenAI := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "uncosted-openai",
+		Platform:     service.PlatformOpenAI,
+		TotalCostCNY: 0,
+	})
+	costedAnthropic := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "costed-anthropic",
+		Platform:     service.PlatformAnthropic,
+		TotalCostCNY: 20,
+	})
+
+	logs := []*service.UsageLog{
+		{
+			UserID:     user.ID,
+			APIKeyID:   apiKey.ID,
+			AccountID:  costedOpenAI.ID,
+			Model:      "gpt-4o",
+			TotalCost:  2,
+			ActualCost: 2,
+			CreatedAt:  todayStart.Add(1 * time.Hour),
+		},
+		{
+			UserID:     user.ID,
+			APIKeyID:   apiKey.ID,
+			AccountID:  uncostedOpenAI.ID,
+			Model:      "gpt-4o",
+			TotalCost:  98,
+			ActualCost: 98,
+			CreatedAt:  todayStart.Add(2 * time.Hour),
+		},
+		{
+			UserID:     user.ID,
+			APIKeyID:   apiKey.ID,
+			AccountID:  costedAnthropic.ID,
+			Model:      "claude-3",
+			TotalCost:  8,
+			ActualCost: 8,
+			CreatedAt:  todayStart.Add(3 * time.Hour),
+		},
+	}
+	for _, log := range logs {
+		_, err := s.repo.Create(s.ctx, log)
+		s.Require().NoError(err)
+	}
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, now.Add(24*time.Hour)))
+
+	stats, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().InEpsilon(108.0, stats.TotalAccountCost, 0.0001, "display total should keep all account usage")
+	s.Require().InEpsilon(3.0, stats.AverageCostCNYPerUSD, 0.0001, "average must ignore uncosted account usage")
+	s.Require().InEpsilon(5.0, stats.OpenAICostCNYPerUSD, 0.0001)
+	s.Require().InEpsilon(2.5, stats.AnthropicCostCNYPerUSD, 0.0001)
+}
+
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)

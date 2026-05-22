@@ -201,6 +201,7 @@ func mustCreateAccount(t *testing.T, client *dbent.Client, a *service.Account) *
 		SetPriority(a.Priority).
 		SetStatus(a.Status).
 		SetSchedulable(a.Schedulable).
+		SetTotalCostCny(a.TotalCostCNY).
 		SetErrorMessage(a.ErrorMessage)
 
 	if a.ProxyID != nil {
