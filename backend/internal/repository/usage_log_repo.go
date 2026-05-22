@@ -1784,34 +1784,36 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 
 func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats) error {
 	query := `
-		WITH cny_by_platform AS (
+		WITH costed_accounts AS (
 			SELECT
+				a.id,
 				a.platform,
-				SUM(a.total_cost_cny) AS total_cost_cny
+				a.total_cost_cny
 			FROM accounts a
 			WHERE a.deleted_at IS NULL
 				AND a.total_cost_cny > 0
-			GROUP BY a.platform
 		),
-		account_cost_by_platform AS (
+		account_costs AS (
 			SELECT
-				a.platform,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost
-			FROM usage_logs ul
-			JOIN accounts a ON a.id = ul.account_id
-			WHERE a.deleted_at IS NULL
-				AND a.total_cost_cny > 0
-			GROUP BY a.platform
+				ca.platform,
+				ca.total_cost_cny,
+				COALESCE(usage.total_account_cost, 0) AS total_account_cost
+			FROM costed_accounts ca
+			LEFT JOIN LATERAL (
+				SELECT
+					COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost
+				FROM usage_logs ul
+				WHERE ul.account_id = ca.id
+			) usage ON true
 		)
 		SELECT
-			COALESCE(SUM(cny.total_cost_cny), 0) AS total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost), 0) AS total_account_cost,
-			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
-			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost
-		FROM cny_by_platform cny
-		LEFT JOIN account_cost_by_platform cost ON cost.platform = cny.platform
+			COALESCE(SUM(total_cost_cny), 0) AS total_cost_cny,
+			COALESCE(SUM(total_account_cost), 0) AS total_account_cost,
+			COALESCE(SUM(total_cost_cny) FILTER (WHERE platform = $1), 0) AS anthropic_total_cost_cny,
+			COALESCE(SUM(total_account_cost) FILTER (WHERE platform = $1), 0) AS anthropic_total_account_cost,
+			COALESCE(SUM(total_cost_cny) FILTER (WHERE platform = $2), 0) AS openai_total_cost_cny,
+			COALESCE(SUM(total_account_cost) FILTER (WHERE platform = $2), 0) AS openai_total_account_cost
+		FROM account_costs
 	`
 	var totalCostCNY, totalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64
 	if err := scanSingleRow(
