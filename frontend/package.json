@@ -3,15 +3,6 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "pnpm": {
-    "overrides": {
-      "js-cookie": "3.0.6"
-    },
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "vue-demi"
-    ]
-  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
@@ -66,5 +57,14 @@
     "vite-plugin-checker": "^0.9.1",
     "vitest": "^2.1.9",
     "vue-tsc": "^2.2.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "js-cookie": "3.0.7"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "vue-demi"
+    ]
   }
 }
