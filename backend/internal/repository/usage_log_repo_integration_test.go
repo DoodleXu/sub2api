@@ -826,10 +826,66 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 
 	stats, err := s.repo.GetDashboardStats(s.ctx)
 	s.Require().NoError(err)
+	accountRepo := newAccountRepositoryWithSQL(s.client, s.tx, nil)
+	accounts, _, err := accountRepo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 1000})
+	s.Require().NoError(err)
+	var costedTotalCNY, costedTotalAccountCost float64
+	for _, account := range accounts {
+		if account.TotalCostCNY <= 0 {
+			continue
+		}
+		costedTotalCNY += account.TotalCostCNY
+		costedTotalAccountCost += account.TotalAccountCost
+		if account.ID == costedOpenAI.ID {
+			s.Require().InEpsilon(5.0, account.CostCNYPerUSD, 0.0001)
+		}
+		if account.ID == costedAnthropic.ID {
+			s.Require().InEpsilon(2.5, account.CostCNYPerUSD, 0.0001)
+		}
+		if account.ID == uncostedOpenAI.ID {
+			s.Require().Equal(0.0, account.CostCNYPerUSD)
+		}
+	}
+	s.Require().InEpsilon(30.0, stats.TotalCostCNY, 0.0001)
+	s.Require().InEpsilon(costedTotalCNY, stats.TotalCostCNY, 0.0001)
 	s.Require().InEpsilon(108.0, stats.TotalAccountCost, 0.0001, "display total should keep all account usage")
 	s.Require().InEpsilon(3.0, stats.AverageCostCNYPerUSD, 0.0001, "average must ignore uncosted account usage")
+	s.Require().InEpsilon(costedTotalCNY/costedTotalAccountCost, stats.AverageCostCNYPerUSD, 0.0001, "dashboard average must match account list cumulative weighted average")
 	s.Require().InEpsilon(5.0, stats.OpenAICostCNYPerUSD, 0.0001)
 	s.Require().InEpsilon(2.5, stats.AnthropicCostCNYPerUSD, 0.0001)
+}
+
+func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts() {
+	now := time.Now().UTC()
+	todayStart := truncateToDayUTC(now)
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-zero@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny-zero", Name: "k"})
+
+	uncostedOpenAI := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "uncosted-openai-only",
+		Platform:     service.PlatformOpenAI,
+		TotalCostCNY: 0,
+	})
+
+	_, err := s.repo.Create(s.ctx, &service.UsageLog{
+		UserID:     user.ID,
+		APIKeyID:   apiKey.ID,
+		AccountID:  uncostedOpenAI.ID,
+		Model:      "gpt-4o",
+		TotalCost:  12,
+		ActualCost: 12,
+		CreatedAt:  todayStart.Add(1 * time.Hour),
+	})
+	s.Require().NoError(err)
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, now.Add(24*time.Hour)))
+
+	stats, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal(0.0, stats.TotalCostCNY)
+	s.Require().Equal(12.0, stats.TotalAccountCost)
+	s.Require().Equal(0.0, stats.AverageCostCNYPerUSD)
 }
 
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
@@ -842,13 +898,14 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "range-u2@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-range-1", Name: "k1"})
 	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user2.ID, Key: "sk-range-2", Name: "k2"})
-	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-range"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-range", TotalCostCNY: 3})
+	outOfRangeCostedAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-range-outside", TotalCostCNY: 99})
 
 	d1, d2, d3 := 100, 200, 300
 	logOutside := &service.UsageLog{
 		UserID:       user1.ID,
 		APIKeyID:     apiKey1.ID,
-		AccountID:    account.ID,
+		AccountID:    outOfRangeCostedAccount.ID,
 		Model:        "claude-3",
 		InputTokens:  7,
 		OutputTokens: 8,
@@ -905,6 +962,8 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	s.Require().Equal(1.4, stats.TotalActualCost)
 	// account_cost = COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1) = total_cost
 	s.Require().Equal(1.5, stats.TotalAccountCost)
+	s.Require().Equal(102.0, stats.TotalCostCNY)
+	s.Require().InEpsilon(102.0/2.3, stats.AverageCostCNYPerUSD, 0.0001, "dashboard cost per USD must match the account list cumulative weighted average")
 	s.Require().InEpsilon(150.0, stats.AverageDurationMs, 0.0001)
 }
 

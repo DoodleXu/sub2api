@@ -296,7 +296,7 @@
             </span>
           </template>
           <template #cell-total_cost_cny="{ row }">
-            <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
+            <span class="text-sm font-mono text-gray-500 dark:text-dark-400">
               {{ formatCostPerUsd(row) }}
             </span>
           </template>
@@ -1356,7 +1356,7 @@ const formatCostPerUsd = (account: Account): string => {
   }
   const totalAccountCost = Number(account.total_account_cost ?? 0)
   if (!Number.isFinite(totalCny) || !Number.isFinite(totalAccountCost) || totalAccountCost <= 0) {
-    return `¥${totalCny.toFixed(2)}`
+    return '-'
   }
   return `¥${(totalCny / totalAccountCost).toFixed(2)}`
 }

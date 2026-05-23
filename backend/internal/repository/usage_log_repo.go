@@ -1807,10 +1807,8 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 }
 
 func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats) error {
-	return r.fillDashboardCostCNYStatsFromUsageLogs(ctx, stats)
-}
+	args := []any{service.PlatformAnthropic, service.PlatformOpenAI}
 
-func (r *usageLogRepository) fillDashboardCostCNYStatsFromUsageLogs(ctx context.Context, stats *DashboardStats) error {
 	query := `
 		WITH cny_by_platform AS (
 			SELECT
@@ -1821,7 +1819,7 @@ func (r *usageLogRepository) fillDashboardCostCNYStatsFromUsageLogs(ctx context.
 				AND a.total_cost_cny > 0
 			GROUP BY a.platform
 		),
-		account_cost_by_platform AS (
+		account_cost_costed_by_platform AS (
 			SELECT
 				a.platform,
 				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost
@@ -1833,22 +1831,23 @@ func (r *usageLogRepository) fillDashboardCostCNYStatsFromUsageLogs(ctx context.
 		)
 		SELECT
 			COALESCE(SUM(cny.total_cost_cny), 0) AS total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost), 0) AS total_account_cost,
+			COALESCE(SUM(cost.total_account_cost), 0) AS costed_total_account_cost,
 			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
 			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
 			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
 			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost
-		FROM cny_by_platform cny
-		LEFT JOIN account_cost_by_platform cost ON cost.platform = cny.platform
+		FROM (SELECT 1) base
+		LEFT JOIN cny_by_platform cny ON TRUE
+		LEFT JOIN account_cost_costed_by_platform cost ON cost.platform = cny.platform
 	`
-	var totalCostCNY, totalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64
+	var totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{service.PlatformAnthropic, service.PlatformOpenAI},
+		args,
 		&totalCostCNY,
-		&totalAccountCost,
+		&costedTotalAccountCost,
 		&anthropicCostCNY,
 		&anthropicAccountCost,
 		&openAICostCNY,
@@ -1856,13 +1855,14 @@ func (r *usageLogRepository) fillDashboardCostCNYStatsFromUsageLogs(ctx context.
 	); err != nil {
 		return err
 	}
-	applyDashboardCostCNYStats(stats, totalCostCNY, totalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost)
+	applyDashboardCostCNYStats(stats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost)
 	return nil
 }
 
-func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, totalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64) {
-	if totalAccountCost > 0 {
-		stats.AverageCostCNYPerUSD = totalCostCNY / totalAccountCost
+func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64) {
+	stats.TotalCostCNY = totalCostCNY
+	if costedTotalAccountCost > 0 {
+		stats.AverageCostCNYPerUSD = totalCostCNY / costedTotalAccountCost
 	}
 	if anthropicAccountCost > 0 {
 		stats.AnthropicCostCNYPerUSD = anthropicCostCNY / anthropicAccountCost
