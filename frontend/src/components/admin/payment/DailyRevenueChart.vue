@@ -31,6 +31,7 @@ import {
   Legend,
   Filler
 } from 'chart.js'
+import type { TooltipItem } from 'chart.js'
 import { Line } from 'vue-chartjs'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
@@ -42,6 +43,10 @@ const props = defineProps<{
   data: { date: string; amount: number; count: number }[]
   loading?: boolean
 }>()
+
+function formatCurrency(value: number): string {
+  return `¥${value.toFixed(2)}`
+}
 
 const chartData = computed(() => {
   if (!props.data || props.data.length === 0) return null
@@ -83,6 +88,9 @@ const chartOptions = {
       display: true,
       position: 'left' as const,
       title: { display: true, text: t('payment.admin.revenue') },
+      ticks: {
+        callback: (value: string | number) => formatCurrency(Number(value)),
+      },
     },
     y1: {
       type: 'linear' as const,
@@ -94,6 +102,21 @@ const chartOptions = {
   },
   plugins: {
     legend: { position: 'top' as const },
+    tooltip: {
+      callbacks: {
+        label: (context: TooltipItem<'line'>) => {
+          const label = context.dataset.label || ''
+          const value = context.parsed.y
+          if (value === null) {
+            return label
+          }
+          if (context.dataset.yAxisID === 'y1') {
+            return `${label}: ${value}`
+          }
+          return `${label}: ${formatCurrency(value)}`
+        },
+      },
+    },
   }
 }
 </script>
