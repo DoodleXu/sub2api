@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,9 +38,25 @@ type PublicSettingsProvider interface {
 }
 
 type injectedSiteSEO struct {
-	SiteName     string `json:"site_name"`
-	SiteLogo     string `json:"site_logo"`
-	SiteSubtitle string `json:"site_subtitle"`
+	SiteName                string                   `json:"site_name"`
+	SiteLogo                string                   `json:"site_logo"`
+	SiteSubtitle            string                   `json:"site_subtitle"`
+	CustomMenuItems         []injectedCustomMenuItem `json:"custom_menu_items"`
+	LoginAgreementDocuments []injectedLegalDocument  `json:"login_agreement_documents"`
+}
+
+type injectedCustomMenuItem struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	URL        string `json:"url"`
+	PageSlug   string `json:"page_slug"`
+	Visibility string `json:"visibility"`
+	SortOrder  int    `json:"sort_order"`
+}
+
+type injectedLegalDocument struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // FrontendServer serves the embedded frontend with settings injection
@@ -102,7 +119,7 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 			return
 		}
 
-		if tryServeSEOFile(c, path) {
+		if s.tryServeSEOFile(c, path) {
 			return
 		}
 
@@ -170,7 +187,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 
 		// Replace nonce placeholder with actual nonce before serving
 		content := replaceNoncePlaceholder(cached.Content, nonce)
-		content = injectRequestSEO(content, c)
+		content = injectRequestSEO(content, c, cached.Settings)
 
 		c.Header("ETag", requestETag)
 		c.Header("Cache-Control", "no-cache") // Must revalidate
@@ -204,7 +221,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 
 	// Replace nonce placeholder with actual nonce before serving
 	content := replaceNoncePlaceholder(rendered, nonce)
-	content = injectRequestSEO(content, c)
+	content = injectRequestSEO(content, c, settingsJSON)
 
 	cached = s.cache.Get()
 	if cached != nil {
@@ -239,14 +256,17 @@ func injectSiteTitle(doc, settingsJSON []byte) []byte {
 		return doc
 	}
 
-	// Find and replace the existing <title>...</title>
+	return replaceHTMLTitle(doc, siteSEOTitle(cfg.SiteName))
+}
+
+func replaceHTMLTitle(doc []byte, title string) []byte {
 	titleStart := bytes.Index(doc, []byte("<title>"))
 	titleEnd := bytes.Index(doc, []byte("</title>"))
 	if titleStart == -1 || titleEnd == -1 || titleEnd <= titleStart {
 		return doc
 	}
 
-	newTitle := []byte("<title>" + html.EscapeString(siteSEOTitle(cfg.SiteName)) + "</title>")
+	newTitle := []byte("<title>" + html.EscapeString(title) + "</title>")
 	var buf bytes.Buffer
 	buf.Write(doc[:titleStart])
 	buf.Write(newTitle)
@@ -356,18 +376,104 @@ func replaceCanonicalHref(doc []byte, href string) []byte {
 	return buf.Bytes()
 }
 
-func injectRequestSEO(doc []byte, c *gin.Context) []byte {
+func injectRequestSEO(doc []byte, c *gin.Context, settingsJSON []byte) []byte {
+	pageTitle, description, indexable := requestSEO(c.Request.URL.Path, settingsJSON)
 	robots := "noindex, nofollow"
-	if isIndexablePublicPath(c.Request.URL.Path) {
+	if indexable {
 		robots = "index, follow"
 	}
-	result := replaceMetaContent(doc, `name`, `robots`, robots)
+	result := replaceHTMLTitle(doc, pageTitle)
+	result = replaceMetaContent(result, `name`, `description`, description)
+	result = replaceMetaContent(result, `name`, `robots`, robots)
+	result = replaceMetaContent(result, `property`, `og:title`, pageTitle)
+	result = replaceMetaContent(result, `property`, `og:description`, description)
+	result = replaceMetaContent(result, `name`, `twitter:title`, pageTitle)
+	result = replaceMetaContent(result, `name`, `twitter:description`, description)
 	return replaceCanonicalHref(result, canonicalURL(c))
 }
 
-func isIndexablePublicPath(path string) bool {
+func isIndexablePublicPath(path string, settingsJSON ...[]byte) bool {
+	_, _, indexable := requestSEO(path, firstSettingsJSON(settingsJSON...))
+	return indexable
+}
+
+func requestSEO(path string, settingsJSON []byte) (string, string, bool) {
+	cfg := parseInjectedSiteSEO(settingsJSON)
+	siteName := normalizedSiteName(cfg.SiteName)
+	description := siteSEODescription(cfg.SiteSubtitle)
+	title := siteSEOTitle(siteName)
 	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
-	return trimmed == "" || trimmed == "/home" || strings.HasPrefix(trimmed, "/legal/")
+	if trimmed == "" || trimmed == "/home" {
+		return title, description, true
+	}
+	if id, ok := strings.CutPrefix(trimmed, "/custom/"); ok {
+		id = cleanURLPathID(id)
+		if item, found := findPublicCustomMenuItem(cfg.CustomMenuItems, id); found {
+			return item.Label + " - " + siteName, description, true
+		}
+		return title, description, false
+	}
+	if id, ok := strings.CutPrefix(trimmed, "/legal/"); ok {
+		id = cleanURLPathID(id)
+		if doc, found := findLegalDocument(cfg.LoginAgreementDocuments, id); found {
+			return doc.Title + " - " + siteName, description, true
+		}
+		return title, description, true
+	}
+	return title, description, false
+}
+
+func cleanURLPathID(id string) string {
+	decoded, err := url.PathUnescape(strings.TrimSpace(id))
+	if err != nil {
+		return strings.TrimSpace(id)
+	}
+	return strings.TrimSpace(decoded)
+}
+
+func firstSettingsJSON(values ...[]byte) []byte {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func parseInjectedSiteSEO(settingsJSON []byte) injectedSiteSEO {
+	var cfg injectedSiteSEO
+	if len(settingsJSON) > 0 {
+		_ = json.Unmarshal(settingsJSON, &cfg)
+	}
+	return cfg
+}
+
+func normalizedSiteName(siteName string) string {
+	name := strings.TrimSpace(siteName)
+	if name == "" {
+		return "Sub2API"
+	}
+	return name
+}
+
+func findPublicCustomMenuItem(items []injectedCustomMenuItem, id string) (injectedCustomMenuItem, bool) {
+	id = strings.TrimSpace(id)
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == id && strings.TrimSpace(item.Label) != "" && item.Visibility != "admin" {
+			return item, true
+		}
+	}
+	return injectedCustomMenuItem{}, false
+}
+
+func findLegalDocument(items []injectedLegalDocument, id string) (injectedLegalDocument, bool) {
+	id = strings.TrimSpace(id)
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == id && strings.TrimSpace(item.Title) != "" {
+			return item, true
+		}
+	}
+	return injectedLegalDocument{}, false
 }
 
 // replaceNoncePlaceholder replaces the nonce placeholder with actual nonce value
@@ -428,36 +534,81 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 	return true
 }
 
-func tryServeSEOFile(c *gin.Context, path string) bool {
+func (s *FrontendServer) tryServeSEOFile(c *gin.Context, path string) bool {
 	switch strings.TrimSpace(path) {
 	case "/robots.txt":
-		serveRobotsTXT(c)
+		serveRobotsTXT(c, s.loadSettingsJSON(c))
 		return true
 	case "/sitemap.xml":
-		serveSitemapXML(c)
+		serveSitemapXML(c, s.loadSettingsJSON(c))
 		return true
 	default:
 		return false
 	}
 }
 
-func serveRobotsTXT(c *gin.Context) {
+func (s *FrontendServer) loadSettingsJSON(c *gin.Context) []byte {
+	if s == nil || s.settings == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	settings, err := s.settings.GetPublicSettingsForInjection(ctx)
+	if err != nil {
+		return nil
+	}
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		return nil
+	}
+	return settingsJSON
+}
+
+func tryServeSEOFile(c *gin.Context, path string) bool {
+	switch strings.TrimSpace(path) {
+	case "/robots.txt":
+		serveRobotsTXT(c, nil)
+		return true
+	case "/sitemap.xml":
+		serveSitemapXML(c, nil)
+		return true
+	default:
+		return false
+	}
+}
+
+func serveRobotsTXT(c *gin.Context, settingsJSON []byte) {
 	base := requestBaseURL(c)
-	body := "User-agent: *\n" +
+	cfg := parseInjectedSiteSEO(settingsJSON)
+	var builder strings.Builder
+	builder.WriteString("User-agent: *\n")
+	builder.WriteString(
 		"Allow: /$\n" +
-		"Allow: /home\n" +
-		"Allow: /legal/\n" +
-		"Disallow: /admin/\n" +
-		"Disallow: /auth/\n" +
-		"Disallow: /dashboard\n" +
-		"Disallow: /keys\n" +
-		"Disallow: /usage\n" +
-		"Disallow: /profile\n" +
-		"Disallow: /payment/\n" +
-		"Disallow: /purchase\n" +
-		"Disallow: /orders\n" +
-		"Sitemap: " + base + "/sitemap.xml\n"
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
+			"Allow: /home\n" +
+			"Allow: /legal/\n",
+	)
+	for _, item := range cfg.CustomMenuItems {
+		if strings.TrimSpace(item.ID) == "" || item.Visibility == "admin" {
+			continue
+		}
+		builder.WriteString("Allow: /custom/")
+		builder.WriteString(url.PathEscape(strings.TrimSpace(item.ID)))
+		builder.WriteByte('\n')
+	}
+	builder.WriteString(
+		"Disallow: /custom/\n" +
+			"Disallow: /admin/\n" +
+			"Disallow: /auth/\n" +
+			"Disallow: /dashboard\n" +
+			"Disallow: /keys\n" +
+			"Disallow: /usage\n" +
+			"Disallow: /profile\n" +
+			"Disallow: /payment/\n" +
+			"Disallow: /purchase\n" +
+			"Disallow: /orders\n" +
+			"Sitemap: " + base + "/sitemap.xml\n",
+	)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(builder.String()))
 	c.Abort()
 }
 
@@ -473,13 +624,35 @@ type sitemapURL struct {
 	Priority   string `xml:"priority,omitempty"`
 }
 
-func serveSitemapXML(c *gin.Context) {
+func serveSitemapXML(c *gin.Context, settingsJSON []byte) {
 	base := requestBaseURL(c)
+	urls := []sitemapURL{
+		{Loc: base + "/home", ChangeFreq: "weekly", Priority: "1.0"},
+	}
+	cfg := parseInjectedSiteSEO(settingsJSON)
+	for _, item := range cfg.CustomMenuItems {
+		if strings.TrimSpace(item.ID) == "" || item.Visibility == "admin" {
+			continue
+		}
+		urls = append(urls, sitemapURL{
+			Loc:        base + "/custom/" + url.PathEscape(strings.TrimSpace(item.ID)),
+			ChangeFreq: "weekly",
+			Priority:   "0.8",
+		})
+	}
+	for _, doc := range cfg.LoginAgreementDocuments {
+		if strings.TrimSpace(doc.ID) == "" || strings.TrimSpace(doc.Title) == "" {
+			continue
+		}
+		urls = append(urls, sitemapURL{
+			Loc:        base + "/legal/" + url.PathEscape(strings.TrimSpace(doc.ID)),
+			ChangeFreq: "monthly",
+			Priority:   "0.6",
+		})
+	}
 	urlset := sitemapURLSet{
 		Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9",
-		URLs: []sitemapURL{
-			{Loc: base + "/home", ChangeFreq: "weekly", Priority: "1.0"},
-		},
+		URLs:  urls,
 	}
 	content, err := xml.MarshalIndent(urlset, "", "  ")
 	if err != nil {

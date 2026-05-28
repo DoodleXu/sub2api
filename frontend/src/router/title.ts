@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n'
+import type { CustomMenuItem, LoginAgreementDocument } from '@/types'
 
 const DEFAULT_DESCRIPTION =
   'Sub2API is an AI API gateway for unified model access, account routing, usage billing, and API key management.'
@@ -44,6 +45,38 @@ export function isRouteIndexable(path: string): boolean {
   return normalized === '' || normalized === '/home' || normalized.startsWith('/legal/')
 }
 
+function normalizeSiteName(siteName?: string): string {
+  return typeof siteName === 'string' && siteName.trim() ? siteName.trim() : 'Sub2API'
+}
+
+export function resolveCustomPageSEO(
+  item: CustomMenuItem | null | undefined,
+  siteName?: string,
+  fallbackDescription?: string
+): { title: string; description: string; indexable: boolean } {
+  const normalizedSiteName = normalizeSiteName(siteName)
+  const label = typeof item?.label === 'string' ? item.label.trim() : ''
+  return {
+    title: label ? `${label} - ${normalizedSiteName}` : resolveDocumentTitle('Custom Page', normalizedSiteName),
+    description: resolvePageDescription(undefined, fallbackDescription),
+    indexable: Boolean(label && item?.visibility !== 'admin'),
+  }
+}
+
+export function resolveLegalDocumentSEO(
+  document: LoginAgreementDocument | null | undefined,
+  siteName?: string,
+  fallbackDescription?: string
+): { title: string; description: string; indexable: boolean } {
+  const normalizedSiteName = normalizeSiteName(siteName)
+  const title = typeof document?.title === 'string' ? document.title.trim() : ''
+  return {
+    title: title ? `${title} - ${normalizedSiteName}` : resolveDocumentTitle('Legal Document', normalizedSiteName),
+    description: resolvePageDescription(undefined, fallbackDescription),
+    indexable: true,
+  }
+}
+
 function setMetaContent(selector: string, content: string): void {
   const element = document.head.querySelector<HTMLMetaElement>(selector)
   if (element) {
@@ -64,11 +97,12 @@ export function applyRouteSEO(options: {
   description: string
   siteName: string
   image?: string
+  indexable?: boolean
 }): void {
   const { path, title, description, siteName } = options
   const image = options.image || '/logo.png'
   const canonical = `${window.location.origin}${path === '/' ? '/home' : path}`
-  const robots = isRouteIndexable(path) ? 'index, follow' : 'noindex, nofollow'
+  const robots = (options.indexable ?? isRouteIndexable(path)) ? 'index, follow' : 'noindex, nofollow'
 
   document.title = title
   setMetaContent('meta[name="description"]', description)

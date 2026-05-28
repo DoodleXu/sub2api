@@ -11,7 +11,7 @@ import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
-import { applyRouteSEO, resolveDocumentTitle, resolvePageDescription } from './title'
+import { applyRouteSEO, resolveCustomPageSEO, resolveDocumentTitle, resolveLegalDocumentSEO, resolvePageDescription } from './title'
 
 /**
  * Route definitions with lazy loading
@@ -367,7 +367,7 @@ const routes: RouteRecordRaw[] = [
     name: 'CustomPage',
     component: () => import('@/views/user/CustomPageView.vue'),
     meta: {
-      requiresAuth: true,
+      requiresAuth: false,
       requiresAdmin: false,
       title: 'Custom Page',
       titleKey: 'customPage.title',
@@ -722,7 +722,11 @@ function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: bo
 function applySEOForRoute(to: RouteLocationNormalized): void {
   const appStore = useAppStore()
   const authStore = useAuthStore()
+  const siteName = appStore.siteName || 'Sub2API'
+  const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
   let title = resolveDocumentTitle(to.meta.title, appStore.siteName, to.meta.titleKey as string)
+  let description = resolvePageDescription(to.meta.descriptionKey as string | undefined, siteSubtitle)
+  let indexable: boolean | undefined
 
   if (to.name === 'CustomPage') {
     const id = to.params.id as string
@@ -730,21 +734,29 @@ function applySEOForRoute(to: RouteLocationNormalized): void {
     const adminSettingsStore = useAdminSettingsStore()
     const menuItem = publicItems.find((item) => item.id === id)
       ?? (authStore.isAdmin ? adminSettingsStore.customMenuItems.find((item) => item.id === id) : undefined)
-    if (menuItem?.label) {
-      const siteName = appStore.siteName || 'Sub2API'
-      title = `${menuItem.label} - ${siteName}`
-    }
+    const seo = resolveCustomPageSEO(menuItem, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
+  if (to.name === 'LegalDocument') {
+    const id = to.params.documentId as string
+    const documents = appStore.cachedPublicSettings?.login_agreement_documents ?? []
+    const document = documents.find((item) => item.id === id)
+    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
   }
 
   applyRouteSEO({
     path: to.path,
     title,
-    description: resolvePageDescription(
-      to.meta.descriptionKey as string | undefined,
-      appStore.cachedPublicSettings?.site_subtitle
-    ),
-    siteName: appStore.siteName || 'Sub2API',
-    image: appStore.siteLogo || '/logo.png'
+    description,
+    siteName,
+    image: appStore.siteLogo || '/logo.png',
+    indexable,
   })
 }
 

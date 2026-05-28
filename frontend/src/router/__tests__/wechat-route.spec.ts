@@ -61,4 +61,12 @@ describe('router WeChat OAuth route', () => {
     expect(route?.meta.requiresAuth).toBe(false)
     expect(route?.meta.title).toBe('WeChat Payment Callback')
   })
+
+  it('registers custom pages as public routes', async () => {
+    const { default: router } = await import('@/router')
+    const route = router.getRoutes().find((record) => record.name === 'CustomPage')
+
+    expect(route?.path).toBe('/custom/:id')
+    expect(route?.meta.requiresAuth).toBe(false)
+  })
 })

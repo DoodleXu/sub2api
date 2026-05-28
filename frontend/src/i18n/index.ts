@@ -70,20 +70,46 @@ export async function setLocale(locale: string): Promise<void> {
   document.documentElement.setAttribute('lang', locale)
 
   // 同步更新浏览器页签标题和 SEO 元信息，使其跟随语言切换
-  const { applyRouteSEO, resolveDocumentTitle, resolvePageDescription } = await import('@/router/title')
+  const {
+    applyRouteSEO,
+    resolveCustomPageSEO,
+    resolveDocumentTitle,
+    resolveLegalDocumentSEO,
+    resolvePageDescription,
+  } = await import('@/router/title')
   const { default: router } = await import('@/router')
   const { useAppStore } = await import('@/stores/app')
   const route = router.currentRoute.value
   const appStore = useAppStore()
+  const siteName = appStore.siteName || 'Sub2API'
+  const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
+  let title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
+  let description = resolvePageDescription(route.meta.descriptionKey as string | undefined, siteSubtitle)
+  let indexable: boolean | undefined
+
+  if (route.name === 'CustomPage') {
+    const id = route.params.id as string
+    const item = appStore.cachedPublicSettings?.custom_menu_items?.find((menuItem) => menuItem.id === id)
+    const seo = resolveCustomPageSEO(item, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  } else if (route.name === 'LegalDocument') {
+    const id = route.params.documentId as string
+    const document = appStore.cachedPublicSettings?.login_agreement_documents?.find((doc) => doc.id === id)
+    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
   applyRouteSEO({
     path: route.path,
-    title: resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string),
-    description: resolvePageDescription(
-      route.meta.descriptionKey as string | undefined,
-      appStore.cachedPublicSettings?.site_subtitle
-    ),
-    siteName: appStore.siteName || 'Sub2API',
-    image: appStore.siteLogo || '/logo.png'
+    title,
+    description,
+    siteName,
+    image: appStore.siteLogo || '/logo.png',
+    indexable,
   })
 }
 

@@ -124,7 +124,7 @@ func TestInjectRequestSEO(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/home", nil)
 
-		result := string(injectRequestSEO(html, c))
+		result := string(injectRequestSEO(html, c, nil))
 
 		assert.Contains(t, result, `name="robots" content="index, follow"`)
 		assert.Contains(t, result, `rel="canonical" href="https://example.com/home"`)
@@ -136,10 +136,51 @@ func TestInjectRequestSEO(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/admin/dashboard", nil)
 
-		result := string(injectRequestSEO(html, c))
+		result := string(injectRequestSEO(html, c, nil))
 
 		assert.Contains(t, result, `name="robots" content="noindex, nofollow"`)
 		assert.Contains(t, result, `rel="canonical" href="https://example.com/admin/dashboard"`)
+	})
+
+	t.Run("marks_public_custom_pages_indexable_with_page_title", func(t *testing.T) {
+		html := []byte(`<html><head><title>old</title><meta name="description" content="old"><meta name="robots" content="noindex, nofollow"><meta property="og:title" content="old"><meta property="og:description" content="old"><meta name="twitter:title" content="old"><meta name="twitter:description" content="old"><link rel="canonical" href="/"></head></html>`)
+		settingsJSON := []byte(`{"site_name":"My Site","site_subtitle":"Unified access","custom_menu_items":[{"id":"docs","label":"Docs","url":"md:docs","visibility":"user"}]}`)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/custom/docs", nil)
+
+		result := string(injectRequestSEO(html, c, settingsJSON))
+
+		assert.Contains(t, result, `<title>Docs - My Site</title>`)
+		assert.Contains(t, result, `name="description" content="Unified access"`)
+		assert.Contains(t, result, `name="robots" content="index, follow"`)
+		assert.Contains(t, result, `property="og:title" content="Docs - My Site"`)
+		assert.Contains(t, result, `rel="canonical" href="https://example.com/custom/docs"`)
+	})
+
+	t.Run("keeps_admin_custom_pages_noindex", func(t *testing.T) {
+		html := []byte(`<html><head><meta name="robots" content="index, follow"><link rel="canonical" href="/"></head></html>`)
+		settingsJSON := []byte(`{"custom_menu_items":[{"id":"ops","label":"Ops","url":"md:ops","visibility":"admin"}]}`)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/custom/ops", nil)
+
+		result := string(injectRequestSEO(html, c, settingsJSON))
+
+		assert.Contains(t, result, `name="robots" content="noindex, nofollow"`)
+	})
+
+	t.Run("uses_legal_document_title_when_available", func(t *testing.T) {
+		html := []byte(`<html><head><title>old</title><meta name="description" content="old"><meta name="robots" content="noindex, nofollow"><meta property="og:title" content="old"><meta property="og:description" content="old"><meta name="twitter:title" content="old"><meta name="twitter:description" content="old"><link rel="canonical" href="/"></head></html>`)
+		settingsJSON := []byte(`{"site_name":"My Site","site_subtitle":"Unified access","login_agreement_documents":[{"id":"privacy","title":"Privacy Policy"}]}`)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/legal/privacy", nil)
+
+		result := string(injectRequestSEO(html, c, settingsJSON))
+
+		assert.Contains(t, result, `<title>Privacy Policy - My Site</title>`)
+		assert.Contains(t, result, `name="robots" content="index, follow"`)
 	})
 }
 
@@ -627,7 +668,12 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 	t.Run("serves_robots_txt", func(t *testing.T) {
 		provider := &mockSettingsProvider{
-			settings: map[string]string{"test": "value"},
+			settings: map[string]any{
+				"custom_menu_items": []map[string]any{
+					{"id": "docs", "label": "Docs", "url": "md:docs", "visibility": "user"},
+					{"id": "ops", "label": "Ops", "url": "md:ops", "visibility": "admin"},
+				},
+			},
 		}
 
 		server, err := NewFrontendServer(provider)
@@ -643,12 +689,23 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
 		assert.Contains(t, w.Body.String(), "Disallow: /admin/")
+		assert.Contains(t, w.Body.String(), "Allow: /custom/docs")
+		assert.NotContains(t, w.Body.String(), "Allow: /custom/ops")
+		assert.Contains(t, w.Body.String(), "Disallow: /custom/")
 		assert.Contains(t, w.Body.String(), "Sitemap: https://example.com/sitemap.xml")
 	})
 
 	t.Run("serves_sitemap_xml", func(t *testing.T) {
 		provider := &mockSettingsProvider{
-			settings: map[string]string{"test": "value"},
+			settings: map[string]any{
+				"custom_menu_items": []map[string]any{
+					{"id": "docs", "label": "Docs", "url": "md:docs", "visibility": "user"},
+					{"id": "ops", "label": "Ops", "url": "md:ops", "visibility": "admin"},
+				},
+				"login_agreement_documents": []map[string]any{
+					{"id": "privacy", "title": "Privacy Policy"},
+				},
+			},
 		}
 
 		server, err := NewFrontendServer(provider)
@@ -664,6 +721,9 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Header().Get("Content-Type"), "application/xml")
 		assert.Contains(t, w.Body.String(), "<loc>https://example.com/home</loc>")
+		assert.Contains(t, w.Body.String(), "<loc>https://example.com/custom/docs</loc>")
+		assert.NotContains(t, w.Body.String(), "<loc>https://example.com/custom/ops</loc>")
+		assert.Contains(t, w.Body.String(), "<loc>https://example.com/legal/privacy</loc>")
 	})
 }
 

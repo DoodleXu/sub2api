@@ -12,6 +12,7 @@ import (
 type HTMLCache struct {
 	mu              sync.RWMutex
 	cachedHTML      []byte
+	settingsJSON    []byte
 	etag            string
 	baseHTMLHash    string // Hash of the original index.html (immutable after build)
 	settingsVersion uint64 // Incremented when settings change
@@ -19,8 +20,9 @@ type HTMLCache struct {
 
 // CachedHTML represents the cache state
 type CachedHTML struct {
-	Content []byte
-	ETag    string
+	Content  []byte
+	ETag     string
+	Settings []byte
 }
 
 // NewHTMLCache creates a new HTML cache instance
@@ -44,6 +46,7 @@ func (c *HTMLCache) Invalidate() {
 
 	c.settingsVersion++
 	c.cachedHTML = nil
+	c.settingsJSON = nil
 	c.etag = ""
 }
 
@@ -56,8 +59,9 @@ func (c *HTMLCache) Get() *CachedHTML {
 		return nil
 	}
 	return &CachedHTML{
-		Content: c.cachedHTML,
-		ETag:    c.etag,
+		Content:  c.cachedHTML,
+		ETag:     c.etag,
+		Settings: append([]byte(nil), c.settingsJSON...),
 	}
 }
 
@@ -67,6 +71,7 @@ func (c *HTMLCache) Set(html []byte, settingsJSON []byte) {
 	defer c.mu.Unlock()
 
 	c.cachedHTML = html
+	c.settingsJSON = append([]byte(nil), settingsJSON...)
 	c.etag = c.generateETag(settingsJSON)
 }
 
