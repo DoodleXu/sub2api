@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveDocumentTitle } from '@/router/title'
+import { isRouteIndexable, resolveDocumentTitle, resolvePageDescription } from '@/router/title'
 
 describe('resolveDocumentTitle', () => {
   it('路由存在标题时，使用“路由标题 - 站点名”格式', () => {
@@ -21,5 +21,30 @@ describe('resolveDocumentTitle', () => {
 
     expect(before).toBe('Admin Dashboard - Alpha')
     expect(after).toBe('Admin Dashboard - Beta')
+  })
+})
+
+describe('resolvePageDescription', () => {
+  it('存在 fallback 时优先使用 fallback', () => {
+    expect(resolvePageDescription(undefined, 'Custom site subtitle')).toBe('Custom site subtitle')
+  })
+
+  it('无描述时回退到默认 SEO 描述', () => {
+    expect(resolvePageDescription()).toContain('Sub2API is an AI API gateway')
+  })
+})
+
+describe('isRouteIndexable', () => {
+  it('公开内容页允许索引', () => {
+    expect(isRouteIndexable('/')).toBe(true)
+    expect(isRouteIndexable('/home')).toBe(true)
+    expect(isRouteIndexable('/legal/privacy')).toBe(true)
+  })
+
+  it('后台、登录和用户区默认不允许索引', () => {
+    expect(isRouteIndexable('/login')).toBe(false)
+    expect(isRouteIndexable('/dashboard')).toBe(false)
+    expect(isRouteIndexable('/admin/dashboard')).toBe(false)
+    expect(isRouteIndexable('/payment/result')).toBe(false)
   })
 })

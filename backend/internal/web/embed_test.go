@@ -92,6 +92,57 @@ func TestInjectSiteTitle(t *testing.T) {
 	})
 }
 
+func TestInjectSiteSEO(t *testing.T) {
+	t.Run("injects_public_site_metadata", func(t *testing.T) {
+		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title><meta name="description" content="old"><meta property="og:site_name" content="old"><meta property="og:title" content="old"><meta property="og:description" content="old"><meta property="og:image" content="/logo.png"><meta name="twitter:title" content="old"><meta name="twitter:description" content="old"></head><body></body></html>`)
+		settingsJSON := []byte(`{"site_name":"My Site","site_subtitle":"Unified AI access","site_logo":"https://cdn.example.com/logo.png"}`)
+
+		result := string(injectSiteSEO(html, settingsJSON))
+
+		assert.Contains(t, result, "<title>My Site - AI API Gateway</title>")
+		assert.Contains(t, result, `name="description" content="Unified AI access"`)
+		assert.Contains(t, result, `property="og:site_name" content="My Site"`)
+		assert.Contains(t, result, `property="og:image" content="https://cdn.example.com/logo.png"`)
+		assert.Contains(t, result, `name="twitter:title" content="My Site - AI API Gateway"`)
+	})
+
+	t.Run("falls_back_to_defaults", func(t *testing.T) {
+		html := []byte(`<html><head><meta name="description" content="old"><meta property="og:image" content="old"></head><body></body></html>`)
+		settingsJSON := []byte(`{}`)
+
+		result := string(injectSiteSEO(html, settingsJSON))
+
+		assert.Contains(t, result, `name="description" content="Sub2API is an AI API gateway`)
+		assert.Contains(t, result, `property="og:image" content="/logo.png"`)
+	})
+}
+
+func TestInjectRequestSEO(t *testing.T) {
+	t.Run("marks_public_home_indexable", func(t *testing.T) {
+		html := []byte(`<html><head><meta name="robots" content="noindex, nofollow"><link rel="canonical" href="/"></head></html>`)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/home", nil)
+
+		result := string(injectRequestSEO(html, c))
+
+		assert.Contains(t, result, `name="robots" content="index, follow"`)
+		assert.Contains(t, result, `rel="canonical" href="https://example.com/home"`)
+	})
+
+	t.Run("marks_private_routes_noindex", func(t *testing.T) {
+		html := []byte(`<html><head><meta name="robots" content="index, follow"><link rel="canonical" href="/"></head></html>`)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "https://example.com/admin/dashboard", nil)
+
+		result := string(injectRequestSEO(html, c))
+
+		assert.Contains(t, result, `name="robots" content="noindex, nofollow"`)
+		assert.Contains(t, result, `rel="canonical" href="https://example.com/admin/dashboard"`)
+	})
+}
+
 func TestReplaceNoncePlaceholder(t *testing.T) {
 	t.Run("replaces_single_placeholder", func(t *testing.T) {
 		html := []byte(`<script nonce="__CSP_NONCE_VALUE__">console.log('test');</script>`)
@@ -328,6 +379,38 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 		assert.Empty(t, w2.Body.String())
 	})
 
+	t.Run("does_not_reuse_304_across_paths_with_different_seo", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]string{"test": "value"},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(middleware.CSPNonceKey, "test-nonce")
+			c.Next()
+		})
+		router.Use(server.Middleware())
+
+		w1 := httptest.NewRecorder()
+		req1 := httptest.NewRequest(http.MethodGet, "https://example.com/home", nil)
+		router.ServeHTTP(w1, req1)
+		etag := w1.Header().Get("ETag")
+		require.NotEmpty(t, etag)
+		assert.Contains(t, w1.Body.String(), `name="robots" content="index, follow"`)
+
+		w2 := httptest.NewRecorder()
+		req2 := httptest.NewRequest(http.MethodGet, "https://example.com/admin/dashboard", nil)
+		req2.Header.Set("If-None-Match", etag)
+		router.ServeHTTP(w2, req2)
+
+		assert.Equal(t, http.StatusOK, w2.Code)
+		assert.NotEqual(t, etag, w2.Header().Get("ETag"))
+		assert.Contains(t, w2.Body.String(), `name="robots" content="noindex, nofollow"`)
+	})
+
 	t.Run("sets_cache_control_header", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
@@ -540,6 +623,47 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+	})
+
+	t.Run("serves_robots_txt", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]string{"test": "value"},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(server.Middleware())
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://example.com/robots.txt", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Content-Type"), "text/plain")
+		assert.Contains(t, w.Body.String(), "Disallow: /admin/")
+		assert.Contains(t, w.Body.String(), "Sitemap: https://example.com/sitemap.xml")
+	})
+
+	t.Run("serves_sitemap_xml", func(t *testing.T) {
+		provider := &mockSettingsProvider{
+			settings: map[string]string{"test": "value"},
+		}
+
+		server, err := NewFrontendServer(provider)
+		require.NoError(t, err)
+
+		router := gin.New()
+		router.Use(server.Middleware())
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "https://example.com/sitemap.xml", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Content-Type"), "application/xml")
+		assert.Contains(t, w.Body.String(), "<loc>https://example.com/home</loc>")
 	})
 }
 

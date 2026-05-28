@@ -5,8 +5,12 @@ package web
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
@@ -30,6 +34,12 @@ var frontendFS embed.FS
 // PublicSettingsProvider is an interface to fetch public settings
 type PublicSettingsProvider interface {
 	GetPublicSettingsForInjection(ctx context.Context) (any, error)
+}
+
+type injectedSiteSEO struct {
+	SiteName     string `json:"site_name"`
+	SiteLogo     string `json:"site_logo"`
+	SiteSubtitle string `json:"site_subtitle"`
 }
 
 // FrontendServer serves the embedded frontend with settings injection
@@ -92,6 +102,10 @@ func (s *FrontendServer) Middleware() gin.HandlerFunc {
 			return
 		}
 
+		if tryServeSEOFile(c, path) {
+			return
+		}
+
 		cleanPath := strings.TrimPrefix(path, "/")
 		if cleanPath == "" {
 			cleanPath = "index.html"
@@ -146,8 +160,9 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	// Check cache first
 	cached := s.cache.Get()
 	if cached != nil {
+		requestETag := requestScopedETag(cached.ETag, c)
 		// Check If-None-Match for 304 response
-		if match := c.GetHeader("If-None-Match"); match == cached.ETag {
+		if match := c.GetHeader("If-None-Match"); match == requestETag {
 			c.Status(http.StatusNotModified)
 			c.Abort()
 			return
@@ -155,8 +170,9 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 
 		// Replace nonce placeholder with actual nonce before serving
 		content := replaceNoncePlaceholder(cached.Content, nonce)
+		content = injectRequestSEO(content, c)
 
-		c.Header("ETag", cached.ETag)
+		c.Header("ETag", requestETag)
 		c.Header("Cache-Control", "no-cache") // Must revalidate
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 		c.Abort()
@@ -188,10 +204,11 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 
 	// Replace nonce placeholder with actual nonce before serving
 	content := replaceNoncePlaceholder(rendered, nonce)
+	content = injectRequestSEO(content, c)
 
 	cached = s.cache.Get()
 	if cached != nil {
-		c.Header("ETag", cached.ETag)
+		c.Header("ETag", requestScopedETag(cached.ETag, c))
 	}
 	c.Header("Cache-Control", "no-cache")
 	c.Data(http.StatusOK, "text/html; charset=utf-8", content)
@@ -207,35 +224,150 @@ func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
 	headClose := []byte("</head>")
 	result := bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
 
-	// Replace <title> with custom site name so the browser tab shows it immediately
-	result = injectSiteTitle(result, settingsJSON)
+	// Replace generic SEO tags with public site settings so crawlers and link previews
+	// see the configured brand before the SPA boots.
+	result = injectSiteSEO(result, settingsJSON)
 
 	return result
 }
 
 // injectSiteTitle replaces the static <title> in HTML with the configured site name.
 // This ensures the browser tab shows the correct title before JS executes.
-func injectSiteTitle(html, settingsJSON []byte) []byte {
-	var cfg struct {
-		SiteName string `json:"site_name"`
-	}
+func injectSiteTitle(doc, settingsJSON []byte) []byte {
+	var cfg injectedSiteSEO
 	if err := json.Unmarshal(settingsJSON, &cfg); err != nil || cfg.SiteName == "" {
-		return html
+		return doc
 	}
 
 	// Find and replace the existing <title>...</title>
-	titleStart := bytes.Index(html, []byte("<title>"))
-	titleEnd := bytes.Index(html, []byte("</title>"))
+	titleStart := bytes.Index(doc, []byte("<title>"))
+	titleEnd := bytes.Index(doc, []byte("</title>"))
 	if titleStart == -1 || titleEnd == -1 || titleEnd <= titleStart {
-		return html
+		return doc
 	}
 
-	newTitle := []byte("<title>" + cfg.SiteName + " - AI API Gateway</title>")
+	newTitle := []byte("<title>" + html.EscapeString(siteSEOTitle(cfg.SiteName)) + "</title>")
 	var buf bytes.Buffer
-	buf.Write(html[:titleStart])
+	buf.Write(doc[:titleStart])
 	buf.Write(newTitle)
-	buf.Write(html[titleEnd+len("</title>"):])
+	buf.Write(doc[titleEnd+len("</title>"):])
 	return buf.Bytes()
+}
+
+func injectSiteSEO(doc, settingsJSON []byte) []byte {
+	var cfg injectedSiteSEO
+	if err := json.Unmarshal(settingsJSON, &cfg); err != nil {
+		return doc
+	}
+	siteName := strings.TrimSpace(cfg.SiteName)
+	if siteName == "" {
+		siteName = "Sub2API"
+	}
+	description := siteSEODescription(cfg.SiteSubtitle)
+	image := strings.TrimSpace(cfg.SiteLogo)
+	if image == "" {
+		image = "/logo.png"
+	}
+
+	result := injectSiteTitle(doc, settingsJSON)
+	title := siteSEOTitle(siteName)
+	result = replaceMetaContent(result, `name`, `description`, description)
+	result = replaceMetaContent(result, `property`, `og:site_name`, siteName)
+	result = replaceMetaContent(result, `property`, `og:title`, title)
+	result = replaceMetaContent(result, `property`, `og:description`, description)
+	result = replaceMetaContent(result, `property`, `og:image`, image)
+	result = replaceMetaContent(result, `name`, `twitter:title`, title)
+	result = replaceMetaContent(result, `name`, `twitter:description`, description)
+	return result
+}
+
+func siteSEOTitle(siteName string) string {
+	name := strings.TrimSpace(siteName)
+	if name == "" {
+		name = "Sub2API"
+	}
+	return name + " - AI API Gateway"
+}
+
+func siteSEODescription(siteSubtitle string) string {
+	if subtitle := strings.TrimSpace(siteSubtitle); subtitle != "" {
+		return subtitle
+	}
+	return "Sub2API is an AI API gateway for unified model access, account routing, usage billing, and API key management."
+}
+
+func replaceMetaContent(doc []byte, attrName, attrValue, content string) []byte {
+	marker := []byte(`<meta ` + attrName + `="` + attrValue + `"`)
+	start := bytes.Index(doc, marker)
+	if start == -1 {
+		return doc
+	}
+	tagEndRel := bytes.IndexByte(doc[start:], '>')
+	if tagEndRel == -1 {
+		return doc
+	}
+	tagEnd := start + tagEndRel
+	contentMarker := []byte(`content="`)
+	contentStartRel := bytes.Index(doc[start:tagEnd], contentMarker)
+	if contentStartRel == -1 {
+		return doc
+	}
+	valueStart := start + contentStartRel + len(contentMarker)
+	valueEndRel := bytes.IndexByte(doc[valueStart:tagEnd], '"')
+	if valueEndRel == -1 {
+		return doc
+	}
+	valueEnd := valueStart + valueEndRel
+
+	var buf bytes.Buffer
+	buf.Write(doc[:valueStart])
+	buf.WriteString(html.EscapeString(content))
+	buf.Write(doc[valueEnd:])
+	return buf.Bytes()
+}
+
+func replaceCanonicalHref(doc []byte, href string) []byte {
+	marker := []byte(`<link rel="canonical"`)
+	start := bytes.Index(doc, marker)
+	if start == -1 {
+		return doc
+	}
+	tagEndRel := bytes.IndexByte(doc[start:], '>')
+	if tagEndRel == -1 {
+		return doc
+	}
+	tagEnd := start + tagEndRel
+	hrefMarker := []byte(`href="`)
+	hrefStartRel := bytes.Index(doc[start:tagEnd], hrefMarker)
+	if hrefStartRel == -1 {
+		return doc
+	}
+	valueStart := start + hrefStartRel + len(hrefMarker)
+	valueEndRel := bytes.IndexByte(doc[valueStart:tagEnd], '"')
+	if valueEndRel == -1 {
+		return doc
+	}
+	valueEnd := valueStart + valueEndRel
+
+	var buf bytes.Buffer
+	buf.Write(doc[:valueStart])
+	buf.WriteString(html.EscapeString(href))
+	buf.Write(doc[valueEnd:])
+	return buf.Bytes()
+}
+
+func injectRequestSEO(doc []byte, c *gin.Context) []byte {
+	robots := "noindex, nofollow"
+	if isIndexablePublicPath(c.Request.URL.Path) {
+		robots = "index, follow"
+	}
+	result := replaceMetaContent(doc, `name`, `robots`, robots)
+	return replaceCanonicalHref(result, canonicalURL(c))
+}
+
+func isIndexablePublicPath(path string) bool {
+	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
+	return trimmed == "" || trimmed == "/home" || strings.HasPrefix(trimmed, "/legal/")
 }
 
 // replaceNoncePlaceholder replaces the nonce placeholder with actual nonce value
@@ -294,6 +426,111 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 	c.File(filePath)
 	c.Abort()
 	return true
+}
+
+func tryServeSEOFile(c *gin.Context, path string) bool {
+	switch strings.TrimSpace(path) {
+	case "/robots.txt":
+		serveRobotsTXT(c)
+		return true
+	case "/sitemap.xml":
+		serveSitemapXML(c)
+		return true
+	default:
+		return false
+	}
+}
+
+func serveRobotsTXT(c *gin.Context) {
+	base := requestBaseURL(c)
+	body := "User-agent: *\n" +
+		"Allow: /$\n" +
+		"Allow: /home\n" +
+		"Allow: /legal/\n" +
+		"Disallow: /admin/\n" +
+		"Disallow: /auth/\n" +
+		"Disallow: /dashboard\n" +
+		"Disallow: /keys\n" +
+		"Disallow: /usage\n" +
+		"Disallow: /profile\n" +
+		"Disallow: /payment/\n" +
+		"Disallow: /purchase\n" +
+		"Disallow: /orders\n" +
+		"Sitemap: " + base + "/sitemap.xml\n"
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
+	c.Abort()
+}
+
+type sitemapURLSet struct {
+	XMLName xml.Name     `xml:"urlset"`
+	Xmlns   string       `xml:"xmlns,attr"`
+	URLs    []sitemapURL `xml:"url"`
+}
+
+type sitemapURL struct {
+	Loc        string `xml:"loc"`
+	ChangeFreq string `xml:"changefreq,omitempty"`
+	Priority   string `xml:"priority,omitempty"`
+}
+
+func serveSitemapXML(c *gin.Context) {
+	base := requestBaseURL(c)
+	urlset := sitemapURLSet{
+		Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9",
+		URLs: []sitemapURL{
+			{Loc: base + "/home", ChangeFreq: "weekly", Priority: "1.0"},
+		},
+	}
+	content, err := xml.MarshalIndent(urlset, "", "  ")
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Failed to generate sitemap")
+		c.Abort()
+		return
+	}
+	body := append([]byte(xml.Header), content...)
+	c.Data(http.StatusOK, "application/xml; charset=utf-8", body)
+	c.Abort()
+}
+
+func canonicalURL(c *gin.Context) string {
+	path := strings.TrimSpace(c.Request.URL.Path)
+	if path == "" || path == "/" {
+		path = "/home"
+	}
+	return requestBaseURL(c) + path
+}
+
+func requestScopedETag(baseETag string, c *gin.Context) string {
+	cleanBase := strings.Trim(baseETag, `"`)
+	if cleanBase == "" {
+		cleanBase = "html"
+	}
+	seed := canonicalURL(c) + "|" + c.Request.URL.Path
+	if isIndexablePublicPath(c.Request.URL.Path) {
+		seed += "|index"
+	} else {
+		seed += "|noindex"
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return `"` + cleanBase + "-" + hex.EncodeToString(sum[:8]) + `"`
+}
+
+func requestBaseURL(c *gin.Context) string {
+	scheme := c.GetHeader("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = "http"
+		if c.Request.TLS != nil {
+			scheme = "https"
+		}
+	}
+	host := c.GetHeader("X-Forwarded-Host")
+	if host == "" {
+		host = c.Request.Host
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return strings.TrimRight(scheme+"://"+host, "/")
 }
 
 func shouldBypassEmbeddedFrontend(path string) bool {
