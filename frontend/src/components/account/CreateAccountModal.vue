@@ -2477,7 +2477,7 @@
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.totalCostCny') }}</label>
-          <input v-model.number="form.total_cost_cny" type="number" min="0" step="0.01" class="input" />
+          <input v-model.number="form.total_cost_cny" type="number" min="0" step="0.0001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.totalCostCnyHint') }}</p>
         </div>
       </div>

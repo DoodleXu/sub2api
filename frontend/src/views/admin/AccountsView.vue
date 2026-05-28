@@ -1352,13 +1352,13 @@ const formatCostPerUsd = (account: Account): string => {
   }
   const backendCostPerUsd = Number(account.cost_cny_per_usd ?? 0)
   if (Number.isFinite(backendCostPerUsd) && backendCostPerUsd > 0) {
-    return `¥${backendCostPerUsd.toFixed(2)}`
+    return `¥${backendCostPerUsd.toFixed(4)}`
   }
   const totalAccountCost = Number(account.total_account_cost ?? 0)
   if (!Number.isFinite(totalCny) || !Number.isFinite(totalAccountCost) || totalAccountCost <= 0) {
     return '-'
   }
-  return `¥${(totalCny / totalAccountCost).toFixed(2)}`
+  return `¥${(totalCny / totalAccountCost).toFixed(4)}`
 }
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
