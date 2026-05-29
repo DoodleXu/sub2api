@@ -611,6 +611,10 @@ export interface SystemSettings {
   web_console_enabled: boolean;
   web_console_default_endpoint: string;
 
+  // Daily check-in reward range
+  daily_checkin_reward_min_usd: number;
+  daily_checkin_reward_max_usd: number;
+
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
@@ -844,6 +848,10 @@ export interface UpdateSettingsRequest {
   // Web Console feature switch
   web_console_enabled?: boolean;
   web_console_default_endpoint?: string;
+
+  // Daily check-in reward range
+  daily_checkin_reward_min_usd?: number;
+  daily_checkin_reward_max_usd?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

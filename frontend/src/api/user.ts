@@ -19,6 +19,33 @@ import type {
   PlatformQuotasResponse,
 } from '@/types'
 
+export interface DailyCheckinRecord {
+  id: number
+  user_id: number
+  date: string
+  reward_amount: number
+  qualified_usage_usd: number
+  created_at: string
+}
+
+export interface DailyCheckinStatus {
+  today: string
+  month: string
+  checked_in: boolean
+  eligible: boolean
+  today_usage_usd: number
+  required_usage_usd: number
+  reward_min_usd: number
+  reward_max_usd: number
+  month_checkins: DailyCheckinRecord[]
+}
+
+export interface DailyCheckinResult extends DailyCheckinStatus {
+  reward_amount: number
+  balance: number
+  checked_in_at: string
+}
+
 /**
  * Get current user profile
  * @returns User profile data
@@ -194,6 +221,16 @@ export async function getMyPlatformQuotas(): Promise<PlatformQuotasResponse> {
   return data
 }
 
+export async function getDailyCheckinStatus(): Promise<DailyCheckinStatus> {
+  const { data } = await apiClient.get<DailyCheckinStatus>('/user/checkin/status')
+  return data
+}
+
+export async function dailyCheckin(): Promise<DailyCheckinResult> {
+  const { data } = await apiClient.post<DailyCheckinResult>('/user/checkin')
+  return data
+}
+
 export const userAPI = {
   getProfile,
   updateProfile,
@@ -210,6 +247,8 @@ export const userAPI = {
   getAffiliateDetail,
   transferAffiliateQuota,
   getMyPlatformQuotas,
+  getDailyCheckinStatus,
+  dailyCheckin,
 }
 
 export default userAPI

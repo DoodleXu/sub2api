@@ -38,9 +38,14 @@
             <template v-if="user.notes">{{ t('admin.users.notes') }}: {{ user.notes }}</template>
             <template v-else>&nbsp;</template>
           </p>
-          <p class="ml-4 flex-shrink-0 text-xs text-gray-500 dark:text-dark-400">
-            {{ t('admin.users.totalRecharged') }}: <span class="font-semibold text-emerald-600 dark:text-emerald-400">${{ totalRecharged.toFixed(2) }}</span>
-          </p>
+          <div class="ml-4 flex flex-shrink-0 items-center gap-4 text-xs text-gray-500 dark:text-dark-400">
+            <p>
+              {{ t('admin.users.totalCheckinReward') }}: <span class="font-semibold text-emerald-600 dark:text-emerald-400">${{ totalCheckinReward.toFixed(2) }}</span>
+            </p>
+            <p>
+              {{ t('admin.users.totalRecharged') }}: <span class="font-semibold text-emerald-600 dark:text-emerald-400">${{ totalRecharged.toFixed(2) }}</span>
+            </p>
+          </div>
         </div>
       </div>
 
@@ -128,10 +133,10 @@
                 {{ formatValue(item) }}
               </p>
               <p
-                v-if="isAdminType(item.type)"
+                v-if="isAdminType(item.type) || isCheckinReward(item)"
                 class="text-xs text-gray-400 dark:text-dark-500"
               >
-                {{ t('redeem.adminAdjustment') }}
+                {{ isCheckinReward(item) ? item.notes : t('redeem.adminAdjustment') }}
               </p>
               <p
                 v-else
@@ -187,6 +192,7 @@ const loading = ref(false)
 const currentPage = ref(1)
 const total = ref(0)
 const totalRecharged = ref(0)
+const totalCheckinReward = ref(0)
 const pageSize = 15
 const typeFilter = ref('')
 
@@ -196,6 +202,7 @@ const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
 const typeOptions = computed(() => [
   { value: '', label: t('admin.users.allTypes') },
   { value: 'balance', label: t('admin.users.typeBalance') },
+  { value: 'checkin_balance', label: t('admin.users.typeCheckinBalance') },
   { value: 'affiliate_balance', label: t('admin.users.typeAffiliateBalance') },
   { value: 'admin_balance', label: t('admin.users.typeAdminBalance') },
   { value: 'concurrency', label: t('admin.users.typeConcurrency') },
@@ -225,6 +232,7 @@ const loadHistory = async (page: number) => {
     history.value = res.items || []
     total.value = res.total || 0
     totalRecharged.value = res.total_recharged || 0
+    totalCheckinReward.value = res.total_checkin_reward || 0
   } catch (error) {
     console.error('Failed to load balance history:', error)
   } finally {
@@ -236,13 +244,17 @@ const loadHistory = async (page: number) => {
 const isAdminType = (type: string) => type === 'admin_balance' || type === 'admin_concurrency'
 
 // Helper: check if balance type (includes admin_balance)
-const isBalanceType = (type: string) => type === 'balance' || type === 'admin_balance' || type === 'affiliate_balance'
+const isBalanceType = (type: string) => type === 'balance' || type === 'checkin_balance' || type === 'admin_balance' || type === 'affiliate_balance'
 
 // Helper: check if subscription type
 const isSubscriptionType = (type: string) => type === 'subscription'
 
+const isCheckinReward = (item: BalanceHistoryItem) =>
+  item.type === 'checkin_balance' || (item.type === 'admin_balance' && item.notes === '签到奖励')
+
 // Icon name based on type
 const getIconName = (item: BalanceHistoryItem) => {
+  if (isCheckinReward(item)) return 'calendarCheck'
   if (isBalanceType(item.type)) return 'dollar'
   if (isSubscriptionType(item.type)) return 'badge'
   return 'bolt' // concurrency
@@ -289,6 +301,9 @@ const getValueColor = (item: BalanceHistoryItem) => {
 
 // Item title
 const getItemTitle = (item: BalanceHistoryItem) => {
+  if (isCheckinReward(item)) {
+    return t('redeem.balanceAddedCheckin')
+  }
   switch (item.type) {
     case 'balance':
       return t('redeem.balanceAddedRedeem')

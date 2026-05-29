@@ -239,9 +239,10 @@ export interface BalanceHistoryItem {
   group?: { id: number; name: string } | null
 }
 
-// Balance history response extends pagination with total_recharged summary
+// Balance history response extends pagination with balance summary totals.
 export interface BalanceHistoryResponse extends PaginatedResponse<BalanceHistoryItem> {
   total_recharged: number
+  total_checkin_reward: number
 }
 
 /**
@@ -249,8 +250,8 @@ export interface BalanceHistoryResponse extends PaginatedResponse<BalanceHistory
  * @param id - User ID
  * @param page - Page number
  * @param pageSize - Items per page
- * @param type - Optional type filter (balance, affiliate_balance, admin_balance, concurrency, admin_concurrency, subscription)
- * @returns Paginated balance history with total_recharged
+ * @param type - Optional type filter (balance, checkin_balance, affiliate_balance, admin_balance, concurrency, admin_concurrency, subscription)
+ * @returns Paginated balance history with summary totals
  */
 export async function getUserBalanceHistory(
   id: number,

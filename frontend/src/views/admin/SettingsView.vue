@@ -5289,6 +5289,50 @@
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.dailyCheckin.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.dailyCheckin.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.dailyCheckin.rewardMin') }}
+                </label>
+                <input
+                  v-model.number="form.daily_checkin_reward_min_usd"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  class="input"
+                />
+              </div>
+              <div>
+                <label class="input-label">
+                  {{ t('admin.settings.features.dailyCheckin.rewardMax') }}
+                </label>
+                <input
+                  v-model.number="form.daily_checkin_reward_max_usd"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  class="input"
+                />
+              </div>
+            </div>
+            <p class="text-xs text-gray-400">
+              {{ t('admin.settings.features.dailyCheckin.rewardHint') }}
+            </p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.riskControl.title') }}
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -6761,6 +6805,7 @@ import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue"
 import { useClipboard } from "@/composables/useClipboard";
 import { affiliatesAPI, type AffiliateAdminEntry, type SimpleUser as AffiliateSimpleUser } from "@/api/admin/affiliates";
 import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
+import { isSubscriptionType } from "@/utils/subscriptionType";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
@@ -7239,6 +7284,9 @@ const form = reactive<SettingsForm>({
   // Web Console feature switch
   web_console_enabled: false,
   web_console_default_endpoint: "",
+  // Daily Check-in reward range
+  daily_checkin_reward_min_usd: 1,
+  daily_checkin_reward_max_usd: 3,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
 });
@@ -7996,7 +8044,7 @@ async function loadSubscriptionGroups() {
     const groups = await adminAPI.groups.getAll();
     subscriptionGroups.value = groups.filter(
       (group) =>
-        group.subscription_type === "subscription" && group.status === "active",
+        isSubscriptionType(group.subscription_type) && group.status === "active",
     );
   } catch (_error: unknown) {
     subscriptionGroups.value = [];
@@ -8197,6 +8245,14 @@ async function saveSettings() {
       form.wechat_connect_mp_enabled,
       form.wechat_connect_mobile_enabled,
       form.wechat_connect_mode,
+    );
+    const dailyCheckinRewardMin = Math.max(
+      0,
+      Math.min(100, Math.floor(Number(form.daily_checkin_reward_min_usd) || 0)),
+    );
+    const dailyCheckinRewardMax = Math.max(
+      dailyCheckinRewardMin,
+      Math.min(100, Math.floor(Number(form.daily_checkin_reward_max_usd) || dailyCheckinRewardMin)),
     );
 
     const payload: UpdateSettingsRequest = {
@@ -8410,6 +8466,8 @@ async function saveSettings() {
       web_console_enabled: form.web_console_enabled,
       web_console_default_endpoint:
         form.web_console_default_endpoint?.trim() || "",
+      daily_checkin_reward_min_usd: dailyCheckinRewardMin,
+      daily_checkin_reward_max_usd: dailyCheckinRewardMax,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
     };

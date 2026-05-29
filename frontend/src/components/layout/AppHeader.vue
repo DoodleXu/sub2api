@@ -21,7 +21,7 @@
         </div>
       </div>
 
-      <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + User Dropdown -->
+      <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + Check-in + User Dropdown -->
       <div class="flex items-center gap-3">
         <!-- Announcement Bell -->
         <AnnouncementBell v-if="user" />
@@ -66,6 +66,9 @@
             ${{ user.balance?.toFixed(2) || '0.00' }}
           </span>
         </div>
+
+        <!-- Sign-in -->
+        <DailyCheckinButton v-if="user" />
 
         <!-- User Dropdown -->
         <div v-if="user" class="relative" ref="dropdownRef">
@@ -221,6 +224,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
 import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
+import DailyCheckinButton from '@/components/common/DailyCheckinButton.vue'
 import Icon from '@/components/icons/Icon.vue'
 
 const router = useRouter()
