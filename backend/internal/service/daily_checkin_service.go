@@ -258,7 +258,7 @@ func listMonthlyCheckins(ctx context.Context, q dailyCheckinQuerier, userID int6
 	if err != nil {
 		return nil, fmt.Errorf("list monthly daily checkins: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	records := make([]DailyCheckinRecord, 0)
 	for rows.Next() {

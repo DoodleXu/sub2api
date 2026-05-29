@@ -139,6 +139,13 @@ func (f fakeGoogleSubscriptionRepo) ListByGroupID(ctx context.Context, groupID i
 	return nil, nil, errors.New("not implemented")
 }
 func (f fakeGoogleSubscriptionRepo) List(ctx context.Context, params pagination.PaginationParams, userID, groupID *int64, status, platform, sortBy, sortOrder string) ([]service.UserSubscription, *pagination.PaginationResult, error) {
+	if f.getActive != nil && userID != nil && groupID != nil && status == service.SubscriptionStatusActive {
+		sub, err := f.getActive(ctx, *userID, *groupID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []service.UserSubscription{*sub}, &pagination.PaginationResult{Total: 1}, nil
+	}
 	return nil, nil, errors.New("not implemented")
 }
 func (f fakeGoogleSubscriptionRepo) ExistsByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (bool, error) {
