@@ -1,7 +1,10 @@
+//go:build unit
+
 package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,7 +18,7 @@ type updateServiceTestCache struct {
 
 func (c *updateServiceTestCache) GetUpdateInfo(context.Context) (string, error) {
 	if c.data == "" {
-		return "", errUpdateServiceTestCacheMiss{}
+		return "", errors.New("cache miss")
 	}
 	return c.data, nil
 }
@@ -25,18 +28,16 @@ func (c *updateServiceTestCache) SetUpdateInfo(_ context.Context, data string, _
 	return nil
 }
 
-type errUpdateServiceTestCacheMiss struct{}
-
-func (errUpdateServiceTestCacheMiss) Error() string {
-	return "cache miss"
-}
-
 type updateServiceTestGitHubClient struct {
-	repo string
+	repo    string
+	release *GitHubRelease
 }
 
 func (c *updateServiceTestGitHubClient) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
 	c.repo = repo
+	if c.release != nil {
+		return c.release, nil
+	}
 	return &GitHubRelease{
 		TagName:     "v9.9.9",
 		Name:        "test release",
@@ -46,11 +47,11 @@ func (c *updateServiceTestGitHubClient) FetchLatestRelease(_ context.Context, re
 }
 
 func (c *updateServiceTestGitHubClient) DownloadFile(context.Context, string, string, int64) error {
-	return nil
+	panic("DownloadFile should not be called by these tests")
 }
 
 func (c *updateServiceTestGitHubClient) FetchChecksumFile(context.Context, string) ([]byte, error) {
-	return nil, nil
+	panic("FetchChecksumFile should not be called by these tests")
 }
 
 func TestUpdateServiceUsesForkRepositoryByDefault(t *testing.T) {
@@ -77,4 +78,25 @@ func TestUpdateServiceUsesConfiguredRepository(t *testing.T) {
 	require.Equal(t, "example/custom-sub2api", client.repo)
 	require.Equal(t, "example/custom-sub2api", info.Repository)
 	require.Equal(t, "https://github.com/example/custom-sub2api/releases/tag/v9.9.9", info.ReleaseInfo.HTMLURL)
+}
+
+func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
+	svc := NewUpdateService(
+		&updateServiceTestCache{},
+		&updateServiceTestGitHubClient{
+			release: &GitHubRelease{
+				TagName: "v0.1.140",
+				Name:    "v0.1.140",
+			},
+		},
+		"0.1.140",
+		"release",
+		nil,
+	)
+
+	err := svc.PerformUpdate(context.Background())
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
+	require.ErrorIs(t, err, ErrNoUpdateAvailable)
 }
