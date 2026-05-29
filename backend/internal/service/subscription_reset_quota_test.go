@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,11 +17,15 @@ import (
 type resetQuotaUserSubRepoStub struct {
 	userSubRepoNoop
 
-	sub *UserSubscription
+	sub  *UserSubscription
+	list []UserSubscription
 
 	resetDailyCalled   bool
 	resetWeeklyCalled  bool
 	resetMonthlyCalled bool
+	resetDailyIDs      []int64
+	resetWeeklyIDs     []int64
+	resetMonthlyIDs    []int64
 	resetDailyErr      error
 	resetWeeklyErr     error
 	resetMonthlyErr    error
@@ -34,8 +39,29 @@ func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserS
 	return &cp, nil
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, windowStart time.Time) error {
+func (r *resetQuotaUserSubRepoStub) List(_ context.Context, params pagination.PaginationParams, _ *int64, _ *int64, status, _ string, _ string, _ string) ([]UserSubscription, *pagination.PaginationResult, error) {
+	if status != SubscriptionStatusActive {
+		return nil, nil, nil
+	}
+	start := params.Offset()
+	if start >= len(r.list) {
+		return []UserSubscription{}, &pagination.PaginationResult{Total: int64(len(r.list)), Page: params.Page, PageSize: params.PageSize, Pages: 1}, nil
+	}
+	end := start + params.Limit()
+	if end > len(r.list) {
+		end = len(r.list)
+	}
+	out := append([]UserSubscription(nil), r.list[start:end]...)
+	pages := (len(r.list) + params.Limit() - 1) / params.Limit()
+	if pages < 1 {
+		pages = 1
+	}
+	return out, &pagination.PaginationResult{Total: int64(len(r.list)), Page: params.Page, PageSize: params.PageSize, Pages: pages}, nil
+}
+
+func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, windowStart time.Time) error {
 	r.resetDailyCalled = true
+	r.resetDailyIDs = append(r.resetDailyIDs, id)
 	if r.resetDailyErr == nil && r.sub != nil {
 		r.sub.DailyUsageUSD = 0
 		r.sub.DailyWindowStart = &windowStart
@@ -43,13 +69,15 @@ func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, 
 	return r.resetDailyErr
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetWeeklyUsage(_ context.Context, _ int64, _ time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, _ time.Time) error {
 	r.resetWeeklyCalled = true
+	r.resetWeeklyIDs = append(r.resetWeeklyIDs, id)
 	return r.resetWeeklyErr
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetMonthlyUsage(_ context.Context, _ int64, _ time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, _ time.Time) error {
 	r.resetMonthlyCalled = true
+	r.resetMonthlyIDs = append(r.resetMonthlyIDs, id)
 	return r.resetMonthlyErr
 }
 
@@ -204,4 +232,35 @@ func TestAdminResetQuota_ReturnsRefreshedSub(t *testing.T) {
 	// 服务应返回第二次 GetByID 的刷新值而非初始的 99.9
 	require.Equal(t, float64(0), result.DailyUsageUSD, "返回的订阅应反映已归零的用量")
 	require.True(t, stub.resetDailyCalled)
+}
+
+func TestAdminBulkResetQuota_ResetDailyAndWeeklyOnly(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{
+		list: []UserSubscription{
+			{ID: 11, UserID: 101, GroupID: 201, Status: SubscriptionStatusActive},
+			{ID: 12, UserID: 102, GroupID: 202, Status: SubscriptionStatusActive},
+		},
+	}
+	svc := newResetQuotaSvc(stub)
+
+	result, err := svc.AdminBulkResetQuota(context.Background(), true, true, false)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Equal(t, []int64{11, 12}, stub.resetDailyIDs)
+	require.Equal(t, []int64{11, 12}, stub.resetWeeklyIDs)
+	require.Empty(t, stub.resetMonthlyIDs, "补偿型周配额重置不应清月用量")
+}
+
+func TestAdminBulkResetQuota_AllFalseReturnsError(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{}
+	svc := newResetQuotaSvc(stub)
+
+	_, err := svc.AdminBulkResetQuota(context.Background(), false, false, false)
+
+	require.ErrorIs(t, err, ErrInvalidInput)
+	require.False(t, stub.resetDailyCalled)
+	require.False(t, stub.resetWeeklyCalled)
+	require.False(t, stub.resetMonthlyCalled)
 }

@@ -398,6 +398,14 @@ type BulkAssignResult struct {
 	Statuses      map[int64]string
 }
 
+// BulkResetQuotaResult 批量重置订阅用量结果
+type BulkResetQuotaResult struct {
+	Success    int     `json:"success"`
+	Failed     int     `json:"failed"`
+	SuccessIDs []int64 `json:"success_ids,omitempty"`
+	FailedIDs  []int64 `json:"failed_ids,omitempty"`
+}
+
 // BulkAssignSubscription 批量分配订阅
 func (s *SubscriptionService) BulkAssignSubscription(ctx context.Context, input *BulkAssignSubscriptionInput) (*BulkAssignResult, error) {
 	result := &BulkAssignResult{
@@ -788,6 +796,71 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	}
 	// Return the refreshed subscription from DB
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
+}
+
+// AdminBulkResetQuota manually resets usage windows for all active subscriptions.
+func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDaily, resetWeekly, resetMonthly bool) (*BulkResetQuotaResult, error) {
+	if !resetDaily && !resetWeekly && !resetMonthly {
+		return nil, ErrInvalidInput
+	}
+
+	const pageSize = 1000
+	windowStart := startOfDay(time.Now())
+	result := &BulkResetQuotaResult{
+		SuccessIDs: make([]int64, 0),
+		FailedIDs:  make([]int64, 0),
+	}
+
+	for page := 1; ; page++ {
+		subs, pag, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: page, PageSize: pageSize}, nil, nil, SubscriptionStatusActive, "", "id", "asc")
+		if err != nil {
+			return nil, err
+		}
+		if len(subs) == 0 {
+			break
+		}
+
+		for i := range subs {
+			sub := &subs[i]
+			if resetDaily {
+				if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, windowStart); err != nil {
+					result.Failed++
+					result.FailedIDs = append(result.FailedIDs, sub.ID)
+					continue
+				}
+			}
+			if resetWeekly {
+				if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, windowStart); err != nil {
+					result.Failed++
+					result.FailedIDs = append(result.FailedIDs, sub.ID)
+					continue
+				}
+			}
+			if resetMonthly {
+				if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, windowStart); err != nil {
+					result.Failed++
+					result.FailedIDs = append(result.FailedIDs, sub.ID)
+					continue
+				}
+			}
+
+			s.InvalidateSubCache(sub.UserID, sub.GroupID)
+			if s.billingCacheService != nil {
+				_ = s.billingCacheService.InvalidateSubscription(ctx, sub.UserID, sub.GroupID)
+			}
+			result.Success++
+			result.SuccessIDs = append(result.SuccessIDs, sub.ID)
+		}
+
+		if pag == nil || page >= pag.Pages || len(subs) < pageSize {
+			break
+		}
+	}
+
+	if s.subCacheL1 != nil {
+		s.subCacheL1.Wait()
+	}
+	return result, nil
 }
 
 // CheckAndResetWindows 检查并重置过期的窗口
