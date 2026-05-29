@@ -256,7 +256,7 @@ func (h *SubscriptionHandler) ResetQuota(c *gin.Context) {
 	response.Success(c, dto.UserSubscriptionFromServiceAdmin(sub))
 }
 
-// BulkResetQuota resets daily, weekly, and/or monthly usage for all active subscriptions.
+// BulkResetQuota resets daily and/or weekly usage for all active subscriptions.
 // POST /api/v1/admin/subscriptions/bulk-reset-quota
 func (h *SubscriptionHandler) BulkResetQuota(c *gin.Context) {
 	var req BulkResetSubscriptionQuotaRequest
@@ -264,8 +264,12 @@ func (h *SubscriptionHandler) BulkResetQuota(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if req.Monthly {
+		response.BadRequest(c, "Monthly quota reset is not supported for bulk weekly compensation")
+		return
+	}
 	if !req.Daily && !req.Weekly && !req.Monthly {
-		response.BadRequest(c, "At least one of 'daily', 'weekly', or 'monthly' must be true")
+		response.BadRequest(c, "At least one of 'daily' or 'weekly' must be true")
 		return
 	}
 	result, err := h.subscriptionService.AdminBulkResetQuota(c.Request.Context(), req.Daily, req.Weekly, req.Monthly)

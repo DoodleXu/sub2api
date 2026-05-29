@@ -242,6 +242,8 @@ func (r *userSubscriptionRepository) List(ctx context.Context, params pagination
 	// Determine sort field
 	var field string
 	switch sortBy {
+	case "id":
+		field = usersubscription.FieldID
 	case "expires_at":
 		field = usersubscription.FieldExpiresAt
 	case "status":

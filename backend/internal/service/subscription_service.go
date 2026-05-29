@@ -798,9 +798,9 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }
 
-// AdminBulkResetQuota manually resets usage windows for all active subscriptions.
+// AdminBulkResetQuota manually resets daily and/or weekly usage windows for all active subscriptions.
 func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDaily, resetWeekly, resetMonthly bool) (*BulkResetQuotaResult, error) {
-	if !resetDaily && !resetWeekly && !resetMonthly {
+	if resetMonthly || (!resetDaily && !resetWeekly) {
 		return nil, ErrInvalidInput
 	}
 

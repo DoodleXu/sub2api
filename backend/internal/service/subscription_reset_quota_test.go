@@ -264,3 +264,15 @@ func TestAdminBulkResetQuota_AllFalseReturnsError(t *testing.T) {
 	require.False(t, stub.resetWeeklyCalled)
 	require.False(t, stub.resetMonthlyCalled)
 }
+
+func TestAdminBulkResetQuota_RejectsMonthlyReset(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{}
+	svc := newResetQuotaSvc(stub)
+
+	_, err := svc.AdminBulkResetQuota(context.Background(), true, true, true)
+
+	require.ErrorIs(t, err, ErrInvalidInput)
+	require.False(t, stub.resetDailyCalled)
+	require.False(t, stub.resetWeeklyCalled)
+	require.False(t, stub.resetMonthlyCalled)
+}
