@@ -159,6 +159,14 @@
             >
               <Icon name="questionCircle" size="md" />
             </button>
+            <button
+              @click="handleResetAllWeeklyQuota"
+              :disabled="resettingAllWeeklyQuota"
+              class="btn btn-secondary"
+            >
+              <Icon name="refresh" size="md" class="mr-2" :class="resettingAllWeeklyQuota ? 'animate-spin' : ''" />
+              <span>{{ t('admin.subscriptions.resetAllWeeklyQuota') }}</span>
+            </button>
             <button @click="showAssignModal = true" class="btn btn-primary">
               <Icon name="plus" size="md" class="mr-2" />
               {{ t('admin.subscriptions.assignSubscription') }}
@@ -395,6 +403,15 @@
               >
                 <Icon name="refresh" size="sm" />
                 <span class="text-xs">{{ t('admin.subscriptions.resetQuota') }}</span>
+              </button>
+              <button
+                v-if="row.status === 'active'"
+                @click="handleResetWeeklyQuota(row)"
+                :disabled="resettingQuota && resettingSubscription?.id === row.id"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-teal-50 hover:text-teal-600 dark:hover:bg-teal-900/20 dark:hover:text-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Icon name="refresh" size="sm" />
+                <span class="text-xs">{{ t('admin.subscriptions.resetWeeklyQuota') }}</span>
               </button>
               <button
                 v-if="row.status === 'active'"
@@ -654,6 +671,24 @@
       :cancel-text="t('common.cancel')"
       @confirm="confirmResetQuota"
       @cancel="showResetQuotaConfirm = false"
+    />
+    <ConfirmDialog
+      :show="showResetWeeklyQuotaConfirm"
+      :title="t('admin.subscriptions.resetWeeklyQuotaTitle')"
+      :message="t('admin.subscriptions.resetWeeklyQuotaConfirm', { user: resettingSubscription?.user?.email })"
+      :confirm-text="t('admin.subscriptions.resetWeeklyQuota')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmResetWeeklyQuota"
+      @cancel="showResetWeeklyQuotaConfirm = false"
+    />
+    <ConfirmDialog
+      :show="showResetAllWeeklyQuotaConfirm"
+      :title="t('admin.subscriptions.resetAllWeeklyQuotaTitle')"
+      :message="t('admin.subscriptions.resetAllWeeklyQuotaConfirm')"
+      :confirm-text="t('admin.subscriptions.resetAllWeeklyQuota')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmResetAllWeeklyQuota"
+      @cancel="showResetAllWeeklyQuotaConfirm = false"
     />
     <!-- Subscription Guide Modal -->
     <teleport to="body">
@@ -941,9 +976,12 @@ const showAssignModal = ref(false)
 const showExtendModal = ref(false)
 const showRevokeDialog = ref(false)
 const showResetQuotaConfirm = ref(false)
+const showResetWeeklyQuotaConfirm = ref(false)
+const showResetAllWeeklyQuotaConfirm = ref(false)
 const submitting = ref(false)
 const resettingSubscription = ref<UserSubscription | null>(null)
 const resettingQuota = ref(false)
+const resettingAllWeeklyQuota = ref(false)
 const extendingSubscription = ref<UserSubscription | null>(null)
 const revokingSubscription = ref<UserSubscription | null>(null)
 
@@ -1266,6 +1304,15 @@ const handleResetQuota = (subscription: UserSubscription) => {
   showResetQuotaConfirm.value = true
 }
 
+const handleResetWeeklyQuota = (subscription: UserSubscription) => {
+  resettingSubscription.value = subscription
+  showResetWeeklyQuotaConfirm.value = true
+}
+
+const handleResetAllWeeklyQuota = () => {
+  showResetAllWeeklyQuotaConfirm.value = true
+}
+
 const confirmResetQuota = async () => {
   if (!resettingSubscription.value) return
   if (resettingQuota.value) return
@@ -1281,6 +1328,40 @@ const confirmResetQuota = async () => {
     console.error('Error resetting quota:', error)
   } finally {
     resettingQuota.value = false
+  }
+}
+
+const confirmResetWeeklyQuota = async () => {
+  if (!resettingSubscription.value) return
+  if (resettingQuota.value) return
+  resettingQuota.value = true
+  try {
+    await adminAPI.subscriptions.resetQuota(resettingSubscription.value.id, { daily: true, weekly: true, monthly: false })
+    appStore.showSuccess(t('admin.subscriptions.weeklyQuotaResetSuccess'))
+    showResetWeeklyQuotaConfirm.value = false
+    resettingSubscription.value = null
+    await loadSubscriptions()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToResetWeeklyQuota'))
+    console.error('Error resetting weekly quota:', error)
+  } finally {
+    resettingQuota.value = false
+  }
+}
+
+const confirmResetAllWeeklyQuota = async () => {
+  if (resettingAllWeeklyQuota.value) return
+  resettingAllWeeklyQuota.value = true
+  try {
+    const result = await adminAPI.subscriptions.bulkResetQuota({ daily: true, weekly: true, monthly: false })
+    appStore.showSuccess(t('admin.subscriptions.allWeeklyQuotaResetSuccess', { count: result.success, failed: result.failed }))
+    showResetAllWeeklyQuotaConfirm.value = false
+    await loadSubscriptions()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToResetAllWeeklyQuota'))
+    console.error('Error resetting all weekly quota:', error)
+  } finally {
+    resettingAllWeeklyQuota.value = false
   }
 }
 

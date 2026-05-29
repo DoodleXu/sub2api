@@ -13,6 +13,13 @@ import type {
   PaginatedResponse
 } from '@/types'
 
+export interface BulkResetQuotaResult {
+  success: number
+  failed: number
+  success_ids?: number[]
+  failed_ids?: number[]
+}
+
 /**
  * List all subscriptions with pagination
  * @param page - Page number (default: 1)
@@ -139,6 +146,23 @@ export async function resetQuota(
 }
 
 /**
+ * Reset daily, weekly, and/or monthly usage quota for all active subscriptions
+ * @param options - Which windows to reset
+ * @returns Bulk reset result
+ */
+export async function bulkResetQuota(options: {
+  daily: boolean
+  weekly: boolean
+  monthly: boolean
+}): Promise<BulkResetQuotaResult> {
+  const { data } = await apiClient.post<BulkResetQuotaResult>(
+    '/admin/subscriptions/bulk-reset-quota',
+    options
+  )
+  return data
+}
+
+/**
  * List subscriptions by group
  * @param groupId - Group ID
  * @param page - Page number
@@ -189,6 +213,7 @@ export const subscriptionsAPI = {
   extend,
   revoke,
   resetQuota,
+  bulkResetQuota,
   listByGroup,
   listByUser
 }
