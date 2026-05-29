@@ -12,6 +12,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/dgraph-io/ristretto"
 	"golang.org/x/sync/singleflight"
@@ -400,10 +401,13 @@ type BulkAssignResult struct {
 
 // BulkResetQuotaResult 批量重置订阅用量结果
 type BulkResetQuotaResult struct {
-	Success    int     `json:"success"`
-	Failed     int     `json:"failed"`
-	SuccessIDs []int64 `json:"success_ids,omitempty"`
-	FailedIDs  []int64 `json:"failed_ids,omitempty"`
+	DryRun        bool    `json:"dry_run"`
+	RunID         string  `json:"run_id,omitempty"`
+	AffectedCount int     `json:"affected_count"`
+	Success       int     `json:"success"`
+	Failed        int     `json:"failed"`
+	SuccessIDs    []int64 `json:"success_ids,omitempty"`
+	FailedIDs     []int64 `json:"failed_ids,omitempty"`
 }
 
 // BulkAssignSubscription 批量分配订阅
@@ -798,8 +802,17 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }
 
+// AdminBulkResetQuotaDryRun previews how many active subscriptions would be affected.
+func (s *SubscriptionService) AdminBulkResetQuotaDryRun(ctx context.Context, resetDaily, resetWeekly, resetMonthly bool) (*BulkResetQuotaResult, error) {
+	return s.adminBulkResetQuota(ctx, resetDaily, resetWeekly, resetMonthly, true)
+}
+
 // AdminBulkResetQuota manually resets daily and/or weekly usage windows for all active subscriptions.
 func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDaily, resetWeekly, resetMonthly bool) (*BulkResetQuotaResult, error) {
+	return s.adminBulkResetQuota(ctx, resetDaily, resetWeekly, resetMonthly, false)
+}
+
+func (s *SubscriptionService) adminBulkResetQuota(ctx context.Context, resetDaily, resetWeekly, resetMonthly, dryRun bool) (*BulkResetQuotaResult, error) {
 	if resetMonthly || (!resetDaily && !resetWeekly) {
 		return nil, ErrInvalidInput
 	}
@@ -807,8 +820,12 @@ func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDail
 	const pageSize = 1000
 	windowStart := startOfDay(time.Now())
 	result := &BulkResetQuotaResult{
+		DryRun:     dryRun,
 		SuccessIDs: make([]int64, 0),
 		FailedIDs:  make([]int64, 0),
+	}
+	if !dryRun {
+		result.RunID = fmt.Sprintf("sub-bulk-reset-%d", time.Now().UnixNano())
 	}
 
 	for page := 1; ; page++ {
@@ -822,6 +839,10 @@ func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDail
 
 		for i := range subs {
 			sub := &subs[i]
+			result.AffectedCount++
+			if dryRun {
+				continue
+			}
 			if resetDaily {
 				if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, windowStart); err != nil {
 					result.Failed++
@@ -860,7 +881,28 @@ func (s *SubscriptionService) AdminBulkResetQuota(ctx context.Context, resetDail
 	if s.subCacheL1 != nil {
 		s.subCacheL1.Wait()
 	}
+	logBulkResetQuotaResult(result, resetDaily, resetWeekly, resetMonthly)
 	return result, nil
+}
+
+func logBulkResetQuotaResult(result *BulkResetQuotaResult, resetDaily, resetWeekly, resetMonthly bool) {
+	if result == nil {
+		return
+	}
+	logger.LegacyPrintf(
+		"service.subscription",
+		"[SubscriptionBulkResetQuota] run_id=%s dry_run=%t daily=%t weekly=%t monthly=%t affected=%d success=%d failed=%d success_ids=%v failed_ids=%v",
+		result.RunID,
+		result.DryRun,
+		resetDaily,
+		resetWeekly,
+		resetMonthly,
+		result.AffectedCount,
+		result.Success,
+		result.Failed,
+		result.SuccessIDs,
+		result.FailedIDs,
+	)
 }
 
 // CheckAndResetWindows 检查并重置过期的窗口

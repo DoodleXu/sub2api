@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -272,7 +273,39 @@ func (h *SubscriptionHandler) BulkResetQuota(c *gin.Context) {
 		response.BadRequest(c, "At least one of 'daily' or 'weekly' must be true")
 		return
 	}
-	result, err := h.subscriptionService.AdminBulkResetQuota(c.Request.Context(), req.Daily, req.Weekly, req.Monthly)
+
+	if strings.TrimSpace(c.GetHeader("Idempotency-Key")) == "" {
+		response.BadRequest(c, "Idempotency-Key is required for bulk quota reset")
+		return
+	}
+
+	idempotencyPayload := struct {
+		Body BulkResetSubscriptionQuotaRequest `json:"body"`
+	}{
+		Body: req,
+	}
+	executeAdminIdempotentJSON(c, "admin.subscriptions.bulk_reset_quota", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		return h.subscriptionService.AdminBulkResetQuota(ctx, req.Daily, req.Weekly, req.Monthly)
+	})
+}
+
+// BulkResetQuotaDryRun previews the active subscriptions affected by a bulk reset.
+// POST /api/v1/admin/subscriptions/bulk-reset-quota/dry-run
+func (h *SubscriptionHandler) BulkResetQuotaDryRun(c *gin.Context) {
+	var req BulkResetSubscriptionQuotaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.Monthly {
+		response.BadRequest(c, "Monthly quota reset is not supported for bulk weekly compensation")
+		return
+	}
+	if !req.Daily && !req.Weekly && !req.Monthly {
+		response.BadRequest(c, "At least one of 'daily' or 'weekly' must be true")
+		return
+	}
+	result, err := h.subscriptionService.AdminBulkResetQuotaDryRun(c.Request.Context(), req.Daily, req.Weekly, req.Monthly)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

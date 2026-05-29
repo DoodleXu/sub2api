@@ -688,8 +688,15 @@
       :confirm-text="t('admin.subscriptions.resetAllWeeklyQuota')"
       :cancel-text="t('common.cancel')"
       @confirm="confirmResetAllWeeklyQuota"
-      @cancel="showResetAllWeeklyQuotaConfirm = false"
-    />
+      @cancel="closeResetAllWeeklyQuotaConfirm"
+    >
+      <div
+        v-if="bulkResetPreview"
+        class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-200"
+      >
+        {{ t('admin.subscriptions.resetAllWeeklyQuotaDryRunSummary', { count: bulkResetPreview.affected_count }) }}
+      </div>
+    </ConfirmDialog>
     <!-- Subscription Guide Modal -->
     <teleport to="body">
       <transition name="modal">
@@ -778,6 +785,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { UserSubscription, Group, GroupPlatform, SubscriptionType } from '@/types'
+import type { BulkResetQuotaResult } from '@/api/admin/subscriptions'
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
 import { formatDateOnly } from '@/utils/format'
@@ -982,6 +990,8 @@ const submitting = ref(false)
 const resettingSubscription = ref<UserSubscription | null>(null)
 const resettingQuota = ref(false)
 const resettingAllWeeklyQuota = ref(false)
+const bulkResetPreview = ref<BulkResetQuotaResult | null>(null)
+const bulkResetIdempotencyKey = ref('')
 const extendingSubscription = ref<UserSubscription | null>(null)
 const revokingSubscription = ref<UserSubscription | null>(null)
 
@@ -1309,8 +1319,44 @@ const handleResetWeeklyQuota = (subscription: UserSubscription) => {
   showResetWeeklyQuotaConfirm.value = true
 }
 
-const handleResetAllWeeklyQuota = () => {
-  showResetAllWeeklyQuotaConfirm.value = true
+const makeBulkResetQuotaIdempotencyKey = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `subscriptions-bulk-reset-${crypto.randomUUID()}`
+  }
+  return `subscriptions-bulk-reset-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+const getResetAllWeeklyQuotaError = (error: any, fallback: string) =>
+  error?.response?.data?.detail ||
+  error?.response?.data?.message ||
+  error?.message ||
+  fallback
+
+const closeResetAllWeeklyQuotaConfirm = () => {
+  showResetAllWeeklyQuotaConfirm.value = false
+  bulkResetPreview.value = null
+  bulkResetIdempotencyKey.value = ''
+}
+
+const handleResetAllWeeklyQuota = async () => {
+  if (resettingAllWeeklyQuota.value) return
+  resettingAllWeeklyQuota.value = true
+  bulkResetPreview.value = null
+  bulkResetIdempotencyKey.value = ''
+  try {
+    bulkResetPreview.value = await adminAPI.subscriptions.bulkResetQuotaDryRun({
+      daily: true,
+      weekly: true,
+      monthly: false
+    })
+    bulkResetIdempotencyKey.value = makeBulkResetQuotaIdempotencyKey()
+    showResetAllWeeklyQuotaConfirm.value = true
+  } catch (error: any) {
+    appStore.showError(getResetAllWeeklyQuotaError(error, t('admin.subscriptions.failedToPreviewResetAllWeeklyQuota')))
+    console.error('Error previewing all weekly quota reset:', error)
+  } finally {
+    resettingAllWeeklyQuota.value = false
+  }
 }
 
 const confirmResetQuota = async () => {
@@ -1353,12 +1399,20 @@ const confirmResetAllWeeklyQuota = async () => {
   if (resettingAllWeeklyQuota.value) return
   resettingAllWeeklyQuota.value = true
   try {
-    const result = await adminAPI.subscriptions.bulkResetQuota({ daily: true, weekly: true, monthly: false })
-    appStore.showSuccess(t('admin.subscriptions.allWeeklyQuotaResetSuccess', { count: result.success, failed: result.failed }))
-    showResetAllWeeklyQuotaConfirm.value = false
+    const idempotencyKey = bulkResetIdempotencyKey.value || makeBulkResetQuotaIdempotencyKey()
+    const result = await adminAPI.subscriptions.bulkResetQuota(
+      { daily: true, weekly: true, monthly: false },
+      idempotencyKey
+    )
+    appStore.showSuccess(t('admin.subscriptions.allWeeklyQuotaResetSuccess', {
+      count: result.success,
+      failed: result.failed,
+      runId: result.run_id || idempotencyKey
+    }))
+    closeResetAllWeeklyQuotaConfirm()
     await loadSubscriptions()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToResetAllWeeklyQuota'))
+    appStore.showError(getResetAllWeeklyQuotaError(error, t('admin.subscriptions.failedToResetAllWeeklyQuota')))
     console.error('Error resetting all weekly quota:', error)
   } finally {
     resettingAllWeeklyQuota.value = false

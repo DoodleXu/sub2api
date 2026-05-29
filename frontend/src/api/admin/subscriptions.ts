@@ -14,6 +14,9 @@ import type {
 } from '@/types'
 
 export interface BulkResetQuotaResult {
+  dry_run: boolean
+  run_id?: string
+  affected_count: number
   success: number
   failed: number
   success_ids?: number[]
@@ -154,9 +157,30 @@ export async function bulkResetQuota(options: {
   daily: boolean
   weekly: boolean
   monthly: boolean
-}): Promise<BulkResetQuotaResult> {
+}, idempotencyKey?: string): Promise<BulkResetQuotaResult> {
+  const config = idempotencyKey
+    ? { headers: { 'Idempotency-Key': idempotencyKey } }
+    : undefined
   const { data } = await apiClient.post<BulkResetQuotaResult>(
     '/admin/subscriptions/bulk-reset-quota',
+    options,
+    config
+  )
+  return data
+}
+
+/**
+ * Preview bulk quota reset impact without changing any usage data
+ * @param options - Which windows to preview
+ * @returns Dry-run bulk reset result
+ */
+export async function bulkResetQuotaDryRun(options: {
+  daily: boolean
+  weekly: boolean
+  monthly: boolean
+}): Promise<BulkResetQuotaResult> {
+  const { data } = await apiClient.post<BulkResetQuotaResult>(
+    '/admin/subscriptions/bulk-reset-quota/dry-run',
     options
   )
   return data
@@ -214,6 +238,7 @@ export const subscriptionsAPI = {
   revoke,
   resetQuota,
   bulkResetQuota,
+  bulkResetQuotaDryRun,
   listByGroup,
   listByUser
 }

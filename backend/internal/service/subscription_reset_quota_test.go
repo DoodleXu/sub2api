@@ -246,11 +246,39 @@ func TestAdminBulkResetQuota_ResetDailyAndWeeklyOnly(t *testing.T) {
 	result, err := svc.AdminBulkResetQuota(context.Background(), true, true, false)
 
 	require.NoError(t, err)
+	require.False(t, result.DryRun)
+	require.NotEmpty(t, result.RunID)
+	require.Equal(t, 2, result.AffectedCount)
 	require.Equal(t, 2, result.Success)
 	require.Equal(t, 0, result.Failed)
+	require.Equal(t, []int64{11, 12}, result.SuccessIDs)
 	require.Equal(t, []int64{11, 12}, stub.resetDailyIDs)
 	require.Equal(t, []int64{11, 12}, stub.resetWeeklyIDs)
 	require.Empty(t, stub.resetMonthlyIDs, "补偿型周配额重置不应清月用量")
+}
+
+func TestAdminBulkResetQuotaDryRun_CountsActiveSubscriptionsWithoutReset(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{
+		list: []UserSubscription{
+			{ID: 21, UserID: 201, GroupID: 301, Status: SubscriptionStatusActive},
+			{ID: 22, UserID: 202, GroupID: 302, Status: SubscriptionStatusActive},
+		},
+	}
+	svc := newResetQuotaSvc(stub)
+
+	result, err := svc.AdminBulkResetQuotaDryRun(context.Background(), true, true, false)
+
+	require.NoError(t, err)
+	require.True(t, result.DryRun)
+	require.Empty(t, result.RunID)
+	require.Equal(t, 2, result.AffectedCount)
+	require.Equal(t, 0, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Empty(t, result.SuccessIDs)
+	require.Empty(t, result.FailedIDs)
+	require.Empty(t, stub.resetDailyIDs)
+	require.Empty(t, stub.resetWeeklyIDs)
+	require.Empty(t, stub.resetMonthlyIDs)
 }
 
 func TestAdminBulkResetQuota_AllFalseReturnsError(t *testing.T) {
@@ -258,6 +286,18 @@ func TestAdminBulkResetQuota_AllFalseReturnsError(t *testing.T) {
 	svc := newResetQuotaSvc(stub)
 
 	_, err := svc.AdminBulkResetQuota(context.Background(), false, false, false)
+
+	require.ErrorIs(t, err, ErrInvalidInput)
+	require.False(t, stub.resetDailyCalled)
+	require.False(t, stub.resetWeeklyCalled)
+	require.False(t, stub.resetMonthlyCalled)
+}
+
+func TestAdminBulkResetQuotaDryRun_RejectsMonthlyReset(t *testing.T) {
+	stub := &resetQuotaUserSubRepoStub{}
+	svc := newResetQuotaSvc(stub)
+
+	_, err := svc.AdminBulkResetQuotaDryRun(context.Background(), true, true, true)
 
 	require.ErrorIs(t, err, ErrInvalidInput)
 	require.False(t, stub.resetDailyCalled)
