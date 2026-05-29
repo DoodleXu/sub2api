@@ -238,6 +238,10 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// Web Console feature switch (browser-side chat/image workspace)
+	WebConsoleEnabled         bool   `json:"web_console_enabled"`
+	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
@@ -306,6 +310,9 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	WebConsoleEnabled         bool   `json:"web_console_enabled"`
+	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

@@ -293,7 +293,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		AvailableChannelsEnabled:  settings.AvailableChannelsEnabled,
+		WebConsoleEnabled:         settings.WebConsoleEnabled,
+		WebConsoleDefaultEndpoint: settings.WebConsoleDefaultEndpoint,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 	}
@@ -628,6 +630,10 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Web Console feature switch (browser-side)
+	WebConsoleEnabled         *bool   `json:"web_console_enabled"`
+	WebConsoleDefaultEndpoint *string `json:"web_console_default_endpoint"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1717,6 +1723,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		WebConsoleEnabled: func() bool {
+			if req.WebConsoleEnabled != nil {
+				return *req.WebConsoleEnabled
+			}
+			return previousSettings.WebConsoleEnabled
+		}(),
+		WebConsoleDefaultEndpoint: func() string {
+			if req.WebConsoleDefaultEndpoint != nil {
+				return strings.TrimSpace(*req.WebConsoleDefaultEndpoint)
+			}
+			return previousSettings.WebConsoleDefaultEndpoint
+		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
 				return *req.AffiliateEnabled
@@ -2036,7 +2054,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+		AvailableChannelsEnabled:  updatedSettings.AvailableChannelsEnabled,
+		WebConsoleEnabled:         updatedSettings.WebConsoleEnabled,
+		WebConsoleDefaultEndpoint: updatedSettings.WebConsoleDefaultEndpoint,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2504,6 +2524,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.WebConsoleEnabled != after.WebConsoleEnabled {
+		changed = append(changed, "web_console_enabled")
+	}
+	if before.WebConsoleDefaultEndpoint != after.WebConsoleDefaultEndpoint {
+		changed = append(changed, "web_console_default_endpoint")
 	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")

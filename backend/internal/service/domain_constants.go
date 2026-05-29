@@ -337,6 +337,14 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyWebConsoleEnabled controls the browser-side AI workspace entry.
+	// Conversations are stored only in localStorage; the server only exposes this switch.
+	SettingKeyWebConsoleEnabled = "web_console_enabled"
+
+	// SettingKeyWebConsoleDefaultEndpoint stores the admin-selected preferred endpoint URL
+	// from api_base_url/custom_endpoints. Users can still choose another public endpoint.
+	SettingKeyWebConsoleDefaultEndpoint = "web_console_default_endpoint"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

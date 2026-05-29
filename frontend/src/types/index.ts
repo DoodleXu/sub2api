@@ -232,6 +232,8 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  web_console_enabled: boolean
+  web_console_default_endpoint: string
   affiliate_enabled: boolean
 }
 

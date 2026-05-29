@@ -552,6 +552,10 @@ export interface SystemSettings {
   // Available Channels feature switch
   available_channels_enabled: boolean;
 
+  // Web Console feature switch
+  web_console_enabled: boolean;
+  web_console_default_endpoint: string;
+
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
 
@@ -771,6 +775,10 @@ export interface UpdateSettingsRequest {
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+
+  // Web Console feature switch
+  web_console_enabled?: boolean;
+  web_console_default_endpoint?: string;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

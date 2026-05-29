@@ -361,6 +361,7 @@ export default {
     groups: 'Groups',
     channels: 'Channels',
     availableChannels: 'Available Channels',
+    webConsole: 'Web Console',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
     proxies: 'Proxies',
@@ -1038,6 +1039,11 @@ export default {
       unitPerMillion: '/ 1M tokens',
       unitPerRequest: '/ request'
     }
+  },
+
+  webConsole: {
+    title: 'Web Console',
+    description: 'Chat and generate images with your current API keys, subscription quota, or balance'
   },
 
   affiliate: {
@@ -5258,6 +5264,17 @@ export default {
           configureLink: 'Configure model pricing in Channel Management > Channel Pricing',
           enabled: 'Enable Available Channels',
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
+        },
+        webConsole: {
+          title: 'Web Console',
+          description: 'Allow users to chat and generate images in the browser with their own API key, subscription quota, or wallet balance. Sessions stay local to the browser.',
+          enabled: 'Enable Web Console',
+          enabledHint: 'When off, the sidebar entry is hidden. Existing local sessions are not removed.',
+          defaultEndpoint: 'Default API endpoint',
+          defaultEndpointAuto: 'Auto-select the first available endpoint',
+          defaultEndpointHint: 'Preselects this endpoint in the Web Console. Users can still switch endpoints inside the page.',
+          primaryEndpoint: 'Primary endpoint',
+          currentEndpoint: 'Current saved value - {endpoint}',
         },
         riskControl: {
           title: 'Risk Control',

@@ -5101,6 +5101,54 @@
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.webConsole.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.webConsole.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.webConsole.enabled') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.features.webConsole.enabledHint') }}
+                </p>
+              </div>
+              <Toggle v-model="form.web_console_enabled" />
+            </div>
+
+            <div v-if="form.web_console_enabled">
+              <label class="input-label">
+                {{ t('admin.settings.features.webConsole.defaultEndpoint') }}
+              </label>
+              <select
+                v-model="form.web_console_default_endpoint"
+                class="input"
+              >
+                <option value="">
+                  {{ t('admin.settings.features.webConsole.defaultEndpointAuto') }}
+                </option>
+                <option
+                  v-for="endpoint in webConsoleEndpointOptions"
+                  :key="endpoint.value"
+                  :value="endpoint.value"
+                >
+                  {{ endpoint.label }}
+                </option>
+              </select>
+              <p class="mt-1 text-xs text-gray-400">
+                {{ t('admin.settings.features.webConsole.defaultEndpointHint') }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.riskControl.title') }}
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -7041,8 +7089,37 @@ const form = reactive<SettingsForm>({
   channel_monitor_default_interval_seconds: 60,
   // Available Channels feature switch
   available_channels_enabled: false,
+  // Web Console feature switch
+  web_console_enabled: false,
+  web_console_default_endpoint: "",
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
+});
+
+const webConsoleEndpointOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = [];
+  const add = (label: string, endpoint: string) => {
+    const value = endpoint.trim();
+    if (!value || options.some((item) => item.value === value)) return;
+    options.push({ value, label: `${label} - ${value}` });
+  };
+
+  add(t("admin.settings.features.webConsole.primaryEndpoint"), form.api_base_url);
+  for (const endpoint of form.custom_endpoints) {
+    add(endpoint.name || endpoint.endpoint, endpoint.endpoint);
+  }
+
+  const selected = form.web_console_default_endpoint.trim();
+  if (selected && !options.some((item) => item.value === selected)) {
+    options.unshift({
+      value: selected,
+      label: t("admin.settings.features.webConsole.currentEndpoint", {
+        endpoint: selected,
+      }),
+    });
+  }
+
+  return options;
 });
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -8180,6 +8257,10 @@ async function saveSettings() {
         Number(form.channel_monitor_default_interval_seconds) || 60,
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
+      // Web Console feature switch
+      web_console_enabled: form.web_console_enabled,
+      web_console_default_endpoint:
+        form.web_console_default_endpoint?.trim() || "",
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
     };
