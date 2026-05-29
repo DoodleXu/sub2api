@@ -104,6 +104,11 @@ export const FeatureFlags = {
     mode: 'opt-in',
     label: 'Available Channels',
   }),
+  webConsole: defineFlag({
+    key: 'web_console_enabled',
+    mode: 'opt-in',
+    label: 'Web Console',
+  }),
   payment: defineFlag({
     key: 'payment_enabled',
     mode: 'opt-out',

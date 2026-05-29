@@ -159,6 +159,38 @@ describe('路由守卫逻辑', () => {
     setActivePinia(createPinia())
   })
 
+  describe('公开设置依赖路由', () => {
+    it('/console 这类功能门禁在冷启动时会先加载 public settings', async () => {
+      const { ensurePublicSettingsForRoute } = await import('@/router')
+      const fetchPublicSettings = vi.fn().mockResolvedValue({ web_console_enabled: true })
+
+      await ensurePublicSettingsForRoute(
+        { requiresWebConsole: true },
+        {
+          publicSettingsLoaded: false,
+          fetchPublicSettings,
+        },
+      )
+
+      expect(fetchPublicSettings).toHaveBeenCalledTimes(1)
+    })
+
+    it('public settings 已加载时不重复请求', async () => {
+      const { ensurePublicSettingsForRoute } = await import('@/router')
+      const fetchPublicSettings = vi.fn()
+
+      await ensurePublicSettingsForRoute(
+        { requiresWebConsole: true },
+        {
+          publicSettingsLoaded: true,
+          fetchPublicSettings,
+        },
+      )
+
+      expect(fetchPublicSettings).not.toHaveBeenCalled()
+    })
+  })
+
   // --- 未认证用户 ---
 
   describe('未认证用户', () => {

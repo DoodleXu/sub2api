@@ -217,6 +217,19 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/console',
+    name: 'WebConsole',
+    component: () => import('@/views/user/WebConsoleView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Web Console',
+      titleKey: 'webConsole.title',
+      descriptionKey: 'webConsole.description',
+      requiresWebConsole: true
+    }
+  },
+  {
     path: '/redeem',
     name: 'Redeem',
     component: () => import('@/views/user/RedeemView.vue'),
@@ -701,6 +714,23 @@ const BACKEND_MODE_CALLBACK_PATHS = [
 ]
 const BACKEND_MODE_PENDING_AUTH_PATHS = ['/register', '/email-verify']
 
+export async function ensurePublicSettingsForRoute(
+  meta: Record<string, any>,
+  appStore: {
+    publicSettingsLoaded: boolean
+    fetchPublicSettings: () => Promise<unknown>
+  },
+): Promise<void> {
+  const needsPublicSettings =
+    meta.requiresPayment ||
+    meta.requiresRiskControl ||
+    meta.requiresWebConsole
+
+  if (needsPublicSettings && !appStore.publicSettingsLoaded) {
+    await appStore.fetchPublicSettings()
+  }
+}
+
 function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: boolean): boolean {
   if (BACKEND_MODE_ALLOWED_PATHS.some((allowedPath) => path === allowedPath || path.startsWith(allowedPath))) {
     return true
@@ -807,6 +837,7 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+  await ensurePublicSettingsForRoute(to.meta, appStore)
 
   // Check payment requirement (internal payment system only)
   if (to.meta.requiresPayment) {
@@ -821,6 +852,14 @@ router.beforeEach(async (to, _from, next) => {
     const riskControlEnabled = appStore.cachedPublicSettings?.risk_control_enabled === true
     if (!riskControlEnabled) {
       next(authStore.isAdmin ? '/admin/settings' : '/dashboard')
+      return
+    }
+  }
+
+  if (to.meta.requiresWebConsole) {
+    const webConsoleEnabled = appStore.cachedPublicSettings?.web_console_enabled === true
+    if (!webConsoleEnabled) {
+      next('/dashboard')
       return
     }
   }

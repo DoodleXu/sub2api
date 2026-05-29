@@ -56,6 +56,12 @@ declare module 'vue-router' {
     requiresRiskControl?: boolean
 
     /**
+     * 是否要求网页对话工作台功能开关已启用
+     * @default false
+     */
+    requiresWebConsole?: boolean
+
+    /**
      * i18n key for the page title
      */
     titleKey?: string
