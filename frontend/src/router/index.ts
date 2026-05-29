@@ -3,7 +3,7 @@
  * Defines all application routes with lazy loading and navigation guards
  */
 
-import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
@@ -11,7 +11,7 @@ import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
-import { resolveDocumentTitle } from './title'
+import { applyRouteSEO, resolveCustomPageSEO, resolveDocumentTitle, resolveLegalDocumentSEO, resolvePageDescription } from './title'
 
 /**
  * Route definitions with lazy loading
@@ -35,7 +35,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/HomeView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Home'
+      title: 'Home',
+      descriptionKey: 'home.heroDescription'
     }
   },
   {
@@ -163,6 +164,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: false,
       title: 'Key Usage',
+      descriptionKey: 'keyUsage.subtitle'
     }
   },
   {
@@ -378,7 +380,7 @@ const routes: RouteRecordRaw[] = [
     name: 'CustomPage',
     component: () => import('@/views/user/CustomPageView.vue'),
     meta: {
-      requiresAuth: true,
+      requiresAuth: false,
       requiresAdmin: false,
       title: 'Custom Page',
       titleKey: 'customPage.title',
@@ -747,6 +749,47 @@ function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: bo
   return false
 }
 
+function applySEOForRoute(to: RouteLocationNormalized): void {
+  const appStore = useAppStore()
+  const authStore = useAuthStore()
+  const siteName = appStore.siteName || 'Sub2API'
+  const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
+  let title = resolveDocumentTitle(to.meta.title, appStore.siteName, to.meta.titleKey as string)
+  let description = resolvePageDescription(to.meta.descriptionKey as string | undefined, siteSubtitle)
+  let indexable: boolean | undefined
+
+  if (to.name === 'CustomPage') {
+    const id = to.params.id as string
+    const publicItems = appStore.cachedPublicSettings?.custom_menu_items ?? []
+    const adminSettingsStore = useAdminSettingsStore()
+    const menuItem = publicItems.find((item) => item.id === id)
+      ?? (authStore.isAdmin ? adminSettingsStore.customMenuItems.find((item) => item.id === id) : undefined)
+    const seo = resolveCustomPageSEO(menuItem, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
+  if (to.name === 'LegalDocument') {
+    const id = to.params.documentId as string
+    const documents = appStore.cachedPublicSettings?.login_agreement_documents ?? []
+    const document = documents.find((item) => item.id === id)
+    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
+  applyRouteSEO({
+    path: to.path,
+    title,
+    description,
+    siteName,
+    image: appStore.siteLogo || '/logo.png',
+    indexable,
+  })
+}
+
 router.beforeEach(async (to, _from, next) => {
   // 开始导航加载状态
   navigationLoading.startNavigation()
@@ -759,24 +802,9 @@ router.beforeEach(async (to, _from, next) => {
     authInitialized = true
   }
 
-  // Set page title
+  // Set page title and SEO metadata
   const appStore = useAppStore()
-  // For custom pages, use menu item label as document title
-  if (to.name === 'CustomPage') {
-    const id = to.params.id as string
-    const publicItems = appStore.cachedPublicSettings?.custom_menu_items ?? []
-    const adminSettingsStore = useAdminSettingsStore()
-    const menuItem = publicItems.find((item) => item.id === id)
-      ?? (authStore.isAdmin ? adminSettingsStore.customMenuItems.find((item) => item.id === id) : undefined)
-    if (menuItem?.label) {
-      const siteName = appStore.siteName || 'Sub2API'
-      document.title = `${menuItem.label} - ${siteName}`
-    } else {
-      document.title = resolveDocumentTitle(to.meta.title, appStore.siteName, to.meta.titleKey as string)
-    }
-  } else {
-    document.title = resolveDocumentTitle(to.meta.title, appStore.siteName, to.meta.titleKey as string)
-  }
+  applySEOForRoute(to)
 
   // Check if route requires authentication
   const requiresAuth = to.meta.requiresAuth !== false // Default to true

@@ -3,7 +3,13 @@ import { RouterView, useRouter, useRoute } from 'vue-router'
 import { onMounted, onBeforeUnmount, watch } from 'vue'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
-import { resolveDocumentTitle } from '@/router/title'
+import {
+  applyRouteSEO,
+  resolveCustomPageSEO,
+  resolveDocumentTitle,
+  resolveLegalDocumentSEO,
+  resolvePageDescription,
+} from '@/router/title'
 import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
 import { useAppStore, useAuthStore, useSubscriptionStore, useAnnouncementStore } from '@/stores'
 import { getSetupStatus } from '@/api/setup'
@@ -106,8 +112,37 @@ onMounted(async () => {
   // Load public settings into appStore (will be cached for other components)
   await appStore.fetchPublicSettings()
 
-  // Re-resolve document title now that siteName is available
-  document.title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
+  // Re-resolve SEO metadata now that site settings are available
+  const siteName = appStore.siteName || 'Sub2API'
+  const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
+  let title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
+  let description = resolvePageDescription(route.meta.descriptionKey as string | undefined, siteSubtitle)
+  let indexable: boolean | undefined
+
+  if (route.name === 'CustomPage') {
+    const id = route.params.id as string
+    const item = appStore.cachedPublicSettings?.custom_menu_items?.find((menuItem) => menuItem.id === id)
+    const seo = resolveCustomPageSEO(item, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  } else if (route.name === 'LegalDocument') {
+    const id = route.params.documentId as string
+    const document = appStore.cachedPublicSettings?.login_agreement_documents?.find((doc) => doc.id === id)
+    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
+  applyRouteSEO({
+    path: route.path,
+    title,
+    description,
+    siteName,
+    image: appStore.siteLogo || '/logo.png',
+    indexable,
+  })
 })
 </script>
 

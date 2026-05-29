@@ -261,9 +261,10 @@ func (h *PageHandler) checkImageSlugVisibility(c *gin.Context, slug string) bool
 func RegisterPageRoutes(v1 *gin.RouterGroup, dataDir string, jwtAuth gin.HandlerFunc, adminAuth gin.HandlerFunc, settingService *service.SettingService) {
 	h := NewPageHandler(dataDir, settingService)
 
-	// Authenticated page content (JWT required + visibility check)
+	// Page content is public for user-visible markdown pages. If a token is
+	// provided, it is validated so admin-only markdown pages keep working.
 	pages := v1.Group("/pages")
-	pages.Use(jwtAuth)
+	pages.Use(optionalPageAuth(jwtAuth))
 	{
 		pages.GET("/:slug", h.GetPageContent)
 	}
@@ -279,5 +280,15 @@ func RegisterPageRoutes(v1 *gin.RouterGroup, dataDir string, jwtAuth gin.Handler
 	adminPages.Use(adminAuth)
 	{
 		adminPages.GET("", h.ListPages)
+	}
+}
+
+func optionalPageAuth(jwtAuth gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if strings.TrimSpace(c.GetHeader("Authorization")) == "" {
+			c.Next()
+			return
+		}
+		jwtAuth(c)
 	}
 }
