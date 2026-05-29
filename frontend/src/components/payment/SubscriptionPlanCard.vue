@@ -43,19 +43,19 @@
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.rate') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ rateDisplay }}</span>
         </div>
-        <div v-if="plan.daily_limit_usd != null" class="flex items-center justify-between">
+        <div v-if="showDailyLimit" class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.dailyLimit') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.daily_limit_usd }}</span>
         </div>
-        <div v-if="plan.weekly_limit_usd != null" class="flex items-center justify-between">
+        <div v-if="showWeeklyLimit" class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.weeklyLimit') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.weekly_limit_usd }}</span>
         </div>
-        <div v-if="plan.monthly_limit_usd != null" class="flex items-center justify-between">
+        <div v-if="showMonthlyLimit" class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.monthlyLimit') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">${{ plan.monthly_limit_usd }}</span>
         </div>
-        <div v-if="plan.daily_limit_usd == null && plan.weekly_limit_usd == null && plan.monthly_limit_usd == null" class="flex items-center justify-between">
+        <div v-if="!hasVisibleLimit" class="flex items-center justify-between">
           <span class="text-gray-400 dark:text-dark-500">{{ t('payment.planCard.quota') }}</span>
           <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.planCard.unlimited') }}</span>
         </div>
@@ -99,6 +99,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubscriptionPlan } from '@/types/payment'
 import type { UserSubscription } from '@/types'
+import { allowsDailyLimit, allowsMonthlyLimit, allowsWeeklyLimit, SUBSCRIPTION_MONTHLY_TYPE } from '@/utils/subscriptionType'
 import {
   platformAccentBarClass,
   platformBadgeLightClass,
@@ -109,6 +110,7 @@ import {
   platformDiscountClass,
   platformLabel,
 } from '@/utils/platformColors'
+import { formatValidityPeriod } from '@/utils/validityUnit'
 
 const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
 const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
@@ -140,6 +142,12 @@ const rateDisplay = computed(() => {
   return `×${Number(rate.toPrecision(10))}`
 })
 
+const groupSubscriptionType = computed(() => props.plan.group_subscription_type || SUBSCRIPTION_MONTHLY_TYPE)
+const showDailyLimit = computed(() => allowsDailyLimit(groupSubscriptionType.value) && props.plan.daily_limit_usd != null)
+const showWeeklyLimit = computed(() => allowsWeeklyLimit(groupSubscriptionType.value) && props.plan.weekly_limit_usd != null)
+const showMonthlyLimit = computed(() => allowsMonthlyLimit(groupSubscriptionType.value) && props.plan.monthly_limit_usd != null)
+const hasVisibleLimit = computed(() => showDailyLimit.value || showWeeklyLimit.value || showMonthlyLimit.value)
+
 const MODEL_SCOPE_LABELS: Record<string, string> = {
   claude: 'Claude',
   gemini_text: 'Gemini',
@@ -154,9 +162,6 @@ const modelScopeLabels = computed(() => {
 })
 
 const validitySuffix = computed(() => {
-  const u = props.plan.validity_unit || 'day'
-  if (u === 'month') return t('payment.perMonth')
-  if (u === 'year') return t('payment.perYear')
-  return `${props.plan.validity_days}${t('payment.days')}`
+  return formatValidityPeriod(props.plan.validity_days, props.plan.validity_unit, t)
 })
 </script>

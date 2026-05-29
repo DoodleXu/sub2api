@@ -11,9 +11,19 @@ const i18n = createI18n({
   messages: {
     en: {
       payment: {
+        day: 'day',
         days: 'days',
+        week: 'week',
+        weeks: 'weeks',
+        month: 'month',
+        months: 'months',
+        year: 'year',
+        years: 'years',
         models: 'Models',
         planCard: {
+          dailyLimit: 'Daily',
+          weeklyLimit: 'Weekly',
+          monthlyLimit: 'Monthly',
           quota: 'Quota',
           rate: 'Rate',
           unlimited: 'Unlimited',
@@ -31,6 +41,7 @@ const mountPlanCard = (overrides: Record<string, unknown> = {}) =>
         id: 1,
         group_id: 10,
         group_platform: 'openai',
+        group_subscription_type: 'subscription',
         name: 'Pro',
         description: '',
         price: 10,
@@ -82,5 +93,32 @@ describe('SubscriptionPlanCard', () => {
     expect(text).toContain('Claude')
     expect(text).toContain('Gemini')
     expect(text).toContain('Imagen')
+  })
+
+  it('renders weekly validity unit and hides monthly limit for weekly quota plans', () => {
+    const text = mountPlanCard({
+      validity_days: 1,
+      validity_unit: 'weeks',
+      group_subscription_type: 'subscription_weekly',
+      weekly_limit_usd: 100,
+      monthly_limit_usd: 300,
+    }).text()
+
+    expect(text).toContain('/ 1payment.week')
+    expect(text).toContain('$100')
+    expect(text).not.toContain('$300')
+  })
+
+  it('only shows daily limit for daily quota plans', () => {
+    const text = mountPlanCard({
+      group_subscription_type: 'subscription_daily',
+      daily_limit_usd: 20,
+      weekly_limit_usd: 100,
+      monthly_limit_usd: 300,
+    }).text()
+
+    expect(text).toContain('$20')
+    expect(text).not.toContain('$100')
+    expect(text).not.toContain('$300')
   })
 })

@@ -34,7 +34,7 @@
           </div>
         </template>
         <template #cell-validity_days="{ value, row }">
-          <span class="text-sm">{{ value }} {{ t('payment.admin.' + (row.validity_unit || 'days')) }}</span>
+          <span class="text-sm">{{ formatValidityPeriod(value, row.validity_unit, t, 'payment.admin', ' ') }}</span>
         </template>
         <template #cell-for_sale="{ value, row }">
           <button
@@ -90,6 +90,7 @@ import Icon from '@/components/icons/Icon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import PlanEditDialog from './PlanEditDialog.vue'
 import { platformTextClass } from '@/utils/platformColors'
+import { formatValidityPeriod } from '@/utils/validityUnit'
 
 const { t } = useI18n()
 const appStore = useAppStore()

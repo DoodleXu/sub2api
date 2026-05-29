@@ -21,6 +21,7 @@ export type OrderStatus =
 export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex'
 
 export type OrderType = 'balance' | 'subscription'
+export type SubscriptionBillingType = 'standard' | 'subscription' | 'subscription_weekly' | 'subscription_daily'
 
 // ==================== Configuration ====================
 
@@ -114,6 +115,7 @@ export interface SubscriptionPlan {
   id: number
   group_id: number
   group_platform?: string
+  group_subscription_type?: SubscriptionBillingType
   group_name?: string
   rate_multiplier?: number
   daily_limit_usd?: number | null

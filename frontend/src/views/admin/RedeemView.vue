@@ -130,7 +130,7 @@
 
           <template #cell-value="{ value, row }">
             <span class="text-sm font-medium text-gray-900 dark:text-white">
-              <template v-if="row.type === 'balance'">${{ value.toFixed(2) }}</template>
+              <template v-if="isBalanceValueType(row.type)">${{ value.toFixed(2) }}</template>
               <template v-else-if="row.type === 'subscription'">
                 {{ row.validity_days || 30 }} {{ t('admin.redeem.days') }}
                 <span v-if="row.group" class="ml-1 text-xs text-gray-500 dark:text-gray-400"
@@ -616,6 +616,7 @@ import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { adminAPI } from '@/api/admin'
 import { formatDateTime } from '@/utils/format'
+import { isSubscriptionType } from '@/utils/subscriptionType'
 import type {
   RedeemCode,
   RedeemCodeType,
@@ -656,7 +657,7 @@ const subscriptionGroups = ref<Group[]>([])
 // 订阅类型分组选项
 const subscriptionGroupOptions = computed(() => {
   return subscriptionGroups.value
-    .filter((g) => g.subscription_type === 'subscription')
+    .filter((g) => isSubscriptionType(g.subscription_type))
     .map((g) => ({
       value: g.id,
       label: g.name,
@@ -741,10 +742,14 @@ const typeOptions = computed(() => [
 const filterTypeOptions = computed(() => [
   { value: '', label: t('admin.redeem.allTypes') },
   { value: 'balance', label: t('admin.redeem.balance') },
+  { value: 'checkin_balance', label: t('admin.redeem.types.checkin_balance') },
   { value: 'concurrency', label: t('admin.redeem.concurrency') },
   { value: 'subscription', label: t('admin.redeem.subscription') },
   { value: 'invitation', label: t('admin.redeem.invitation') }
 ])
+
+const isBalanceValueType = (type: string) =>
+  type === 'balance' || type === 'admin_balance' || type === 'checkin_balance'
 
 const filterStatusOptions = computed(() => [
   { value: '', label: t('admin.redeem.allStatus') },

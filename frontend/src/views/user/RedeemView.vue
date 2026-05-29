@@ -379,7 +379,7 @@ const contactInfo = ref('')
 
 // Helper functions for history display
 const isBalanceType = (type: string) => {
-  return type === 'balance' || type === 'admin_balance'
+  return type === 'balance' || type === 'checkin_balance' || type === 'admin_balance'
 }
 
 const isSubscriptionType = (type: string) => {
@@ -390,8 +390,14 @@ const isAdminAdjustment = (type: string) => {
   return type === 'admin_balance' || type === 'admin_concurrency'
 }
 
+const isCheckinReward = (item: RedeemHistoryItem) => {
+  return item.type === 'checkin_balance' || (item.type === 'admin_balance' && item.notes === '签到奖励')
+}
+
 const getHistoryItemTitle = (item: RedeemHistoryItem) => {
-  if (item.type === 'balance') {
+  if (isCheckinReward(item)) {
+    return t('redeem.balanceAddedCheckin')
+  } else if (item.type === 'balance') {
     return t('redeem.balanceAddedRedeem')
   } else if (item.type === 'admin_balance') {
     return item.value >= 0 ? t('redeem.balanceAddedAdmin') : t('redeem.balanceDeductedAdmin')

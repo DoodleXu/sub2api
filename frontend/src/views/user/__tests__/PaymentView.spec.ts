@@ -438,4 +438,33 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(getSubscriptionUpgradeOptions).toHaveBeenCalledWith(7)
     expect((wrapper.vm as unknown as { upgradeOptionsError: string }).upgradeOptionsError).toBe('network failed')
   })
+
+  it('normalizes plural validity_unit values in the subscription confirmation', async () => {
+    routeState.query = { tab: 'subscription', group: '3' }
+    const fixture = checkoutInfoWithPlansFixture()
+    fixture.data.balance_disabled = true
+    fixture.data.plans[0].validity_days = 1
+    fixture.data.plans[0].validity_unit = 'weeks'
+    getCheckoutInfo.mockResolvedValue(fixture)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          AmountInput: true,
+          Icon: true,
+          PaymentMethodSelector: true,
+          PaymentStatusPanel: true,
+          SubscriptionPlanCard: true,
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('/ 1payment.week')
+    expect(wrapper.text()).not.toContain('/ 1payment.weeks')
+  })
 })

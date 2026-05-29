@@ -27,6 +27,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubscriptionType, GroupPlatform } from '@/types'
+import { isSubscriptionType } from '@/utils/subscriptionType'
 import PlatformIcon from './PlatformIcon.vue'
 
 interface Props {
@@ -55,7 +56,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const { t } = useI18n()
 
-const isSubscription = computed(() => props.subscriptionType === 'subscription')
+const isSubscription = computed(() => isSubscriptionType(props.subscriptionType))
 
 // 是否有专属倍率（且与默认倍率不同）
 const hasCustomRate = computed(() => {

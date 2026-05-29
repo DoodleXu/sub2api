@@ -121,19 +121,19 @@
                       <span :class="['text-lg font-bold', planTextClass]">×{{ selectedPlan.rate_multiplier ?? 1 }}</span>
                     </div>
                   </div>
-                  <div v-if="selectedPlan.daily_limit_usd != null">
+                  <div v-if="showPlanDailyLimit(selectedPlan)">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.dailyLimit') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.daily_limit_usd }}</div>
                   </div>
-                  <div v-if="selectedPlan.weekly_limit_usd != null">
+                  <div v-if="showPlanWeeklyLimit(selectedPlan)">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.weeklyLimit') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.weekly_limit_usd }}</div>
                   </div>
-                  <div v-if="selectedPlan.monthly_limit_usd != null">
+                  <div v-if="showPlanMonthlyLimit(selectedPlan)">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.monthlyLimit') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">${{ selectedPlan.monthly_limit_usd }}</div>
                   </div>
-                  <div v-if="selectedPlan.daily_limit_usd == null && selectedPlan.weekly_limit_usd == null && selectedPlan.monthly_limit_usd == null">
+                  <div v-if="!hasVisiblePlanLimit(selectedPlan)">
                     <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('payment.planCard.quota') }}</span>
                     <div class="text-lg font-semibold text-gray-800 dark:text-gray-200">{{ t('payment.planCard.unlimited') }}</div>
                   </div>
@@ -347,6 +347,8 @@ import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/paym
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
 import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
+import { allowsDailyLimit, allowsMonthlyLimit, allowsWeeklyLimit, SUBSCRIPTION_MONTHLY_TYPE } from '@/utils/subscriptionType'
+import { formatValidityPeriod } from '@/utils/validityUnit'
 
 const i18n = useI18n()
 const { t } = i18n
@@ -744,6 +746,26 @@ const paymentButtonClass = computed(() => {
 const planBadgeClass = computed(() => platformBadgeClass(selectedPlan.value?.group_platform || ''))
 const planTextClass = computed(() => platformTextClass(selectedPlan.value?.group_platform || ''))
 
+function planSubscriptionType(plan: SubscriptionPlan | null | undefined) {
+  return plan?.group_subscription_type || SUBSCRIPTION_MONTHLY_TYPE
+}
+
+function showPlanDailyLimit(plan: SubscriptionPlan | null | undefined): boolean {
+  return allowsDailyLimit(planSubscriptionType(plan)) && plan?.daily_limit_usd != null
+}
+
+function showPlanWeeklyLimit(plan: SubscriptionPlan | null | undefined): boolean {
+  return allowsWeeklyLimit(planSubscriptionType(plan)) && plan?.weekly_limit_usd != null
+}
+
+function showPlanMonthlyLimit(plan: SubscriptionPlan | null | undefined): boolean {
+  return allowsMonthlyLimit(planSubscriptionType(plan)) && plan?.monthly_limit_usd != null
+}
+
+function hasVisiblePlanLimit(plan: SubscriptionPlan | null | undefined): boolean {
+  return showPlanDailyLimit(plan) || showPlanWeeklyLimit(plan) || showPlanMonthlyLimit(plan)
+}
+
 // Renewal modal state
 const showRenewalModal = ref(false)
 const renewGroupId = ref<number | null>(null)
@@ -754,10 +776,7 @@ const renewalPlans = computed(() => {
 
 const planValiditySuffix = computed(() => {
   if (!selectedPlan.value) return ''
-  const u = selectedPlan.value.validity_unit || 'day'
-  if (u === 'month') return t('payment.perMonth')
-  if (u === 'year') return t('payment.perYear')
-  return `${selectedPlan.value.validity_days}${t('payment.days')}`
+  return formatValidityPeriod(selectedPlan.value.validity_days, selectedPlan.value.validity_unit, t)
 })
 
 function selectPlan(plan: SubscriptionPlan) {

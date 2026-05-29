@@ -802,6 +802,7 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { getRemainingDurationParts, isOneTimeDailyQuota, type RemainingDurationParts } from '@/utils/subscriptionQuota'
+import { isSubscriptionType } from '@/utils/subscriptionType'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -1022,7 +1023,7 @@ const platformFilterOptions = computed(() => [
 // Group options for assign (only subscription type groups)
 const subscriptionGroupOptions = computed(() =>
   groups.value
-    .filter((g) => g.subscription_type === 'subscription' && g.status === 'active')
+    .filter((g) => isSubscriptionType(g.subscription_type) && g.status === 'active')
     .map((g) => ({
       value: g.id,
       label: g.name,

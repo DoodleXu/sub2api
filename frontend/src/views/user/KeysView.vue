@@ -405,34 +405,35 @@
         </div>
 
         <div>
-          <label class="input-label">{{ t('keys.groupLabel') }}</label>
+          <label class="input-label">{{ t('keys.bindingLabel') }}</label>
           <Select
-            v-model="formData.group_id"
-            :options="groupOptions"
-            :placeholder="t('keys.selectGroup')"
+            :model-value="formData.binding_value"
+            :options="keyBindingOptions"
+            :placeholder="t('keys.selectBinding')"
             :searchable="true"
             :search-placeholder="t('keys.searchGroup')"
             data-tour="key-form-group"
+            @update:model-value="onFormBindingChange"
           >
             <template #selected="{ option }">
               <GroupBadge
                 v-if="option"
-                :name="(option as unknown as GroupOption).label"
-                :platform="(option as unknown as GroupOption).platform"
-                :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                :rate-multiplier="(option as unknown as GroupOption).rate"
-                :user-rate-multiplier="(option as unknown as GroupOption).userRate"
+                :name="(option as unknown as KeyBindingOption).label"
+                :platform="(option as unknown as KeyBindingOption).platform"
+                :subscription-type="(option as unknown as KeyBindingOption).subscriptionType"
+                :rate-multiplier="(option as unknown as KeyBindingOption).rate"
+                :user-rate-multiplier="(option as unknown as KeyBindingOption).userRate"
               />
-              <span v-else class="text-gray-400">{{ t('keys.selectGroup') }}</span>
+              <span v-else class="text-gray-400">{{ t('keys.selectBinding') }}</span>
             </template>
             <template #option="{ option, selected }">
               <GroupOptionItem
-                :name="(option as unknown as GroupOption).label"
-                :platform="(option as unknown as GroupOption).platform"
-                :subscription-type="(option as unknown as GroupOption).subscriptionType"
-                :rate-multiplier="(option as unknown as GroupOption).rate"
-                :user-rate-multiplier="(option as unknown as GroupOption).userRate"
-                :description="(option as unknown as GroupOption).description"
+                :name="(option as unknown as KeyBindingOption).label"
+                :platform="(option as unknown as KeyBindingOption).platform"
+                :subscription-type="(option as unknown as KeyBindingOption).subscriptionType"
+                :rate-multiplier="(option as unknown as KeyBindingOption).rate"
+                :user-rate-multiplier="(option as unknown as KeyBindingOption).userRate"
+                :description="(option as unknown as KeyBindingOption).description"
                 :selected="selected"
               />
             </template>
@@ -1010,13 +1011,12 @@
         <div class="max-h-80 overflow-y-auto p-1.5">
           <button
             v-for="option in filteredGroupOptions"
-            :key="option.value ?? 'null'"
-            @click="changeGroup(selectedKeyForGroup!, option.value)"
+            :key="option.value"
+            @click="changeGroup(selectedKeyForGroup!, option)"
             :class="[
               'flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors',
               'border-b border-gray-100 last:border-0 dark:border-dark-700',
-              selectedKeyForGroup?.group_id === option.value ||
-              (!selectedKeyForGroup?.group_id && option.value === null)
+              selectedKeyForGroup && apiKeyBindingValue(selectedKeyForGroup) === option.value
                 ? 'bg-primary-50 dark:bg-primary-900/20'
                 : 'hover:bg-gray-100 dark:hover:bg-dark-700'
             ]"
@@ -1029,10 +1029,7 @@
               :rate-multiplier="option.rate"
               :user-rate-multiplier="option.userRate"
               :description="option.description"
-              :selected="
-                selectedKeyForGroup?.group_id === option.value ||
-                (!selectedKeyForGroup?.group_id && option.value === null)
-              "
+              :selected="!!selectedKeyForGroup && apiKeyBindingValue(selectedKeyForGroup) === option.value"
             />
           </button>
           <!-- Empty state when search has no results -->
@@ -1050,6 +1047,7 @@
 	import { useI18n } from 'vue-i18n'
 	import { useAppStore } from '@/stores/app'
 	import { useOnboardingStore } from '@/stores/onboarding'
+	import { useSubscriptionStore } from '@/stores/subscriptions'
 	import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
@@ -1069,12 +1067,13 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
-	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform } from '@/types'
+	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest } from '@/types'
 import userChannelsAPI, { type UserAvailableChannel, type UserSupportedModel } from '@/api/channels'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
+import { isSubscriptionType } from '@/utils/subscriptionType'
 import {
   buildCcSwitchImportDeeplink,
   type CcSwitchClientType
@@ -1087,18 +1086,22 @@ const formatDateTimeLocal = (isoDate: string): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-interface GroupOption {
-  value: number
+interface KeyBindingOption {
+  [key: string]: unknown
+  value: string
   label: string
   description: string | null
   rate: number
   userRate: number | null
   subscriptionType: SubscriptionType
   platform: GroupPlatform
+  groupId: number
+  subscriptionId: number | null
 }
 
 const appStore = useAppStore()
 const onboardingStore = useOnboardingStore()
+const subscriptionStore = useSubscriptionStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const columns = computed<Column[]>(() => [
@@ -1123,6 +1126,7 @@ let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
 const userGroupRates = ref<Record<number, number>>({})
 const availableChannels = ref<UserAvailableChannel[]>([])
+const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
 
 const pagination = ref({
   page: 1,
@@ -1173,7 +1177,9 @@ const setGroupButtonRef = (keyId: number, el: Element | ComponentPublicInstance 
 
 const formData = ref({
   name: '',
+  binding_value: '',
   group_id: null as number | null,
+  subscription_id: null as number | null,
   status: 'active' as 'active' | 'inactive',
   use_custom_key: false,
   custom_key: '',
@@ -1244,25 +1250,99 @@ const onStatusFilterChange = (value: string | number | boolean | null) => {
   onFilterChange()
 }
 
-// Convert groups to Select options format with rate multiplier and subscription type
-const groupOptions = computed(() =>
-  groups.value.map((group) => ({
-    value: group.id,
+const groupById = computed(() => new Map(groups.value.map((group) => [group.id, group])))
+
+const groupBindingValue = (groupId: number) => `group:${groupId}`
+const subscriptionBindingValue = (subscriptionId: number) => `subscription:${subscriptionId}`
+
+const legacySubscriptionBindingOption = computed<KeyBindingOption | null>(() => {
+  const key = selectedKey.value
+  if (!showEditModal.value || !key || key.subscription_id || key.group_id === null) {
+    return null
+  }
+  const group = groupById.value.get(key.group_id)
+  if (!group || !isSubscriptionType(group.subscription_type)) {
+    return null
+  }
+  return {
+    value: groupBindingValue(group.id),
     label: group.name,
     description: group.description,
     rate: group.rate_multiplier,
     userRate: userGroupRates.value[group.id] ?? null,
     subscriptionType: group.subscription_type,
-    platform: group.platform
-  }))
-)
+    platform: group.platform,
+    groupId: group.id,
+    subscriptionId: null
+  }
+})
+
+const keyBindingOptions = computed<KeyBindingOption[]>(() => {
+  const standardGroups: KeyBindingOption[] = groups.value
+    .filter((group) => !isSubscriptionType(group.subscription_type))
+    .map((group): KeyBindingOption => ({
+      value: groupBindingValue(group.id),
+      label: group.name,
+      description: group.description,
+      rate: group.rate_multiplier,
+      userRate: userGroupRates.value[group.id] ?? null,
+      subscriptionType: group.subscription_type,
+      platform: group.platform,
+      groupId: group.id,
+      subscriptionId: null
+    }))
+
+  const subscriptionBindings: KeyBindingOption[] = []
+  for (const sub of activeSubscriptions.value) {
+    if (sub.status !== 'active') continue
+    const group = sub.group || groupById.value.get(sub.group_id)
+    if (!group) continue
+    const expiresAt = sub.expires_at ? formatDateTime(sub.expires_at) : ''
+    subscriptionBindings.push({
+      value: subscriptionBindingValue(sub.id),
+      label: `${group.name} #${sub.id}`,
+      description: expiresAt ? `${t('keys.subscriptionExpiresAt')} ${expiresAt}` : group.description,
+      rate: group.rate_multiplier,
+      userRate: userGroupRates.value[group.id] ?? null,
+      subscriptionType: group.subscription_type,
+      platform: group.platform,
+      groupId: group.id,
+      subscriptionId: sub.id
+    })
+  }
+
+  const options = [...standardGroups, ...subscriptionBindings]
+  const legacyOption = legacySubscriptionBindingOption.value
+  if (legacyOption && !options.some((option) => option.value === legacyOption.value)) {
+    return [legacyOption, ...options]
+  }
+  return options
+})
+
+const apiKeyBindingValue = (key: Pick<ApiKey, 'group_id' | 'subscription_id'> | null) => {
+  if (!key) return ''
+  if (key.subscription_id) return subscriptionBindingValue(key.subscription_id)
+  if (key.group_id !== null) return groupBindingValue(key.group_id)
+  return ''
+}
+
+const resolveBindingOption = (value: string) =>
+  keyBindingOptions.value.find((option) => option.value === value) || null
+
+const onFormBindingChange = (value: string | number | boolean | null) => {
+  const bindingValue = typeof value === 'string' ? value : ''
+  const option = resolveBindingOption(bindingValue)
+  formData.value.binding_value = bindingValue
+  formData.value.group_id = option?.groupId ?? null
+  formData.value.subscription_id = option?.subscriptionId ?? null
+}
 
 // Group dropdown search
 const groupSearchQuery = ref('')
 const filteredGroupOptions = computed(() => {
   const query = groupSearchQuery.value.trim().toLowerCase()
-  if (!query) return groupOptions.value
-  return groupOptions.value.filter((opt) => {
+  if (!query) return keyBindingOptions.value
+  return keyBindingOptions.value.filter((opt) => {
     return opt.label.toLowerCase().includes(query) ||
       (opt.description && opt.description.toLowerCase().includes(query))
   })
@@ -1370,6 +1450,14 @@ const loadAvailableChannels = async () => {
   }
 }
 
+const loadActiveSubscriptions = async () => {
+  try {
+    await subscriptionStore.fetchActiveSubscriptions(true)
+  } catch (error) {
+    console.error('Failed to load active subscriptions:', error)
+  }
+}
+
 const selectedKeySupportedModels = computed<UserSupportedModel[]>(() => {
   const key = selectedKey.value
   const groupId = key?.group_id
@@ -1427,9 +1515,12 @@ const editKey = (key: ApiKey) => {
   selectedKey.value = key
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
   const hasExpiration = !!key.expires_at
+  const bindingValue = apiKeyBindingValue(key)
   formData.value = {
     name: key.name,
+    binding_value: bindingValue,
     group_id: key.group_id,
+    subscription_id: key.subscription_id,
     status: key.status === 'quota_exhausted' || key.status === 'expired' ? 'inactive' : key.status,
     use_custom_key: false,
     custom_key: '',
@@ -1493,13 +1584,16 @@ const openGroupSelector = (key: ApiKey) => {
   }
 }
 
-const changeGroup = async (key: ApiKey, newGroupId: number | null) => {
+const changeGroup = async (key: ApiKey, option: KeyBindingOption) => {
   groupSelectorKeyId.value = null
   dropdownPosition.value = null
-  if (key.group_id === newGroupId) return
+  if (apiKeyBindingValue(key) === option.value) return
 
   try {
-    await keysAPI.update(key.id, { group_id: newGroupId })
+    await keysAPI.update(key.id, {
+      group_id: option.groupId,
+      subscription_id: option.subscriptionId
+    })
     appStore.showSuccess(t('keys.groupChangedSuccess'))
     loadApiKeys()
   } catch (error) {
@@ -1522,8 +1616,11 @@ const confirmDelete = (key: ApiKey) => {
 }
 
 const handleSubmit = async () => {
-  // Validate group_id is required
-  if (formData.value.group_id === null) {
+  const binding = resolveBindingOption(formData.value.binding_value)
+  const bindingUnchanged = showEditModal.value &&
+    selectedKey.value &&
+    formData.value.binding_value === apiKeyBindingValue(selectedKey.value)
+  if (!binding && !bindingUnchanged) {
     appStore.showError(t('keys.groupRequired'))
     return
   }
@@ -1578,9 +1675,8 @@ const handleSubmit = async () => {
   submitting.value = true
   try {
     if (showEditModal.value && selectedKey.value) {
-      await keysAPI.update(selectedKey.value.id, {
+      const updates: UpdateApiKeyRequest = {
         name: formData.value.name,
-        group_id: formData.value.group_id,
         status: formData.value.status,
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
@@ -1589,13 +1685,23 @@ const handleSubmit = async () => {
         rate_limit_5h: rateLimitData.rate_limit_5h,
         rate_limit_1d: rateLimitData.rate_limit_1d,
         rate_limit_7d: rateLimitData.rate_limit_7d,
-      })
+      }
+      if (binding && !bindingUnchanged) {
+        updates.group_id = binding.groupId
+        updates.subscription_id = binding.subscriptionId
+      }
+      await keysAPI.update(selectedKey.value.id, updates)
       appStore.showSuccess(t('keys.keyUpdatedSuccess'))
     } else {
+      if (!binding) {
+        appStore.showError(t('keys.groupRequired'))
+        return
+      }
       const customKey = formData.value.use_custom_key ? formData.value.custom_key : undefined
       await keysAPI.create(
         formData.value.name,
-        formData.value.group_id,
+        binding.groupId,
+        binding.subscriptionId,
         customKey,
         ipWhitelist,
         ipBlacklist,
@@ -1646,7 +1752,9 @@ const closeModals = () => {
   selectedKey.value = null
   formData.value = {
     name: '',
+    binding_value: '',
     group_id: null,
+    subscription_id: null,
     status: 'active',
     use_custom_key: false,
     custom_key: '',
@@ -1813,6 +1921,7 @@ function formatResetTime(resetAt: string | null): string {
 onMounted(() => {
   loadApiKeys()
   loadGroups()
+  loadActiveSubscriptions()
   loadUserGroupRates()
   loadPublicSettings()
   loadAvailableChannels()

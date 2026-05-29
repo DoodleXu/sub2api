@@ -126,7 +126,7 @@
             </div>
           </div>
           <div v-if="selectedKey" class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
-            <span class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">{{ selectedKey.group?.subscription_type === 'subscription' ? '订阅额度优先' : '账户余额' }}</span>
+            <span class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">{{ isSubscriptionType(selectedKey.group?.subscription_type) ? '订阅额度优先' : '账户余额' }}</span>
             <span v-if="selectedKey.quota > 0" class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">
               Key 额度 ${{ selectedKey.quota_used.toFixed(2) }} / ${{ selectedKey.quota.toFixed(2) }}
             </span>
@@ -277,6 +277,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { keysAPI } from '@/api'
 import { useAppStore } from '@/stores/app'
+import { isSubscriptionType } from '@/utils/subscriptionType'
 import type { ApiKey } from '@/types'
 import {
   createWebConsoleMessageId,
