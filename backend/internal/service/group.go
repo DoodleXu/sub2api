@@ -81,20 +81,46 @@ func (g *Group) IsActive() bool {
 	return g.Status == StatusActive
 }
 
+func IsSubscriptionTypeValue(subscriptionType string) bool {
+	switch subscriptionType {
+	case SubscriptionTypeSubscription, SubscriptionTypeSubscriptionWeekly, SubscriptionTypeSubscriptionDaily:
+		return true
+	default:
+		return false
+	}
+}
+
+func AllowsDailyLimit(subscriptionType string) bool {
+	return IsSubscriptionTypeValue(subscriptionType)
+}
+
+func AllowsWeeklyLimit(subscriptionType string) bool {
+	switch subscriptionType {
+	case SubscriptionTypeSubscription, SubscriptionTypeSubscriptionWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+func AllowsMonthlyLimit(subscriptionType string) bool {
+	return subscriptionType == SubscriptionTypeSubscription
+}
+
 func (g *Group) IsSubscriptionType() bool {
-	return g.SubscriptionType == SubscriptionTypeSubscription
+	return g != nil && IsSubscriptionTypeValue(g.SubscriptionType)
 }
 
 func (g *Group) HasDailyLimit() bool {
-	return g.DailyLimitUSD != nil && *g.DailyLimitUSD > 0
+	return g != nil && (g.SubscriptionType == "" || AllowsDailyLimit(g.SubscriptionType)) && g.DailyLimitUSD != nil && *g.DailyLimitUSD > 0
 }
 
 func (g *Group) HasWeeklyLimit() bool {
-	return g.WeeklyLimitUSD != nil && *g.WeeklyLimitUSD > 0
+	return g != nil && (g.SubscriptionType == "" || AllowsWeeklyLimit(g.SubscriptionType)) && g.WeeklyLimitUSD != nil && *g.WeeklyLimitUSD > 0
 }
 
 func (g *Group) HasMonthlyLimit() bool {
-	return g.MonthlyLimitUSD != nil && *g.MonthlyLimitUSD > 0
+	return g != nil && (g.SubscriptionType == "" || AllowsMonthlyLimit(g.SubscriptionType)) && g.MonthlyLimitUSD != nil && *g.MonthlyLimitUSD > 0
 }
 
 // GetImagePrice 根据 image_size 返回对应的图片生成价格

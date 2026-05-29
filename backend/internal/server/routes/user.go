@@ -1,23 +1,30 @@
 package routes
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/Wei-Shaw/sub2api/internal/handler"
-	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	ratelimitmiddleware "github.com/Wei-Shaw/sub2api/internal/middleware"
+	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 // RegisterUserRoutes 注册用户相关路由（需要认证）
 func RegisterUserRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
-	jwtAuth middleware.JWTAuthMiddleware,
+	jwtAuth servermiddleware.JWTAuthMiddleware,
+	redisClient *redis.Client,
 	settingService *service.SettingService,
 ) {
+	rateLimiter := ratelimitmiddleware.NewRateLimiter(redisClient)
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
-	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	authenticated.Use(servermiddleware.BackendModeUserGuard(settingService))
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -33,6 +40,17 @@ func RegisterUserRoutes(
 			user.POST("/auth-identities/bind/start", h.User.StartIdentityBinding)
 			user.GET("/api-keys/:id/usage/daily", h.Usage.GetMyAPIKeyDailyUsage)
 			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
+			user.GET("/checkin/status", h.DailyCheckin.Status)
+			user.POST("/checkin", rateLimiter.LimitWithOptions("user-checkin", 6, time.Minute, ratelimitmiddleware.RateLimitOptions{
+				FailureMode: ratelimitmiddleware.RateLimitFailClose,
+				KeyFunc: func(c *gin.Context) string {
+					subject, ok := servermiddleware.GetAuthSubjectFromContext(c)
+					if ok {
+						return fmt.Sprintf("user:%d", subject.UserID)
+					}
+					return "ip:" + c.ClientIP()
+				},
+			}), h.DailyCheckin.CheckIn)
 
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")

@@ -87,13 +87,28 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 		Where(
 			paymentorder.UserIDEQ(userID),
 			paymentorder.OrderTypeEQ(payment.OrderTypeSubscription),
-			paymentorder.SubscriptionGroupIDEQ(sub.GroupID),
+			paymentorder.FulfilledSubscriptionIDEQ(sub.ID),
 			paymentorder.StatusIn(OrderStatusCompleted, OrderStatusPartiallyRefunded),
 			paymentorder.SubscriptionDaysNotNil(),
-			paymentorder.CreatedAtGTE(subscriptionUpgradeOrderWindowStart(sub)),
 		).
 		Order(dbent.Asc(paymentorder.FieldCreatedAt)).
 		All(ctx)
+	if err != nil {
+		return subscriptionUpgradeCredit{}, err
+	}
+	if len(orders) == 0 {
+		orders, err = s.entClient.PaymentOrder.Query().
+			Where(
+				paymentorder.UserIDEQ(userID),
+				paymentorder.OrderTypeEQ(payment.OrderTypeSubscription),
+				paymentorder.SubscriptionGroupIDEQ(sub.GroupID),
+				paymentorder.StatusIn(OrderStatusCompleted, OrderStatusPartiallyRefunded),
+				paymentorder.SubscriptionDaysNotNil(),
+				paymentorder.CreatedAtGTE(subscriptionUpgradeOrderWindowStart(sub)),
+			).
+			Order(dbent.Asc(paymentorder.FieldCreatedAt)).
+			All(ctx)
+	}
 	if err != nil {
 		return subscriptionUpgradeCredit{}, err
 	}

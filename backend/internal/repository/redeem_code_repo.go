@@ -6,6 +6,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -358,14 +359,14 @@ func (r *redeemCodeRepository) ListByUser(ctx context.Context, userID int64, lim
 }
 
 // ListByUserPaginated returns paginated balance/concurrency history for a user.
-// Supports optional type filter (e.g. "balance", "admin_balance", "concurrency", "admin_concurrency", "subscription").
+// Supports optional type filter (e.g. "balance", "checkin_balance", "admin_balance", "concurrency", "admin_concurrency", "subscription").
 func (r *redeemCodeRepository) ListByUserPaginated(ctx context.Context, userID int64, params pagination.PaginationParams, codeType string) ([]service.RedeemCode, *pagination.PaginationResult, error) {
 	q := r.client.RedeemCode.Query().
 		Where(redeemcode.UsedByEQ(userID))
 
 	// Optional type filter
 	if codeType != "" {
-		q = q.Where(redeemcode.TypeEQ(codeType))
+		q = q.Where(redeemCodeTypePredicate(codeType))
 	}
 
 	total, err := q.Count(ctx)
@@ -386,8 +387,26 @@ func (r *redeemCodeRepository) ListByUserPaginated(ctx context.Context, userID i
 	return redeemCodeEntitiesToService(codes), paginationResultFromTotal(int64(total), params), nil
 }
 
-// SumPositiveBalanceByUser returns total recharged amount (sum of value > 0 where type is balance/admin_balance).
+// SumPositiveBalanceByUser returns total recharged amount, excluding sign-in rewards.
 func (r *redeemCodeRepository) SumPositiveBalanceByUser(ctx context.Context, userID int64) (float64, error) {
+	return r.sumPositiveBalanceByUserWhere(ctx, userID, redeemcode.Or(
+		redeemcode.TypeEQ(service.RedeemTypeBalance),
+		redeemcode.And(
+			redeemcode.TypeEQ(service.AdjustmentTypeAdminBalance),
+			redeemcode.Or(
+				redeemcode.NotesIsNil(),
+				redeemcode.NotesNEQ(service.RedeemNotesDailyCheckinReward),
+			),
+		),
+	))
+}
+
+// SumPositiveCheckinBalanceByUser returns total sign-in reward amount.
+func (r *redeemCodeRepository) SumPositiveCheckinBalanceByUser(ctx context.Context, userID int64) (float64, error) {
+	return r.sumPositiveBalanceByUserWhere(ctx, userID, dailyCheckinBalanceRecordPredicate())
+}
+
+func (r *redeemCodeRepository) sumPositiveBalanceByUserWhere(ctx context.Context, userID int64, typePredicate predicate.RedeemCode) (float64, error) {
 	var result []struct {
 		Sum float64 `json:"sum"`
 	}
@@ -395,7 +414,7 @@ func (r *redeemCodeRepository) SumPositiveBalanceByUser(ctx context.Context, use
 		Where(
 			redeemcode.UsedByEQ(userID),
 			redeemcode.ValueGT(0),
-			redeemcode.TypeIn("balance", "admin_balance"),
+			typePredicate,
 		).
 		Aggregate(dbent.As(dbent.Sum(redeemcode.FieldValue), "sum")).
 		Scan(ctx, &result)
@@ -406,6 +425,23 @@ func (r *redeemCodeRepository) SumPositiveBalanceByUser(ctx context.Context, use
 		return 0, nil
 	}
 	return result[0].Sum, nil
+}
+
+func redeemCodeTypePredicate(codeType string) predicate.RedeemCode {
+	if codeType == service.RedeemTypeCheckinBalance {
+		return dailyCheckinBalanceRecordPredicate()
+	}
+	return redeemcode.TypeEQ(codeType)
+}
+
+func dailyCheckinBalanceRecordPredicate() predicate.RedeemCode {
+	return redeemcode.Or(
+		redeemcode.TypeEQ(service.RedeemTypeCheckinBalance),
+		redeemcode.And(
+			redeemcode.TypeEQ(service.AdjustmentTypeAdminBalance),
+			redeemcode.NotesEQ(service.RedeemNotesDailyCheckinReward),
+		),
+	)
 }
 
 func redeemCodeEntityToService(m *dbent.RedeemCode) *service.RedeemCode {

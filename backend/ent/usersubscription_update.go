@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
@@ -333,6 +334,21 @@ func (_u *UserSubscriptionUpdate) SetAssignedByUser(v *User) *UserSubscriptionUp
 	return _u.SetAssignedByUserID(v.ID)
 }
 
+// AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
+func (_u *UserSubscriptionUpdate) AddAPIKeyIDs(ids ...int64) *UserSubscriptionUpdate {
+	_u.mutation.AddAPIKeyIDs(ids...)
+	return _u
+}
+
+// AddAPIKeys adds the "api_keys" edges to the APIKey entity.
+func (_u *UserSubscriptionUpdate) AddAPIKeys(v ...*APIKey) *UserSubscriptionUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyIDs(ids...)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *UserSubscriptionUpdate) AddUsageLogIDs(ids ...int64) *UserSubscriptionUpdate {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -369,6 +385,27 @@ func (_u *UserSubscriptionUpdate) ClearGroup() *UserSubscriptionUpdate {
 func (_u *UserSubscriptionUpdate) ClearAssignedByUser() *UserSubscriptionUpdate {
 	_u.mutation.ClearAssignedByUser()
 	return _u
+}
+
+// ClearAPIKeys clears all "api_keys" edges to the APIKey entity.
+func (_u *UserSubscriptionUpdate) ClearAPIKeys() *UserSubscriptionUpdate {
+	_u.mutation.ClearAPIKeys()
+	return _u
+}
+
+// RemoveAPIKeyIDs removes the "api_keys" edge to APIKey entities by IDs.
+func (_u *UserSubscriptionUpdate) RemoveAPIKeyIDs(ids ...int64) *UserSubscriptionUpdate {
+	_u.mutation.RemoveAPIKeyIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeys removes "api_keys" edges to APIKey entities.
+func (_u *UserSubscriptionUpdate) RemoveAPIKeys(v ...*APIKey) *UserSubscriptionUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyIDs(ids...)
 }
 
 // ClearUsageLogs clears all "usage_logs" edges to the UsageLog entity.
@@ -605,6 +642,51 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeysCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeysIDs(); len(nodes) > 0 && !_u.mutation.APIKeysCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeysIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -979,6 +1061,21 @@ func (_u *UserSubscriptionUpdateOne) SetAssignedByUser(v *User) *UserSubscriptio
 	return _u.SetAssignedByUserID(v.ID)
 }
 
+// AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
+func (_u *UserSubscriptionUpdateOne) AddAPIKeyIDs(ids ...int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddAPIKeyIDs(ids...)
+	return _u
+}
+
+// AddAPIKeys adds the "api_keys" edges to the APIKey entity.
+func (_u *UserSubscriptionUpdateOne) AddAPIKeys(v ...*APIKey) *UserSubscriptionUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyIDs(ids...)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *UserSubscriptionUpdateOne) AddUsageLogIDs(ids ...int64) *UserSubscriptionUpdateOne {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -1015,6 +1112,27 @@ func (_u *UserSubscriptionUpdateOne) ClearGroup() *UserSubscriptionUpdateOne {
 func (_u *UserSubscriptionUpdateOne) ClearAssignedByUser() *UserSubscriptionUpdateOne {
 	_u.mutation.ClearAssignedByUser()
 	return _u
+}
+
+// ClearAPIKeys clears all "api_keys" edges to the APIKey entity.
+func (_u *UserSubscriptionUpdateOne) ClearAPIKeys() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearAPIKeys()
+	return _u
+}
+
+// RemoveAPIKeyIDs removes the "api_keys" edge to APIKey entities by IDs.
+func (_u *UserSubscriptionUpdateOne) RemoveAPIKeyIDs(ids ...int64) *UserSubscriptionUpdateOne {
+	_u.mutation.RemoveAPIKeyIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeys removes "api_keys" edges to APIKey entities.
+func (_u *UserSubscriptionUpdateOne) RemoveAPIKeys(v ...*APIKey) *UserSubscriptionUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyIDs(ids...)
 }
 
 // ClearUsageLogs clears all "usage_logs" edges to the UsageLog entity.
@@ -1281,6 +1399,51 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeysCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeysIDs(); len(nodes) > 0 && !_u.mutation.APIKeysCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeysIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   usersubscription.APIKeysTable,
+			Columns: []string{usersubscription.APIKeysColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

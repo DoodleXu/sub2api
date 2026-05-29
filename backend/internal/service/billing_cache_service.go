@@ -855,14 +855,18 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userI
 
 // checkSubscriptionEligibility 检查订阅模式资格
 func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, userID int64, group *Group, subscription *UserSubscription) error {
-	// 获取订阅缓存数据
-	subData, err := s.GetSubscriptionStatus(ctx, userID, group.ID)
-	if err != nil {
-		if s.circuitBreaker != nil {
-			s.circuitBreaker.OnFailure(err)
+	subData := subscriptionCacheDataFromSubscription(subscription)
+	if subData == nil {
+		var err error
+		// 获取订阅缓存数据
+		subData, err = s.GetSubscriptionStatus(ctx, userID, group.ID)
+		if err != nil {
+			if s.circuitBreaker != nil {
+				s.circuitBreaker.OnFailure(err)
+			}
+			logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription check failed for user %d group %d: %v", userID, group.ID, err)
+			return ErrBillingServiceUnavailable.WithCause(err)
 		}
-		logger.LegacyPrintf("service.billing_cache", "ALERT: billing subscription check failed for user %d group %d: %v", userID, group.ID, err)
-		return ErrBillingServiceUnavailable.WithCause(err)
 	}
 	if s.circuitBreaker != nil {
 		s.circuitBreaker.OnSuccess()
@@ -892,6 +896,20 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func subscriptionCacheDataFromSubscription(subscription *UserSubscription) *subscriptionCacheData {
+	if subscription == nil || subscription.ExpiresAt.IsZero() {
+		return nil
+	}
+	return &subscriptionCacheData{
+		Status:       subscription.Status,
+		ExpiresAt:    subscription.ExpiresAt,
+		DailyUsage:   subscription.DailyUsageUSD,
+		WeeklyUsage:  subscription.WeeklyUsageUSD,
+		MonthlyUsage: subscription.MonthlyUsageUSD,
+		Version:      subscription.UpdatedAt.Unix(),
+	}
 }
 
 type billingCircuitBreakerState int

@@ -181,6 +181,10 @@ type SystemSettings struct {
 	WebConsoleEnabled         bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 
+	// Daily check-in reward range
+	DailyCheckinRewardMinUSD int `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD int `json:"daily_checkin_reward_max_usd"`
+
 	// Claude Code version check
 	MinClaudeCodeVersion string
 	MaxClaudeCodeVersion string

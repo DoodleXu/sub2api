@@ -76,11 +76,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 		if isSubscriptionType && subscriptionService != nil {
-			subscription, err := subscriptionService.GetActiveSubscription(
-				c.Request.Context(),
-				apiKey.User.ID,
-				apiKey.Group.ID,
-			)
+			subscription, err := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey)
 			if err != nil {
 				abortWithGoogleError(c, 403, "No active subscription found for this group")
 				return

@@ -35,6 +35,7 @@ var (
 		{Name: "window_7d_start", Type: field.TypeTime, Nullable: true},
 		{Name: "group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "user_id", Type: field.TypeInt64},
+		{Name: "subscription_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// APIKeysTable holds the schema information for the "api_keys" table.
 	APIKeysTable = &schema.Table{
@@ -54,6 +55,12 @@ var (
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
+			{
+				Symbol:     "api_keys_user_subscriptions_api_keys",
+				Columns:    []*schema.Column{APIKeysColumns[24]},
+				RefColumns: []*schema.Column{UserSubscriptionsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
 		},
 		Indexes: []*schema.Index{
 			{
@@ -65,6 +72,11 @@ var (
 				Name:    "apikey_group_id",
 				Unique:  false,
 				Columns: []*schema.Column{APIKeysColumns[22]},
+			},
+			{
+				Name:    "apikey_subscription_id",
+				Unique:  false,
+				Columns: []*schema.Column{APIKeysColumns[24]},
 			},
 			{
 				Name:    "apikey_status",
@@ -835,6 +847,7 @@ var (
 		{Name: "subscription_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "subscription_days", Type: field.TypeInt, Nullable: true},
 		{Name: "upgrade_from_subscription_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "fulfilled_subscription_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "upgrade_credit_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "upgrade_credit_days", Type: field.TypeInt, Nullable: true},
 		{Name: "provider_instance_id", Type: field.TypeString, Nullable: true, Size: 64},
@@ -868,7 +881,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "payment_orders_users_payment_orders",
-				Columns:    []*schema.Column{PaymentOrdersColumns[42]},
+				Columns:    []*schema.Column{PaymentOrdersColumns[43]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -885,32 +898,32 @@ var (
 			{
 				Name:    "paymentorder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[42]},
+				Columns: []*schema.Column{PaymentOrdersColumns[43]},
 			},
 			{
 				Name:    "paymentorder_status",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[24]},
+				Columns: []*schema.Column{PaymentOrdersColumns[25]},
 			},
 			{
 				Name:    "paymentorder_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[32]},
+				Columns: []*schema.Column{PaymentOrdersColumns[33]},
 			},
 			{
 				Name:    "paymentorder_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[40]},
+				Columns: []*schema.Column{PaymentOrdersColumns[41]},
 			},
 			{
 				Name:    "paymentorder_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[33]},
+				Columns: []*schema.Column{PaymentOrdersColumns[34]},
 			},
 			{
 				Name:    "paymentorder_payment_type_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[33]},
+				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[34]},
 			},
 			{
 				Name:    "paymentorder_order_type",
@@ -921,6 +934,11 @@ var (
 				Name:    "paymentorder_upgrade_from_subscription_id",
 				Unique:  false,
 				Columns: []*schema.Column{PaymentOrdersColumns[18]},
+			},
+			{
+				Name:    "paymentorder_fulfilled_subscription_id",
+				Unique:  false,
+				Columns: []*schema.Column{PaymentOrdersColumns[19]},
 			},
 		},
 	}
@@ -1801,6 +1819,7 @@ var (
 func init() {
 	APIKeysTable.ForeignKeys[0].RefTable = GroupsTable
 	APIKeysTable.ForeignKeys[1].RefTable = UsersTable
+	APIKeysTable.ForeignKeys[2].RefTable = UserSubscriptionsTable
 	APIKeysTable.Annotation = &entsql.Annotation{
 		Table: "api_keys",
 	}

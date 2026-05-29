@@ -64,8 +64,10 @@ type RedeemCodeRepository interface {
 	// ListByUserPaginated returns paginated balance/concurrency history for a specific user.
 	// codeType filter is optional - pass empty string to return all types.
 	ListByUserPaginated(ctx context.Context, userID int64, params pagination.PaginationParams, codeType string) ([]RedeemCode, *pagination.PaginationResult, error)
-	// SumPositiveBalanceByUser returns the total recharged amount (sum of positive balance values) for a user.
+	// SumPositiveBalanceByUser returns the total recharged amount (sum of positive non-check-in balance values) for a user.
 	SumPositiveBalanceByUser(ctx context.Context, userID int64) (float64, error)
+	// SumPositiveCheckinBalanceByUser returns the total sign-in reward amount for a user.
+	SumPositiveCheckinBalanceByUser(ctx context.Context, userID int64) (float64, error)
 }
 
 // GenerateCodesRequest 生成兑换码请求
@@ -642,7 +644,7 @@ func (s *RedeemService) GetUserHistory(ctx context.Context, userID int64, limit 
 
 // reduceOrCancelSubscription 缩短订阅天数，剩余天数 <= 0 时取消订阅
 func (s *RedeemService) reduceOrCancelSubscription(ctx context.Context, userID, groupID int64, reduceDays int, code string) error {
-	sub, err := s.subscriptionService.userSubRepo.GetByUserIDAndGroupID(ctx, userID, groupID)
+	sub, err := s.subscriptionService.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
 	if err != nil {
 		return ErrSubscriptionNotFound
 	}

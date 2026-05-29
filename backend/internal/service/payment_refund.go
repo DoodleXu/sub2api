@@ -259,14 +259,16 @@ func (s *PaymentService) BuildRefundPreview(ctx context.Context, o *dbent.Paymen
 	}
 	remainingDays := 0
 	var expiresAt *time.Time
+	foundOrderSubscription := false
 	if s != nil && s.subscriptionSvc != nil {
-		if sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID); err == nil && sub != nil {
+		if sub, err := s.getRefundOrderSubscription(ctx, o); err == nil && sub != nil {
+			foundOrderSubscription = true
 			remainingDays = daysRemainingFromNow(sub.ExpiresAt)
 			exp := sub.ExpiresAt
 			expiresAt = &exp
 		}
 	}
-	if remainingDays <= 0 {
+	if remainingDays <= 0 && !foundOrderSubscription {
 		remainingDays = estimateOrderSubscriptionRemainingDays(o)
 	}
 	if remainingDays <= 0 {
@@ -297,7 +299,7 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 			if p.SubDaysToDeduct > *o.SubscriptionDays {
 				p.SubDaysToDeduct = *o.SubscriptionDays
 			}
-			sub, err := s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID)
+			sub, err := s.getRefundOrderSubscription(ctx, o)
 			if err == nil && sub != nil {
 				p.SubscriptionID = sub.ID
 			} else if !force {
@@ -316,6 +318,30 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 	p.DeductionType = payment.DeductionTypeBalance
 	p.BalanceToDeduct = math.Min(p.RefundAmount, u.Balance)
 	return nil
+}
+
+func (s *PaymentService) getRefundOrderSubscription(ctx context.Context, o *dbent.PaymentOrder) (*UserSubscription, error) {
+	if s == nil || s.subscriptionSvc == nil || o == nil || o.SubscriptionGroupID == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	if o.FulfilledSubscriptionID != nil && *o.FulfilledSubscriptionID > 0 {
+		sub, err := s.subscriptionSvc.GetByID(ctx, *o.FulfilledSubscriptionID)
+		if err != nil {
+			return nil, err
+		}
+		if sub.UserID == o.UserID && sub.GroupID == *o.SubscriptionGroupID {
+			return sub, nil
+		}
+		return nil, ErrSubscriptionNotFound
+	}
+	sub, err := s.subscriptionSvc.GetSubscriptionByPaymentOrder(ctx, o.UserID, *o.SubscriptionGroupID, o.ID)
+	if err == nil && sub != nil {
+		return sub, nil
+	}
+	if err != nil && !errors.Is(err, ErrSubscriptionNotFound) {
+		return nil, err
+	}
+	return s.subscriptionSvc.GetActiveSubscription(ctx, o.UserID, *o.SubscriptionGroupID)
 }
 
 func calculateSubscriptionRefundAmountByDays(orderDays int, orderAmount float64, days int) float64 {

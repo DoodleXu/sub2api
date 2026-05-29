@@ -223,6 +223,69 @@ func TestCalculateSubscriptionUpgradeCreditAggregatesCurrentTermOrders(t *testin
 	require.InDelta(t, 300.0, credit.CreditAmount, 0.01)
 }
 
+func TestCalculateSubscriptionUpgradeCreditUsesFulfilledSubscriptionOnly(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("upgrade-linked@example.com").
+		SetPasswordHash("hash").
+		SetUsername("upgrade-linked-user").
+		Save(ctx)
+	require.NoError(t, err)
+	group, err := client.Group.Create().
+		SetName("upgrade-linked-group").
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	now := time.Now()
+	makeOrder := func(outTradeNo string, subscriptionID int64, amount float64, days int) {
+		t.Helper()
+		_, err := client.PaymentOrder.Create().
+			SetUserID(user.ID).
+			SetUserEmail(user.Email).
+			SetUserName(user.Username).
+			SetAmount(amount).
+			SetPayAmount(amount).
+			SetFeeRate(0).
+			SetRechargeCode(outTradeNo).
+			SetOutTradeNo(outTradeNo).
+			SetPaymentType(payment.TypeEasyPay).
+			SetPaymentTradeNo("trade-" + outTradeNo).
+			SetOrderType(payment.OrderTypeSubscription).
+			SetPlanID(100).
+			SetSubscriptionGroupID(group.ID).
+			SetSubscriptionDays(days).
+			SetFulfilledSubscriptionID(subscriptionID).
+			SetStatus(OrderStatusCompleted).
+			SetExpiresAt(now.Add(time.Hour)).
+			SetPaidAt(now.Add(-20 * 24 * time.Hour)).
+			SetCompletedAt(now.Add(-20 * 24 * time.Hour)).
+			SetCreatedAt(now.Add(-20 * 24 * time.Hour)).
+			SetClientIP("127.0.0.1").
+			SetSrcHost("api.example.com").
+			Save(ctx)
+		require.NoError(t, err)
+	}
+	makeOrder("sub2_linked_other", 71, 300, 30)
+	makeOrder("sub2_linked_target", 72, 90, 30)
+
+	svc := &PaymentService{entClient: client}
+	credit, err := svc.calculateSubscriptionUpgradeCredit(ctx, user.ID, &UserSubscription{
+		ID:        72,
+		UserID:    user.ID,
+		GroupID:   group.ID,
+		StartsAt:  now.Add(-20 * 24 * time.Hour),
+		Status:    SubscriptionStatusActive,
+		ExpiresAt: now.Add(10 * 24 * time.Hour),
+	}, &dbent.SubscriptionPlan{ID: 200, GroupID: group.ID, Price: 1000})
+
+	require.NoError(t, err)
+	require.InDelta(t, 30.0, credit.CreditAmount, 0.01)
+}
+
 func TestCreateOrderAppliesSubscriptionUpgradeCreditAndMinimumPayable(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

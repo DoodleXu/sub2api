@@ -297,6 +297,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AvailableChannelsEnabled:  settings.AvailableChannelsEnabled,
 		WebConsoleEnabled:         settings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint: settings.WebConsoleDefaultEndpoint,
+		DailyCheckinRewardMinUSD:  settings.DailyCheckinRewardMinUSD,
+		DailyCheckinRewardMaxUSD:  settings.DailyCheckinRewardMaxUSD,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 	}
@@ -643,6 +645,10 @@ type UpdateSettingsRequest struct {
 	// Web Console feature switch (browser-side)
 	WebConsoleEnabled         *bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint *string `json:"web_console_default_endpoint"`
+
+	// Daily check-in reward range
+	DailyCheckinRewardMinUSD *int `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD *int `json:"daily_checkin_reward_max_usd"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1765,6 +1771,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WebConsoleDefaultEndpoint
 		}(),
+		DailyCheckinRewardMinUSD: func() int {
+			if req.DailyCheckinRewardMinUSD != nil {
+				return *req.DailyCheckinRewardMinUSD
+			}
+			return previousSettings.DailyCheckinRewardMinUSD
+		}(),
+		DailyCheckinRewardMaxUSD: func() int {
+			if req.DailyCheckinRewardMaxUSD != nil {
+				return *req.DailyCheckinRewardMaxUSD
+			}
+			return previousSettings.DailyCheckinRewardMaxUSD
+		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
 				return *req.AffiliateEnabled
@@ -2097,6 +2115,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AvailableChannelsEnabled:  updatedSettings.AvailableChannelsEnabled,
 		WebConsoleEnabled:         updatedSettings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint: updatedSettings.WebConsoleDefaultEndpoint,
+		DailyCheckinRewardMinUSD:  updatedSettings.DailyCheckinRewardMinUSD,
+		DailyCheckinRewardMaxUSD:  updatedSettings.DailyCheckinRewardMaxUSD,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2580,6 +2600,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.WebConsoleDefaultEndpoint != after.WebConsoleDefaultEndpoint {
 		changed = append(changed, "web_console_default_endpoint")
+	}
+	if before.DailyCheckinRewardMinUSD != after.DailyCheckinRewardMinUSD {
+		changed = append(changed, "daily_checkin_reward_min_usd")
+	}
+	if before.DailyCheckinRewardMaxUSD != after.DailyCheckinRewardMaxUSD {
+		changed = append(changed, "daily_checkin_reward_max_usd")
 	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")

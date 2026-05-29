@@ -78,31 +78,32 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		return nil
 	}
 	out := &APIKey{
-		ID:            k.ID,
-		UserID:        k.UserID,
-		Key:           k.Key,
-		Name:          k.Name,
-		GroupID:       k.GroupID,
-		Status:        k.Status,
-		IPWhitelist:   k.IPWhitelist,
-		IPBlacklist:   k.IPBlacklist,
-		LastUsedAt:    k.LastUsedAt,
-		Quota:         k.Quota,
-		QuotaUsed:     k.QuotaUsed,
-		ExpiresAt:     k.ExpiresAt,
-		CreatedAt:     k.CreatedAt,
-		UpdatedAt:     k.UpdatedAt,
-		RateLimit5h:   k.RateLimit5h,
-		RateLimit1d:   k.RateLimit1d,
-		RateLimit7d:   k.RateLimit7d,
-		Usage5h:       k.EffectiveUsage5h(),
-		Usage1d:       k.EffectiveUsage1d(),
-		Usage7d:       k.EffectiveUsage7d(),
-		Window5hStart: k.Window5hStart,
-		Window1dStart: k.Window1dStart,
-		Window7dStart: k.Window7dStart,
-		User:          UserFromServiceShallow(k.User),
-		Group:         GroupFromServiceShallow(k.Group),
+		ID:             k.ID,
+		UserID:         k.UserID,
+		Key:            k.Key,
+		Name:           k.Name,
+		GroupID:        k.GroupID,
+		SubscriptionID: k.SubscriptionID,
+		Status:         k.Status,
+		IPWhitelist:    k.IPWhitelist,
+		IPBlacklist:    k.IPBlacklist,
+		LastUsedAt:     k.LastUsedAt,
+		Quota:          k.Quota,
+		QuotaUsed:      k.QuotaUsed,
+		ExpiresAt:      k.ExpiresAt,
+		CreatedAt:      k.CreatedAt,
+		UpdatedAt:      k.UpdatedAt,
+		RateLimit5h:    k.RateLimit5h,
+		RateLimit1d:    k.RateLimit1d,
+		RateLimit7d:    k.RateLimit7d,
+		Usage5h:        k.EffectiveUsage5h(),
+		Usage1d:        k.EffectiveUsage1d(),
+		Usage7d:        k.EffectiveUsage7d(),
+		Window5hStart:  k.Window5hStart,
+		Window1dStart:  k.Window1dStart,
+		Window7dStart:  k.Window7dStart,
+		User:           UserFromServiceShallow(k.User),
+		Group:          GroupFromServiceShallow(k.Group),
 	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)
@@ -547,9 +548,8 @@ func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
 		out.Status = service.StatusExpired
 	}
 
-	// For admin_balance/admin_concurrency types, include notes so users can see
-	// why they were charged or credited by admin
-	if (rc.Type == "admin_balance" || rc.Type == "admin_concurrency") && rc.Notes != "" {
+	// For system/admin balance adjustments, include notes so users can see the reason.
+	if (rc.Type == "checkin_balance" || rc.Type == "admin_balance" || rc.Type == "admin_concurrency") && rc.Notes != "" {
 		out.Notes = &rc.Notes
 	}
 

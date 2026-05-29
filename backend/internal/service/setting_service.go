@@ -869,6 +869,12 @@ const (
 	channelMonitorIntervalFallback = 60
 )
 
+const (
+	DailyCheckinRewardMinDefault = 1
+	DailyCheckinRewardMaxDefault = 3
+	DailyCheckinRewardMaxLimit   = 100
+)
+
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
 // Empty / invalid input falls back to channelMonitorIntervalFallback.
 func parseChannelMonitorInterval(raw string) int {
@@ -877,6 +883,38 @@ func parseChannelMonitorInterval(raw string) int {
 		return channelMonitorIntervalFallback
 	}
 	return clampChannelMonitorInterval(v)
+}
+
+func parseDailyCheckinRewardRange(minRaw, maxRaw string) (int, int) {
+	minValue := DailyCheckinRewardMinDefault
+	maxValue := DailyCheckinRewardMaxDefault
+	if raw := strings.TrimSpace(minRaw); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			minValue = v
+		}
+	}
+	if raw := strings.TrimSpace(maxRaw); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			maxValue = v
+		}
+	}
+	return normalizeDailyCheckinRewardRange(minValue, maxValue)
+}
+
+func normalizeDailyCheckinRewardRange(minValue, maxValue int) (int, int) {
+	if minValue < 0 {
+		minValue = 0
+	}
+	if minValue > DailyCheckinRewardMaxLimit {
+		minValue = DailyCheckinRewardMaxLimit
+	}
+	if maxValue > DailyCheckinRewardMaxLimit {
+		maxValue = DailyCheckinRewardMaxLimit
+	}
+	if maxValue < minValue {
+		maxValue = minValue
+	}
+	return minValue, maxValue
 }
 
 // clampChannelMonitorInterval clamps v to the allowed range. 0 means "not provided".
@@ -1863,6 +1901,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
 	updates[SettingKeyWebConsoleEnabled] = strconv.FormatBool(settings.WebConsoleEnabled)
 	updates[SettingKeyWebConsoleDefaultEndpoint] = strings.TrimSpace(settings.WebConsoleDefaultEndpoint)
+	checkinMin, checkinMax := normalizeDailyCheckinRewardRange(settings.DailyCheckinRewardMinUSD, settings.DailyCheckinRewardMaxUSD)
+	updates[SettingKeyDailyCheckinRewardMinUSD] = strconv.Itoa(checkinMin)
+	updates[SettingKeyDailyCheckinRewardMaxUSD] = strconv.Itoa(checkinMax)
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
@@ -2777,6 +2818,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Web console feature (default disabled; opt-in)
 		SettingKeyWebConsoleEnabled:         "false",
 		SettingKeyWebConsoleDefaultEndpoint: "",
+		// Daily check-in reward range (USD integer)
+		SettingKeyDailyCheckinRewardMinUSD: strconv.Itoa(DailyCheckinRewardMinDefault),
+		SettingKeyDailyCheckinRewardMaxUSD: strconv.Itoa(DailyCheckinRewardMaxDefault),
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
@@ -3286,6 +3330,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
 	result.WebConsoleEnabled = settings[SettingKeyWebConsoleEnabled] == "true"
 	result.WebConsoleDefaultEndpoint = strings.TrimSpace(settings[SettingKeyWebConsoleDefaultEndpoint])
+	result.DailyCheckinRewardMinUSD, result.DailyCheckinRewardMaxUSD = parseDailyCheckinRewardRange(
+		settings[SettingKeyDailyCheckinRewardMinUSD],
+		settings[SettingKeyDailyCheckinRewardMaxUSD],
+	)
 
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
 	result.AffiliateEnabled = settings[SettingKeyAffiliateEnabled] == "true"
@@ -3566,6 +3614,24 @@ func (s *SettingService) getStringOrDefault(settings map[string]string, key, def
 		return value
 	}
 	return defaultValue
+}
+
+func (s *SettingService) GetDailyCheckinRewardRange(ctx context.Context) (int, int, error) {
+	if s == nil || s.settingRepo == nil {
+		return DailyCheckinRewardMinDefault, DailyCheckinRewardMaxDefault, nil
+	}
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyDailyCheckinRewardMinUSD,
+		SettingKeyDailyCheckinRewardMaxUSD,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("get daily checkin reward range: %w", err)
+	}
+	minValue, maxValue := parseDailyCheckinRewardRange(
+		settings[SettingKeyDailyCheckinRewardMinUSD],
+		settings[SettingKeyDailyCheckinRewardMaxUSD],
+	)
+	return minValue, maxValue, nil
 }
 
 // IsTurnstileEnabled 检查是否启用 Turnstile 验证

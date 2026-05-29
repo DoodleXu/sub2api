@@ -140,11 +140,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 
 		if isSubscriptionType && subscriptionService != nil {
-			sub, subErr := subscriptionService.GetActiveSubscription(
-				c.Request.Context(),
-				apiKey.User.ID,
-				apiKey.Group.ID,
-			)
+			sub, subErr := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey)
 			if subErr != nil {
 				if !skipBilling {
 					AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
@@ -225,6 +221,23 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		c.Next()
 	}
+}
+
+func resolveAPIKeySubscription(ctx context.Context, subscriptionService *service.SubscriptionService, apiKey *service.APIKey) (*service.UserSubscription, error) {
+	if subscriptionService == nil || apiKey == nil || apiKey.User == nil || apiKey.Group == nil || !apiKey.Group.IsSubscriptionType() {
+		return nil, service.ErrSubscriptionNotFound
+	}
+	if apiKey.SubscriptionID == nil || *apiKey.SubscriptionID <= 0 {
+		return subscriptionService.ResolveSingleActiveSubscriptionForGroup(ctx, apiKey.User.ID, apiKey.Group.ID)
+	}
+	sub, err := subscriptionService.GetByID(ctx, *apiKey.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	if sub.UserID != apiKey.User.ID || sub.GroupID != apiKey.Group.ID || !sub.IsActive() {
+		return nil, service.ErrSubscriptionNotFound
+	}
+	return sub, nil
 }
 
 // GetAPIKeyFromContext 从上下文中获取API key

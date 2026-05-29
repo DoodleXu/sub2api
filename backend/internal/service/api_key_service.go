@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -20,13 +21,16 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound     = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed    = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists       = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort     = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited  = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrInvalidIPPattern   = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound                = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed               = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrSubscriptionNotAllowed        = infraerrors.Forbidden("SUBSCRIPTION_NOT_ALLOWED", "user is not allowed to bind this subscription")
+	ErrSubscriptionRequiredForAPIKey = infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "subscription_id is required when binding a subscription group")
+	ErrAPIKeyBindingMismatch         = infraerrors.BadRequest("API_KEY_BINDING_MISMATCH", "subscription_id does not belong to group_id")
+	ErrAPIKeyExists                  = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort                = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars            = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited             = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrInvalidIPPattern              = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -149,11 +153,12 @@ type APIKeyAuthCacheInvalidator interface {
 
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
-	Name        string   `json:"name"`
-	GroupID     *int64   `json:"group_id"`
-	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
-	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
-	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
+	Name           string   `json:"name"`
+	GroupID        *int64   `json:"group_id"`
+	SubscriptionID *int64   `json:"subscription_id"`
+	CustomKey      *string  `json:"custom_key"`   // 可选的自定义key
+	IPWhitelist    []string `json:"ip_whitelist"` // IP 白名单
+	IPBlacklist    []string `json:"ip_blacklist"` // IP 黑名单
 
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
@@ -167,11 +172,12 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
-	Name        *string  `json:"name"`
-	GroupID     *int64   `json:"group_id"`
-	Status      *string  `json:"status"`
-	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单（空数组清空）
-	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单（空数组清空）
+	Name           *string  `json:"name"`
+	GroupID        *int64   `json:"group_id"`
+	SubscriptionID *int64   `json:"subscription_id"`
+	Status         *string  `json:"status"`
+	IPWhitelist    []string `json:"ip_whitelist"` // IP 白名单（空数组清空）
+	IPBlacklist    []string `json:"ip_blacklist"` // IP 黑名单（空数组清空）
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -325,6 +331,65 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 	return user.CanBindGroup(group.ID, group.IsExclusive)
 }
 
+func (s *APIKeyService) resolveAPIKeyBinding(ctx context.Context, user *User, groupID, subscriptionID *int64) (*int64, *int64, error) {
+	if subscriptionID != nil {
+		if *subscriptionID <= 0 {
+			return nil, nil, ErrSubscriptionNotAllowed
+		}
+		sub, err := s.userSubRepo.GetByID(ctx, *subscriptionID)
+		if err != nil {
+			return nil, nil, ErrSubscriptionNotAllowed
+		}
+		if sub.UserID != user.ID || !sub.IsActive() {
+			return nil, nil, ErrSubscriptionNotAllowed
+		}
+		if groupID != nil && *groupID != sub.GroupID {
+			return nil, nil, ErrAPIKeyBindingMismatch
+		}
+
+		group := sub.Group
+		if group == nil {
+			var err error
+			group, err = s.groupRepo.GetByID(ctx, sub.GroupID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("get group: %w", err)
+			}
+		}
+		if !group.IsActive() || !group.IsSubscriptionType() {
+			return nil, nil, ErrSubscriptionNotAllowed
+		}
+
+		resolvedGroupID := sub.GroupID
+		resolvedSubscriptionID := sub.ID
+		return &resolvedGroupID, &resolvedSubscriptionID, nil
+	}
+
+	if groupID == nil {
+		return nil, nil, nil
+	}
+	group, err := s.groupRepo.GetByID(ctx, *groupID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get group: %w", err)
+	}
+	if group.IsSubscriptionType() {
+		sub, err := resolveSingleActiveSubscriptionForGroup(ctx, s.userSubRepo, user.ID, group.ID)
+		if err != nil {
+			if errors.Is(err, ErrSubscriptionNotFound) {
+				return nil, nil, ErrSubscriptionRequiredForAPIKey
+			}
+			return nil, nil, err
+		}
+		resolvedGroupID := sub.GroupID
+		resolvedSubscriptionID := sub.ID
+		return &resolvedGroupID, &resolvedSubscriptionID, nil
+	}
+	if !s.canUserBindGroup(ctx, user, group) {
+		return nil, nil, ErrGroupNotAllowed
+	}
+	resolvedGroupID := *groupID
+	return &resolvedGroupID, nil, nil
+}
+
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	// 验证用户存在
@@ -347,17 +412,9 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
-	// 验证分组权限（如果指定了分组）
-	if req.GroupID != nil {
-		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
-		if err != nil {
-			return nil, fmt.Errorf("get group: %w", err)
-		}
-
-		// 检查用户是否可以绑定该分组
-		if !s.canUserBindGroup(ctx, user, group) {
-			return nil, ErrGroupNotAllowed
-		}
+	groupID, subscriptionID, err := s.resolveAPIKeyBinding(ctx, user, req.GroupID, req.SubscriptionID)
+	if err != nil {
+		return nil, err
 	}
 
 	var key string
@@ -397,18 +454,19 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	// 创建API Key记录
 	apiKey := &APIKey{
-		UserID:      userID,
-		Key:         key,
-		Name:        req.Name,
-		GroupID:     req.GroupID,
-		Status:      StatusActive,
-		IPWhitelist: req.IPWhitelist,
-		IPBlacklist: req.IPBlacklist,
-		Quota:       req.Quota,
-		QuotaUsed:   0,
-		RateLimit5h: req.RateLimit5h,
-		RateLimit1d: req.RateLimit1d,
-		RateLimit7d: req.RateLimit7d,
+		UserID:         userID,
+		Key:            key,
+		Name:           req.Name,
+		GroupID:        groupID,
+		SubscriptionID: subscriptionID,
+		Status:         StatusActive,
+		IPWhitelist:    req.IPWhitelist,
+		IPBlacklist:    req.IPBlacklist,
+		Quota:          req.Quota,
+		QuotaUsed:      0,
+		RateLimit5h:    req.RateLimit5h,
+		RateLimit1d:    req.RateLimit1d,
+		RateLimit7d:    req.RateLimit7d,
 	}
 
 	// Set expiration time if specified
@@ -541,23 +599,18 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Name = *req.Name
 	}
 
-	if req.GroupID != nil {
-		// 验证分组权限
+	if req.GroupID != nil || req.SubscriptionID != nil {
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
 			return nil, fmt.Errorf("get user: %w", err)
 		}
 
-		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
+		groupID, subscriptionID, err := s.resolveAPIKeyBinding(ctx, user, req.GroupID, req.SubscriptionID)
 		if err != nil {
-			return nil, fmt.Errorf("get group: %w", err)
+			return nil, err
 		}
-
-		if !s.canUserBindGroup(ctx, user, group) {
-			return nil, ErrGroupNotAllowed
-		}
-
-		apiKey.GroupID = req.GroupID
+		apiKey.GroupID = groupID
+		apiKey.SubscriptionID = subscriptionID
 	}
 
 	if req.Status != nil {

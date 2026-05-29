@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
@@ -30,6 +31,7 @@ type UserSubscriptionQuery struct {
 	withUser           *UserQuery
 	withGroup          *GroupQuery
 	withAssignedByUser *UserQuery
+	withAPIKeys        *APIKeyQuery
 	withUsageLogs      *UsageLogQuery
 	modifiers          []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
@@ -127,6 +129,28 @@ func (_q *UserSubscriptionQuery) QueryAssignedByUser() *UserQuery {
 			sqlgraph.From(usersubscription.Table, usersubscription.FieldID, selector),
 			sqlgraph.To(user.Table, user.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, true, usersubscription.AssignedByUserTable, usersubscription.AssignedByUserColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryAPIKeys chains the current query on the "api_keys" edge.
+func (_q *UserSubscriptionQuery) QueryAPIKeys() *APIKeyQuery {
+	query := (&APIKeyClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(usersubscription.Table, usersubscription.FieldID, selector),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, usersubscription.APIKeysTable, usersubscription.APIKeysColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -351,6 +375,7 @@ func (_q *UserSubscriptionQuery) Clone() *UserSubscriptionQuery {
 		withUser:           _q.withUser.Clone(),
 		withGroup:          _q.withGroup.Clone(),
 		withAssignedByUser: _q.withAssignedByUser.Clone(),
+		withAPIKeys:        _q.withAPIKeys.Clone(),
 		withUsageLogs:      _q.withUsageLogs.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
@@ -388,6 +413,17 @@ func (_q *UserSubscriptionQuery) WithAssignedByUser(opts ...func(*UserQuery)) *U
 		opt(query)
 	}
 	_q.withAssignedByUser = query
+	return _q
+}
+
+// WithAPIKeys tells the query-builder to eager-load the nodes that are connected to
+// the "api_keys" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserSubscriptionQuery) WithAPIKeys(opts ...func(*APIKeyQuery)) *UserSubscriptionQuery {
+	query := (&APIKeyClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withAPIKeys = query
 	return _q
 }
 
@@ -480,10 +516,11 @@ func (_q *UserSubscriptionQuery) sqlAll(ctx context.Context, hooks ...queryHook)
 	var (
 		nodes       = []*UserSubscription{}
 		_spec       = _q.querySpec()
-		loadedTypes = [4]bool{
+		loadedTypes = [5]bool{
 			_q.withUser != nil,
 			_q.withGroup != nil,
 			_q.withAssignedByUser != nil,
+			_q.withAPIKeys != nil,
 			_q.withUsageLogs != nil,
 		}
 	)
@@ -523,6 +560,13 @@ func (_q *UserSubscriptionQuery) sqlAll(ctx context.Context, hooks ...queryHook)
 	if query := _q.withAssignedByUser; query != nil {
 		if err := _q.loadAssignedByUser(ctx, query, nodes, nil,
 			func(n *UserSubscription, e *User) { n.Edges.AssignedByUser = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withAPIKeys; query != nil {
+		if err := _q.loadAPIKeys(ctx, query, nodes,
+			func(n *UserSubscription) { n.Edges.APIKeys = []*APIKey{} },
+			func(n *UserSubscription, e *APIKey) { n.Edges.APIKeys = append(n.Edges.APIKeys, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -623,6 +667,39 @@ func (_q *UserSubscriptionQuery) loadAssignedByUser(ctx context.Context, query *
 		for i := range nodes {
 			assign(nodes[i], n)
 		}
+	}
+	return nil
+}
+func (_q *UserSubscriptionQuery) loadAPIKeys(ctx context.Context, query *APIKeyQuery, nodes []*UserSubscription, init func(*UserSubscription), assign func(*UserSubscription, *APIKey)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*UserSubscription)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(apikey.FieldSubscriptionID)
+	}
+	query.Where(predicate.APIKey(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(usersubscription.APIKeysColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.SubscriptionID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "subscription_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "subscription_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
 	}
 	return nil
 }

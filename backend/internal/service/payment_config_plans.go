@@ -28,6 +28,12 @@ func validatePlanRequired(name string, groupID int64, price float64, validityDay
 	if strings.TrimSpace(validityUnit) == "" {
 		return infraerrors.BadRequest("PLAN_VALIDITY_UNIT_REQUIRED", "validity unit is required")
 	}
+	if !isSupportedPlanValidityUnit(validityUnit) {
+		return infraerrors.BadRequest("PLAN_VALIDITY_UNIT_INVALID", "validity unit must be day, week, month, or year")
+	}
+	if psComputeValidityDays(validityDays, validityUnit) > MaxValidityDays {
+		return infraerrors.BadRequest("PLAN_VALIDITY_TOO_LONG", "validity period must be within 100 years")
+	}
 	if originalPrice != nil && *originalPrice < 0 {
 		return infraerrors.BadRequest("PLAN_ORIGINAL_PRICE_INVALID", "original price must be >= 0")
 	}
@@ -51,23 +57,39 @@ func validatePlanPatch(req UpdatePlanRequest) error {
 	if req.ValidityUnit != nil && strings.TrimSpace(*req.ValidityUnit) == "" {
 		return infraerrors.BadRequest("PLAN_VALIDITY_UNIT_REQUIRED", "validity unit is required")
 	}
+	if req.ValidityUnit != nil && !isSupportedPlanValidityUnit(*req.ValidityUnit) {
+		return infraerrors.BadRequest("PLAN_VALIDITY_UNIT_INVALID", "validity unit must be day, week, month, or year")
+	}
+	if req.ValidityDays != nil && req.ValidityUnit != nil && psComputeValidityDays(*req.ValidityDays, *req.ValidityUnit) > MaxValidityDays {
+		return infraerrors.BadRequest("PLAN_VALIDITY_TOO_LONG", "validity period must be within 100 years")
+	}
 	if req.OriginalPrice != nil && *req.OriginalPrice < 0 {
 		return infraerrors.BadRequest("PLAN_ORIGINAL_PRICE_INVALID", "original price must be >= 0")
 	}
 	return nil
 }
 
+func isSupportedPlanValidityUnit(unit string) bool {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "day", "days", "week", "weeks", "month", "months", "year", "years":
+		return true
+	default:
+		return false
+	}
+}
+
 // --- Plan CRUD ---
 
 // PlanGroupInfo holds the group details needed for subscription plan display.
 type PlanGroupInfo struct {
-	Platform        string   `json:"platform"`
-	Name            string   `json:"name"`
-	RateMultiplier  float64  `json:"rate_multiplier"`
-	DailyLimitUSD   *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD *float64 `json:"monthly_limit_usd"`
-	ModelScopes     []string `json:"supported_model_scopes"`
+	Platform         string   `json:"platform"`
+	Name             string   `json:"name"`
+	SubscriptionType string   `json:"subscription_type"`
+	RateMultiplier   float64  `json:"rate_multiplier"`
+	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
+	WeeklyLimitUSD   *float64 `json:"weekly_limit_usd"`
+	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd"`
+	ModelScopes      []string `json:"supported_model_scopes"`
 }
 
 // GetGroupPlatformMap returns a map of group_id → platform for the given plans.
@@ -99,14 +121,16 @@ func (s *PaymentConfigService) GetGroupInfoMap(ctx context.Context, plans []*dbe
 	}
 	m := make(map[int64]PlanGroupInfo, len(groups))
 	for _, g := range groups {
+		dailyLimit, weeklyLimit, monthlyLimit := applySubscriptionLimitPolicy(g.SubscriptionType, g.DailyLimitUsd, g.WeeklyLimitUsd, g.MonthlyLimitUsd)
 		m[int64(g.ID)] = PlanGroupInfo{
-			Platform:        g.Platform,
-			Name:            g.Name,
-			RateMultiplier:  g.RateMultiplier,
-			DailyLimitUSD:   g.DailyLimitUsd,
-			WeeklyLimitUSD:  g.WeeklyLimitUsd,
-			MonthlyLimitUSD: g.MonthlyLimitUsd,
-			ModelScopes:     g.SupportedModelScopes,
+			Platform:         g.Platform,
+			Name:             g.Name,
+			SubscriptionType: g.SubscriptionType,
+			RateMultiplier:   g.RateMultiplier,
+			DailyLimitUSD:    dailyLimit,
+			WeeklyLimitUSD:   weeklyLimit,
+			MonthlyLimitUSD:  monthlyLimit,
+			ModelScopes:      g.SupportedModelScopes,
 		}
 	}
 	return m

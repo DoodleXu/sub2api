@@ -44,6 +44,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetName(key.Name).
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
+		SetNillableSubscriptionID(key.SubscriptionID).
 		SetNillableLastUsedAt(key.LastUsedAt).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -74,6 +75,7 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIK
 		Where(apikey.IDEQ(id)).
 		WithUser().
 		WithGroup().
+		WithSubscription().
 		Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
@@ -108,6 +110,7 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 		Where(apikey.KeyEQ(key)).
 		WithUser().
 		WithGroup().
+		WithSubscription().
 		Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
@@ -125,6 +128,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldID,
 			apikey.FieldUserID,
 			apikey.FieldGroupID,
+			apikey.FieldSubscriptionID,
 			apikey.FieldName,
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
@@ -222,6 +226,11 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		builder.SetGroupID(*key.GroupID)
 	} else {
 		builder.ClearGroupID()
+	}
+	if key.SubscriptionID != nil {
+		builder.SetSubscriptionID(*key.SubscriptionID)
+	} else {
+		builder.ClearSubscriptionID()
 	}
 
 	// Expiration time
@@ -332,6 +341,7 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 
 	keysQuery := q.
 		WithGroup().
+		WithSubscription().
 		Offset(params.Offset()).
 		Limit(params.Limit())
 	for _, order := range apiKeyListOrder(params) {
@@ -458,6 +468,7 @@ func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID in
 	n, err := r.client.APIKey.Update().
 		Where(apikey.GroupIDEQ(groupID), apikey.DeletedAtIsNil()).
 		ClearGroupID().
+		ClearSubscriptionID().
 		Save(ctx)
 	return int64(n), err
 }
@@ -468,6 +479,7 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 	n, err := client.APIKey.Update().
 		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
 		SetGroupID(newGroupID).
+		ClearSubscriptionID().
 		Save(ctx)
 	return int64(n), err
 }
@@ -619,35 +631,39 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		return nil
 	}
 	out := &service.APIKey{
-		ID:            m.ID,
-		UserID:        m.UserID,
-		Key:           m.Key,
-		Name:          m.Name,
-		Status:        m.Status,
-		IPWhitelist:   m.IPWhitelist,
-		IPBlacklist:   m.IPBlacklist,
-		LastUsedAt:    m.LastUsedAt,
-		CreatedAt:     m.CreatedAt,
-		UpdatedAt:     m.UpdatedAt,
-		GroupID:       m.GroupID,
-		Quota:         m.Quota,
-		QuotaUsed:     m.QuotaUsed,
-		ExpiresAt:     m.ExpiresAt,
-		RateLimit5h:   m.RateLimit5h,
-		RateLimit1d:   m.RateLimit1d,
-		RateLimit7d:   m.RateLimit7d,
-		Usage5h:       m.Usage5h,
-		Usage1d:       m.Usage1d,
-		Usage7d:       m.Usage7d,
-		Window5hStart: m.Window5hStart,
-		Window1dStart: m.Window1dStart,
-		Window7dStart: m.Window7dStart,
+		ID:             m.ID,
+		UserID:         m.UserID,
+		Key:            m.Key,
+		Name:           m.Name,
+		Status:         m.Status,
+		IPWhitelist:    m.IPWhitelist,
+		IPBlacklist:    m.IPBlacklist,
+		LastUsedAt:     m.LastUsedAt,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
+		GroupID:        m.GroupID,
+		SubscriptionID: m.SubscriptionID,
+		Quota:          m.Quota,
+		QuotaUsed:      m.QuotaUsed,
+		ExpiresAt:      m.ExpiresAt,
+		RateLimit5h:    m.RateLimit5h,
+		RateLimit1d:    m.RateLimit1d,
+		RateLimit7d:    m.RateLimit7d,
+		Usage5h:        m.Usage5h,
+		Usage1d:        m.Usage1d,
+		Usage7d:        m.Usage7d,
+		Window5hStart:  m.Window5hStart,
+		Window1dStart:  m.Window1dStart,
+		Window7dStart:  m.Window7dStart,
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
 	}
 	if m.Edges.Group != nil {
 		out.Group = groupEntityToService(m.Edges.Group)
+	}
+	if m.Edges.Subscription != nil {
+		out.Subscription = userSubscriptionEntityToService(m.Edges.Subscription)
 	}
 	return out
 }

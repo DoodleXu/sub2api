@@ -73,6 +73,18 @@ func TestValidatePlanRequired_WhitespaceValidityUnit(t *testing.T) {
 	require.Contains(t, err.Error(), "validity unit")
 }
 
+func TestValidatePlanRequired_InvalidValidityUnit(t *testing.T) {
+	err := validatePlanRequired("Pro", 1, 9.99, 30, "fortnight", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validity unit")
+}
+
+func TestValidatePlanRequired_TooLongValidity(t *testing.T) {
+	err := validatePlanRequired("Pro", 1, 9.99, MaxValidityDays+1, "days", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "100 years")
+}
+
 func TestValidatePlanRequired_NameValidatedFirst(t *testing.T) {
 	err := validatePlanRequired("", 0, 0, 0, "", nil)
 	require.Error(t, err)
@@ -185,6 +197,18 @@ func TestValidatePlanPatch_EmptyValidityUnit(t *testing.T) {
 func TestValidatePlanPatch_ValidValidityUnit(t *testing.T) {
 	err := validatePlanPatch(UpdatePlanRequest{ValidityUnit: ptrStr("days")})
 	require.NoError(t, err)
+}
+
+func TestValidatePlanPatch_InvalidValidityUnit(t *testing.T) {
+	err := validatePlanPatch(UpdatePlanRequest{ValidityUnit: ptrStr("fortnight")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validity unit")
+}
+
+func TestValidatePlanPatch_TooLongValidity(t *testing.T) {
+	err := validatePlanPatch(UpdatePlanRequest{ValidityDays: ptrInt(101), ValidityUnit: ptrStr("years")})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "100 years")
 }
 
 func TestValidatePlanPatch_AllNil(t *testing.T) {

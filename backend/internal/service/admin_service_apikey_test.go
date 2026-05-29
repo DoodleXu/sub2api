@@ -69,8 +69,12 @@ func (s *userRepoStubForGroupUpdate) UpdateConcurrency(context.Context, int64, i
 	panic("unexpected")
 }
 
-func (s *userRepoStubForGroupUpdate) BatchSetConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
-func (s *userRepoStubForGroupUpdate) BatchAddConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
+func (s *userRepoStubForGroupUpdate) BatchSetConcurrency(context.Context, []int64, int) (int, error) {
+	return 0, nil
+}
+func (s *userRepoStubForGroupUpdate) BatchAddConcurrency(context.Context, []int64, int) (int, error) {
+	return 0, nil
+}
 func (s *userRepoStubForGroupUpdate) ExistsByEmail(context.Context, string) (bool, error) {
 	panic("unexpected")
 }
@@ -266,6 +270,27 @@ func (s *userSubRepoStubForGroupUpdate) GetActiveByUserIDAndGroupID(_ context.Co
 	}
 	clone := *s.getActiveSub
 	return &clone, nil
+}
+
+func (s *userSubRepoStubForGroupUpdate) List(_ context.Context, _ pagination.PaginationParams, userID, groupID *int64, status, _ string, _ string, _ string) ([]UserSubscription, *pagination.PaginationResult, error) {
+	s.called = true
+	if userID != nil {
+		s.calledUserID = *userID
+	}
+	if groupID != nil {
+		s.calledGroupID = *groupID
+	}
+	if status != SubscriptionStatusActive {
+		return []UserSubscription{}, &pagination.PaginationResult{Page: 1, PageSize: 2, Pages: 1}, nil
+	}
+	if s.getActiveErr != nil {
+		return nil, nil, s.getActiveErr
+	}
+	if s.getActiveSub == nil {
+		return []UserSubscription{}, &pagination.PaginationResult{Page: 1, PageSize: 2, Pages: 1}, nil
+	}
+	clone := *s.getActiveSub
+	return []UserSubscription{clone}, &pagination.PaginationResult{Total: 1, Page: 1, PageSize: 2, Pages: 1}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +528,8 @@ func TestAdminService_AdminUpdateAPIKeyGroupID_SubscriptionGroup_AllowsActiveSub
 	require.True(t, userSubRepo.called)
 	require.NotNil(t, got.APIKey.GroupID)
 	require.Equal(t, int64(10), *got.APIKey.GroupID)
+	require.NotNil(t, got.APIKey.SubscriptionID)
+	require.Equal(t, int64(99), *got.APIKey.SubscriptionID)
 	require.False(t, userRepo.addGroupCalled)
 }
 

@@ -359,14 +359,17 @@ func psSliceContains(sl []string, s string) bool {
 const (
 	validityUnitWeek  = "week"
 	validityUnitMonth = "month"
+	validityUnitYear  = "year"
 )
 
 func psComputeValidityDays(days int, unit string) int {
-	switch unit {
-	case validityUnitWeek:
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case validityUnitWeek, "weeks":
 		return days * 7
-	case validityUnitMonth:
+	case validityUnitMonth, "months":
 		return days * 30
+	case validityUnitYear, "years":
+		return days * 365
 	default:
 		return days
 	}

@@ -56,8 +56,10 @@ const (
 
 // Group subscription type constants
 const (
-	SubscriptionTypeStandard     = "standard"     // 标准计费模式（按余额扣费）
-	SubscriptionTypeSubscription = "subscription" // 订阅模式（按限额控制）
+	SubscriptionTypeStandard           = "standard"            // 标准计费模式（按余额扣费）
+	SubscriptionTypeSubscription       = "subscription"        // 订阅模式（月配额，旧值保留兼容）
+	SubscriptionTypeSubscriptionWeekly = "subscription_weekly" // 订阅模式（周配额）
+	SubscriptionTypeSubscriptionDaily  = "subscription_daily"  // 订阅模式（日配额）
 )
 
 // Subscription status constants

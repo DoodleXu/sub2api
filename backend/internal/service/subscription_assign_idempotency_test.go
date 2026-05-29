@@ -174,6 +174,15 @@ func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, u
 	return &cp, nil
 }
 
+func (s *subscriptionUserSubRepoStub) GetActiveByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+	sub := s.byUserGroup[s.key(userID, groupID)]
+	if sub == nil || sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
+		return nil, ErrSubscriptionNotFound
+	}
+	cp := *sub
+	return &cp, nil
+}
+
 func (s *subscriptionUserSubRepoStub) Create(_ context.Context, sub *UserSubscription) error {
 	if sub == nil {
 		return nil
@@ -242,6 +251,36 @@ func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(10), sub.ID)
 	require.Equal(t, 0, subRepo.createCalls, "reuse should not create new subscription")
+}
+
+func TestAssignIndependentSubscriptionCreatesSeparateRecordForSameGroup(t *testing.T) {
+	start := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	subRepo.seed(&UserSubscription{
+		ID:        10,
+		UserID:    1001,
+		GroupID:   1,
+		StartsAt:  start,
+		ExpiresAt: start.AddDate(0, 0, 30),
+		Notes:     "first purchase",
+	})
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	sub, err := svc.AssignIndependentSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       1001,
+		GroupID:      1,
+		ValidityDays: 7,
+		Notes:        "payment order 99",
+	})
+
+	require.NoError(t, err)
+	require.NotEqual(t, int64(10), sub.ID)
+	require.Equal(t, 1, subRepo.createCalls, "same subscription payment should create a new independent record")
+	require.Equal(t, start.AddDate(0, 0, 30), subRepo.byID[10].ExpiresAt, "existing subscription must not be extended")
+	require.Equal(t, "payment order 99", sub.Notes)
 }
 
 func TestAssignSubscriptionConflictWhenSemanticsMismatch(t *testing.T) {
@@ -342,6 +381,12 @@ func TestNormalizeAssignValidityDays(t *testing.T) {
 	require.Equal(t, 30, normalizeAssignValidityDays(-5))
 	require.Equal(t, MaxValidityDays, normalizeAssignValidityDays(MaxValidityDays+100))
 	require.Equal(t, 7, normalizeAssignValidityDays(7))
+}
+
+func TestSubscriptionNotesContainPaymentOrderRequiresExactLine(t *testing.T) {
+	require.True(t, subscriptionNotesContainPaymentOrder("manual\npayment order 1", 1))
+	require.False(t, subscriptionNotesContainPaymentOrder("payment order 10", 1))
+	require.False(t, subscriptionNotesContainPaymentOrder("prefix payment order 1 suffix", 1))
 }
 
 func TestDetectAssignSemanticConflictCases(t *testing.T) {

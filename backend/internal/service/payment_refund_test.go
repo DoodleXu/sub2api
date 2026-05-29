@@ -238,3 +238,79 @@ func TestBuildRefundPreviewCapsPartiallyRefundedSubscription(t *testing.T) {
 	require.Equal(t, 20.0, preview.SuggestedRefundAmount)
 	require.Equal(t, 10, preview.SuggestedSubscriptionDaysToDeduct)
 }
+
+func TestBuildRefundPreviewUsesSubscriptionCreatedByOrder(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("refund-order-sub@example.com").
+		SetPasswordHash("hash").
+		SetUsername("refund-order-sub-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	group, err := client.Group.Create().
+		SetName("refund-order-sub-group").
+		SetStatus(StatusActive).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		Save(ctx)
+	require.NoError(t, err)
+
+	days := 30
+	completedAt := time.Now().UTC()
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(100).
+		SetPayAmount(100).
+		SetFeeRate(0).
+		SetRechargeCode("REFUND-ORDER-SUB").
+		SetOutTradeNo("sub2_refund_order_sub").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade-refund-order-sub").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetStatus(OrderStatusCompleted).
+		SetSubscriptionGroupID(group.ID).
+		SetSubscriptionDays(days).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(completedAt).
+		SetCompletedAt(completedAt).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	_, err = client.UserSubscription.Create().
+		SetUserID(user.ID).
+		SetGroupID(group.ID).
+		SetStartsAt(now.Add(-24 * time.Hour)).
+		SetExpiresAt(now.Add(5*24*time.Hour - time.Minute)).
+		SetStatus(SubscriptionStatusActive).
+		SetAssignedAt(now).
+		SetNotes("payment order " + strconv.FormatInt(order.ID, 10)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.UserSubscription.Create().
+		SetUserID(user.ID).
+		SetGroupID(group.ID).
+		SetStartsAt(now).
+		SetExpiresAt(now.Add(20 * 24 * time.Hour)).
+		SetStatus(SubscriptionStatusActive).
+		SetAssignedAt(now).
+		SetNotes("payment order 999999").
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{
+		subscriptionSvc: &SubscriptionService{entClient: client},
+	}
+	preview := svc.BuildRefundPreview(ctx, order)
+
+	require.Equal(t, 5, preview.SubscriptionRemainingDays)
+	require.Equal(t, 5, preview.SuggestedSubscriptionDaysToDeduct)
+	require.Equal(t, 16.66, preview.SuggestedRefundAmount)
+}

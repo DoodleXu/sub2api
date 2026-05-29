@@ -5,11 +5,13 @@ package service
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -159,6 +161,10 @@ func (r *paymentOrderLifecycleRedeemRepo) ListByUserPaginated(context.Context, i
 }
 
 func (r *paymentOrderLifecycleRedeemRepo) SumPositiveBalanceByUser(context.Context, int64) (float64, error) {
+	panic("unexpected call")
+}
+
+func (r *paymentOrderLifecycleRedeemRepo) SumPositiveCheckinBalanceByUser(context.Context, int64) (float64, error) {
 	panic("unexpected call")
 }
 
@@ -451,6 +457,80 @@ func TestVerifyOrderByOutTradeNoRejectsPaidQueryWithZeroAmount(t *testing.T) {
 
 	require.Equal(t, 0.0, userRepo.getByIDUser.Balance)
 	require.Empty(t, redeemRepo.useCalls)
+}
+
+func TestExecuteSubscriptionFulfillmentCreatesIndependentSubscriptionForRepeatPurchase(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("repeat-sub@example.com").
+		SetPasswordHash("hash").
+		SetUsername("repeat-sub-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	groupID := int64(77)
+	days := 7
+	paidAt := time.Now().UTC()
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(28).
+		SetPayAmount(28).
+		SetFeeRate(0).
+		SetRechargeCode("REPEAT-SUB-INDEPENDENT").
+		SetOutTradeNo("sub2_repeat_sub_independent").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade-repeat-sub").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetStatus(OrderStatusPaid).
+		SetSubscriptionGroupID(groupID).
+		SetSubscriptionDays(days).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetPaidAt(paidAt).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: groupID, SubscriptionType: SubscriptionTypeSubscription, Status: payment.EntityStatusActive},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	existingExpiresAt := time.Now().Add(30 * 24 * time.Hour)
+	subRepo.seed(&UserSubscription{
+		ID:        10,
+		UserID:    user.ID,
+		GroupID:   groupID,
+		StartsAt:  time.Now().Add(-time.Hour),
+		ExpiresAt: existingExpiresAt,
+		Status:    SubscriptionStatusActive,
+		Notes:     "first purchase",
+	})
+
+	subscriptionSvc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	svc := &PaymentService{
+		entClient:       client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: subscriptionSvc,
+	}
+
+	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+	require.NoError(t, err)
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Equal(t, 1, subRepo.createCalls)
+	require.Equal(t, existingExpiresAt, subRepo.byID[10].ExpiresAt, "repeat purchase must not extend the existing subscription")
+
+	assignedCount, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("SUBSCRIPTION_ASSIGNED")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, assignedCount)
 }
 
 func TestVerifyOrderByOutTradeNoDoesNotCancelUnpaidUpstreamOrder(t *testing.T) {

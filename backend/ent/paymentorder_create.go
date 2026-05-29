@@ -225,6 +225,20 @@ func (_c *PaymentOrderCreate) SetNillableUpgradeFromSubscriptionID(v *int64) *Pa
 	return _c
 }
 
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (_c *PaymentOrderCreate) SetFulfilledSubscriptionID(v int64) *PaymentOrderCreate {
+	_c.mutation.SetFulfilledSubscriptionID(v)
+	return _c
+}
+
+// SetNillableFulfilledSubscriptionID sets the "fulfilled_subscription_id" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableFulfilledSubscriptionID(v *int64) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetFulfilledSubscriptionID(*v)
+	}
+	return _c
+}
+
 // SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
 func (_c *PaymentOrderCreate) SetUpgradeCreditAmount(v float64) *PaymentOrderCreate {
 	_c.mutation.SetUpgradeCreditAmount(v)
@@ -822,6 +836,10 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 		_spec.SetField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
 		_node.UpgradeFromSubscriptionID = &value
 	}
+	if value, ok := _c.mutation.FulfilledSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
+		_node.FulfilledSubscriptionID = &value
+	}
 	if value, ok := _c.mutation.UpgradeCreditAmount(); ok {
 		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
 		_node.UpgradeCreditAmount = value
@@ -1298,6 +1316,30 @@ func (u *PaymentOrderUpsert) AddUpgradeFromSubscriptionID(v int64) *PaymentOrder
 // ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
 func (u *PaymentOrderUpsert) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsert {
 	u.SetNull(paymentorder.FieldUpgradeFromSubscriptionID)
+	return u
+}
+
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsert) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldFulfilledSubscriptionID, v)
+	return u
+}
+
+// UpdateFulfilledSubscriptionID sets the "fulfilled_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateFulfilledSubscriptionID() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldFulfilledSubscriptionID)
+	return u
+}
+
+// AddFulfilledSubscriptionID adds v to the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsert) AddFulfilledSubscriptionID(v int64) *PaymentOrderUpsert {
+	u.Add(paymentorder.FieldFulfilledSubscriptionID, v)
+	return u
+}
+
+// ClearFulfilledSubscriptionID clears the value of the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsert) ClearFulfilledSubscriptionID() *PaymentOrderUpsert {
+	u.SetNull(paymentorder.FieldFulfilledSubscriptionID)
 	return u
 }
 
@@ -2080,6 +2122,34 @@ func (u *PaymentOrderUpsertOne) UpdateUpgradeFromSubscriptionID() *PaymentOrderU
 func (u *PaymentOrderUpsertOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertOne) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetFulfilledSubscriptionID(v)
+	})
+}
+
+// AddFulfilledSubscriptionID adds v to the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertOne) AddFulfilledSubscriptionID(v int64) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddFulfilledSubscriptionID(v)
+	})
+}
+
+// UpdateFulfilledSubscriptionID sets the "fulfilled_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateFulfilledSubscriptionID() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateFulfilledSubscriptionID()
+	})
+}
+
+// ClearFulfilledSubscriptionID clears the value of the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertOne) ClearFulfilledSubscriptionID() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearFulfilledSubscriptionID()
 	})
 }
 
@@ -3089,6 +3159,34 @@ func (u *PaymentOrderUpsertBulk) UpdateUpgradeFromSubscriptionID() *PaymentOrder
 func (u *PaymentOrderUpsertBulk) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetFulfilledSubscriptionID(v)
+	})
+}
+
+// AddFulfilledSubscriptionID adds v to the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) AddFulfilledSubscriptionID(v int64) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.AddFulfilledSubscriptionID(v)
+	})
+}
+
+// UpdateFulfilledSubscriptionID sets the "fulfilled_subscription_id" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateFulfilledSubscriptionID() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateFulfilledSubscriptionID()
+	})
+}
+
+// ClearFulfilledSubscriptionID clears the value of the "fulfilled_subscription_id" field.
+func (u *PaymentOrderUpsertBulk) ClearFulfilledSubscriptionID() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearFulfilledSubscriptionID()
 	})
 }
 

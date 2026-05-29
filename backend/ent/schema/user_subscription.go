@@ -98,6 +98,7 @@ func (UserSubscription) Edges() []ent.Edge {
 			Ref("assigned_subscriptions").
 			Field("assigned_by").
 			Unique(),
+		edge.To("api_keys", APIKey.Type),
 		edge.To("usage_logs", UsageLog.Type),
 	}
 }
@@ -111,8 +112,7 @@ func (UserSubscription) Indexes() []ent.Index {
 		// 活跃订阅查询复合索引（线上由 SQL 迁移创建部分索引，schema 仅用于模型可读性对齐）
 		index.Fields("user_id", "status", "expires_at"),
 		index.Fields("assigned_by"),
-		// 唯一约束通过部分索引实现（WHERE deleted_at IS NULL），支持软删除后重新订阅
-		// 见迁移文件 016_soft_delete_partial_unique_indexes.sql
+		// 同一用户可拥有多条同分组独立订阅；该索引用于用户+分组查询。
 		index.Fields("user_id", "group_id"),
 		index.Fields("deleted_at"),
 	}

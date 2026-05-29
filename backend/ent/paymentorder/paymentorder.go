@@ -52,6 +52,8 @@ const (
 	FieldSubscriptionDays = "subscription_days"
 	// FieldUpgradeFromSubscriptionID holds the string denoting the upgrade_from_subscription_id field in the database.
 	FieldUpgradeFromSubscriptionID = "upgrade_from_subscription_id"
+	// FieldFulfilledSubscriptionID holds the string denoting the fulfilled_subscription_id field in the database.
+	FieldFulfilledSubscriptionID = "fulfilled_subscription_id"
 	// FieldUpgradeCreditAmount holds the string denoting the upgrade_credit_amount field in the database.
 	FieldUpgradeCreditAmount = "upgrade_credit_amount"
 	// FieldUpgradeCreditDays holds the string denoting the upgrade_credit_days field in the database.
@@ -133,6 +135,7 @@ var Columns = []string{
 	FieldSubscriptionGroupID,
 	FieldSubscriptionDays,
 	FieldUpgradeFromSubscriptionID,
+	FieldFulfilledSubscriptionID,
 	FieldUpgradeCreditAmount,
 	FieldUpgradeCreditDays,
 	FieldProviderInstanceID,
@@ -318,6 +321,11 @@ func BySubscriptionDays(opts ...sql.OrderTermOption) OrderOption {
 // ByUpgradeFromSubscriptionID orders the results by the upgrade_from_subscription_id field.
 func ByUpgradeFromSubscriptionID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpgradeFromSubscriptionID, opts...).ToFunc()
+}
+
+// ByFulfilledSubscriptionID orders the results by the fulfilled_subscription_id field.
+func ByFulfilledSubscriptionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFulfilledSubscriptionID, opts...).ToFunc()
 }
 
 // ByUpgradeCreditAmount orders the results by the upgrade_credit_amount field.

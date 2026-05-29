@@ -392,6 +392,33 @@ func (_u *PaymentOrderUpdate) ClearUpgradeFromSubscriptionID() *PaymentOrderUpda
 	return _u
 }
 
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdate) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpdate {
+	_u.mutation.ResetFulfilledSubscriptionID()
+	_u.mutation.SetFulfilledSubscriptionID(v)
+	return _u
+}
+
+// SetNillableFulfilledSubscriptionID sets the "fulfilled_subscription_id" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableFulfilledSubscriptionID(v *int64) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetFulfilledSubscriptionID(*v)
+	}
+	return _u
+}
+
+// AddFulfilledSubscriptionID adds value to the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdate) AddFulfilledSubscriptionID(v int64) *PaymentOrderUpdate {
+	_u.mutation.AddFulfilledSubscriptionID(v)
+	return _u
+}
+
+// ClearFulfilledSubscriptionID clears the value of the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdate) ClearFulfilledSubscriptionID() *PaymentOrderUpdate {
+	_u.mutation.ClearFulfilledSubscriptionID()
+	return _u
+}
+
 // SetUpgradeCreditAmount sets the "upgrade_credit_amount" field.
 func (_u *PaymentOrderUpdate) SetUpgradeCreditAmount(v float64) *PaymentOrderUpdate {
 	_u.mutation.ResetUpgradeCreditAmount()
@@ -1025,6 +1052,15 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
 		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
 	}
+	if value, ok := _u.mutation.FulfilledSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedFulfilledSubscriptionID(); ok {
+		_spec.AddField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
+	}
+	if _u.mutation.FulfilledSubscriptionIDCleared() {
+		_spec.ClearField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.UpgradeCreditAmount(); ok {
 		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)
 	}
@@ -1551,6 +1587,33 @@ func (_u *PaymentOrderUpdateOne) AddUpgradeFromSubscriptionID(v int64) *PaymentO
 // ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
 func (_u *PaymentOrderUpdateOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpdateOne {
 	_u.mutation.ClearUpgradeFromSubscriptionID()
+	return _u
+}
+
+// SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpdateOne {
+	_u.mutation.ResetFulfilledSubscriptionID()
+	_u.mutation.SetFulfilledSubscriptionID(v)
+	return _u
+}
+
+// SetNillableFulfilledSubscriptionID sets the "fulfilled_subscription_id" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableFulfilledSubscriptionID(v *int64) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetFulfilledSubscriptionID(*v)
+	}
+	return _u
+}
+
+// AddFulfilledSubscriptionID adds value to the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) AddFulfilledSubscriptionID(v int64) *PaymentOrderUpdateOne {
+	_u.mutation.AddFulfilledSubscriptionID(v)
+	return _u
+}
+
+// ClearFulfilledSubscriptionID clears the value of the "fulfilled_subscription_id" field.
+func (_u *PaymentOrderUpdateOne) ClearFulfilledSubscriptionID() *PaymentOrderUpdateOne {
+	_u.mutation.ClearFulfilledSubscriptionID()
 	return _u
 }
 
@@ -2216,6 +2279,15 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
 		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.FulfilledSubscriptionID(); ok {
+		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedFulfilledSubscriptionID(); ok {
+		_spec.AddField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
+	}
+	if _u.mutation.FulfilledSubscriptionIDCleared() {
+		_spec.ClearField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.UpgradeCreditAmount(); ok {
 		_spec.SetField(paymentorder.FieldUpgradeCreditAmount, field.TypeFloat64, value)

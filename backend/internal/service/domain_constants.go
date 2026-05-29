@@ -80,7 +80,10 @@ const (
 	RedeemTypeSubscription     = domain.RedeemTypeSubscription
 	RedeemTypeInvitation       = domain.RedeemTypeInvitation
 	RedeemTypeAffiliateBalance = "affiliate_balance"
+	RedeemTypeCheckinBalance   = "checkin_balance"
 )
+
+const RedeemNotesDailyCheckinReward = "签到奖励"
 
 // PromoCode status constants
 const (
@@ -96,8 +99,10 @@ const (
 
 // Group subscription type constants
 const (
-	SubscriptionTypeStandard     = domain.SubscriptionTypeStandard     // 标准计费模式（按余额扣费）
-	SubscriptionTypeSubscription = domain.SubscriptionTypeSubscription // 订阅模式（按限额控制）
+	SubscriptionTypeStandard           = domain.SubscriptionTypeStandard           // 标准计费模式（按余额扣费）
+	SubscriptionTypeSubscription       = domain.SubscriptionTypeSubscription       // 订阅模式（月配额，旧值保留兼容）
+	SubscriptionTypeSubscriptionWeekly = domain.SubscriptionTypeSubscriptionWeekly // 订阅模式（周配额）
+	SubscriptionTypeSubscriptionDaily  = domain.SubscriptionTypeSubscriptionDaily  // 订阅模式（日配额）
 )
 
 // Subscription status constants
@@ -368,6 +373,10 @@ const (
 	// SettingKeyWebConsoleDefaultEndpoint stores the admin-selected preferred endpoint URL
 	// from api_base_url/custom_endpoints. Users can still choose another public endpoint.
 	SettingKeyWebConsoleDefaultEndpoint = "web_console_default_endpoint"
+
+	// Daily check-in reward settings.
+	SettingKeyDailyCheckinRewardMinUSD = "daily_checkin_reward_min_usd"
+	SettingKeyDailyCheckinRewardMaxUSD = "daily_checkin_reward_max_usd"
 
 	// =========================
 	// Overload Cooldown (529)

@@ -43,8 +43,8 @@ type AdminService interface {
 	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
 	// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
 	// codeType is optional - pass empty string to return all types.
-	// Also returns totalRecharged (sum of all positive balance top-ups).
-	GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, error)
+	// Also returns totalRecharged and totalCheckinReward summaries.
+	GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, float64, error)
 	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
 
 	// Group management
@@ -1030,18 +1030,18 @@ func (s *adminServiceImpl) GetUserUsageStats(ctx context.Context, userID int64, 
 }
 
 // GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
-func (s *adminServiceImpl) GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, error) {
+func (s *adminServiceImpl) GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, float64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize}
 	if codeType == RedeemTypeAffiliateBalance {
 		codes, total, err := s.listAffiliateBalanceHistory(ctx, userID, params)
 		if err != nil {
-			return nil, 0, 0, err
+			return nil, 0, 0, 0, err
 		}
-		totalRecharged, err := s.redeemCodeRepo.SumPositiveBalanceByUser(ctx, userID)
+		totalRecharged, totalCheckinReward, err := s.getUserBalanceHistoryTotals(ctx, userID)
 		if err != nil {
-			return nil, 0, 0, err
+			return nil, 0, 0, 0, err
 		}
-		return codes, total, totalRecharged, nil
+		return codes, total, totalRecharged, totalCheckinReward, nil
 	}
 
 	if codeType == "" {
@@ -1050,18 +1050,18 @@ func (s *adminServiceImpl) GetUserBalanceHistory(ctx context.Context, userID int
 
 	codes, result, err := s.redeemCodeRepo.ListByUserPaginated(ctx, userID, params, codeType)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	total := result.Total
-	// Aggregate total recharged amount (only once, regardless of type filter)
-	totalRecharged, err := s.redeemCodeRepo.SumPositiveBalanceByUser(ctx, userID)
+	// Aggregate summary amounts once, regardless of type filter.
+	totalRecharged, totalCheckinReward, err := s.getUserBalanceHistoryTotals(ctx, userID)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
-	return codes, total, totalRecharged, nil
+	return codes, total, totalRecharged, totalCheckinReward, nil
 }
 
-func (s *adminServiceImpl) getAllUserBalanceHistory(ctx context.Context, userID int64, params pagination.PaginationParams) ([]RedeemCode, int64, float64, error) {
+func (s *adminServiceImpl) getAllUserBalanceHistory(ctx context.Context, userID int64, params pagination.PaginationParams) ([]RedeemCode, int64, float64, float64, error) {
 	needed := params.Offset() + params.Limit()
 	if needed < params.Limit() {
 		needed = params.Limit()
@@ -1069,19 +1069,31 @@ func (s *adminServiceImpl) getAllUserBalanceHistory(ctx context.Context, userID 
 
 	redeemCodes, redeemTotal, err := s.listRedeemBalanceHistoryForMerge(ctx, userID, needed)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	affiliateCodes, affiliateTotal, err := s.listAffiliateBalanceHistoryForMerge(ctx, userID, needed)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	codes := mergeBalanceHistoryCodes(redeemCodes, affiliateCodes, params)
 
+	totalRecharged, totalCheckinReward, err := s.getUserBalanceHistoryTotals(ctx, userID)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	return codes, redeemTotal + affiliateTotal, totalRecharged, totalCheckinReward, nil
+}
+
+func (s *adminServiceImpl) getUserBalanceHistoryTotals(ctx context.Context, userID int64) (float64, float64, error) {
 	totalRecharged, err := s.redeemCodeRepo.SumPositiveBalanceByUser(ctx, userID)
 	if err != nil {
-		return nil, 0, 0, err
+		return 0, 0, err
 	}
-	return codes, redeemTotal + affiliateTotal, totalRecharged, nil
+	totalCheckinReward, err := s.redeemCodeRepo.SumPositiveCheckinBalanceByUser(ctx, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return totalRecharged, totalCheckinReward, nil
 }
 
 func (s *adminServiceImpl) listRedeemBalanceHistoryForMerge(ctx context.Context, userID int64, needed int) ([]RedeemCode, int64, error) {
@@ -1686,6 +1698,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	dailyLimit := normalizeLimit(input.DailyLimitUSD)
 	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
 	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
+	dailyLimit, weeklyLimit, monthlyLimit = applySubscriptionLimitPolicy(subscriptionType, dailyLimit, weeklyLimit, monthlyLimit)
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
@@ -1830,6 +1843,19 @@ func normalizeLimit(limit *float64) *float64 {
 	return limit
 }
 
+func applySubscriptionLimitPolicy(subscriptionType string, dailyLimit, weeklyLimit, monthlyLimit *float64) (*float64, *float64, *float64) {
+	if !AllowsDailyLimit(subscriptionType) {
+		dailyLimit = nil
+	}
+	if !AllowsWeeklyLimit(subscriptionType) {
+		weeklyLimit = nil
+	}
+	if !AllowsMonthlyLimit(subscriptionType) {
+		monthlyLimit = nil
+	}
+	return dailyLimit, weeklyLimit, monthlyLimit
+}
+
 // normalizePrice 将负数转换为 nil（表示使用默认价格），0 保留（表示免费）
 func normalizePrice(price *float64) *float64 {
 	if price == nil || *price < 0 {
@@ -1884,7 +1910,7 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 	if platform != PlatformAnthropic && platform != PlatformAntigravity {
 		return fmt.Errorf("invalid request fallback only supported for anthropic or antigravity groups")
 	}
-	if subscriptionType == SubscriptionTypeSubscription {
+	if IsSubscriptionTypeValue(subscriptionType) {
 		return fmt.Errorf("subscription groups cannot set invalid request fallback")
 	}
 	if currentGroupID > 0 && currentGroupID == fallbackGroupID {
@@ -1898,7 +1924,7 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 	if fallbackGroup.Platform != PlatformAnthropic {
 		return fmt.Errorf("fallback group must be anthropic platform")
 	}
-	if fallbackGroup.SubscriptionType == SubscriptionTypeSubscription {
+	if fallbackGroup.IsSubscriptionType() {
 		return fmt.Errorf("fallback group cannot be subscription type")
 	}
 	if fallbackGroup.FallbackGroupIDOnInvalidRequest != nil {
@@ -1944,6 +1970,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
 	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
 	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD = applySubscriptionLimitPolicy(group.SubscriptionType, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD)
 	// 图片生成计费配置：负数表示清除（使用默认价格）
 	if input.AllowImageGeneration != nil {
 		group.AllowImageGeneration = *input.AllowImageGeneration
@@ -2248,6 +2275,7 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 	if *groupID == 0 {
 		// 0 表示解绑分组（不修改 user_allowed_groups，避免影响用户其他 Key）
 		apiKey.GroupID = nil
+		apiKey.SubscriptionID = nil
 		apiKey.Group = nil
 	} else {
 		// 验证目标分组存在且状态为 active
@@ -2258,21 +2286,26 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		if group.Status != StatusActive {
 			return nil, infraerrors.BadRequest("GROUP_NOT_ACTIVE", "target group is not active")
 		}
+		var subscriptionID *int64
 		// 订阅类型分组：用户须持有该分组的有效订阅才可绑定
 		if group.IsSubscriptionType() {
 			if s.userSubRepo == nil {
 				return nil, infraerrors.InternalServer("SUBSCRIPTION_REPOSITORY_UNAVAILABLE", "subscription repository is not configured")
 			}
-			if _, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, apiKey.UserID, *groupID); err != nil {
+			sub, err := resolveSingleActiveSubscriptionForGroup(ctx, s.userSubRepo, apiKey.UserID, *groupID)
+			if err != nil {
 				if errors.Is(err, ErrSubscriptionNotFound) {
 					return nil, infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "user does not have an active subscription for this group")
 				}
 				return nil, err
 			}
+			sid := sub.ID
+			subscriptionID = &sid
 		}
 
 		gid := *groupID
 		apiKey.GroupID = &gid
+		apiKey.SubscriptionID = subscriptionID
 		apiKey.Group = group
 
 		// 专属标准分组：使用事务保证「添加分组权限」与「更新 API Key」的原子性
