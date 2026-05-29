@@ -882,6 +882,8 @@ func TestAPIContracts(t *testing.T) {
 					"enable_fingerprint_unification": true,
 					"enable_metadata_passthrough": false,
 					"web_search_emulation_enabled": false,
+					"web_console_enabled": false,
+					"web_console_default_endpoint": "",
 					"payment_visible_method_alipay_source": "easypay_alipay",
 					"payment_visible_method_wxpay_source": "official_wxpay",
 					"payment_visible_method_alipay_enabled": true,
@@ -1212,7 +1214,9 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_dingtalk_subscriptions": [],
 					"auth_source_default_dingtalk_grant_on_signup": false,
 					"auth_source_default_dingtalk_grant_on_first_bind": false,
-					"force_email_on_third_party_signup": false
+					"force_email_on_third_party_signup": false,
+					"web_console_enabled": false,
+					"web_console_default_endpoint": ""
 				}
 			}`,
 		},
