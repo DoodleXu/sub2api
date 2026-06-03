@@ -186,6 +186,7 @@ func TestClaudeTokenRefresher_CanRefresh(t *testing.T) {
 		name     string
 		platform string
 		accType  string
+		archived bool
 		want     bool
 	}{
 		{
@@ -212,13 +213,26 @@ func TestClaudeTokenRefresher_CanRefresh(t *testing.T) {
 			accType:  AccountTypeOAuth,
 			want:     false,
 		},
+		{
+			name:     "archived anthropic oauth - cannot refresh",
+			platform: PlatformAnthropic,
+			accType:  AccountTypeOAuth,
+			archived: true,
+			want:     false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var archivedAt *time.Time
+			if tt.archived {
+				now := time.Now()
+				archivedAt = &now
+			}
 			account := &Account{
-				Platform: tt.platform,
-				Type:     tt.accType,
+				Platform:   tt.platform,
+				Type:       tt.accType,
+				ArchivedAt: archivedAt,
 			}
 
 			got := refresher.CanRefresh(account)
@@ -234,6 +248,7 @@ func TestOpenAITokenRefresher_CanRefresh(t *testing.T) {
 		name     string
 		platform string
 		accType  string
+		archived bool
 		want     bool
 	}{
 		{
@@ -248,15 +263,54 @@ func TestOpenAITokenRefresher_CanRefresh(t *testing.T) {
 			accType:  AccountTypeAPIKey,
 			want:     false,
 		},
+		{
+			name:     "archived openai oauth - cannot refresh",
+			platform: PlatformOpenAI,
+			accType:  AccountTypeOAuth,
+			archived: true,
+			want:     false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var archivedAt *time.Time
+			if tt.archived {
+				now := time.Now()
+				archivedAt = &now
+			}
 			account := &Account{
-				Platform: tt.platform,
-				Type:     tt.accType,
+				Platform:   tt.platform,
+				Type:       tt.accType,
+				ArchivedAt: archivedAt,
 			}
 			require.Equal(t, tt.want, refresher.CanRefresh(account))
+		})
+	}
+}
+
+func TestOAuthTokenRefreshers_CanRefresh_ArchivedAccounts(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		refresher TokenRefresher
+		account   *Account
+	}{
+		{
+			name:      "gemini oauth archived",
+			refresher: &GeminiTokenRefresher{},
+			account:   &Account{Platform: PlatformGemini, Type: AccountTypeOAuth, ArchivedAt: &now},
+		},
+		{
+			name:      "antigravity oauth archived",
+			refresher: &AntigravityTokenRefresher{},
+			account:   &Account{Platform: PlatformAntigravity, Type: AccountTypeOAuth, ArchivedAt: &now},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.False(t, tt.refresher.CanRefresh(tt.account))
 		})
 	}
 }

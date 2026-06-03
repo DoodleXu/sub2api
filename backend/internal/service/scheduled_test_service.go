@@ -12,23 +12,29 @@ var scheduledTestCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom 
 
 // ScheduledTestService provides CRUD operations for scheduled test plans and results.
 type ScheduledTestService struct {
-	planRepo   ScheduledTestPlanRepository
-	resultRepo ScheduledTestResultRepository
+	planRepo    ScheduledTestPlanRepository
+	resultRepo  ScheduledTestResultRepository
+	accountRepo AccountRepository
 }
 
 // NewScheduledTestService creates a new ScheduledTestService.
 func NewScheduledTestService(
 	planRepo ScheduledTestPlanRepository,
 	resultRepo ScheduledTestResultRepository,
+	accountRepo AccountRepository,
 ) *ScheduledTestService {
 	return &ScheduledTestService{
-		planRepo:   planRepo,
-		resultRepo: resultRepo,
+		planRepo:    planRepo,
+		resultRepo:  resultRepo,
+		accountRepo: accountRepo,
 	}
 }
 
 // CreatePlan validates the cron expression, computes next_run_at, and persists the plan.
 func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if err := s.ensureAccountCanRunScheduledTest(ctx, plan.AccountID); err != nil {
+		return nil, err
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -40,6 +46,20 @@ func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTe
 	}
 
 	return s.planRepo.Create(ctx, plan)
+}
+
+func (s *ScheduledTestService) ensureAccountCanRunScheduledTest(ctx context.Context, accountID int64) error {
+	if s.accountRepo == nil {
+		return nil
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account.IsArchived() {
+		return fmt.Errorf("account is archived")
+	}
+	return nil
 }
 
 // GetPlan retrieves a plan by ID.
@@ -54,6 +74,11 @@ func (s *ScheduledTestService) ListPlansByAccount(ctx context.Context, accountID
 
 // UpdatePlan validates cron and updates the plan.
 func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if plan.Enabled {
+		if err := s.ensureAccountCanRunScheduledTest(ctx, plan.AccountID); err != nil {
+			return nil, err
+		}
+	}
 	nextRun, err := computeNextRun(plan.CronExpression, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)

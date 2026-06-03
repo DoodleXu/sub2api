@@ -126,6 +126,27 @@ func TestRefreshIfNeeded_Success(t *testing.T) {
 	require.Equal(t, 1, executor.refreshCalls)
 }
 
+func TestRefreshIfNeeded_ArchivedAccountSkipped(t *testing.T) {
+	now := time.Now()
+	account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeOAuth, ArchivedAt: &now}
+	repo := &refreshAPIAccountRepo{account: account}
+	cache := &refreshAPICacheStub{lockResult: true}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: true,
+		credentials:  map[string]any{"access_token": "new-token"},
+	}
+
+	api := NewOAuthRefreshAPI(repo, cache)
+	result, err := api.RefreshIfNeeded(context.Background(), account, executor, 3*time.Minute)
+
+	require.NoError(t, err)
+	require.False(t, result.Refreshed)
+	require.Same(t, account, result.Account)
+	require.Equal(t, 0, repo.updateCalls)
+	require.Equal(t, 0, executor.refreshCalls)
+	require.Equal(t, 1, cache.releaseCalls)
+}
+
 func TestRefreshIfNeeded_UpdateCredentialsPreservesRateLimitState(t *testing.T) {
 	resetAt := time.Now().Add(45 * time.Minute)
 	account := &Account{

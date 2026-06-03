@@ -178,6 +178,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	if account.IsArchived() {
+		return s.sendErrorAndEnd(c, "Account is archived")
+	}
 
 	// Route to platform-specific test method
 	if account.IsOpenAI() {

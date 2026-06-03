@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 )
 
 func TestBuildSelectedSet(t *testing.T) {
@@ -108,5 +109,37 @@ func TestShouldCreateAccount(t *testing.T) {
 					tt.crsID, tt.selectedSet, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAppendArchivedCRSSkip(t *testing.T) {
+	result := &SyncFromCRSResult{}
+	appendArchivedCRSSkip(result, SyncFromCRSItemResult{
+		CRSAccountID: "crs-1",
+		Kind:         "oauth",
+		Name:         "archived",
+	})
+
+	if result.Skipped != 1 {
+		t.Fatalf("Skipped = %d, want 1", result.Skipped)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("Items len = %d, want 1", len(result.Items))
+	}
+	if result.Items[0].Action != "skipped" || result.Items[0].Error != "archived account" {
+		t.Fatalf("unexpected item: %+v", result.Items[0])
+	}
+}
+
+func TestCRSSyncRefreshOAuthTokenSkipsArchived(t *testing.T) {
+	archivedAt := time.Now()
+	svc := &CRSSyncService{}
+	got := svc.refreshOAuthToken(nil, &Account{
+		Type:       AccountTypeOAuth,
+		Platform:   PlatformOpenAI,
+		ArchivedAt: &archivedAt,
+	})
+	if got != nil {
+		t.Fatalf("refreshOAuthToken returned %v, want nil", got)
 	}
 }

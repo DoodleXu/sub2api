@@ -361,6 +361,22 @@ func TestClaudeTokenProvider_NilAccount(t *testing.T) {
 	require.Empty(t, token)
 }
 
+func TestClaudeTokenProvider_ArchivedAccount(t *testing.T) {
+	provider := NewClaudeTokenProvider(nil, nil, nil)
+	now := time.Now()
+	account := &Account{
+		ID:         104,
+		Platform:   PlatformAnthropic,
+		Type:       AccountTypeOAuth,
+		ArchivedAt: &now,
+	}
+
+	token, err := provider.GetAccessToken(context.Background(), account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account is archived")
+	require.Empty(t, token)
+}
+
 func TestClaudeTokenProvider_WrongPlatform(t *testing.T) {
 	provider := NewClaudeTokenProvider(nil, nil, nil)
 	account := &Account{

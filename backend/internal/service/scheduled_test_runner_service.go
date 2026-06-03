@@ -17,6 +17,7 @@ type ScheduledTestRunnerService struct {
 	planRepo       ScheduledTestPlanRepository
 	scheduledSvc   *ScheduledTestService
 	accountTestSvc *AccountTestService
+	accountRepo    AccountRepository
 	rateLimitSvc   *RateLimitService
 	cfg            *config.Config
 
@@ -30,6 +31,7 @@ func NewScheduledTestRunnerService(
 	planRepo ScheduledTestPlanRepository,
 	scheduledSvc *ScheduledTestService,
 	accountTestSvc *AccountTestService,
+	accountRepo AccountRepository,
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
 ) *ScheduledTestRunnerService {
@@ -37,6 +39,7 @@ func NewScheduledTestRunnerService(
 		planRepo:       planRepo,
 		scheduledSvc:   scheduledSvc,
 		accountTestSvc: accountTestSvc,
+		accountRepo:    accountRepo,
 		rateLimitSvc:   rateLimitSvc,
 		cfg:            cfg,
 	}
@@ -120,6 +123,23 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 }
 
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
+	if s.accountRepo != nil {
+		account, err := s.accountRepo.GetByID(ctx, plan.AccountID)
+		if err != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d account lookup error: %v", plan.ID, err)
+			return
+		}
+		if account.IsArchived() {
+			disabled := *plan
+			disabled.Enabled = false
+			disabled.NextRunAt = nil
+			if _, err := s.planRepo.Update(ctx, &disabled); err != nil {
+				logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d disable archived account plan error: %v", plan.ID, err)
+			}
+			return
+		}
+	}
+
 	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)

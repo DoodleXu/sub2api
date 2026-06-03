@@ -365,6 +365,22 @@ func TestOpenAITokenProvider_NilAccount(t *testing.T) {
 	require.Empty(t, token)
 }
 
+func TestOpenAITokenProvider_ArchivedAccount(t *testing.T) {
+	provider := NewOpenAITokenProvider(nil, nil, nil)
+	now := time.Now()
+	account := &Account{
+		ID:         104,
+		Platform:   PlatformOpenAI,
+		Type:       AccountTypeOAuth,
+		ArchivedAt: &now,
+	}
+
+	token, err := provider.GetAccessToken(context.Background(), account)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account is archived")
+	require.Empty(t, token)
+}
+
 func TestOpenAITokenProvider_WrongPlatform(t *testing.T) {
 	provider := NewOpenAITokenProvider(nil, nil, nil)
 	account := &Account{

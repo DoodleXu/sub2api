@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -81,6 +82,19 @@ func TestAntigravityTokenProvider_GetAccessToken_Guards(t *testing.T) {
 		token, err := provider.GetAccessToken(context.Background(), account)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "not an antigravity account")
+		require.Empty(t, token)
+	})
+
+	t.Run("archived account", func(t *testing.T) {
+		now := time.Now()
+		account := &Account{
+			Platform:   PlatformAntigravity,
+			Type:       AccountTypeOAuth,
+			ArchivedAt: &now,
+		}
+		token, err := provider.GetAccessToken(context.Background(), account)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "account is archived")
 		require.Empty(t, token)
 	})
 

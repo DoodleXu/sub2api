@@ -168,6 +168,10 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.BadRequest(c, "Cannot refresh non-OAuth account credentials")
 		return
 	}
+	if account.IsArchived() {
+		response.BadRequest(c, "Cannot refresh archived account credentials")
+		return
+	}
 
 	// Use OpenAI OAuth service to refresh token
 	tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(c.Request.Context(), account)

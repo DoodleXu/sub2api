@@ -61,6 +61,33 @@ func newTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 	return c, rec
 }
 
+func TestAccountTestService_TestAccountConnectionRejectsArchivedAccount(t *testing.T) {
+	ctx, recorder := newTestContext()
+	archivedAt := time.Now()
+	account := &Account{
+		ID:          1,
+		Name:        "archived",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token"},
+		ArchivedAt:  &archivedAt,
+	}
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	upstream := &queuedHTTPUpstream{}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "gpt-5.4", "", AccountTestModeDefault)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Account is archived")
+	require.Contains(t, recorder.Body.String(), "Account is archived")
+	require.Empty(t, upstream.requests)
+}
+
 type openAIAccountTestRepo struct {
 	mockAccountRepoForGemini
 	updatedExtra       map[string]any

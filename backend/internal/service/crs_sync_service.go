@@ -68,6 +68,13 @@ type SyncFromCRSResult struct {
 	Items   []SyncFromCRSItemResult `json:"items"`
 }
 
+func appendArchivedCRSSkip(result *SyncFromCRSResult, item SyncFromCRSItemResult) {
+	item.Action = "skipped"
+	item.Error = "archived account"
+	result.Skipped++
+	result.Items = append(result.Items, item)
+}
+
 type crsLoginResponse struct {
 	Success  bool   `json:"success"`
 	Token    string `json:"token"`
@@ -375,6 +382,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
+			continue
+		}
 
 		// Update existing
 		existing.Extra = mergeMap(existing.Extra, extra)
@@ -489,6 +500,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			item.Action = "created"
 			result.Created++
 			result.Items = append(result.Items, item)
+			continue
+		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
 			continue
 		}
 
@@ -625,6 +640,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
+			continue
+		}
 
 		existing.Extra = mergeMap(existing.Extra, extra)
 		existing.Name = defaultName(src.Name, src.ID)
@@ -747,6 +766,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
+			continue
+		}
 
 		existing.Extra = mergeMap(existing.Extra, extra)
 		existing.Name = defaultName(src.Name, src.ID)
@@ -865,6 +888,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
+			continue
+		}
 
 		existing.Extra = mergeMap(existing.Extra, extra)
 		existing.Name = defaultName(src.Name, src.ID)
@@ -976,6 +1003,10 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			item.Action = "created"
 			result.Created++
 			result.Items = append(result.Items, item)
+			continue
+		}
+		if existing.IsArchived() {
+			appendArchivedCRSSkip(result, item)
 			continue
 		}
 
@@ -1223,7 +1254,7 @@ func crsExportAccounts(ctx context.Context, client *http.Client, baseURL, adminT
 // refreshOAuthToken attempts to refresh OAuth token for a synced account
 // Returns updated credentials or nil if refresh failed/not applicable
 func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account) map[string]any {
-	if account.Type != AccountTypeOAuth {
+	if account == nil || account.Type != AccountTypeOAuth || account.IsArchived() {
 		return nil
 	}
 
