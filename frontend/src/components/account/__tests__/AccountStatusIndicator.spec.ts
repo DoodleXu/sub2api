@@ -23,6 +23,7 @@ function makeAccount(overrides: Partial<Account>): Account {
     concurrency: 1,
     priority: 1,
     status: 'active',
+    archived_at: null,
     error_message: null,
     last_used_at: null,
     expires_at: null,
@@ -43,6 +44,26 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('归档账号显示归档状态而不覆盖原始 status 数据', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          archived_at: '2026-03-15T00:00:00Z',
+          status: 'error',
+          error_message: 'kept for restore'
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.archived')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.error')
+  })
+
   it('模型限流 + overages 启用 + 无 AICredits key → 显示 ⚡ (credits_active)', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

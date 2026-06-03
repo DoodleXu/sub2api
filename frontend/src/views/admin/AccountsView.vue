@@ -158,23 +158,12 @@
             </template>
           </AccountTableActions>
         </div>
-        <div
-          v-if="hasPendingListSync"
-          class="mt-2 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200"
-        >
-          <span>{{ t('admin.accounts.listPendingSyncHint') }}</span>
-          <button
-            class="btn btn-secondary px-2 py-1 text-xs"
-            @click="syncPendingListChanges"
-          >
-            {{ t('admin.accounts.listPendingSyncAction') }}
-          </button>
-        </div>
       </template>
       <template #table>
         <AccountBulkActionsBar
           :selected-ids="selIds"
           @delete="handleBulkDelete"
+          @archive="handleBulkArchive"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
           @edit-selected="openBulkEditSelected"
@@ -355,7 +344,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @archive="handleArchive" @unarchive="handleUnarchive" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -552,6 +541,7 @@ const autoRefreshFetching = ref(false)
 const AUTO_REFRESH_SILENT_WINDOW_MS = 15000
 const autoRefreshSilentUntil = ref(0)
 const hasPendingListSync = ref(false)
+let pendingListSyncTimer: number | null = null
 const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
@@ -778,10 +768,18 @@ const resetAutoRefreshCache = () => {
   autoRefreshETag.value = null
 }
 
+const clearPendingListSyncTimer = () => {
+  if (pendingListSyncTimer) {
+    window.clearTimeout(pendingListSyncTimer)
+    pendingListSyncTimer = null
+  }
+}
+
 const isFirstLoad = ref(true)
 
 const load = async () => {
   const requestParams = params as any
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
@@ -797,6 +795,7 @@ const load = async () => {
 }
 
 const reload = async () => {
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
@@ -805,6 +804,7 @@ const reload = async () => {
 }
 
 const debouncedReload = () => {
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -812,6 +812,7 @@ const debouncedReload = () => {
 }
 
 const handlePageChange = (page: number) => {
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -819,6 +820,7 @@ const handlePageChange = (page: number) => {
 }
 
 const handlePageSizeChange = (size: number) => {
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -832,6 +834,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   requestParams.sort_by = key
   requestParams.sort_order = order
   pagination.page = 1
+  clearPendingListSyncTimer()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
@@ -1003,10 +1006,54 @@ const openTLSFingerprintProfiles = () => {
 }
 
 const syncPendingListChanges = async () => {
-  hasPendingListSync.value = false
-  await load()
-  // Keep behavior consistent with manual refresh.
-  usageManualRefreshToken.value += 1
+  clearPendingListSyncTimer()
+  if (autoRefreshFetching.value) {
+    pendingListSyncTimer = window.setTimeout(() => {
+      syncPendingListChanges()
+    }, 350)
+    return
+  }
+  autoRefreshFetching.value = true
+  try {
+    const result = await adminAPI.accounts.listWithEtag(
+      pagination.page,
+      pagination.page_size,
+      toRaw(params) as {
+        platform?: string
+        type?: string
+        status?: string
+        privacy_mode?: string
+        group?: string
+        search?: string
+        sort_by?: string
+        sort_order?: AccountSortOrder
+      }
+    )
+    if (result.etag) {
+      autoRefreshETag.value = result.etag
+    }
+    if (!result.notModified && result.data) {
+      pagination.total = result.data.total || 0
+      pagination.pages = result.data.pages || 0
+      mergeAccountsIncrementally(result.data.items || [])
+    }
+    hasPendingListSync.value = false
+    await refreshTodayStatsBatch()
+  } catch (error) {
+    hasPendingListSync.value = true
+    console.error('Failed to sync pending account list changes:', error)
+    appStore.showError(t('admin.accounts.listPendingSyncFailed'))
+  } finally {
+    autoRefreshFetching.value = false
+  }
+}
+
+const schedulePendingListSync = () => {
+  if (!hasPendingListSync.value) return
+  clearPendingListSyncTimer()
+  pendingListSyncTimer = window.setTimeout(() => {
+    syncPendingListChanges()
+  }, 350)
 }
 
 const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
@@ -1215,6 +1262,34 @@ const toggleSelectAllVisible = (event: Event) => {
   toggleVisible(target.checked)
 }
 const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return; try { await Promise.all(selIds.value.map(id => adminAPI.accounts.delete(id))); clearSelection(); reload() } catch (error) { console.error('Failed to bulk delete accounts:', error) } }
+const handleBulkArchive = async () => {
+  const selectedIds = [...selIds.value]
+  if (!confirm(t('admin.accounts.bulkArchiveConfirm', { count: selectedIds.length }))) return
+  try {
+    const result = await adminAPI.accounts.bulkUpdate(selectedIds, { archived: true })
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.bulkArchiveSuccess', { count: result.success }))
+    }
+    const resultSuccessIds = result.results?.filter(item => item.success).map(item => item.account_id) ?? []
+    const successIds = result.success_ids?.length
+      ? result.success_ids
+      : result.failed === 0
+        ? selectedIds
+        : resultSuccessIds
+    if (successIds.length > 0) {
+      const successSet = new Set(successIds)
+      accounts.value = accounts.value.filter(account => !successSet.has(account.id))
+      removeSelectedAccounts(successIds)
+      syncPaginationAfterLocalRemoval(successIds.length)
+      enterAutoRefreshSilentWindow()
+    }
+  } catch (error) {
+    console.error('Failed to bulk archive accounts:', error)
+    appStore.showError(String(error))
+  }
+}
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
@@ -1431,16 +1506,24 @@ const buildAccountQueryFilters = () => ({
 })
 const accountMatchesCurrentFilters = (account: Account) => {
   const filters = buildAccountQueryFilters()
+  const isArchived = Boolean(account.archived_at)
   if (filters.platform && account.platform !== filters.platform) return false
   if (filters.type && account.type !== filters.type) return false
   if (filters.status) {
+    if (filters.status === 'archived') {
+      if (!isArchived) return false
+    } else if (isArchived) {
+      return false
+    }
     const now = Date.now()
     const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
     const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
     const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
     const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
 
-    if (filters.status === 'active') {
+    if (filters.status === 'archived') {
+      // 已在上方按 archived_at 判断；保留原始 status，不参与其它派生状态判断。
+    } else if (filters.status === 'active') {
       if (account.status !== 'active' || isRateLimited || isTempUnschedulable || !account.schedulable) return false
     } else if (filters.status === 'rate_limited') {
       if (account.status !== 'active' || !isRateLimited || isTempUnschedulable) return false
@@ -1451,6 +1534,8 @@ const accountMatchesCurrentFilters = (account: Account) => {
     } else if (account.status !== filters.status) {
       return false
     }
+  } else if (isArchived) {
+    return false
   }
   if (filters.group) {
     const groupIds = account.group_ids ?? account.groups?.map((group) => group.id) ?? []
@@ -1478,6 +1563,7 @@ const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Accou
     current_concurrency: updatedAccount.current_concurrency ?? oldAccount.current_concurrency,
     current_window_cost: updatedAccount.current_window_cost ?? oldAccount.current_window_cost,
     active_sessions: updatedAccount.active_sessions ?? oldAccount.active_sessions,
+    archived_at: Object.prototype.hasOwnProperty.call(updatedAccount, 'archived_at') ? (updatedAccount.archived_at ?? null) : (oldAccount.archived_at ?? null),
     total_account_cost: updatedAccount.total_account_cost ?? oldAccount.total_account_cost,
     cost_cny_per_usd: updatedAccount.cost_cny_per_usd ?? oldAccount.cost_cny_per_usd
   }
@@ -1493,8 +1579,8 @@ const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Accou
   return mergedAccount
 }
 
-const syncPaginationAfterLocalRemoval = () => {
-  const nextTotal = Math.max(0, pagination.total - 1)
+const syncPaginationAfterLocalRemoval = (removedCount = 1) => {
+  const nextTotal = Math.max(0, pagination.total - removedCount)
   pagination.total = nextTotal
   pagination.pages = nextTotal > 0 ? Math.ceil(nextTotal / pagination.page_size) : 0
 
@@ -1503,8 +1589,8 @@ const syncPaginationAfterLocalRemoval = () => {
   if (pagination.page > maxPage) {
     pagination.page = maxPage
   }
-  // 行被本地移除后不立刻全量补页，改为提示用户手动同步。
   hasPendingListSync.value = nextTotal > 0
+  schedulePendingListSync()
 }
 
 const patchAccountInList = (updatedAccount: Account) => {
@@ -1627,6 +1713,29 @@ const handleSetPrivacy = async (a: Account) => {
     appStore.showError(error?.response?.data?.message || t('admin.accounts.privacyFailed'))
   }
 }
+const handleArchive = async (a: Account) => {
+  if (!confirm(t('admin.accounts.archiveConfirm', { name: a.name }))) return
+  try {
+    const updated = await adminAPI.accounts.setArchived(a.id, true)
+    patchAccountInList(updated)
+    enterAutoRefreshSilentWindow()
+    appStore.showSuccess(t('admin.accounts.archiveSuccess'))
+  } catch (error: any) {
+    console.error('Failed to archive account:', error)
+    appStore.showError(error?.message || t('admin.accounts.archiveFailed'))
+  }
+}
+const handleUnarchive = async (a: Account) => {
+  try {
+    const updated = await adminAPI.accounts.setArchived(a.id, false)
+    patchAccountInList(updated)
+    enterAutoRefreshSilentWindow()
+    appStore.showSuccess(t('admin.accounts.unarchiveSuccess'))
+  } catch (error: any) {
+    console.error('Failed to unarchive account:', error)
+    appStore.showError(error?.message || t('admin.accounts.unarchiveFailed'))
+  }
+}
 const handleDelete = (a: Account) => { deletingAcc.value = a; showDeleteDialog.value = true }
 const confirmDelete = async () => { if(!deletingAcc.value) return; try { await adminAPI.accounts.delete(deletingAcc.value.id); showDeleteDialog.value = false; deletingAcc.value = null; reload() } catch (error) { console.error('Failed to delete account:', error) } }
 const handleToggleSchedulable = async (a: Account) => {
@@ -1707,6 +1816,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  clearPendingListSyncTimer()
   window.removeEventListener('scroll', handleScroll, true)
   document.removeEventListener('click', handleClickOutside)
 })

@@ -283,6 +283,8 @@ const isTempUnschedulable = computed(() => {
   return new Date(props.account.temp_unschedulable_until) > new Date()
 })
 
+const isArchived = computed(() => Boolean(props.account.archived_at))
+
 // Computed: has error status
 const hasError = computed(() => {
   return props.account.status === 'error'
@@ -315,6 +317,9 @@ const overloadCountdown = computed(() => {
 
 // Computed: status badge class
 const statusClass = computed(() => {
+  if (isArchived.value) {
+    return 'badge-gray'
+  }
   if (hasError.value) {
     return 'badge-danger'
   }
@@ -335,6 +340,9 @@ const statusClass = computed(() => {
 
 // Computed: status text
 const statusText = computed(() => {
+  if (isArchived.value) {
+    return t('admin.accounts.status.archived')
+  }
   if (hasError.value) {
     return t('admin.accounts.status.error')
   }

@@ -147,6 +147,13 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
 }
 
 /**
+ * Archive or restore an account without changing its underlying status.
+ */
+export async function setArchived(id: number, archived: boolean): Promise<Account> {
+  return update(id, { archived })
+}
+
+/**
  * Check mixed-channel risk for account-group binding.
  */
 export async function checkMixedChannelRisk(
@@ -557,6 +564,7 @@ export async function exportData(options?: {
     sort_order?: 'asc' | 'desc'
   }
   includeProxies?: boolean
+  includeArchived?: boolean
 }): Promise<AdminDataPayload> {
   const params: Record<string, string> = {}
   if (options?.ids && options.ids.length > 0) {
@@ -574,6 +582,9 @@ export async function exportData(options?: {
   }
   if (options?.includeProxies === false) {
     params.include_proxies = 'false'
+  }
+  if (options?.includeArchived === true) {
+    params.include_archived = 'true'
   }
   const { data } = await apiClient.get<AdminDataPayload>('/admin/accounts/data', { params })
   return data
@@ -684,6 +695,7 @@ export const accountsAPI = {
   getById,
   create,
   update,
+  setArchived,
   checkMixedChannelRisk,
   delete: deleteAccount,
   toggleStatus,

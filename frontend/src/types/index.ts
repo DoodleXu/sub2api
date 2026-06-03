@@ -842,6 +842,7 @@ export interface Account {
   total_account_cost?: number
   cost_cny_per_usd?: number
   status: 'active' | 'inactive' | 'error'
+  archived_at?: string | null
   error_message: string | null
   last_used_at: string | null
   expires_at: number | null
@@ -1054,6 +1055,7 @@ export interface UpdateAccountRequest {
   add_cost_cny?: number
   schedulable?: boolean
   status?: 'active' | 'inactive' | 'error'
+  archived?: boolean
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
@@ -1129,6 +1131,8 @@ export interface AdminDataAccount {
   concurrency: number
   priority: number
   rate_multiplier?: number | null
+  total_cost_cny?: number
+  archived_at?: string | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
 }

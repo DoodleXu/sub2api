@@ -568,7 +568,7 @@ function downloadJSONFile(payload: unknown, fileName: string) {
 async function exportCoreData() {
   exportingCoreData.value = true
   try {
-    const payload = await adminAPI.accounts.exportData({ includeProxies: true })
+    const payload = await adminAPI.accounts.exportData({ includeProxies: true, includeArchived: true })
     downloadJSONFile(payload, `sub2api-core-data-${new Date().toISOString().slice(0, 10)}.json`)
     appStore.showSuccess(t('admin.backup.coreData.exportSuccess'))
   } catch (error) {
