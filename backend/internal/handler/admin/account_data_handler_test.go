@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -44,6 +45,7 @@ type dataAccount struct {
 	ProxyKey    *string        `json:"proxy_key"`
 	Concurrency int            `json:"concurrency"`
 	Priority    int            `json:"priority"`
+	ArchivedAt  *string        `json:"archived_at"`
 }
 
 func setupAccountDataRouter() (*gin.Engine, *stubAdminService) {
@@ -98,6 +100,7 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 			Status:   service.StatusActive,
 		},
 	}
+	archivedAt := time.Date(2026, 6, 1, 10, 20, 30, 0, time.UTC)
 	adminSvc.accounts = []service.Account{
 		{
 			ID:          21,
@@ -110,6 +113,7 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 			Concurrency: 3,
 			Priority:    50,
 			Status:      service.StatusDisabled,
+			ArchivedAt:  &archivedAt,
 		},
 	}
 
@@ -127,6 +131,8 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	require.Equal(t, "pass", resp.Data.Proxies[0].Password)
 	require.Len(t, resp.Data.Accounts, 1)
 	require.Equal(t, "secret", resp.Data.Accounts[0].Credentials["token"])
+	require.NotNil(t, resp.Data.Accounts[0].ArchivedAt)
+	require.Equal(t, "2026-06-01T10:20:30Z", *resp.Data.Accounts[0].ArchivedAt)
 }
 
 func TestExportDataWithoutProxies(t *testing.T) {
@@ -258,6 +264,7 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 					"proxy_key":   "socks5|1.2.3.4|1080|u|p",
 					"concurrency": 3,
 					"priority":    50,
+					"archived_at": "2026-06-01T10:20:30Z",
 				},
 			},
 		},
@@ -274,4 +281,6 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdProxies, 0)
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
+	require.NotNil(t, adminSvc.createdAccounts[0].ArchivedAt)
+	require.Equal(t, int64(1780309230), adminSvc.createdAccounts[0].ArchivedAt.Unix())
 }

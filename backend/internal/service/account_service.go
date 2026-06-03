@@ -87,6 +87,7 @@ type AccountBulkUpdate struct {
 	TotalCostCNY   *float64
 	LoadFactor     *int
 	Status         *string
+	Archived       *bool
 	Schedulable    *bool
 	Credentials    map[string]any
 	Extra          map[string]any

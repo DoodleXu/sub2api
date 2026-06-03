@@ -481,6 +481,38 @@ func (s *AccountRepoSuite) TestListActive() {
 	s.Require().Equal("active1", accounts[0].Name)
 }
 
+func (s *AccountRepoSuite) TestListWithFilters_ArchivedHiddenByDefaultAndFilteredSeparately() {
+	now := time.Now()
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "oauth-visible", Type: service.AccountTypeOAuth, Status: service.StatusActive})
+	oauthArchived := mustCreateAccount(s.T(), s.client, &service.Account{Name: "oauth-archived", Type: service.AccountTypeOAuth, Status: service.StatusActive, ArchivedAt: &now})
+	keyArchived := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "key-archived",
+		Type:         service.AccountTypeAPIKey,
+		Status:       service.StatusError,
+		ArchivedAt:   &now,
+		TotalCostCNY: 12.34,
+		Extra:        map[string]any{"quota_used": 5.5},
+	})
+
+	accounts, result, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "", 0, "")
+	s.Require().NoError(err)
+	s.Require().GreaterOrEqual(result.Total, int64(1))
+	visibleNames := accountNames(accounts)
+	s.Require().Contains(visibleNames, "oauth-visible")
+	s.Require().NotContains(visibleNames, "oauth-archived")
+	s.Require().NotContains(visibleNames, "key-archived")
+
+	archived, result, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10, SortBy: "name"}, "", "", service.AccountStatusArchivedFilter, "", 0, "")
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), result.Total)
+	s.Require().Equal([]string{"key-archived", "oauth-archived"}, accountNames(archived))
+	s.Require().Equal(oauthArchived.ID, archived[1].ID)
+	s.Require().Equal(keyArchived.ID, archived[0].ID)
+	s.Require().Equal(service.StatusError, archived[0].Status, "archive must not overwrite key account status")
+	s.Require().Equal(12.34, archived[0].TotalCostCNY, "archive must retain key account CNY cost")
+	s.Require().Equal(5.5, archived[0].Extra["quota_used"], "archive must retain key account quota usage")
+}
+
 func (s *AccountRepoSuite) TestListByPlatform() {
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "p1", Platform: service.PlatformAnthropic, Status: service.StatusActive})
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "p2", Platform: service.PlatformOpenAI, Status: service.StatusActive})

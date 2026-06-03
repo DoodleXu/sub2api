@@ -59,6 +59,7 @@ type DataAccount struct {
 	Priority           int            `json:"priority"`
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
 	TotalCostCNY       float64        `json:"total_cost_cny,omitempty"`
+	ArchivedAt         *string        `json:"archived_at,omitempty"`
 	ExpiresAt          *int64         `json:"expires_at,omitempty"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired,omitempty"`
 }
@@ -93,6 +94,10 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 
 	selectedIDs, err := parseAccountIDs(c)
 	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if _, err := parseIncludeArchived(c); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -152,6 +157,11 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			v := acc.ExpiresAt.Unix()
 			expiresAt = &v
 		}
+		var archivedAt *string
+		if acc.ArchivedAt != nil {
+			v := acc.ArchivedAt.UTC().Format(time.RFC3339)
+			archivedAt = &v
+		}
 		dataAccounts = append(dataAccounts, DataAccount{
 			Name:               acc.Name,
 			Notes:              acc.Notes,
@@ -164,6 +174,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			Priority:           acc.Priority,
 			RateMultiplier:     acc.RateMultiplier,
 			TotalCostCNY:       acc.TotalCostCNY,
+			ArchivedAt:         archivedAt,
 			ExpiresAt:          expiresAt,
 			AutoPauseOnExpired: &acc.AutoPauseOnExpired,
 		})
@@ -308,6 +319,16 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 
 		enrichCredentialsFromIDToken(&item)
+		archivedAt, err := parseDataAccountArchivedAt(item.ArchivedAt)
+		if err != nil {
+			result.AccountFailed++
+			result.Errors = append(result.Errors, DataImportError{
+				Kind:    "account",
+				Name:    item.Name,
+				Message: err.Error(),
+			})
+			continue
+		}
 
 		accountInput := &service.CreateAccountInput{
 			Name:                 item.Name,
@@ -321,6 +342,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			Priority:             item.Priority,
 			RateMultiplier:       item.RateMultiplier,
 			TotalCostCNY:         &item.TotalCostCNY,
+			ArchivedAt:           archivedAt,
 			GroupIDs:             nil,
 			ExpiresAt:            item.ExpiresAt,
 			AutoPauseOnExpired:   item.AutoPauseOnExpired,
@@ -338,7 +360,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			continue
 		}
 		// 收集 Antigravity OAuth 账号，稍后异步设置隐私
-		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
+		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth && !created.IsArchived() {
 			privacyAccounts = append(privacyAccounts, created)
 		}
 		result.AccountCreated++
@@ -419,6 +441,10 @@ func (h *AccountHandler) resolveExportAccounts(ctx context.Context, ids []int64,
 	platform := c.Query("platform")
 	accountType := c.Query("type")
 	status := c.Query("status")
+	includeArchived, err := parseIncludeArchived(c)
+	if err != nil {
+		return nil, err
+	}
 	privacyMode := strings.TrimSpace(c.Query("privacy_mode"))
 	search := strings.TrimSpace(c.Query("search"))
 	sortBy := c.DefaultQuery("sort_by", "name")
@@ -440,7 +466,18 @@ func (h *AccountHandler) resolveExportAccounts(ctx context.Context, ids []int64,
 		}
 	}
 
-	return h.listAccountsFiltered(ctx, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	accounts, err := h.listAccountsFiltered(ctx, platform, accountType, status, search, groupID, privacyMode, sortBy, sortOrder)
+	if err != nil {
+		return nil, err
+	}
+	if !includeArchived || status != "" {
+		return accounts, nil
+	}
+	archived, err := h.listAccountsFiltered(ctx, platform, accountType, service.AccountStatusArchivedFilter, search, groupID, privacyMode, sortBy, sortOrder)
+	if err != nil {
+		return nil, err
+	}
+	return append(accounts, archived...), nil
 }
 
 func (h *AccountHandler) resolveExportProxies(ctx context.Context, accounts []service.Account) ([]service.Proxy, error) {
@@ -515,6 +552,21 @@ func parseIncludeProxies(c *gin.Context) (bool, error) {
 	}
 }
 
+func parseIncludeArchived(c *gin.Context) (bool, error) {
+	raw := strings.TrimSpace(strings.ToLower(c.Query("include_archived")))
+	if raw == "" {
+		return false, nil
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid include_archived value: %s", raw)
+	}
+}
+
 func validateDataHeader(payload DataPayload) error {
 	if payload.Type != "" && payload.Type != dataType && payload.Type != coreDataType && payload.Type != legacyDataType {
 		return fmt.Errorf("unsupported data type: %s", payload.Type)
@@ -586,6 +638,24 @@ func validateDataAccount(item DataAccount) error {
 		return errors.New("priority must be >= 0")
 	}
 	return nil
+}
+
+func parseDataAccountArchivedAt(raw *string) (*time.Time, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	value := strings.TrimSpace(*raw)
+	if value == "" {
+		return nil, nil
+	}
+	if ts, err := time.Parse(time.RFC3339, value); err == nil {
+		return &ts, nil
+	}
+	if unix, err := strconv.ParseInt(value, 10, 64); err == nil && unix > 0 {
+		ts := time.Unix(unix, 0).UTC()
+		return &ts, nil
+	}
+	return nil, fmt.Errorf("archived_at is invalid: %s", value)
 }
 
 func defaultProxyName(name string) string {

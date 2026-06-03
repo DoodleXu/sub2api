@@ -281,6 +281,7 @@ type CreateAccountInput struct {
 	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
 	TotalCostCNY       *float64 // 账号累计人民币成本（>=0）
 	LoadFactor         *int
+	ArchivedAt         *time.Time
 	GroupIDs           []int64
 	ExpiresAt          *int64
 	AutoPauseOnExpired *bool
@@ -305,6 +306,7 @@ type UpdateAccountInput struct {
 	AddCostCNY            *float64 // API Key 账号增量人民币成本（>=0）
 	LoadFactor            *int
 	Status                string
+	Archived              *bool
 	GroupIDs              *[]int64
 	ExpiresAt             *int64
 	AutoPauseOnExpired    *bool
@@ -323,6 +325,7 @@ type BulkUpdateAccountsInput struct {
 	TotalCostCNY   *float64 // 账号累计人民币成本（>=0）
 	LoadFactor     *int
 	Status         string
+	Archived       *bool
 	Schedulable    *bool
 	GroupIDs       *[]int64
 	Credentials    map[string]any
@@ -2516,6 +2519,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		Priority:    input.Priority,
 		Status:      StatusActive,
 		Schedulable: true,
+		ArchivedAt:  input.ArchivedAt,
 	}
 	// 预计算固定时间重置的下次重置时间
 	if account.Extra != nil {
@@ -2564,7 +2568,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	// OAuth 账号：创建后异步设置隐私。
 	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
-	if account.Type == AccountTypeOAuth {
+	if account.Type == AccountTypeOAuth && !account.IsArchived() {
 		switch account.Platform {
 		case PlatformOpenAI:
 			go func() {
@@ -2688,6 +2692,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Status != "" {
 		account.Status = input.Status
 	}
+	if input.Archived != nil {
+		if *input.Archived {
+			now := time.Now()
+			account.ArchivedAt = &now
+		} else {
+			account.ArchivedAt = nil
+		}
+	}
 	if input.ExpiresAt != nil {
 		if *input.ExpiresAt <= 0 {
 			account.ExpiresAt = nil
@@ -2762,6 +2774,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if len(input.AccountIDs) == 0 {
 		return result, nil
 	}
+
+	if err := s.filterArchivedBulkUpdateTargets(ctx, input, result); err != nil {
+		return nil, err
+	}
+	if len(input.AccountIDs) == 0 {
+		return result, nil
+	}
+
 	if input.GroupIDs != nil {
 		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
 			return nil, err
@@ -2843,6 +2863,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.Status != "" {
 		repoUpdates.Status = &input.Status
 	}
+	if input.Archived != nil {
+		repoUpdates.Archived = input.Archived
+	}
 	if input.Schedulable != nil {
 		repoUpdates.Schedulable = input.Schedulable
 	}
@@ -2874,6 +2897,61 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	return result, nil
+}
+
+func (s *adminServiceImpl) filterArchivedBulkUpdateTargets(ctx context.Context, input *BulkUpdateAccountsInput, result *BulkUpdateAccountsResult) error {
+	accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+	if err != nil {
+		return err
+	}
+	if len(accounts) == 0 {
+		return nil
+	}
+
+	byID := make(map[int64]*Account, len(accounts))
+	for _, account := range accounts {
+		if account != nil {
+			byID[account.ID] = account
+		}
+	}
+
+	allowArchived := isBulkUnarchiveOnly(input)
+	allowedIDs := make([]int64, 0, len(input.AccountIDs))
+	for _, accountID := range input.AccountIDs {
+		account := byID[accountID]
+		if account == nil || !account.IsArchived() || allowArchived {
+			allowedIDs = append(allowedIDs, accountID)
+			continue
+		}
+		entry := BulkUpdateAccountResult{
+			AccountID: accountID,
+			Success:   false,
+			Error:     "archived account cannot be bulk updated",
+		}
+		result.Failed++
+		result.FailedIDs = append(result.FailedIDs, accountID)
+		result.Results = append(result.Results, entry)
+	}
+	input.AccountIDs = allowedIDs
+	return nil
+}
+
+func isBulkUnarchiveOnly(input *BulkUpdateAccountsInput) bool {
+	if input.Archived == nil || *input.Archived {
+		return false
+	}
+	return input.Name == "" &&
+		input.ProxyID == nil &&
+		input.Concurrency == nil &&
+		input.Priority == nil &&
+		input.RateMultiplier == nil &&
+		input.TotalCostCNY == nil &&
+		input.LoadFactor == nil &&
+		input.Status == "" &&
+		input.Schedulable == nil &&
+		input.GroupIDs == nil &&
+		len(input.Credentials) == 0 &&
+		len(input.Extra) == 0
 }
 
 func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filters *BulkUpdateAccountFilters) ([]int64, error) {

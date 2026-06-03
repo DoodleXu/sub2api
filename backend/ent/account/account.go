@@ -47,6 +47,8 @@ const (
 	FieldTotalCostCny = "total_cost_cny"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldArchivedAt holds the string denoting the archived_at field in the database.
+	FieldArchivedAt = "archived_at"
 	// FieldErrorMessage holds the string denoting the error_message field in the database.
 	FieldErrorMessage = "error_message"
 	// FieldLastUsedAt holds the string denoting the last_used_at field in the database.
@@ -130,6 +132,7 @@ var Columns = []string{
 	FieldRateMultiplier,
 	FieldTotalCostCny,
 	FieldStatus,
+	FieldArchivedAt,
 	FieldErrorMessage,
 	FieldLastUsedAt,
 	FieldExpiresAt,
@@ -281,6 +284,11 @@ func ByTotalCostCny(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByArchivedAt orders the results by the archived_at field.
+func ByArchivedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldArchivedAt, opts...).ToFunc()
 }
 
 // ByErrorMessage orders the results by the error_message field.

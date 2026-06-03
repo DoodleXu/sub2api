@@ -219,6 +219,9 @@ func mustCreateAccount(t *testing.T, client *dbent.Client, a *service.Account) *
 	if a.OverloadUntil != nil {
 		create.SetOverloadUntil(*a.OverloadUntil)
 	}
+	if a.ArchivedAt != nil {
+		create.SetArchivedAt(*a.ArchivedAt)
+	}
 	if a.TempUnschedulableUntil != nil {
 		create.SetTempUnschedulableUntil(*a.TempUnschedulableUntil)
 	}

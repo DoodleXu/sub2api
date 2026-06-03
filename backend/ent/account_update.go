@@ -276,6 +276,26 @@ func (_u *AccountUpdate) SetNillableStatus(v *string) *AccountUpdate {
 	return _u
 }
 
+// SetArchivedAt sets the "archived_at" field.
+func (_u *AccountUpdate) SetArchivedAt(v time.Time) *AccountUpdate {
+	_u.mutation.SetArchivedAt(v)
+	return _u
+}
+
+// SetNillableArchivedAt sets the "archived_at" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableArchivedAt(v *time.Time) *AccountUpdate {
+	if v != nil {
+		_u.SetArchivedAt(*v)
+	}
+	return _u
+}
+
+// ClearArchivedAt clears the value of the "archived_at" field.
+func (_u *AccountUpdate) ClearArchivedAt() *AccountUpdate {
+	_u.mutation.ClearArchivedAt()
+	return _u
+}
+
 // SetErrorMessage sets the "error_message" field.
 func (_u *AccountUpdate) SetErrorMessage(v string) *AccountUpdate {
 	_u.mutation.SetErrorMessage(v)
@@ -762,6 +782,12 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.ArchivedAt(); ok {
+		_spec.SetField(account.FieldArchivedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ArchivedAtCleared() {
+		_spec.ClearField(account.FieldArchivedAt, field.TypeTime)
+	}
 	if value, ok := _u.mutation.ErrorMessage(); ok {
 		_spec.SetField(account.FieldErrorMessage, field.TypeString, value)
 	}
@@ -1227,6 +1253,26 @@ func (_u *AccountUpdateOne) SetNillableStatus(v *string) *AccountUpdateOne {
 	if v != nil {
 		_u.SetStatus(*v)
 	}
+	return _u
+}
+
+// SetArchivedAt sets the "archived_at" field.
+func (_u *AccountUpdateOne) SetArchivedAt(v time.Time) *AccountUpdateOne {
+	_u.mutation.SetArchivedAt(v)
+	return _u
+}
+
+// SetNillableArchivedAt sets the "archived_at" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableArchivedAt(v *time.Time) *AccountUpdateOne {
+	if v != nil {
+		_u.SetArchivedAt(*v)
+	}
+	return _u
+}
+
+// ClearArchivedAt clears the value of the "archived_at" field.
+func (_u *AccountUpdateOne) ClearArchivedAt() *AccountUpdateOne {
+	_u.mutation.ClearArchivedAt()
 	return _u
 }
 
@@ -1745,6 +1791,12 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ArchivedAt(); ok {
+		_spec.SetField(account.FieldArchivedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ArchivedAtCleared() {
+		_spec.ClearField(account.FieldArchivedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.ErrorMessage(); ok {
 		_spec.SetField(account.FieldErrorMessage, field.TypeString, value)

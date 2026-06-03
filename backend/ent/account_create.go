@@ -209,6 +209,20 @@ func (_c *AccountCreate) SetNillableStatus(v *string) *AccountCreate {
 	return _c
 }
 
+// SetArchivedAt sets the "archived_at" field.
+func (_c *AccountCreate) SetArchivedAt(v time.Time) *AccountCreate {
+	_c.mutation.SetArchivedAt(v)
+	return _c
+}
+
+// SetNillableArchivedAt sets the "archived_at" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableArchivedAt(v *time.Time) *AccountCreate {
+	if v != nil {
+		_c.SetArchivedAt(*v)
+	}
+	return _c
+}
+
 // SetErrorMessage sets the "error_message" field.
 func (_c *AccountCreate) SetErrorMessage(v string) *AccountCreate {
 	_c.mutation.SetErrorMessage(v)
@@ -678,6 +692,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 		_spec.SetField(account.FieldStatus, field.TypeString, value)
 		_node.Status = value
 	}
+	if value, ok := _c.mutation.ArchivedAt(); ok {
+		_spec.SetField(account.FieldArchivedAt, field.TypeTime, value)
+		_node.ArchivedAt = &value
+	}
 	if value, ok := _c.mutation.ErrorMessage(); ok {
 		_spec.SetField(account.FieldErrorMessage, field.TypeString, value)
 		_node.ErrorMessage = &value
@@ -1066,6 +1084,24 @@ func (u *AccountUpsert) SetStatus(v string) *AccountUpsert {
 // UpdateStatus sets the "status" field to the value that was provided on create.
 func (u *AccountUpsert) UpdateStatus() *AccountUpsert {
 	u.SetExcluded(account.FieldStatus)
+	return u
+}
+
+// SetArchivedAt sets the "archived_at" field.
+func (u *AccountUpsert) SetArchivedAt(v time.Time) *AccountUpsert {
+	u.Set(account.FieldArchivedAt, v)
+	return u
+}
+
+// UpdateArchivedAt sets the "archived_at" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateArchivedAt() *AccountUpsert {
+	u.SetExcluded(account.FieldArchivedAt)
+	return u
+}
+
+// ClearArchivedAt clears the value of the "archived_at" field.
+func (u *AccountUpsert) ClearArchivedAt() *AccountUpsert {
+	u.SetNull(account.FieldArchivedAt)
 	return u
 }
 
@@ -1606,6 +1642,27 @@ func (u *AccountUpsertOne) SetStatus(v string) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdateStatus() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetArchivedAt sets the "archived_at" field.
+func (u *AccountUpsertOne) SetArchivedAt(v time.Time) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetArchivedAt(v)
+	})
+}
+
+// UpdateArchivedAt sets the "archived_at" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateArchivedAt() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateArchivedAt()
+	})
+}
+
+// ClearArchivedAt clears the value of the "archived_at" field.
+func (u *AccountUpsertOne) ClearArchivedAt() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearArchivedAt()
 	})
 }
 
@@ -2349,6 +2406,27 @@ func (u *AccountUpsertBulk) SetStatus(v string) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdateStatus() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetArchivedAt sets the "archived_at" field.
+func (u *AccountUpsertBulk) SetArchivedAt(v time.Time) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetArchivedAt(v)
+	})
+}
+
+// UpdateArchivedAt sets the "archived_at" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateArchivedAt() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateArchivedAt()
+	})
+}
+
+// ClearArchivedAt clears the value of the "archived_at" field.
+func (u *AccountUpsertBulk) ClearArchivedAt() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearArchivedAt()
 	})
 }
 

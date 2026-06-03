@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,4 +25,16 @@ func TestAccount_BillingRateMultiplier_NegativeFallsBackToOne(t *testing.T) {
 	v := -1.0
 	a := Account{RateMultiplier: &v}
 	require.Equal(t, 1.0, a.BillingRateMultiplier())
+}
+
+func TestAccount_IsSchedulable_ArchivedAccountIsNeverSchedulable(t *testing.T) {
+	archivedAt := time.Now()
+	a := Account{
+		Status:      StatusActive,
+		Schedulable: true,
+		ArchivedAt:  &archivedAt,
+	}
+
+	require.True(t, a.IsArchived())
+	require.False(t, a.IsSchedulable())
 }

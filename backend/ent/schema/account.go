@@ -121,6 +121,13 @@ func (Account) Fields() []ent.Field {
 			MaxLen(20).
 			Default(domain.StatusActive),
 
+		// archived_at: 归档时间。归档独立于 status，用于隐藏账号管理默认列表并停止调度，
+		// 但保留历史用量、成本、配额等数据。
+		field.Time("archived_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+
 		// error_message: 错误信息，记录账户异常时的详细信息
 		field.String("error_message").
 			Optional().

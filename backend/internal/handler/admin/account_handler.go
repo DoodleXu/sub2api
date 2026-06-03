@@ -129,6 +129,7 @@ type UpdateAccountRequest struct {
 	AddCostCNY              *float64       `json:"add_cost_cny"`
 	LoadFactor              *int           `json:"load_factor"`
 	Status                  string         `json:"status" binding:"omitempty,oneof=active inactive error"`
+	Archived                *bool          `json:"archived"`
 	GroupIDs                *[]int64       `json:"group_ids"`
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
@@ -147,6 +148,7 @@ type BulkUpdateAccountsRequest struct {
 	TotalCostCNY            *float64                  `json:"total_cost_cny"`
 	LoadFactor              *int                      `json:"load_factor"`
 	Status                  string                    `json:"status" binding:"omitempty,oneof=active inactive error"`
+	Archived                *bool                     `json:"archived"`
 	Schedulable             *bool                     `json:"schedulable"`
 	GroupIDs                *[]int64                  `json:"group_ids"`
 	Credentials             map[string]any            `json:"credentials"`
@@ -643,6 +645,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		AddCostCNY:            req.AddCostCNY,
 		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
+		Archived:              req.Archived,
 		GroupIDs:              req.GroupIDs,
 		ExpiresAt:             req.ExpiresAt,
 		AutoPauseOnExpired:    req.AutoPauseOnExpired,
@@ -762,6 +765,19 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 }
 
+func (h *AccountHandler) ensureAccountMutable(c *gin.Context, accountID int64, action string) (*service.Account, bool) {
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return nil, false
+	}
+	if account.IsArchived() {
+		response.ErrorFrom(c, infraerrors.BadRequest("ACCOUNT_ARCHIVED", "archived account cannot "+action))
+		return nil, false
+	}
+	return account, true
+}
+
 // RecoverState handles unified recovery of recoverable account runtime state.
 // POST /api/v1/admin/accounts/:id/recover-state
 func (h *AccountHandler) RecoverState(c *gin.Context) {
@@ -773,6 +789,9 @@ func (h *AccountHandler) RecoverState(c *gin.Context) {
 
 	if h.rateLimitService == nil {
 		response.Error(c, http.StatusServiceUnavailable, "Rate limit service unavailable")
+		return
+	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "recover runtime state"); !ok {
 		return
 	}
 
@@ -848,6 +867,9 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
+	if account.IsArchived() {
+		return nil, "", infraerrors.BadRequest("ACCOUNT_ARCHIVED", "cannot refresh archived account credentials")
+	}
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
@@ -1045,6 +1067,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		response.ErrorFrom(c, infraerrors.BadRequest("NOT_OAUTH", "cannot apply oauth credentials to non-OAuth account"))
 		return
 	}
+	if existing.IsArchived() {
+		response.ErrorFrom(c, infraerrors.BadRequest("ACCOUNT_ARCHIVED", "cannot apply oauth credentials to archived account"))
+		return
+	}
 
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
 		Type:        req.Type,
@@ -1133,6 +1159,9 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "clear error state"); !ok {
+		return
+	}
 
 	account, err := h.adminService.ClearAccountError(c.Request.Context(), accountID)
 	if err != nil {
@@ -1180,6 +1209,27 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 	for _, id := range req.AccountIDs {
 		accountID := id // 闭包捕获
 		g.Go(func() error {
+			existing, err := h.adminService.GetAccount(gctx, accountID)
+			if err != nil {
+				mu.Lock()
+				failedCount++
+				errors = append(errors, gin.H{
+					"account_id": accountID,
+					"error":      err.Error(),
+				})
+				mu.Unlock()
+				return nil
+			}
+			if existing.IsArchived() {
+				mu.Lock()
+				failedCount++
+				errors = append(errors, gin.H{
+					"account_id": accountID,
+					"error":      "archived account cannot clear error state",
+				})
+				mu.Unlock()
+				return nil
+			}
 			account, err := h.adminService.ClearAccountError(gctx, accountID)
 			if err != nil {
 				mu.Lock()
@@ -1478,6 +1528,10 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 			response.Error(c, 404, fmt.Sprintf("Account %d not found", accountID))
 			return
 		}
+		if account.IsArchived() {
+			response.ErrorFrom(c, infraerrors.BadRequest("ACCOUNT_ARCHIVED", fmt.Sprintf("archived account %d cannot update credentials", accountID)))
+			return
+		}
 		if account.Credentials == nil {
 			account.Credentials = make(map[string]any)
 		}
@@ -1554,6 +1608,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		req.TotalCostCNY != nil ||
 		req.LoadFactor != nil ||
 		req.Status != "" ||
+		req.Archived != nil ||
 		req.Schedulable != nil ||
 		req.GroupIDs != nil ||
 		len(req.Credentials) > 0 ||
@@ -1575,6 +1630,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		TotalCostCNY:          req.TotalCostCNY,
 		LoadFactor:            req.LoadFactor,
 		Status:                req.Status,
+		Archived:              req.Archived,
 		Schedulable:           req.Schedulable,
 		GroupIDs:              req.GroupIDs,
 		Credentials:           req.Credentials,
@@ -1795,6 +1851,9 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "clear rate limit state"); !ok {
+		return
+	}
 
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
 	if err != nil {
@@ -1817,6 +1876,9 @@ func (h *AccountHandler) ResetQuota(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "reset quota"); !ok {
 		return
 	}
 
@@ -1866,6 +1928,9 @@ func (h *AccountHandler) ClearTempUnschedulable(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "clear temporary unschedulable state"); !ok {
 		return
 	}
 
@@ -1963,6 +2028,9 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 	var req SetSchedulableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if _, ok := h.ensureAccountMutable(c, accountID, "change schedulable state"); !ok {
 		return
 	}
 
@@ -2221,6 +2289,10 @@ func (h *AccountHandler) RefreshTier(c *gin.Context) {
 		response.BadRequest(c, "Only Gemini OAuth accounts support tier refresh")
 		return
 	}
+	if account.IsArchived() {
+		response.ErrorFrom(c, infraerrors.BadRequest("ACCOUNT_ARCHIVED", "cannot refresh tier for archived account"))
+		return
+	}
 
 	oauthType, _ := account.Credentials["oauth_type"].(string)
 	if oauthType != "google_one" {
@@ -2267,6 +2339,8 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	accounts := make([]*service.Account, 0)
+	var successCount, failedCount int
+	var errors []gin.H
 
 	if len(req.AccountIDs) == 0 {
 		allAccounts, _, err := h.adminService.ListAccounts(ctx, 1, 10000, "gemini", "oauth", "", "", 0, "", "name", "asc")
@@ -2292,6 +2366,14 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 			if acc == nil {
 				continue
 			}
+			if acc.IsArchived() {
+				failedCount++
+				errors = append(errors, gin.H{
+					"account_id": acc.ID,
+					"error":      "cannot refresh tier for archived account",
+				})
+				continue
+			}
 			if acc.Platform != service.PlatformGemini || acc.Type != service.AccountTypeOAuth {
 				continue
 			}
@@ -2308,8 +2390,6 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	g.SetLimit(maxConcurrency)
 
 	var mu sync.Mutex
-	var successCount, failedCount int
-	var errors []gin.H
 
 	for _, account := range accounts {
 		acc := account // 闭包捕获

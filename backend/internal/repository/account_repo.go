@@ -102,6 +102,9 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	if account.LoadFactor != nil {
 		builder.SetLoadFactor(*account.LoadFactor)
 	}
+	if account.ArchivedAt != nil {
+		builder.SetArchivedAt(*account.ArchivedAt)
+	}
 
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
@@ -346,6 +349,11 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	} else {
 		builder.ClearLoadFactor()
 	}
+	if account.ArchivedAt != nil {
+		builder.SetArchivedAt(*account.ArchivedAt)
+	} else {
+		builder.ClearArchivedAt()
+	}
 
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
@@ -476,8 +484,14 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 	if accountType != "" {
 		q = q.Where(dbaccount.TypeEQ(accountType))
 	}
+	if status == service.AccountStatusArchivedFilter {
+		q = q.Where(dbaccount.ArchivedAtNotNil())
+	} else {
+		q = q.Where(dbaccount.ArchivedAtIsNil())
+	}
 	if status != "" {
 		switch status {
+		case service.AccountStatusArchivedFilter:
 		case service.StatusActive:
 			q = q.Where(
 				dbaccount.StatusEQ(status),
@@ -634,11 +648,13 @@ func accountStatusOrder(sortOrder string) []func(*entsql.Selector) {
 	return []func(*entsql.Selector){
 		func(s *entsql.Selector) {
 			statusCol := s.C(dbaccount.FieldStatus)
+			archivedAtCol := s.C(dbaccount.FieldArchivedAt)
 			schedulableCol := s.C(dbaccount.FieldSchedulable)
 			rateLimitResetCol := s.C(dbaccount.FieldRateLimitResetAt)
 			tempUnschedulableCol := s.C(dbaccount.FieldTempUnschedulableUntil)
 
 			statusRankExpr := "CASE" +
+				" WHEN " + archivedAtCol + " IS NOT NULL THEN 7" +
 				" WHEN " + statusCol + " = '" + service.StatusActive + "'" +
 				" AND " + schedulableCol + " = TRUE" +
 				" AND (" + rateLimitResetCol + " IS NULL OR " + rateLimitResetCol + " <= NOW())" +
@@ -655,7 +671,7 @@ func accountStatusOrder(sortOrder string) []func(*entsql.Selector) {
 				" AND " + tempUnschedulableCol + " > NOW() THEN 4" +
 				" WHEN " + statusCol + " = '" + service.StatusError + "' THEN 5" +
 				" WHEN " + statusCol + " = '" + service.StatusDisabled + "' THEN 6" +
-				" ELSE 7 END"
+				" ELSE 8 END"
 
 			if sortOrder == pagination.SortOrderDesc {
 				s.OrderExpr(entsql.Expr(statusRankExpr + " DESC"))
@@ -683,7 +699,10 @@ func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]s
 
 func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, error) {
 	accounts, err := r.client.Account.Query().
-		Where(dbaccount.StatusEQ(service.StatusActive)).
+		Where(
+			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
+		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -697,6 +716,7 @@ func (r *accountRepository) ListByPlatform(ctx context.Context, platform string)
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -973,6 +993,7 @@ func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Acco
 	accounts, err := r.client.Account.Query().
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -1000,6 +1021,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -1034,6 +1056,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 		Where(
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -1054,6 +1077,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
@@ -1078,6 +1102,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 		Where(
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.ArchivedAtIsNil(),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
@@ -1487,6 +1512,13 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Status)
 		idx++
 	}
+	if updates.Archived != nil {
+		if *updates.Archived {
+			setClauses = append(setClauses, "archived_at = NOW()")
+		} else {
+			setClauses = append(setClauses, "archived_at = NULL")
+		}
+	}
 	if updates.Schedulable != nil {
 		setClauses = append(setClauses, "schedulable = $"+itoa(idx))
 		args = append(args, *updates.Schedulable)
@@ -1538,6 +1570,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusDisabled) {
 			shouldSync = true
 		}
+		if updates.Archived != nil {
+			shouldSync = true
+		}
 		if updates.Schedulable != nil && !*updates.Schedulable {
 			shouldSync = true
 		}
@@ -1559,8 +1594,9 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		Where(dbaccountgroup.GroupIDEQ(groupID))
 
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
-	preds := make([]dbpredicate.Account, 0, 6)
+	preds := make([]dbpredicate.Account, 0, 7)
 	preds = append(preds, dbaccount.DeletedAtIsNil())
+	preds = append(preds, dbaccount.ArchivedAtIsNil())
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -1866,6 +1902,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		TotalCostCNY:            m.TotalCostCny,
 		LoadFactor:              m.LoadFactor,
 		Status:                  m.Status,
+		ArchivedAt:              m.ArchivedAt,
 		ErrorMessage:            derefString(m.ErrorMessage),
 		LastUsedAt:              m.LastUsedAt,
 		ExpiresAt:               m.ExpiresAt,

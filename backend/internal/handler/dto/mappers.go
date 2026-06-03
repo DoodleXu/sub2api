@@ -219,6 +219,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		TotalAccountCost:        a.TotalAccountCost,
 		CostCNYPerUSD:           a.CostCNYPerUSD,
 		Status:                  a.Status,
+		ArchivedAt:              a.ArchivedAt,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
 		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),

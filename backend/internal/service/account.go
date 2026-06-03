@@ -35,6 +35,7 @@ type Account struct {
 	CostCNYPerUSD      float64
 	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
 	Status             string
+	ArchivedAt         *time.Time
 	ErrorMessage       string
 	LastUsedAt         *time.Time
 	ExpiresAt          *time.Time
@@ -78,6 +79,8 @@ const (
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
 
+const AccountStatusArchivedFilter = "archived"
+
 type TempUnschedulableRule struct {
 	ErrorCode       int      `json:"error_code"`
 	Keywords        []string `json:"keywords"`
@@ -87,6 +90,10 @@ type TempUnschedulableRule struct {
 
 func (a *Account) IsActive() bool {
 	return a.Status == StatusActive
+}
+
+func (a *Account) IsArchived() bool {
+	return a != nil && a.ArchivedAt != nil
 }
 
 // BillingRateMultiplier 返回账号计费倍率。
@@ -117,7 +124,7 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
-	if !a.IsActive() || !a.Schedulable {
+	if a.IsArchived() || !a.IsActive() || !a.Schedulable {
 		return false
 	}
 	now := time.Now()

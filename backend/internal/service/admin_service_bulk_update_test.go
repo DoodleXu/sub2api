@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,49 @@ func TestAdminService_BulkUpdateAccounts_AllSuccessIDs(t *testing.T) {
 	require.ElementsMatch(t, []int64{1, 2, 3}, result.SuccessIDs)
 	require.Empty(t, result.FailedIDs)
 	require.Len(t, result.Results, 3)
+}
+
+func TestAdminService_BulkUpdateAccounts_SkipsArchivedAccounts(t *testing.T) {
+	now := time.Now()
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{ID: 1, ArchivedAt: &now},
+			{ID: 2},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	schedulable := true
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{1, 2},
+		Schedulable: &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 1, result.Failed)
+	require.ElementsMatch(t, []int64{2}, result.SuccessIDs)
+	require.ElementsMatch(t, []int64{1}, result.FailedIDs)
+	require.Equal(t, []int64{2}, repo.bulkUpdateIDs)
+}
+
+func TestAdminService_BulkUpdateAccounts_AllowsArchivedUnarchiveOnly(t *testing.T) {
+	now := time.Now()
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1, ArchivedAt: &now}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	archived := false
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		Archived:   &archived,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 0, result.Failed)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
 }
 
 // TestAdminService_BulkUpdateAccounts_PartialFailureIDs 验证部分失败时 success_ids/failed_ids 正确。

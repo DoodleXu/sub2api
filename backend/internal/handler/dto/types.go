@@ -172,6 +172,7 @@ type Account struct {
 	TotalAccountCost   float64         `json:"total_account_cost"`
 	CostCNYPerUSD      float64         `json:"cost_cny_per_usd"`
 	Status             string          `json:"status"`
+	ArchivedAt         *time.Time      `json:"archived_at"`
 	ErrorMessage       string          `json:"error_message"`
 	LastUsedAt         *time.Time      `json:"last_used_at"`
 	ExpiresAt          *int64          `json:"expires_at"`
