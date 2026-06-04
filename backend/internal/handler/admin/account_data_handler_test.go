@@ -118,7 +118,7 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data?include_archived=true", nil)
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -133,6 +133,56 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	require.Equal(t, "secret", resp.Data.Accounts[0].Credentials["token"])
 	require.NotNil(t, resp.Data.Accounts[0].ArchivedAt)
 	require.Equal(t, "2026-06-01T10:20:30Z", *resp.Data.Accounts[0].ArchivedAt)
+}
+
+func TestExportDataIncludeArchivedKeepsStatusFilterOrthogonal(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	archivedAt := time.Date(2026, 6, 1, 10, 20, 30, 0, time.UTC)
+	adminSvc.accounts = []service.Account{
+		{
+			ID:       1,
+			Name:     "visible-active",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeOAuth,
+			Status:   service.StatusActive,
+		},
+		{
+			ID:         2,
+			Name:       "archived-active",
+			Platform:   service.PlatformOpenAI,
+			Type:       service.AccountTypeOAuth,
+			Status:     service.StatusActive,
+			ArchivedAt: &archivedAt,
+		},
+		{
+			ID:         3,
+			Name:       "archived-error",
+			Platform:   service.PlatformOpenAI,
+			Type:       service.AccountTypeOAuth,
+			Status:     service.StatusError,
+			ArchivedAt: &archivedAt,
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data?platform=openai&type=oauth&status=active&include_archived=true", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp dataResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, []string{"visible-active", "archived-active"}, dataAccountNames(resp.Data.Accounts))
+	require.Nil(t, resp.Data.Accounts[0].ArchivedAt)
+	require.NotNil(t, resp.Data.Accounts[1].ArchivedAt)
+}
+
+func dataAccountNames(accounts []dataAccount) []string {
+	names := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		names = append(names, account.Name)
+	}
+	return names
 }
 
 func TestExportDataWithoutProxies(t *testing.T) {

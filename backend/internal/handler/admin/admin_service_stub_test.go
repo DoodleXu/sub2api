@@ -320,7 +320,29 @@ func (s *stubAdminService) ListAccounts(ctx context.Context, page, pageSize int,
 	s.lastListAccounts.sortBy = sortBy
 	s.lastListAccounts.sortOrder = sortOrder
 	s.lastListAccounts.calls++
-	return s.accounts, int64(len(s.accounts)), nil
+	accounts := make([]service.Account, 0, len(s.accounts))
+	for _, account := range s.accounts {
+		if platform != "" && account.Platform != platform {
+			continue
+		}
+		if accountType != "" && account.Type != accountType {
+			continue
+		}
+		if status == service.AccountStatusArchivedFilter {
+			if !account.IsArchived() {
+				continue
+			}
+		} else {
+			if account.IsArchived() {
+				continue
+			}
+			if status != "" && account.Status != status {
+				continue
+			}
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, int64(len(accounts)), nil
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {

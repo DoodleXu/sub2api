@@ -1262,6 +1262,67 @@ func TestAPIContracts(t *testing.T) {
 				}
 			}`,
 		},
+		{
+			name: "POST /api/v1/admin/accounts/bulk-update skips archived accounts",
+			setup: func(t *testing.T, deps *contractDeps) {
+				t.Helper()
+				archivedAt := deps.now
+				deps.accountRepo.SetAccounts([]service.Account{
+					{ID: 101, Name: "archived", Status: service.StatusActive, ArchivedAt: &archivedAt},
+					{ID: 102, Name: "visible", Status: service.StatusActive},
+				})
+			},
+			method: http.MethodPost,
+			path:   "/api/v1/admin/accounts/bulk-update",
+			body:   `{"account_ids":[101,102],"schedulable":false}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": {
+					"success": 1,
+					"failed": 1,
+					"success_ids": [102],
+					"failed_ids": [101],
+					"results": [
+						{"account_id": 101, "success": false, "error": "archived account cannot be bulk updated"},
+						{"account_id": 102, "success": true}
+					]
+				}
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/settings/daily-checkin/stats",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/settings/daily-checkin/stats",
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": {
+					"enabled": true,
+					"required_usage_usd": 1,
+					"usage_scope": "actual_cost",
+					"reward_min_usd": 1,
+					"reward_max_usd": 3,
+					"today_checkins": 0,
+					"today_users": 0,
+					"today_reward_usd": 0,
+					"month_checkins": 0,
+					"month_users": 0,
+					"month_reward_usd": 0,
+					"average_reward_usd": 0,
+					"daily_budget_usd": 0,
+					"daily_remaining_usd": 0,
+					"monthly_budget_usd": 0,
+					"monthly_remaining_usd": 0,
+					"user_monthly_limit_usd": 0
+				}
+			}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1288,6 +1349,7 @@ type contractDeps struct {
 	usageRepo   *stubUsageLogRepo
 	settingRepo *stubSettingRepo
 	redeemRepo  *stubRedeemCodeRepo
+	accountRepo *stubAccountRepo
 	paymentDB   *dbent.Client
 }
 
@@ -1343,6 +1405,8 @@ func newContractDeps(t *testing.T) *contractDeps {
 
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
+	checkinDB := newContractDailyCheckinDB(t)
+	dailyCheckinService := service.NewDailyCheckinService(checkinDB, settingService, nil, nil)
 	paymentClient := newContractPaymentClient(t)
 	paymentConfigService := service.NewPaymentConfigService(paymentClient, settingRepo, nil)
 	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
@@ -1352,7 +1416,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
-	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)
+	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil, dailyCheckinService)
 	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
@@ -1405,6 +1469,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
+	v1Admin.GET("/settings/daily-checkin/stats", adminSettingHandler.GetDailyCheckinStats)
 	v1Admin.POST("/accounts/bulk-update", adminAccountHandler.BulkUpdate)
 
 	return &contractDeps{
@@ -1417,8 +1482,32 @@ func newContractDeps(t *testing.T) *contractDeps {
 		usageRepo:   usageRepo,
 		settingRepo: settingRepo,
 		redeemRepo:  redeemRepo,
+		accountRepo: &accountRepo,
 		paymentDB:   paymentClient,
 	}
+}
+
+func newContractDailyCheckinDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:api_contract_daily_checkin?mode=memory&cache=shared")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS user_checkins (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			checkin_date TEXT NOT NULL,
+			reward_amount REAL NOT NULL DEFAULT 0,
+			qualified_usage_usd REAL NOT NULL DEFAULT 0,
+			redeem_code_id INTEGER,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		DELETE FROM user_checkins;
+	`)
+	require.NoError(t, err)
+	return db
 }
 
 func newContractPaymentClient(t *testing.T) *dbent.Client {
@@ -1745,6 +1834,14 @@ func (stubGroupRepo) UpdateSortOrders(ctx context.Context, updates []service.Gro
 
 type stubAccountRepo struct {
 	bulkUpdateIDs []int64
+	accounts      map[int64]service.Account
+}
+
+func (s *stubAccountRepo) SetAccounts(accounts []service.Account) {
+	s.accounts = make(map[int64]service.Account, len(accounts))
+	for _, account := range accounts {
+		s.accounts[account.ID] = account
+	}
 }
 
 func (s *stubAccountRepo) Create(ctx context.Context, account *service.Account) error {
@@ -1756,7 +1853,18 @@ func (s *stubAccountRepo) GetByID(ctx context.Context, id int64) (*service.Accou
 }
 
 func (s *stubAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*service.Account, error) {
-	return nil, errors.New("not implemented")
+	out := make([]*service.Account, 0, len(ids))
+	for _, id := range ids {
+		if s.accounts != nil {
+			if account, ok := s.accounts[id]; ok {
+				acc := account
+				out = append(out, &acc)
+				continue
+			}
+		}
+		out = append(out, &service.Account{ID: id, Name: "account", Status: service.StatusActive})
+	}
+	return out, nil
 }
 
 func (s *stubAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) {

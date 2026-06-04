@@ -470,14 +470,50 @@ func (h *AccountHandler) resolveExportAccounts(ctx context.Context, ids []int64,
 	if err != nil {
 		return nil, err
 	}
-	if !includeArchived || status != "" {
+	if !includeArchived || status == service.AccountStatusArchivedFilter {
 		return accounts, nil
 	}
 	archived, err := h.listAccountsFiltered(ctx, platform, accountType, service.AccountStatusArchivedFilter, search, groupID, privacyMode, sortBy, sortOrder)
 	if err != nil {
 		return nil, err
 	}
+	if status != "" {
+		archived = filterArchivedExportAccountsByStatus(archived, status)
+	}
 	return append(accounts, archived...), nil
+}
+
+func filterArchivedExportAccountsByStatus(accounts []service.Account, status string) []service.Account {
+	if status == "" || status == service.AccountStatusArchivedFilter {
+		return accounts
+	}
+	out := make([]service.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if archivedAccountMatchesStatus(account, status) {
+			out = append(out, account)
+		}
+	}
+	return out
+}
+
+func archivedAccountMatchesStatus(account service.Account, status string) bool {
+	now := time.Now()
+	switch status {
+	case service.StatusActive:
+		return account.Status == service.StatusActive
+	case service.StatusDisabled, service.StatusError:
+		return account.Status == status
+	case "rate_limited":
+		return account.Status == service.StatusActive && account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now)
+	case "temp_unschedulable":
+		return account.Status == service.StatusActive && account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(now)
+	case "unschedulable":
+		rateLimited := account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now)
+		tempUnschedulable := account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(now)
+		return account.Status == service.StatusActive && !account.Schedulable && !rateLimited && !tempUnschedulable
+	default:
+		return account.Status == status
+	}
 }
 
 func (h *AccountHandler) resolveExportProxies(ctx context.Context, accounts []service.Account) ([]service.Proxy, error) {
