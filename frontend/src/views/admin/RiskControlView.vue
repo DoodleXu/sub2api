@@ -747,6 +747,84 @@
               </div>
             </div>
 
+            <div class="space-y-3 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+              <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.userWhitelist') }}</h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userWhitelistHint') }}</p>
+                </div>
+                <span class="inline-flex w-fit rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+                  {{ t('admin.riskControl.userWhitelistCount', { count: whitelistUserIDs.length }) }}
+                </span>
+              </div>
+              <div class="relative">
+                <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  v-model.trim="whitelistUserSearch"
+                  type="search"
+                  data-test="whitelist-user-search"
+                  class="input pl-9"
+                  :placeholder="t('admin.riskControl.userWhitelistSearch')"
+                  @focus="whitelistUserSearchOpen = whitelistUserSearchResults.length > 0"
+                  @input="debounceSearchWhitelistUsers"
+                />
+                <div
+                  v-if="whitelistUserSearchOpen"
+                  class="absolute z-20 mt-2 max-h-64 w-full overflow-y-auto rounded-lg border border-gray-100 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
+                >
+                  <div v-if="whitelistUserSearchLoading" class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t('common.loading') }}
+                  </div>
+                  <button
+                    v-for="user in whitelistUserSearchResults"
+                    :key="user.id"
+                    type="button"
+                    data-test="whitelist-user-result"
+                    class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-dark-700/60"
+                    :disabled="isWhitelistUserSelected(user.id)"
+                    @click="addWhitelistUser(user)"
+                  >
+                    <span class="min-w-0">
+                      <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ userDisplayName(user) }}</span>
+                      <span class="mt-0.5 block truncate text-xs text-gray-500 dark:text-gray-400">{{ user.email || `UID ${user.id}` }}</span>
+                    </span>
+                    <span class="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-300">
+                      UID {{ user.id }}
+                    </span>
+                  </button>
+                  <div v-if="!whitelistUserSearchLoading && whitelistUserSearchResults.length === 0" class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t('admin.riskControl.userWhitelistNoResults') }}
+                  </div>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="user in whitelistUserChips"
+                  :key="user.id"
+                  data-test="whitelist-user-chip"
+                  class="inline-flex max-w-full items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-200"
+                >
+                  <span class="min-w-0">
+                    <span class="block truncate font-medium">{{ userDisplayName(user) }}</span>
+                    <span class="block truncate text-xs opacity-75">{{ user.email || `UID ${user.id}` }}</span>
+                  </span>
+                  <span class="shrink-0 rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px] dark:bg-dark-800/70">UID {{ user.id }}</span>
+                  <button
+                    v-if="!isForcedWhitelistUser(user.id)"
+                    type="button"
+                    class="shrink-0 rounded-md p-1 text-emerald-600 transition-colors hover:bg-emerald-100 hover:text-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                    :title="t('admin.riskControl.removeWhitelistUser')"
+                    @click="removeWhitelistUser(user.id)"
+                  >
+                    <Icon name="x" size="xs" />
+                  </button>
+                  <span v-else class="shrink-0 rounded-md bg-white/70 px-1.5 py-0.5 text-[11px] font-medium dark:bg-dark-800/70">
+                    {{ t('admin.riskControl.forcedWhitelist') }}
+                  </span>
+                </span>
+              </div>
+            </div>
+
             <div class="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
               <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -1123,7 +1201,7 @@ import type {
   ModerationMode,
   UpdateContentModerationConfig,
 } from '@/api/admin/riskControl'
-import type { AdminGroup, SelectOption } from '@/types'
+import type { AdminGroup, AdminUser, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
@@ -1153,11 +1231,13 @@ type RiskThresholdRow = {
   value: number
   defaultValue: number
 }
+type WhitelistUserSummary = Pick<AdminUser, 'id' | 'username' | 'email' | 'role' | 'status'>
 
 const maxModerationTestImages = 1
 const maxModerationTestImageSize = 8 * 1024 * 1024
 const maxVisibleApiKeyRows: number = 3
 const blockedKeywordMax = 10000
+const maxWhitelistHydrationConcurrency = 8
 const riskThresholdDefaults: Record<string, number> = {
   harassment: 98,
   'harassment/threatening': 90,
@@ -1188,8 +1268,14 @@ const unbanningUserID = ref<number | null>(null)
 const settingsOpen = ref(false)
 const activeSettingsTab = ref<SettingsTab>('basic')
 const groupSearch = ref('')
+const whitelistUserSearch = ref('')
+const whitelistUserSearchOpen = ref(false)
+const whitelistUserSearchLoading = ref(false)
 const flaggedHashInput = ref('')
 const groups = ref<AdminGroup[]>([])
+const whitelistUsers = ref<Record<number, WhitelistUserSummary>>({})
+const forcedWhitelistUserIDs = ref<number[]>([])
+const whitelistUserSearchResults = ref<AdminUser[]>([])
 const logs = ref<ContentModerationLog[]>([])
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const testedApiKeyStatuses = ref<ContentModerationAPIKeyStatus[]>([])
@@ -1200,6 +1286,9 @@ const moderationTestImages = ref<string[]>([])
 const moderationTestResult = ref<ContentModerationTestAuditResult | null>(null)
 const inputDetailRow = ref<ContentModerationLog | null>(null)
 let statusTimer: number | null = null
+let whitelistUserSearchTimer: number | null = null
+let whitelistHydrateSeq = 0
+let whitelistUserSearchSeq = 0
 
 const configForm = reactive({
   enabled: false,
@@ -1417,6 +1506,14 @@ const inputApiKeyCount = computed(() => parseApiKeys(configForm.api_keys_text).l
 const blockedKeywordList = computed(() => parseBlockedKeywords(configForm.blocked_keywords_text))
 
 const blockedKeywordCount = computed(() => blockedKeywordList.value.length)
+
+const whitelistUserIDs = computed(() => normalizeWhitelistUserIDs(Object.keys(whitelistUsers.value).map((id) => Number(id))))
+
+const forcedWhitelistUserIDSet = computed(() => new Set(forcedWhitelistUserIDs.value))
+
+const whitelistUserChips = computed(() => (
+  whitelistUserIDs.value.map((id) => whitelistUsers.value[id] ?? createWhitelistUserPlaceholder(id))
+))
 
 const pendingDeletedApiKeyCount = computed(() => pendingDeleteApiKeyHashes.value.length)
 
@@ -1695,6 +1792,8 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.sample_rate = config.sample_rate ?? 100
   configForm.all_groups = config.all_groups
   configForm.group_ids = Array.isArray(config.group_ids) ? [...config.group_ids] : []
+  forcedWhitelistUserIDs.value = normalizeNumericIDs(config.forced_whitelist_user_ids ?? [])
+  setWhitelistUserIDs(config.whitelist_user_ids)
   configForm.record_non_hits = config.record_non_hits
   configForm.worker_count = config.worker_count || 4
   configForm.queue_size = config.queue_size || 32768
@@ -1774,6 +1873,7 @@ async function saveConfig() {
       sample_rate: Number(configForm.sample_rate) || 0,
       all_groups: configForm.all_groups,
       group_ids: configForm.all_groups ? [] : [...configForm.group_ids],
+      whitelist_user_ids: whitelistUserIDs.value,
       record_non_hits: configForm.record_non_hits,
       clear_api_key: configForm.clear_api_key,
       worker_count: Number(configForm.worker_count) || 4,
@@ -2202,6 +2302,137 @@ function parseApiKeys(value: string): string[] {
     .filter((item, index, arr) => item && arr.indexOf(item) === index)
 }
 
+function normalizeWhitelistUserIDs(ids: unknown): number[] {
+  const raw = Array.isArray(ids) ? ids : []
+  const values = raw
+    .map((item) => Number(item))
+    .filter((item) => Number.isSafeInteger(item) && item > 0)
+  return normalizeNumericIDs(values)
+}
+
+function normalizeNumericIDs(values: number[]): number[] {
+  return Array.from(new Set(values)).sort((a, b) => a - b)
+}
+
+function createWhitelistUserPlaceholder(id: number): WhitelistUserSummary {
+  return {
+    id,
+    username: '',
+    email: '',
+    role: isForcedWhitelistUser(id) ? 'admin' : 'user',
+    status: 'active',
+  }
+}
+
+function setWhitelistUserIDs(ids: unknown) {
+  const normalized = normalizeWhitelistUserIDs(ids)
+  const next: Record<number, WhitelistUserSummary> = {}
+  for (const id of normalized) {
+    next[id] = whitelistUsers.value[id] ?? createWhitelistUserPlaceholder(id)
+  }
+  whitelistUsers.value = next
+  const seq = ++whitelistHydrateSeq
+  void hydrateWhitelistUsers(normalized, seq)
+}
+
+async function hydrateWhitelistUsers(ids: number[], seq: number) {
+  const uniqueIDs = normalizeWhitelistUserIDs(ids)
+  const targetIDs = new Set(uniqueIDs)
+  const items: Array<AdminUser | null> = []
+  let cursor = 0
+  const workerCount = Math.min(maxWhitelistHydrationConcurrency, uniqueIDs.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < uniqueIDs.length) {
+      const id = uniqueIDs[cursor]
+      cursor += 1
+      try {
+        items.push(await adminAPI.users.getById(id))
+      } catch {
+        items.push(null)
+      }
+    }
+  }))
+  if (seq !== whitelistHydrateSeq) return
+  const next = { ...whitelistUsers.value }
+  for (const item of items) {
+    if (item && targetIDs.has(item.id) && next[item.id]) {
+      next[item.id] = toWhitelistUserSummary(item)
+    }
+  }
+  whitelistUsers.value = next
+}
+
+function toWhitelistUserSummary(user: AdminUser): WhitelistUserSummary {
+  return {
+    id: user.id,
+    username: user.username || '',
+    email: user.email || '',
+    role: user.role,
+    status: user.status,
+  }
+}
+
+function userDisplayName(user: WhitelistUserSummary): string {
+  return user.username || user.email || `UID ${user.id}`
+}
+
+function isWhitelistUserSelected(userID: number): boolean {
+  return whitelistUserIDs.value.includes(userID)
+}
+
+function isForcedWhitelistUser(userID: number): boolean {
+  return forcedWhitelistUserIDSet.value.has(userID)
+}
+
+function addWhitelistUser(user: AdminUser) {
+  whitelistUsers.value = {
+    ...whitelistUsers.value,
+    [user.id]: toWhitelistUserSummary(user),
+  }
+  whitelistUserSearch.value = ''
+  whitelistUserSearchResults.value = []
+  whitelistUserSearchOpen.value = false
+}
+
+function removeWhitelistUser(userID: number) {
+  if (isForcedWhitelistUser(userID)) return
+  const next = { ...whitelistUsers.value }
+  delete next[userID]
+  whitelistUsers.value = next
+}
+
+function debounceSearchWhitelistUsers() {
+  if (whitelistUserSearchTimer !== null) {
+    window.clearTimeout(whitelistUserSearchTimer)
+  }
+  whitelistUserSearchTimer = window.setTimeout(searchWhitelistUsers, 300)
+}
+
+async function searchWhitelistUsers() {
+  const keyword = whitelistUserSearch.value.trim()
+  const seq = ++whitelistUserSearchSeq
+  if (!keyword) {
+    whitelistUserSearchResults.value = []
+    whitelistUserSearchOpen.value = false
+    whitelistUserSearchLoading.value = false
+    return
+  }
+  whitelistUserSearchLoading.value = true
+  whitelistUserSearchOpen.value = true
+  try {
+    const res = await adminAPI.users.list(1, 10, { search: keyword })
+    if (seq !== whitelistUserSearchSeq || keyword !== whitelistUserSearch.value.trim()) return
+    whitelistUserSearchResults.value = res.items
+  } catch {
+    if (seq !== whitelistUserSearchSeq) return
+    whitelistUserSearchResults.value = []
+  } finally {
+    if (seq === whitelistUserSearchSeq) {
+      whitelistUserSearchLoading.value = false
+    }
+  }
+}
+
 function normalizeKeywordBlockingMode(value: unknown): KeywordBlockingMode {
   if (value === 'keyword_only' || value === 'api_only' || value === 'keyword_and_api') {
     return value
@@ -2332,6 +2563,10 @@ onUnmounted(() => {
   if (statusTimer !== null) {
     window.clearInterval(statusTimer)
     statusTimer = null
+  }
+  if (whitelistUserSearchTimer !== null) {
+    window.clearTimeout(whitelistUserSearchTimer)
+    whitelistUserSearchTimer = null
   }
 })
 </script>

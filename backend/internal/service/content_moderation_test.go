@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -151,8 +152,11 @@ type contentModerationTestHashCache struct {
 }
 
 type contentModerationTestUserRepo struct {
-	user    *User
-	updated []User
+	user               *User
+	users              map[int64]*User
+	listWithFiltersErr error
+	getFirstAdminErr   error
+	updated            []User
 }
 
 func (r *contentModerationTestUserRepo) Create(ctx context.Context, user *User) error {
@@ -160,7 +164,19 @@ func (r *contentModerationTestUserRepo) Create(ctx context.Context, user *User) 
 }
 
 func (r *contentModerationTestUserRepo) GetByID(ctx context.Context, id int64) (*User, error) {
-	if r.user == nil {
+	if r.users != nil {
+		user, ok := r.users[id]
+		if !ok || user == nil {
+			return nil, ErrUserNotFound
+		}
+		clone := *user
+		return &clone, nil
+	}
+	if r.user == nil || r.user.ID != id {
+		if r.user != nil && r.user.ID == 0 {
+			clone := *r.user
+			return &clone, nil
+		}
 		return nil, ErrUserNotFound
 	}
 	clone := *r.user
@@ -172,7 +188,24 @@ func (r *contentModerationTestUserRepo) GetByEmail(ctx context.Context, email st
 }
 
 func (r *contentModerationTestUserRepo) GetFirstAdmin(ctx context.Context) (*User, error) {
-	panic("unexpected GetFirstAdmin call")
+	if r.getFirstAdminErr != nil {
+		return nil, r.getFirstAdminErr
+	}
+	var admins []User
+	if r.users != nil {
+		for _, user := range r.users {
+			if user != nil && user.Role == RoleAdmin && user.Status == StatusActive {
+				admins = append(admins, *user)
+			}
+		}
+	} else if r.user != nil && r.user.Role == RoleAdmin && r.user.Status == StatusActive {
+		admins = append(admins, *r.user)
+	}
+	if len(admins) == 0 {
+		return nil, ErrUserNotFound
+	}
+	sort.Slice(admins, func(i, j int) bool { return admins[i].ID < admins[j].ID })
+	return &admins[0], nil
 }
 
 func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User) error {
@@ -181,7 +214,11 @@ func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User) 
 	}
 	clone := *user
 	r.updated = append(r.updated, clone)
-	r.user = &clone
+	if r.users != nil {
+		r.users[clone.ID] = &clone
+	} else {
+		r.user = &clone
+	}
 	return nil
 }
 
@@ -206,7 +243,30 @@ func (r *contentModerationTestUserRepo) List(ctx context.Context, params paginat
 }
 
 func (r *contentModerationTestUserRepo) ListWithFilters(ctx context.Context, params pagination.PaginationParams, filters UserListFilters) ([]User, *pagination.PaginationResult, error) {
-	panic("unexpected ListWithFilters call")
+	if r.listWithFiltersErr != nil {
+		return nil, nil, r.listWithFiltersErr
+	}
+	var out []User
+	if r.users != nil {
+		for _, user := range r.users {
+			if user == nil {
+				continue
+			}
+			if filters.Role != "" && user.Role != filters.Role {
+				continue
+			}
+			if filters.Status != "" && user.Status != filters.Status {
+				continue
+			}
+			out = append(out, *user)
+		}
+	} else if r.user != nil {
+		if (filters.Role == "" || r.user.Role == filters.Role) && (filters.Status == "" || r.user.Status == filters.Status) {
+			out = append(out, *r.user)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, &pagination.PaginationResult{Total: int64(len(out)), Page: params.Page, PageSize: params.PageSize}, nil
 }
 
 func (r *contentModerationTestUserRepo) GetLatestUsedAtByUserIDs(ctx context.Context, userIDs []int64) (map[int64]*time.Time, error) {
@@ -406,6 +466,38 @@ func TestContentModerationConfigNormalize_NonHitRetentionMaxThreeDays(t *testing
 	cfg.normalize()
 
 	require.Equal(t, 3, cfg.NonHitRetentionDays)
+}
+
+func TestContentModerationConfigNormalize_NormalizesWhitelist(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.WhitelistUserIDs = []int64{42, 1, 42, -1}
+
+	cfg.normalize()
+
+	require.Equal(t, []int64{1, 42}, cfg.WhitelistUserIDs)
+	require.True(t, cfg.includesWhitelistedUser(1))
+	require.True(t, cfg.includesWhitelistedUser(42))
+}
+
+func TestContentModerationApplyForcedWhitelist_UsesActiveAdmins(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.WhitelistUserIDs = []int64{42, 42}
+	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
+		1:  {ID: 1, Email: "user@example.com", Role: RoleUser, Status: StatusActive},
+		7:  {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
+		9:  {ID: 9, Email: "disabled-admin@example.com", Role: RoleAdmin, Status: StatusDisabled},
+		42: {ID: 42, Email: "safe@example.com", Role: RoleUser, Status: StatusActive},
+	}}
+	svc := NewContentModerationService(&contentModerationTestSettingRepo{values: map[string]string{}}, nil, nil, nil, userRepo, nil, nil)
+
+	require.NoError(t, svc.applyForcedWhitelist(context.Background(), cfg, true, true))
+
+	require.Equal(t, []int64{42}, cfg.WhitelistUserIDs)
+	require.Equal(t, []int64{7}, cfg.ForcedWhitelistUserIDs)
+	require.Equal(t, []int64{7, 42}, cfg.effectiveWhitelistUserIDs())
+	require.False(t, cfg.includesWhitelistedUser(1))
+	require.True(t, cfg.includesWhitelistedUser(7))
+	require.True(t, cfg.includesWhitelistedUser(42))
 }
 
 func TestNormalizeBlockedKeywords_TrimsDedupesAndCaps(t *testing.T) {
@@ -730,6 +822,132 @@ func TestContentModerationCheck_ModelFilterUsesRequestedModelNotBodyModel(t *tes
 	require.Equal(t, "gpt-5.5", logs[0].Model)
 }
 
+func TestContentModerationCheck_WhitelistedUserSkipsAudit(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.WhitelistUserIDs = []int64{42}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   42,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Empty(t, repo.snapshotLogs())
+}
+
+func TestContentModerationCheck_ForcedAdminWhitelistSkipsAudit(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.WhitelistUserIDs = []int64{}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Empty(t, repo.snapshotLogs())
+}
+
+func TestContentModerationCheck_DerivedAdminWhitelistDoesNotAssumeUIDOne(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.WhitelistUserIDs = []int64{}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestRepo{}
+	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
+		1: {ID: 1, Email: "user@example.com", Role: RoleUser, Status: StatusActive},
+		7: {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
+	}}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		userRepo,
+		nil,
+		nil,
+	)
+
+	adminDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   7,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, adminDecision.Allowed)
+	require.Equal(t, ContentModerationActionAllow, adminDecision.Action)
+
+	userDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, userDecision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, userDecision.Action)
+}
+
+func TestContentModerationCheck_UsesCachedForcedWhitelistWhenAdminLookupFails(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.WhitelistUserIDs = []int64{}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	userRepo := &contentModerationTestUserRepo{
+		listWithFiltersErr: fmt.Errorf("admin lookup failed"),
+		getFirstAdminErr:   fmt.Errorf("admin fallback failed"),
+	}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		&contentModerationTestRepo{},
+		&contentModerationTestHashCache{},
+		nil,
+		userRepo,
+		nil,
+		nil,
+	)
+	svc.setCachedForcedWhitelistUserIDs([]int64{7})
+
+	adminDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   7,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, adminDecision.Allowed)
+	require.Equal(t, ContentModerationActionAllow, adminDecision.Action)
+
+	userDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   2,
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, userDecision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, userDecision.Action)
+}
+
 func defaultContentModerationModelFilterTestConfig() *ContentModerationConfig {
 	cfg := defaultContentModerationConfig()
 	cfg.Enabled = true
@@ -842,6 +1060,116 @@ func TestContentModerationUpdateConfig_SavesCustomThresholds(t *testing.T) {
 	require.Equal(t, 0.72, saved.Thresholds["sexual"])
 	require.Equal(t, 1.0, saved.Thresholds["harassment"])
 	require.NotContains(t, saved.Thresholds, "unknown")
+}
+
+func TestContentModerationUpdateConfig_ForcesAdminWhitelist(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
+		1:  {ID: 1, Email: "user@example.com", Role: RoleUser, Status: StatusActive},
+		7:  {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
+		42: {ID: 42, Email: "safe@example.com", Role: RoleUser, Status: StatusActive},
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	whitelistUserIDs := []int64{42, 42}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		WhitelistUserIDs: &whitelistUserIDs,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{7, 42}, view.WhitelistUserIDs)
+	require.Equal(t, []int64{7}, view.ForcedWhitelistUserIDs)
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	saved.normalize()
+	require.Equal(t, []int64{42}, saved.WhitelistUserIDs)
+	require.Empty(t, saved.ForcedWhitelistUserIDs)
+}
+
+func TestContentModerationUpdateConfig_DoesNotPersistDerivedAdminAsConfiguredWhitelist(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
+		7: {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
+		8: {ID: 8, Email: "next-admin@example.com", Role: RoleAdmin, Status: StatusActive},
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	whitelistUserIDs := []int64{7}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		WhitelistUserIDs: &whitelistUserIDs,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{7, 8}, view.WhitelistUserIDs)
+	require.Equal(t, []int64{7, 8}, view.ForcedWhitelistUserIDs)
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	saved.normalize()
+	require.Empty(t, saved.WhitelistUserIDs)
+
+	userRepo.users = map[int64]*User{
+		7: {ID: 7, Email: "former-admin@example.com", Role: RoleUser, Status: StatusActive},
+		8: {ID: 8, Email: "next-admin@example.com", Role: RoleAdmin, Status: StatusActive},
+	}
+	svc.setCachedForcedWhitelistUserIDs([]int64{8})
+	reloaded, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []int64{8}, reloaded.WhitelistUserIDs)
+	require.Equal(t, []int64{8}, reloaded.ForcedWhitelistUserIDs)
+}
+
+func TestContentModerationUpdateConfig_RejectsUnknownWhitelistUser(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
+		7: {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	whitelistUserIDs := []int64{42}
+
+	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		WhitelistUserIDs: &whitelistUserIDs,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "白名单用户不存在: 42")
+}
+
+func TestContentModerationUpdateConfig_RejectsTooManyWhitelistUsers(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	whitelistUserIDs := make([]int64, 0, maxContentModerationWhitelistUserIDs+1)
+	for id := int64(2); len(whitelistUserIDs) < maxContentModerationWhitelistUserIDs+1; id++ {
+		whitelistUserIDs = append(whitelistUserIDs, id)
+	}
+
+	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		WhitelistUserIDs: &whitelistUserIDs,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "白名单用户最多允许配置")
 }
 
 func TestExtractContentModerationInput_AnthropicImageSourceOnlyParticipatesInMemory(t *testing.T) {

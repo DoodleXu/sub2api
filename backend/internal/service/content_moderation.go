@@ -54,6 +54,8 @@ const (
 	ContentModerationProtocolGemini            = "gemini"
 	ContentModerationProtocolOpenAIImages      = "openai_images"
 
+	defaultContentModerationAdminUserID = 1
+
 	defaultContentModerationBaseURL   = "https://api.openai.com"
 	defaultContentModerationModel     = "omni-moderation-latest"
 	defaultContentModerationTimeoutMS = 3000
@@ -86,6 +88,8 @@ const (
 	maxContentModerationBlockedKeywordRunes      = 200
 	maxContentModerationModelFilterModels        = 1000
 	maxContentModerationModelFilterRunes         = 200
+	maxContentModerationWhitelistUserIDs         = 1000
+	contentModerationForcedWhitelistCacheTTL     = time.Minute
 
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
@@ -133,66 +137,70 @@ func ContentModerationCategories() []string {
 }
 
 type ContentModerationConfig struct {
-	Enabled              bool                         `json:"enabled"`
-	Mode                 string                       `json:"mode"`
-	BaseURL              string                       `json:"base_url"`
-	Model                string                       `json:"model"`
-	APIKey               string                       `json:"api_key,omitempty"`
-	APIKeys              []string                     `json:"api_keys,omitempty"`
-	TimeoutMS            int                          `json:"timeout_ms"`
-	SampleRate           int                          `json:"sample_rate"`
-	AllGroups            bool                         `json:"all_groups"`
-	GroupIDs             []int64                      `json:"group_ids"`
-	RecordNonHits        bool                         `json:"record_non_hits"`
-	Thresholds           map[string]float64           `json:"thresholds"`
-	WorkerCount          int                          `json:"worker_count"`
-	QueueSize            int                          `json:"queue_size"`
-	BlockStatus          int                          `json:"block_status"`
-	BlockMessage         string                       `json:"block_message"`
-	EmailOnHit           bool                         `json:"email_on_hit"`
-	AutoBanEnabled       bool                         `json:"auto_ban_enabled"`
-	BanThreshold         int                          `json:"ban_threshold"`
-	ViolationWindowHours int                          `json:"violation_window_hours"`
-	RetryCount           int                          `json:"retry_count"`
-	HitRetentionDays     int                          `json:"hit_retention_days"`
-	NonHitRetentionDays  int                          `json:"non_hit_retention_days"`
-	PreHashCheckEnabled  bool                         `json:"pre_hash_check_enabled"`
-	BlockedKeywords      []string                     `json:"blocked_keywords"`
-	KeywordBlockingMode  string                       `json:"keyword_blocking_mode"`
-	ModelFilter          ContentModerationModelFilter `json:"model_filter"`
+	Enabled                bool                         `json:"enabled"`
+	Mode                   string                       `json:"mode"`
+	BaseURL                string                       `json:"base_url"`
+	Model                  string                       `json:"model"`
+	APIKey                 string                       `json:"api_key,omitempty"`
+	APIKeys                []string                     `json:"api_keys,omitempty"`
+	TimeoutMS              int                          `json:"timeout_ms"`
+	SampleRate             int                          `json:"sample_rate"`
+	AllGroups              bool                         `json:"all_groups"`
+	GroupIDs               []int64                      `json:"group_ids"`
+	WhitelistUserIDs       []int64                      `json:"whitelist_user_ids"`
+	ForcedWhitelistUserIDs []int64                      `json:"-"`
+	RecordNonHits          bool                         `json:"record_non_hits"`
+	Thresholds             map[string]float64           `json:"thresholds"`
+	WorkerCount            int                          `json:"worker_count"`
+	QueueSize              int                          `json:"queue_size"`
+	BlockStatus            int                          `json:"block_status"`
+	BlockMessage           string                       `json:"block_message"`
+	EmailOnHit             bool                         `json:"email_on_hit"`
+	AutoBanEnabled         bool                         `json:"auto_ban_enabled"`
+	BanThreshold           int                          `json:"ban_threshold"`
+	ViolationWindowHours   int                          `json:"violation_window_hours"`
+	RetryCount             int                          `json:"retry_count"`
+	HitRetentionDays       int                          `json:"hit_retention_days"`
+	NonHitRetentionDays    int                          `json:"non_hit_retention_days"`
+	PreHashCheckEnabled    bool                         `json:"pre_hash_check_enabled"`
+	BlockedKeywords        []string                     `json:"blocked_keywords"`
+	KeywordBlockingMode    string                       `json:"keyword_blocking_mode"`
+	ModelFilter            ContentModerationModelFilter `json:"model_filter"`
 }
 
 type ContentModerationConfigView struct {
-	Enabled              bool                            `json:"enabled"`
-	Mode                 string                          `json:"mode"`
-	BaseURL              string                          `json:"base_url"`
-	Model                string                          `json:"model"`
-	APIKeyConfigured     bool                            `json:"api_key_configured"`
-	APIKeyMasked         string                          `json:"api_key_masked"`
-	APIKeyCount          int                             `json:"api_key_count"`
-	APIKeyMasks          []string                        `json:"api_key_masks"`
-	APIKeyStatuses       []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
-	TimeoutMS            int                             `json:"timeout_ms"`
-	SampleRate           int                             `json:"sample_rate"`
-	AllGroups            bool                            `json:"all_groups"`
-	GroupIDs             []int64                         `json:"group_ids"`
-	RecordNonHits        bool                            `json:"record_non_hits"`
-	Thresholds           map[string]float64              `json:"thresholds"`
-	WorkerCount          int                             `json:"worker_count"`
-	QueueSize            int                             `json:"queue_size"`
-	BlockStatus          int                             `json:"block_status"`
-	BlockMessage         string                          `json:"block_message"`
-	EmailOnHit           bool                            `json:"email_on_hit"`
-	AutoBanEnabled       bool                            `json:"auto_ban_enabled"`
-	BanThreshold         int                             `json:"ban_threshold"`
-	ViolationWindowHours int                             `json:"violation_window_hours"`
-	RetryCount           int                             `json:"retry_count"`
-	HitRetentionDays     int                             `json:"hit_retention_days"`
-	NonHitRetentionDays  int                             `json:"non_hit_retention_days"`
-	PreHashCheckEnabled  bool                            `json:"pre_hash_check_enabled"`
-	BlockedKeywords      []string                        `json:"blocked_keywords"`
-	KeywordBlockingMode  string                          `json:"keyword_blocking_mode"`
-	ModelFilter          ContentModerationModelFilter    `json:"model_filter"`
+	Enabled                bool                            `json:"enabled"`
+	Mode                   string                          `json:"mode"`
+	BaseURL                string                          `json:"base_url"`
+	Model                  string                          `json:"model"`
+	APIKeyConfigured       bool                            `json:"api_key_configured"`
+	APIKeyMasked           string                          `json:"api_key_masked"`
+	APIKeyCount            int                             `json:"api_key_count"`
+	APIKeyMasks            []string                        `json:"api_key_masks"`
+	APIKeyStatuses         []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
+	TimeoutMS              int                             `json:"timeout_ms"`
+	SampleRate             int                             `json:"sample_rate"`
+	AllGroups              bool                            `json:"all_groups"`
+	GroupIDs               []int64                         `json:"group_ids"`
+	WhitelistUserIDs       []int64                         `json:"whitelist_user_ids"`
+	ForcedWhitelistUserIDs []int64                         `json:"forced_whitelist_user_ids"`
+	RecordNonHits          bool                            `json:"record_non_hits"`
+	Thresholds             map[string]float64              `json:"thresholds"`
+	WorkerCount            int                             `json:"worker_count"`
+	QueueSize              int                             `json:"queue_size"`
+	BlockStatus            int                             `json:"block_status"`
+	BlockMessage           string                          `json:"block_message"`
+	EmailOnHit             bool                            `json:"email_on_hit"`
+	AutoBanEnabled         bool                            `json:"auto_ban_enabled"`
+	BanThreshold           int                             `json:"ban_threshold"`
+	ViolationWindowHours   int                             `json:"violation_window_hours"`
+	RetryCount             int                             `json:"retry_count"`
+	HitRetentionDays       int                             `json:"hit_retention_days"`
+	NonHitRetentionDays    int                             `json:"non_hit_retention_days"`
+	PreHashCheckEnabled    bool                            `json:"pre_hash_check_enabled"`
+	BlockedKeywords        []string                        `json:"blocked_keywords"`
+	KeywordBlockingMode    string                          `json:"keyword_blocking_mode"`
+	ModelFilter            ContentModerationModelFilter    `json:"model_filter"`
 }
 
 type ContentModerationAPIKeyStatus struct {
@@ -263,6 +271,7 @@ type UpdateContentModerationConfigInput struct {
 	SampleRate           *int                          `json:"sample_rate"`
 	AllGroups            *bool                         `json:"all_groups"`
 	GroupIDs             *[]int64                      `json:"group_ids"`
+	WhitelistUserIDs     *[]int64                      `json:"whitelist_user_ids"`
 	RecordNonHits        *bool                         `json:"record_non_hits"`
 	Thresholds           *map[string]float64           `json:"thresholds"`
 	WorkerCount          *int                          `json:"worker_count"`
@@ -501,6 +510,9 @@ type ContentModerationService struct {
 	lastCleanupDeletedNonHit atomic.Int64
 	keyHealthMu              sync.Mutex
 	keyHealth                map[string]*contentModerationKeyHealth
+	forcedWhitelistMu        sync.Mutex
+	forcedWhitelistIDs       []int64
+	forcedWhitelistLoadedAt  time.Time
 }
 
 type contentModerationTask struct {
@@ -645,6 +657,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.GroupIDs != nil {
 		cfg.GroupIDs = normalizeInt64IDs(*input.GroupIDs)
 	}
+	if input.WhitelistUserIDs != nil {
+		cfg.WhitelistUserIDs = normalizeContentModerationWhitelistUserIDs(*input.WhitelistUserIDs)
+	}
 	if input.RecordNonHits != nil {
 		cfg.RecordNonHits = *input.RecordNonHits
 	}
@@ -673,10 +688,14 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 			cfg.APIKey = ""
 		}
 	}
+	cfg.normalize()
+	if err := s.applyForcedWhitelist(ctx, cfg, true, true); err != nil {
+		return nil, err
+	}
+	cfg.WhitelistUserIDs = subtractInt64IDs(cfg.WhitelistUserIDs, cfg.ForcedWhitelistUserIDs)
 	if err := s.validateConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
-	cfg.normalize()
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal content moderation config: %w", err)
@@ -805,6 +824,15 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"record_non_hits", cfg.RecordNonHits)
 	if !cfg.Enabled {
 		slog.Info("content_moderation.skip_config_disabled",
+			"user_id", input.UserID,
+			"api_key_id", input.APIKeyID,
+			"group_id", contentModerationLogGroupID(input.GroupID),
+			"endpoint", input.Endpoint,
+			"protocol", input.Protocol)
+		return allow, nil
+	}
+	if cfg.includesWhitelistedUser(input.UserID) {
+		slog.Info("content_moderation.skip_user_whitelisted",
 			"user_id", input.UserID,
 			"api_key_id", input.APIKeyID,
 			"group_id", contentModerationLogGroupID(input.GroupID),
@@ -1195,6 +1223,9 @@ func (s *ContentModerationService) worker(id int) {
 			if !cfg.Enabled || cfg.Mode == ContentModerationModeOff || len(cfg.apiKeys()) == 0 {
 				return
 			}
+			if cfg.includesWhitelistedUser(task.input.UserID) {
+				return
+			}
 			if !cfg.includesGroup(task.input.GroupID) {
 				return
 			}
@@ -1426,18 +1457,21 @@ func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentMode
 	if err != nil {
 		if errors.Is(err, ErrSettingNotFound) {
 			cfg.normalize()
+			s.applyForcedWhitelistSoft(ctx, cfg)
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("get content moderation config: %w", err)
 	}
 	if strings.TrimSpace(raw) == "" {
 		cfg.normalize()
+		s.applyForcedWhitelistSoft(ctx, cfg)
 		return cfg, nil
 	}
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不是有效 JSON")
 	}
 	cfg.normalize()
+	s.applyForcedWhitelistSoft(ctx, cfg)
 	return cfg, nil
 }
 
@@ -1468,6 +1502,16 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 	if cfg.ModelFilter.Type != ContentModerationModelFilterAll && len(cfg.ModelFilter.Models) == 0 {
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_MODEL_FILTER", "指定或排除模型时至少需要配置 1 个模型")
 	}
+	if len(cfg.WhitelistUserIDs) > maxContentModerationWhitelistUserIDs {
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_WHITELIST", fmt.Sprintf("白名单用户最多允许配置 %d 个", maxContentModerationWhitelistUserIDs))
+	}
+	if s.userRepo != nil {
+		for _, userID := range cfg.WhitelistUserIDs {
+			if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
+				return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_WHITELIST_USER", fmt.Sprintf("白名单用户不存在: %d", userID))
+			}
+		}
+	}
 	if !cfg.AllGroups && len(cfg.GroupIDs) > 0 && s.groupRepo != nil {
 		for _, groupID := range cfg.GroupIDs {
 			if _, err := s.groupRepo.GetByIDLite(ctx, groupID); err != nil {
@@ -1476,6 +1520,107 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 		}
 	}
 	return nil
+}
+
+func (s *ContentModerationService) applyForcedWhitelistSoft(ctx context.Context, cfg *ContentModerationConfig) {
+	if err := s.applyForcedWhitelist(ctx, cfg, false, false); err != nil {
+		slog.Warn("content_moderation.forced_whitelist_load_failed", "error", err)
+	}
+}
+
+func (s *ContentModerationService) applyForcedWhitelist(ctx context.Context, cfg *ContentModerationConfig, required bool, refresh bool) error {
+	if cfg == nil {
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不能为空")
+	}
+	forcedIDs, err := s.forcedWhitelistUserIDs(ctx, refresh)
+	if err != nil {
+		if !required {
+			cfg.ForcedWhitelistUserIDs = []int64{}
+			return err
+		}
+		return err
+	}
+	cfg.ForcedWhitelistUserIDs = forcedIDs
+	cfg.WhitelistUserIDs = normalizeContentModerationWhitelistUserIDs(cfg.WhitelistUserIDs)
+	return nil
+}
+
+func (s *ContentModerationService) forcedWhitelistUserIDs(ctx context.Context, refresh bool) ([]int64, error) {
+	if s == nil || s.userRepo == nil {
+		return []int64{defaultContentModerationAdminUserID}, nil
+	}
+	if !refresh {
+		if ids, ok := s.cachedForcedWhitelistUserIDs(false); ok {
+			return ids, nil
+		}
+	}
+	ids, err := s.loadForcedWhitelistUserIDs(ctx)
+	if err == nil {
+		s.setCachedForcedWhitelistUserIDs(ids)
+		return ids, nil
+	}
+	if !refresh {
+		if ids, ok := s.cachedForcedWhitelistUserIDs(true); ok {
+			return ids, nil
+		}
+	}
+	return nil, err
+}
+
+func (s *ContentModerationService) loadForcedWhitelistUserIDs(ctx context.Context) ([]int64, error) {
+	disableSubscriptions := false
+	users, _, err := s.userRepo.ListWithFilters(ctx, pagination.PaginationParams{
+		Page:      1,
+		PageSize:  maxContentModerationWhitelistUserIDs,
+		SortBy:    "id",
+		SortOrder: pagination.SortOrderAsc,
+	}, UserListFilters{
+		Role:                 RoleAdmin,
+		Status:               StatusActive,
+		IncludeSubscriptions: &disableSubscriptions,
+	})
+	if err == nil {
+		ids := make([]int64, 0, len(users))
+		for _, user := range users {
+			if user.ID > 0 {
+				ids = append(ids, user.ID)
+			}
+		}
+		return normalizeContentModerationWhitelistUserIDs(ids), nil
+	}
+	admin, firstAdminErr := s.userRepo.GetFirstAdmin(ctx)
+	if firstAdminErr != nil {
+		return nil, fmt.Errorf("load active admin whitelist users: %w", err)
+	}
+	if admin == nil || admin.ID <= 0 || admin.Role != RoleAdmin || admin.Status != StatusActive {
+		return []int64{}, nil
+	}
+	return []int64{admin.ID}, nil
+}
+
+func (s *ContentModerationService) cachedForcedWhitelistUserIDs(allowStale bool) ([]int64, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.forcedWhitelistMu.Lock()
+	defer s.forcedWhitelistMu.Unlock()
+	if s.forcedWhitelistLoadedAt.IsZero() {
+		return nil, false
+	}
+	if !allowStale && time.Since(s.forcedWhitelistLoadedAt) > contentModerationForcedWhitelistCacheTTL {
+		return nil, false
+	}
+	return append([]int64(nil), s.forcedWhitelistIDs...), true
+}
+
+func (s *ContentModerationService) setCachedForcedWhitelistUserIDs(ids []int64) {
+	if s == nil {
+		return
+	}
+	s.forcedWhitelistMu.Lock()
+	defer s.forcedWhitelistMu.Unlock()
+	s.forcedWhitelistIDs = append([]int64(nil), normalizeContentModerationWhitelistUserIDs(ids)...)
+	s.forcedWhitelistLoadedAt = time.Now()
 }
 
 func (s *ContentModerationService) callModeration(ctx context.Context, cfg *ContentModerationConfig, input any, trackKeyLoad ...bool) (*moderationAPIResult, error) {
@@ -1810,6 +1955,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		SampleRate:           100,
 		AllGroups:            true,
 		GroupIDs:             []int64{},
+		WhitelistUserIDs:     []int64{},
 		RecordNonHits:        false,
 		Thresholds:           ContentModerationDefaultThresholds(),
 		WorkerCount:          defaultContentModerationWorkerCount,
@@ -1840,6 +1986,8 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 	clone := *cfg
 	clone.APIKeys = append([]string(nil), cfg.APIKeys...)
 	clone.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
+	clone.WhitelistUserIDs = append([]int64(nil), cfg.WhitelistUserIDs...)
+	clone.ForcedWhitelistUserIDs = append([]int64(nil), cfg.ForcedWhitelistUserIDs...)
 	clone.BlockedKeywords = append([]string(nil), cfg.BlockedKeywords...)
 	clone.Thresholds = cloneFloatMap(cfg.Thresholds)
 	clone.ModelFilter = ContentModerationModelFilter{
@@ -1923,6 +2071,8 @@ func (cfg *ContentModerationConfig) normalize() {
 		cfg.NonHitRetentionDays = maxContentModerationNonHitRetentionDays
 	}
 	cfg.GroupIDs = normalizeInt64IDs(cfg.GroupIDs)
+	cfg.WhitelistUserIDs = normalizeContentModerationWhitelistUserIDs(cfg.WhitelistUserIDs)
+	cfg.ForcedWhitelistUserIDs = normalizeContentModerationWhitelistUserIDs(cfg.ForcedWhitelistUserIDs)
 	cfg.Thresholds = mergeContentModerationThresholds(ContentModerationDefaultThresholds(), cfg.Thresholds)
 	cfg.BlockedKeywords = normalizeBlockedKeywords(cfg.BlockedKeywords)
 	cfg.KeywordBlockingMode = normalizeKeywordBlockingMode(cfg.KeywordBlockingMode)
@@ -1957,6 +2107,24 @@ func (cfg *ContentModerationConfig) includesModel(model string) bool {
 	default:
 		return true
 	}
+}
+
+func (cfg *ContentModerationConfig) includesWhitelistedUser(userID int64) bool {
+	if cfg == nil || userID <= 0 {
+		return false
+	}
+	ids := cfg.effectiveWhitelistUserIDs()
+	idx := sort.Search(len(ids), func(i int) bool {
+		return ids[i] >= userID
+	})
+	return idx < len(ids) && ids[idx] == userID
+}
+
+func (cfg *ContentModerationConfig) effectiveWhitelistUserIDs() []int64 {
+	if cfg == nil {
+		return []int64{}
+	}
+	return normalizeContentModerationWhitelistUserIDs(append(append([]int64(nil), cfg.WhitelistUserIDs...), cfg.ForcedWhitelistUserIDs...))
 }
 
 func contentModerationLogGroupID(groupID *int64) int64 {
@@ -2126,36 +2294,38 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		apiKeyMasked = masks[0]
 	}
 	return &ContentModerationConfigView{
-		Enabled:              cfg.Enabled,
-		Mode:                 cfg.Mode,
-		BaseURL:              cfg.BaseURL,
-		Model:                cfg.Model,
-		APIKeyConfigured:     len(keys) > 0,
-		APIKeyMasked:         apiKeyMasked,
-		APIKeyCount:          len(keys),
-		APIKeyMasks:          masks,
-		APIKeyStatuses:       s.apiKeyStatuses(keys),
-		TimeoutMS:            cfg.TimeoutMS,
-		SampleRate:           cfg.SampleRate,
-		AllGroups:            cfg.AllGroups,
-		GroupIDs:             append([]int64(nil), cfg.GroupIDs...),
-		RecordNonHits:        cfg.RecordNonHits,
-		Thresholds:           cloneFloatMap(cfg.Thresholds),
-		WorkerCount:          cfg.WorkerCount,
-		QueueSize:            cfg.QueueSize,
-		BlockStatus:          cfg.BlockStatus,
-		BlockMessage:         cfg.BlockMessage,
-		EmailOnHit:           cfg.EmailOnHit,
-		AutoBanEnabled:       cfg.AutoBanEnabled,
-		BanThreshold:         cfg.BanThreshold,
-		ViolationWindowHours: cfg.ViolationWindowHours,
-		RetryCount:           cfg.RetryCount,
-		HitRetentionDays:     cfg.HitRetentionDays,
-		NonHitRetentionDays:  cfg.NonHitRetentionDays,
-		PreHashCheckEnabled:  cfg.PreHashCheckEnabled,
-		BlockedKeywords:      append([]string(nil), cfg.BlockedKeywords...),
-		KeywordBlockingMode:  cfg.KeywordBlockingMode,
-		ModelFilter:          cloneContentModerationModelFilter(cfg.ModelFilter),
+		Enabled:                cfg.Enabled,
+		Mode:                   cfg.Mode,
+		BaseURL:                cfg.BaseURL,
+		Model:                  cfg.Model,
+		APIKeyConfigured:       len(keys) > 0,
+		APIKeyMasked:           apiKeyMasked,
+		APIKeyCount:            len(keys),
+		APIKeyMasks:            masks,
+		APIKeyStatuses:         s.apiKeyStatuses(keys),
+		TimeoutMS:              cfg.TimeoutMS,
+		SampleRate:             cfg.SampleRate,
+		AllGroups:              cfg.AllGroups,
+		GroupIDs:               append([]int64(nil), cfg.GroupIDs...),
+		WhitelistUserIDs:       cfg.effectiveWhitelistUserIDs(),
+		ForcedWhitelistUserIDs: append([]int64(nil), cfg.ForcedWhitelistUserIDs...),
+		RecordNonHits:          cfg.RecordNonHits,
+		Thresholds:             cloneFloatMap(cfg.Thresholds),
+		WorkerCount:            cfg.WorkerCount,
+		QueueSize:              cfg.QueueSize,
+		BlockStatus:            cfg.BlockStatus,
+		BlockMessage:           cfg.BlockMessage,
+		EmailOnHit:             cfg.EmailOnHit,
+		AutoBanEnabled:         cfg.AutoBanEnabled,
+		BanThreshold:           cfg.BanThreshold,
+		ViolationWindowHours:   cfg.ViolationWindowHours,
+		RetryCount:             cfg.RetryCount,
+		HitRetentionDays:       cfg.HitRetentionDays,
+		NonHitRetentionDays:    cfg.NonHitRetentionDays,
+		PreHashCheckEnabled:    cfg.PreHashCheckEnabled,
+		BlockedKeywords:        append([]string(nil), cfg.BlockedKeywords...),
+		KeywordBlockingMode:    cfg.KeywordBlockingMode,
+		ModelFilter:            cloneContentModerationModelFilter(cfg.ModelFilter),
 	}
 }
 
@@ -2458,6 +2628,30 @@ func normalizeInt64IDs(ids []int64) []int64 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+func normalizeContentModerationWhitelistUserIDs(ids []int64) []int64 {
+	return normalizeInt64IDs(ids)
+}
+
+func subtractInt64IDs(ids []int64, remove []int64) []int64 {
+	if len(ids) == 0 || len(remove) == 0 {
+		return normalizeInt64IDs(ids)
+	}
+	removeSet := make(map[int64]struct{}, len(remove))
+	for _, id := range remove {
+		if id > 0 {
+			removeSet[id] = struct{}{}
+		}
+	}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := removeSet[id]; ok {
+			continue
+		}
+		out = append(out, id)
+	}
+	return normalizeInt64IDs(out)
 }
 
 func normalizeBlockedKeywords(in []string) []string {

@@ -12,6 +12,8 @@ const {
   getStatus,
   listLogs,
   getGroups,
+  getUserById,
+  listUsers,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -20,6 +22,8 @@ const {
   getStatus: vi.fn(),
   listLogs: vi.fn(),
   getGroups: vi.fn(),
+  getUserById: vi.fn(),
+  listUsers: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -38,6 +42,10 @@ vi.mock('@/api/admin', () => ({
     },
     groups: {
       getAll: getGroups,
+    },
+    users: {
+      getById: getUserById,
+      list: listUsers,
     },
   },
 }))
@@ -82,6 +90,8 @@ const baseConfig = (): ContentModerationConfig => ({
   sample_rate: 100,
   all_groups: true,
   group_ids: [],
+  whitelist_user_ids: [7],
+  forced_whitelist_user_ids: [7],
   record_non_hits: false,
   worker_count: 4,
   queue_size: 32768,
@@ -184,6 +194,22 @@ function findButtonByText(wrapper: VueWrapper, text: string): DOMWrapper<HTMLBut
   return button
 }
 
+function mountRiskControlView() {
+  return mount(RiskControlView, {
+    global: {
+      stubs: {
+        AppLayout: AppLayoutStub,
+        BaseDialog: BaseDialogStub,
+        Icon: true,
+        Select: true,
+        Toggle: true,
+        Pagination: true,
+        ModelWhitelistSelector: ModelWhitelistSelectorStub,
+      },
+    },
+  })
+}
+
 describe('admin RiskControlView', () => {
   beforeEach(() => {
     getConfig.mockReset()
@@ -191,6 +217,8 @@ describe('admin RiskControlView', () => {
     getStatus.mockReset()
     listLogs.mockReset()
     getGroups.mockReset()
+    getUserById.mockReset()
+    listUsers.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
 
@@ -198,6 +226,14 @@ describe('admin RiskControlView', () => {
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
     getGroups.mockResolvedValue([])
+    getUserById.mockImplementation(async (id: number) => ({
+      id,
+      email: id === 7 ? 'admin@example.com' : `user-${id}@example.com`,
+      username: id === 7 ? 'admin' : `user-${id}`,
+      role: id === 7 ? 'admin' : 'user',
+      status: 'active',
+    }))
+    listUsers.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10, pages: 1 })
     updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => ({
       ...baseConfig(),
       ...payload,
@@ -274,6 +310,146 @@ describe('admin RiskControlView', () => {
       }),
     }))
     expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('shows readable whitelist users, keeps forced admins, and saves selected ids', async () => {
+    listUsers.mockResolvedValue({
+      items: [
+        {
+          id: 42,
+          email: 'alice@example.com',
+          username: 'alice',
+          role: 'user',
+          status: 'active',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      pages: 1,
+    })
+    const wrapper = mountRiskControlView()
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin@example.com')
+    expect(wrapper.text()).toContain('admin.riskControl.forcedWhitelist')
+    expect(wrapper.findAll('[data-test="whitelist-user-chip"]')).toHaveLength(1)
+
+    await wrapper.get('[data-test="whitelist-user-search"]').setValue('alice')
+    await new Promise((resolve) => window.setTimeout(resolve, 350))
+    await flushPromises()
+
+    const result = wrapper.get('[data-test="whitelist-user-result"]')
+    expect(result.text()).toContain('alice@example.com')
+    expect(result.attributes('disabled')).toBeUndefined()
+    await result.trigger('click')
+    expect(wrapper.findAll('[data-test="whitelist-user-chip"]')).toHaveLength(2)
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      whitelist_user_ids: [7, 42],
+    }))
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('does not re-add a removed whitelist user when hydration finishes late', async () => {
+    const cfg = baseConfig()
+    cfg.whitelist_user_ids = [7, 42]
+    cfg.forced_whitelist_user_ids = [7]
+    getConfig.mockResolvedValue(cfg)
+
+    let resolveUser42: (value: unknown) => void = () => {}
+    getUserById.mockImplementation((id: number) => {
+      if (id === 42) {
+        return new Promise((resolve) => {
+          resolveUser42 = resolve
+        })
+      }
+      return Promise.resolve({
+        id,
+        email: 'admin@example.com',
+        username: 'admin',
+        role: 'admin',
+        status: 'active',
+      })
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
+
+    expect(wrapper.text()).toContain('UID 42')
+    await wrapper.get('[title="admin.riskControl.removeWhitelistUser"]').trigger('click')
+    expect(wrapper.text()).not.toContain('UID 42')
+
+    resolveUser42({
+      id: 42,
+      email: 'late@example.com',
+      username: 'late-user',
+      role: 'user',
+      status: 'active',
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('late@example.com')
+    expect(wrapper.text()).not.toContain('UID 42')
+
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+      whitelist_user_ids: [7],
+    }))
+  })
+
+  it('ignores stale whitelist user search responses', async () => {
+    vi.useFakeTimers()
+    const pending: Record<string, (value: unknown) => void> = {}
+    listUsers.mockImplementation((_page: number, _pageSize: number, filters: { search?: string }) => (
+      new Promise((resolve) => {
+        pending[filters.search ?? ''] = resolve
+      })
+    ))
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.scope').trigger('click')
+
+    const search = wrapper.get('[data-test="whitelist-user-search"]')
+    await search.setValue('old')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    await search.setValue('new')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+
+    pending.new({
+      items: [{ id: 43, email: 'new@example.com', username: 'new-user', role: 'user', status: 'active' }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      pages: 1,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('new@example.com')
+
+    pending.old({
+      items: [{ id: 44, email: 'old@example.com', username: 'old-user', role: 'user', status: 'active' }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      pages: 1,
+    })
+    await flushPromises()
+    vi.useRealTimers()
+
+    expect(wrapper.text()).toContain('new@example.com')
+    expect(wrapper.text()).not.toContain('old@example.com')
   })
 
   it('describes worker runtime as async audit and pre-block record processing', async () => {
