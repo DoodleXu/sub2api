@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -134,7 +135,7 @@ func TestAppendArchivedCRSSkip(t *testing.T) {
 func TestCRSSyncRefreshOAuthTokenSkipsArchived(t *testing.T) {
 	archivedAt := time.Now()
 	svc := &CRSSyncService{}
-	got := svc.refreshOAuthToken(nil, &Account{
+	got := svc.refreshOAuthToken(context.TODO(), &Account{
 		Type:       AccountTypeOAuth,
 		Platform:   PlatformOpenAI,
 		ArchivedAt: &archivedAt,
