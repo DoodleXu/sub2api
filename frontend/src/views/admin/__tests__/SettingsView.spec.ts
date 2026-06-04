@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, RouterLinkStub } from "@vue/test-utils";
 
 import SettingsView from "../SettingsView.vue";
 
@@ -433,6 +433,7 @@ function mountView() {
         Select: SelectStub,
         Toggle: ToggleStub,
         Icon: true,
+        RouterLink: RouterLinkStub,
         ConfirmDialog: true,
         PaymentProviderList: true,
         PaymentProviderDialog: true,
@@ -727,6 +728,7 @@ describe("admin SettingsView payment visible method controls", () => {
           Select: SelectStub,
           Toggle: ToggleStub,
           Icon: true,
+          RouterLink: RouterLinkStub,
           ConfirmDialog: true,
           PaymentProviderList: PaymentProviderListStub,
           PaymentProviderDialog: true,
