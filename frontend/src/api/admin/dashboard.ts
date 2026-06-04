@@ -11,6 +11,7 @@ import type {
   GroupStat,
   ApiKeyUsageTrendPoint,
   UserUsageTrendPoint,
+  UserSpendingRankingItem,
   UserSpendingRankingResponse,
   UserBreakdownItem,
   UsageRequestType
@@ -129,7 +130,9 @@ export interface DashboardSnapshotV2Params extends TrendParams {
   include_model_stats?: boolean
   include_group_stats?: boolean
   include_users_trend?: boolean
+  include_user_ranking?: boolean
   users_trend_limit?: number
+  user_ranking_limit?: number
 }
 
 export interface DashboardSnapshotV2Stats extends DashboardStats {
@@ -146,6 +149,10 @@ export interface DashboardSnapshotV2Response {
   models?: ModelStat[]
   groups?: GroupStat[]
   users_trend?: UserUsageTrendPoint[]
+  ranking?: UserSpendingRankingItem[]
+  ranking_total_actual_cost?: number
+  ranking_total_requests?: number
+  ranking_total_tokens?: number
 }
 
 /**

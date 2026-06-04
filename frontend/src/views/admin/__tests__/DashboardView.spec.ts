@@ -100,7 +100,12 @@ describe('admin DashboardView', () => {
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
       trend: [],
-      models: []
+      models: [],
+      users_trend: [],
+      ranking: [],
+      ranking_total_actual_cost: 0,
+      ranking_total_requests: 0,
+      ranking_total_tokens: 0
     })
     getUserUsageTrend.mockResolvedValue({
       trend: [],
@@ -148,20 +153,19 @@ describe('admin DashboardView', () => {
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
       start_date: formatLocalDate(yesterday),
       end_date: formatLocalDate(now),
-      granularity: 'hour'
+      granularity: 'hour',
+      include_users_trend: true,
+      include_user_ranking: true,
+      users_trend_limit: 12,
+      user_ranking_limit: 12
     }))
+    expect(getUserUsageTrend).not.toHaveBeenCalled()
+    expect(getUserSpendingRanking).not.toHaveBeenCalled()
 
     wrapper.unmount()
   })
 
-  it('defers secondary trend and ranking requests after the initial snapshot', async () => {
-    let idleCallback: IdleRequestCallback | null = null
-    vi.stubGlobal('requestIdleCallback', (cb: IdleRequestCallback) => {
-      idleCallback = cb
-      return 1
-    })
-    vi.stubGlobal('cancelIdleCallback', vi.fn())
-
+  it('loads recent user trend and ranking through the initial snapshot', async () => {
     const wrapper = mount(DashboardView, {
       global: {
         stubs: {
@@ -182,28 +186,18 @@ describe('admin DashboardView', () => {
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
     expect(getUserUsageTrend).not.toHaveBeenCalled()
     expect(getUserSpendingRanking).not.toHaveBeenCalled()
-
-    idleCallback?.({ didTimeout: false, timeRemaining: () => 50 })
-    await flushPromises()
-
-    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
-    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+    expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
+      include_stats: true,
+      include_trend: true,
+      include_model_stats: true,
+      include_users_trend: true,
+      include_user_ranking: true
+    }))
 
     wrapper.unmount()
   })
 
-  it('cancels deferred secondary requests when the dashboard is refreshed manually', async () => {
-    let idleCallback: IdleRequestCallback | null = null
-    const cancelIdleCallback = vi.fn(() => {
-      idleCallback = null
-    })
-
-    vi.stubGlobal('requestIdleCallback', (cb: IdleRequestCallback) => {
-      idleCallback = cb
-      return 1
-    })
-    vi.stubGlobal('cancelIdleCallback', cancelIdleCallback)
-
+  it('refreshes dashboard data with a single snapshot request', async () => {
     const wrapper = mount(DashboardView, {
       global: {
         stubs: {
@@ -220,16 +214,18 @@ describe('admin DashboardView', () => {
     })
 
     await flushPromises()
-    expect(idleCallback).not.toBeNull()
 
     await wrapper.find('button.btn-secondary').trigger('click')
     await flushPromises()
 
-    expect(cancelIdleCallback).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledTimes(2)
-    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
-    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
-    expect(idleCallback).toBeNull()
+    expect(getUserUsageTrend).not.toHaveBeenCalled()
+    expect(getUserSpendingRanking).not.toHaveBeenCalled()
+    expect(getSnapshotV2).toHaveBeenLastCalledWith(expect.objectContaining({
+      include_stats: true,
+      include_users_trend: true,
+      include_user_ranking: true
+    }))
 
     wrapper.unmount()
   })

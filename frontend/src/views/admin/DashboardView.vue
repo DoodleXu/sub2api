@@ -1,12 +1,7 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <!-- Loading State -->
-      <div v-if="loading" class="flex items-center justify-center py-12">
-        <LoadingSpinner />
-      </div>
-
-      <template v-else-if="stats">
+      <template v-if="stats">
         <!-- Row 1: Core Stats -->
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <!-- Total API Keys -->
@@ -243,7 +238,7 @@
                   @change="onDateRangeChange"
                 />
               </div>
-              <button @click="loadDashboardStats" :disabled="chartsLoading" class="btn btn-secondary">
+              <button @click="loadDashboardStats" :disabled="loading || chartsLoading" class="btn btn-secondary">
                 {{ t('common.refresh') }}
               </button>
               <div class="ml-auto flex items-center gap-2">
@@ -305,7 +300,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -352,7 +347,49 @@ ChartJS.register(
 
 const appStore = useAppStore()
 const router = useRouter()
-const stats = ref<DashboardStats | null>(null)
+const createEmptyDashboardStats = (): DashboardStats => ({
+  total_users: 0,
+  today_new_users: 0,
+  active_users: 0,
+  hourly_active_users: 0,
+  stats_updated_at: '',
+  stats_stale: false,
+  total_api_keys: 0,
+  active_api_keys: 0,
+  total_accounts: 0,
+  normal_accounts: 0,
+  error_accounts: 0,
+  ratelimit_accounts: 0,
+  overload_accounts: 0,
+  total_requests: 0,
+  total_input_tokens: 0,
+  total_output_tokens: 0,
+  total_cache_creation_tokens: 0,
+  total_cache_read_tokens: 0,
+  total_tokens: 0,
+  total_cost: 0,
+  total_actual_cost: 0,
+  total_account_cost: 0,
+  total_cost_cny: 0,
+  average_cost_cny_per_usd: 0,
+  anthropic_cost_cny_per_usd: 0,
+  openai_cost_cny_per_usd: 0,
+  today_requests: 0,
+  today_input_tokens: 0,
+  today_output_tokens: 0,
+  today_cache_creation_tokens: 0,
+  today_cache_read_tokens: 0,
+  today_tokens: 0,
+  today_cost: 0,
+  today_actual_cost: 0,
+  today_account_cost: 0,
+  average_duration_ms: 0,
+  uptime: 0,
+  rpm: 0,
+  tpm: 0
+})
+
+const stats = ref<DashboardStats>(createEmptyDashboardStats())
 const loading = ref(false)
 const chartsLoading = ref(false)
 const userTrendLoading = ref(false)
@@ -368,12 +405,7 @@ const rankingTotalActualCost = ref(0)
 const rankingTotalRequests = ref(0)
 const rankingTotalTokens = ref(0)
 let chartLoadSeq = 0
-let usersTrendLoadSeq = 0
-let rankingLoadSeq = 0
 const rankingLimit = 12
-type IdleHandle = number | ReturnType<typeof setTimeout>
-let deferredDashboardLoadHandle: IdleHandle | null = null
-let dashboardMounted = false
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
@@ -610,10 +642,13 @@ const onDateRangeChange = (range: {
 // Load data
 const loadDashboardSnapshot = async (includeStats: boolean) => {
   const currentSeq = ++chartLoadSeq
-  if (includeStats && !stats.value) {
+  if (includeStats) {
     loading.value = true
   }
   chartsLoading.value = true
+  userTrendLoading.value = true
+  rankingLoading.value = true
+  rankingError.value = false
   try {
     const response = await adminAPI.dashboard.getSnapshotV2({
       start_date: startDate.value,
@@ -623,7 +658,10 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
       include_trend: true,
       include_model_stats: true,
       include_group_stats: false,
-      include_users_trend: false
+      include_users_trend: true,
+      include_user_ranking: true,
+      users_trend_limit: rankingLimit,
+      user_ranking_limit: rankingLimit
     })
     if (currentSeq !== chartLoadSeq) return
     if (includeStats && response.stats) {
@@ -631,137 +669,41 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
     }
     trendData.value = response.trend || []
     modelStats.value = response.models || []
+    userTrend.value = response.users_trend || []
+    rankingItems.value = response.ranking || []
+    rankingTotalActualCost.value = response.ranking_total_actual_cost || 0
+    rankingTotalRequests.value = response.ranking_total_requests || 0
+    rankingTotalTokens.value = response.ranking_total_tokens || 0
   } catch (error) {
     if (currentSeq !== chartLoadSeq) return
     appStore.showError(t('admin.dashboard.failedToLoad'))
     console.error('Error loading dashboard snapshot:', error)
-  } finally {
-    if (currentSeq === chartLoadSeq) {
-      loading.value = false
-      chartsLoading.value = false
-    }
-  }
-}
-
-const loadUsersTrend = async () => {
-  const currentSeq = ++usersTrendLoadSeq
-  userTrendLoading.value = true
-  try {
-    const response = await adminAPI.dashboard.getUserUsageTrend({
-      start_date: startDate.value,
-      end_date: endDate.value,
-      granularity: granularity.value,
-      limit: 12
-    })
-    if (currentSeq !== usersTrendLoadSeq) return
-    userTrend.value = response.trend || []
-  } catch (error) {
-    if (currentSeq !== usersTrendLoadSeq) return
-    console.error('Error loading users trend:', error)
     userTrend.value = []
-  } finally {
-    if (currentSeq === usersTrendLoadSeq) {
-      userTrendLoading.value = false
-    }
-  }
-}
-
-const loadUserSpendingRanking = async () => {
-  const currentSeq = ++rankingLoadSeq
-  rankingLoading.value = true
-  rankingError.value = false
-  try {
-    const response = await adminAPI.dashboard.getUserSpendingRanking({
-      start_date: startDate.value,
-      end_date: endDate.value,
-      limit: rankingLimit
-    })
-    if (currentSeq !== rankingLoadSeq) return
-    rankingItems.value = response.ranking || []
-    rankingTotalActualCost.value = response.total_actual_cost || 0
-    rankingTotalRequests.value = response.total_requests || 0
-    rankingTotalTokens.value = response.total_tokens || 0
-  } catch (error) {
-    if (currentSeq !== rankingLoadSeq) return
-    console.error('Error loading user spending ranking:', error)
     rankingItems.value = []
     rankingTotalActualCost.value = 0
     rankingTotalRequests.value = 0
     rankingTotalTokens.value = 0
     rankingError.value = true
   } finally {
-    if (currentSeq === rankingLoadSeq) {
+    if (currentSeq === chartLoadSeq) {
+      loading.value = false
+      chartsLoading.value = false
+      userTrendLoading.value = false
       rankingLoading.value = false
     }
   }
 }
 
 const loadDashboardStats = async () => {
-  cancelDeferredDashboardLoad()
-  await Promise.all([
-    loadDashboardSnapshot(true),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
-  ])
+  await loadDashboardSnapshot(true)
 }
 
 const loadChartData = async () => {
-  cancelDeferredDashboardLoad()
-  await Promise.all([
-    loadDashboardSnapshot(false),
-    loadUsersTrend(),
-    loadUserSpendingRanking()
-  ])
-}
-
-const scheduleDeferredDashboardLoad = () => {
-  if (deferredDashboardLoadHandle !== null) {
-    return
-  }
-
-  const run = () => {
-    deferredDashboardLoadHandle = null
-    if (!dashboardMounted) {
-      return
-    }
-    void Promise.all([
-      loadUsersTrend(),
-      loadUserSpendingRanking()
-    ])
-  }
-
-  if (typeof window.requestIdleCallback === 'function') {
-    deferredDashboardLoadHandle = window.requestIdleCallback(run, { timeout: 1800 })
-  } else {
-    deferredDashboardLoadHandle = window.setTimeout(run, 800)
-  }
-}
-
-const cancelDeferredDashboardLoad = () => {
-  if (deferredDashboardLoadHandle === null) {
-    return
-  }
-
-  if (typeof window.cancelIdleCallback === 'function' && typeof deferredDashboardLoadHandle === 'number') {
-    window.cancelIdleCallback(deferredDashboardLoadHandle)
-  } else {
-    clearTimeout(deferredDashboardLoadHandle)
-  }
-  deferredDashboardLoadHandle = null
+  await loadDashboardSnapshot(false)
 }
 
 onMounted(() => {
-  dashboardMounted = true
-  void loadDashboardSnapshot(true).then(() => {
-    if (dashboardMounted) {
-      scheduleDeferredDashboardLoad()
-    }
-  })
-})
-
-onBeforeUnmount(() => {
-  dashboardMounted = false
-  cancelDeferredDashboardLoad()
+  void loadDashboardStats()
 })
 </script>
 

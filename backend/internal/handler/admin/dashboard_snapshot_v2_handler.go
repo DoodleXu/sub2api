@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -34,6 +35,11 @@ type dashboardSnapshotV2Response struct {
 	Models     []usagestats.ModelStat           `json:"models,omitempty"`
 	Groups     []usagestats.GroupStat           `json:"groups,omitempty"`
 	UsersTrend []usagestats.UserUsageTrendPoint `json:"users_trend,omitempty"`
+
+	Ranking                []usagestats.UserSpendingRankingItem `json:"ranking,omitempty"`
+	RankingTotalActualCost float64                              `json:"ranking_total_actual_cost,omitempty"`
+	RankingTotalRequests   int64                                `json:"ranking_total_requests,omitempty"`
+	RankingTotalTokens     int64                                `json:"ranking_total_tokens,omitempty"`
 }
 
 type dashboardSnapshotV2Filters struct {
@@ -64,7 +70,9 @@ type dashboardSnapshotV2CacheKey struct {
 	IncludeModels     bool   `json:"include_models"`
 	IncludeGroups     bool   `json:"include_groups"`
 	IncludeUsersTrend bool   `json:"include_users_trend"`
+	IncludeRanking    bool   `json:"include_ranking"`
 	UsersTrendLimit   int    `json:"users_trend_limit"`
+	RankingLimit      int    `json:"ranking_limit"`
 }
 
 func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
@@ -79,10 +87,17 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 	includeModels := parseBoolQueryWithDefault(c.Query("include_model_stats"), true)
 	includeGroups := parseBoolQueryWithDefault(c.Query("include_group_stats"), false)
 	includeUsersTrend := parseBoolQueryWithDefault(c.Query("include_users_trend"), false)
+	includeRanking := parseBoolQueryWithDefault(c.Query("include_user_ranking"), false)
 	usersTrendLimit := 12
 	if raw := strings.TrimSpace(c.Query("users_trend_limit")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 50 {
 			usersTrendLimit = parsed
+		}
+	}
+	rankingLimit := 12
+	if raw := strings.TrimSpace(c.Query("user_ranking_limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 50 {
+			rankingLimit = parsed
 		}
 	}
 
@@ -109,7 +124,9 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		IncludeModels:     includeModels,
 		IncludeGroups:     includeGroups,
 		IncludeUsersTrend: includeUsersTrend,
+		IncludeRanking:    includeRanking,
 		UsersTrendLimit:   usersTrendLimit,
+		RankingLimit:      rankingLimit,
 	})
 	cacheKey := string(keyRaw)
 
@@ -125,7 +142,9 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 			includeModels,
 			includeGroups,
 			includeUsersTrend,
+			includeRanking,
 			usersTrendLimit,
+			rankingLimit,
 		)
 	})
 	if err != nil {
@@ -149,8 +168,8 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	startTime, endTime time.Time,
 	granularity string,
 	filters *dashboardSnapshotV2Filters,
-	includeStats, includeTrend, includeModels, includeGroups, includeUsersTrend bool,
-	usersTrendLimit int,
+	includeStats, includeTrend, includeModels, includeGroups, includeUsersTrend, includeRanking bool,
+	usersTrendLimit, rankingLimit int,
 ) (*dashboardSnapshotV2Response, error) {
 	resp := &dashboardSnapshotV2Response{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -159,83 +178,143 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 		Granularity: granularity,
 	}
 
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	errCh := make(chan error, 6)
+	run := func(load func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := load(); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
 	if includeStats {
-		stats, err := h.dashboardService.GetDashboardStats(ctx)
-		if err != nil {
-			return nil, errors.New("failed to get dashboard statistics")
-		}
-		resp.Stats = &dashboardSnapshotV2Stats{
-			DashboardStats: *stats,
-			Uptime:         int64(time.Since(h.startTime).Seconds()),
-		}
+		run(func() error {
+			stats, err := h.dashboardService.GetDashboardStats(ctx)
+			if err != nil {
+				return errors.New("failed to get dashboard statistics")
+			}
+			mu.Lock()
+			resp.Stats = &dashboardSnapshotV2Stats{
+				DashboardStats: *stats,
+				Uptime:         int64(time.Since(h.startTime).Seconds()),
+			}
+			mu.Unlock()
+			return nil
+		})
 	}
 
 	if includeTrend {
-		trend, _, err := h.getUsageTrendCached(
-			ctx,
-			startTime,
-			endTime,
-			granularity,
-			filters.UserID,
-			filters.APIKeyID,
-			filters.AccountID,
-			filters.GroupID,
-			filters.Model,
-			filters.RequestType,
-			filters.Stream,
-			filters.BillingType,
-		)
-		if err != nil {
-			return nil, errors.New("failed to get usage trend")
-		}
-		resp.Trend = trend
+		run(func() error {
+			trend, _, err := h.getUsageTrendCached(
+				ctx,
+				startTime,
+				endTime,
+				granularity,
+				filters.UserID,
+				filters.APIKeyID,
+				filters.AccountID,
+				filters.GroupID,
+				filters.Model,
+				filters.RequestType,
+				filters.Stream,
+				filters.BillingType,
+			)
+			if err != nil {
+				return errors.New("failed to get usage trend")
+			}
+			mu.Lock()
+			resp.Trend = trend
+			mu.Unlock()
+			return nil
+		})
 	}
 
 	if includeModels {
-		models, _, err := h.getModelStatsCached(
-			ctx,
-			startTime,
-			endTime,
-			filters.UserID,
-			filters.APIKeyID,
-			filters.AccountID,
-			filters.GroupID,
-			usagestats.ModelSourceRequested,
-			filters.RequestType,
-			filters.Stream,
-			filters.BillingType,
-		)
-		if err != nil {
-			return nil, errors.New("failed to get model statistics")
-		}
-		resp.Models = models
+		run(func() error {
+			models, _, err := h.getModelStatsCached(
+				ctx,
+				startTime,
+				endTime,
+				filters.UserID,
+				filters.APIKeyID,
+				filters.AccountID,
+				filters.GroupID,
+				usagestats.ModelSourceRequested,
+				filters.RequestType,
+				filters.Stream,
+				filters.BillingType,
+			)
+			if err != nil {
+				return errors.New("failed to get model statistics")
+			}
+			mu.Lock()
+			resp.Models = models
+			mu.Unlock()
+			return nil
+		})
 	}
 
 	if includeGroups {
-		groups, _, err := h.getGroupStatsCached(
-			ctx,
-			startTime,
-			endTime,
-			filters.UserID,
-			filters.APIKeyID,
-			filters.AccountID,
-			filters.GroupID,
-			filters.RequestType,
-			filters.Stream,
-			filters.BillingType,
-		)
-		if err != nil {
-			return nil, errors.New("failed to get group statistics")
-		}
-		resp.Groups = groups
+		run(func() error {
+			groups, _, err := h.getGroupStatsCached(
+				ctx,
+				startTime,
+				endTime,
+				filters.UserID,
+				filters.APIKeyID,
+				filters.AccountID,
+				filters.GroupID,
+				filters.RequestType,
+				filters.Stream,
+				filters.BillingType,
+			)
+			if err != nil {
+				return errors.New("failed to get group statistics")
+			}
+			mu.Lock()
+			resp.Groups = groups
+			mu.Unlock()
+			return nil
+		})
 	}
 
 	if includeUsersTrend {
-		usersTrend, _, err := h.getUserUsageTrendCached(ctx, startTime, endTime, granularity, usersTrendLimit)
-		if err != nil {
-			return nil, errors.New("failed to get user usage trend")
-		}
-		resp.UsersTrend = usersTrend
+		run(func() error {
+			usersTrend, _, err := h.getUserUsageTrendCached(ctx, startTime, endTime, granularity, usersTrendLimit)
+			if err != nil {
+				return errors.New("failed to get user usage trend")
+			}
+			mu.Lock()
+			resp.UsersTrend = usersTrend
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if includeRanking {
+		run(func() error {
+			ranking, err := h.dashboardService.GetUserSpendingRanking(ctx, startTime, endTime, rankingLimit)
+			if err != nil {
+				return errors.New("failed to get user spending ranking")
+			}
+			mu.Lock()
+			resp.Ranking = ranking.Ranking
+			resp.RankingTotalActualCost = ranking.TotalActualCost
+			resp.RankingTotalRequests = ranking.TotalRequests
+			resp.RankingTotalTokens = ranking.TotalTokens
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	wg.Wait()
+	close(errCh)
+	if err := <-errCh; err != nil {
+		return nil, err
 	}
 
 	return resp, nil
