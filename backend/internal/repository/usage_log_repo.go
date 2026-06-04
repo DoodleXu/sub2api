@@ -1687,6 +1687,12 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 }
 
 func (r *usageLogRepository) fillDashboardAggregatedAccountCostFromUsageLogs(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
+	if err := r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC); err == nil {
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) && !isUndefinedColumnError(err) {
+		return err
+	}
+
 	tzName := timezone.Name()
 	query := `
 		WITH bounds AS (
@@ -1709,6 +1715,37 @@ func (r *usageLogRepository) fillDashboardAggregatedAccountCostFromUsageLogs(ctx
 			AND ul.created_at < GREATEST(bounds.end_time, $1::timestamptz + INTERVAL '1 day')
 	`
 	return scanSingleRow(ctx, r.sql, query, []any{todayUTC, tzName}, &stats.TotalAccountCost, &stats.TodayAccountCost)
+}
+
+func (r *usageLogRepository) fillDashboardAccountCostFromAggregates(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
+	var totalAccountCost, todayAccountCost float64
+	var missingAccountCostRows int64
+	query := `
+		SELECT
+			COALESCE(SUM(account_cost), 0) AS total_account_cost,
+			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_account_cost,
+			COUNT(*) FILTER (WHERE actual_cost > 0 AND account_cost = 0) AS missing_account_cost_rows
+		FROM usage_dashboard_daily
+	`
+	if err := scanSingleRow(ctx, r.sql, query, []any{todayUTC}, &totalAccountCost, &todayAccountCost, &missingAccountCostRows); err != nil {
+		return err
+	}
+	// Newly added aggregate columns default to 0 for historical rows until a backfill runs.
+	// Preserve correctness by falling back to usage_logs when non-empty aggregates have no account cost.
+	if missingAccountCostRows > 0 {
+		return sql.ErrNoRows
+	}
+	stats.TotalAccountCost = totalAccountCost
+	stats.TodayAccountCost = todayAccountCost
+	return nil
+}
+
+func isUndefinedColumnError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || pqErr == nil {
+		return false
+	}
+	return string(pqErr.Code) == "42703"
 }
 
 func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Context, stats *DashboardStats, startUTC, endUTC, todayUTC, now time.Time) error {
