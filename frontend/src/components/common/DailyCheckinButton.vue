@@ -1,5 +1,6 @@
 <template>
   <button
+    v-if="visible"
     type="button"
     class="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60"
     :class="buttonClass"
@@ -33,6 +34,7 @@ const authStore = useAuthStore()
 const loading = ref(false)
 const submitting = ref(false)
 const status = ref<DailyCheckinStatus | null>(null)
+const visible = computed(() => status.value !== null && status.value.enabled !== false)
 
 const buttonClass = computed(() => {
   if (status.value?.checked_in) {
@@ -47,6 +49,9 @@ const buttonClass = computed(() => {
 const buttonTitle = computed(() => {
   if (status.value?.checked_in) {
     return t('profile.checkin.alreadyCheckedIn')
+  }
+  if (status.value?.enabled === false) {
+    return t('profile.checkin.disabled')
   }
   if (status.value?.eligible) {
     return t('profile.checkin.readyTitle', {
@@ -64,6 +69,15 @@ const buttonTitle = computed(() => {
 
 function formatUSD(value: number): string {
   return `$${Number(value || 0).toFixed(2)}`
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const err = error as { status?: number; code?: number | string; error?: string; message?: string }
+  return err.status === 429 ||
+    String(err.code ?? '') === '429' ||
+    err.error === 'rate limit exceeded' ||
+    err.message === 'Too many requests, please try again later'
 }
 
 async function loadStatus() {
@@ -90,11 +104,20 @@ function checkinErrorMessage(error: unknown): string {
       required: formatUSD(Number(metadata?.required_usage_usd ?? status.value?.required_usage_usd ?? 1)),
     })
   }
+  if (code === 'DAILY_CHECKIN_DISABLED') {
+    return t('profile.checkin.disabled')
+  }
+  if (code === 'DAILY_CHECKIN_BUDGET_EXHAUSTED') {
+    return t('profile.checkin.budgetExhausted')
+  }
+  if (isRateLimitError(error)) {
+    return t('profile.checkin.tooManyRequests')
+  }
   return extractApiErrorMessage(error, t('profile.checkin.failed'))
 }
 
 async function handleCheckin() {
-  if (submitting.value || status.value?.checked_in) return
+  if (!status.value || submitting.value || status.value.checked_in || status.value.enabled === false) return
   submitting.value = true
   try {
     const result = await userAPI.dailyCheckin()

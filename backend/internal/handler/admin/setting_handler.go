@@ -64,10 +64,15 @@ type SettingHandler struct {
 	paymentService           *service.PaymentService
 	userAttributeService     *service.UserAttributeService
 	notificationEmailService *service.NotificationEmailService
+	dailyCheckinService      *service.DailyCheckinService
 }
 
 // NewSettingHandler 创建系统设置处理器
-func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService) *SettingHandler {
+func NewSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, dailyCheckinService ...*service.DailyCheckinService) *SettingHandler {
+	var checkinService *service.DailyCheckinService
+	if len(dailyCheckinService) > 0 {
+		checkinService = dailyCheckinService[0]
+	}
 	return &SettingHandler{
 		settingService:       settingService,
 		emailService:         emailService,
@@ -76,6 +81,7 @@ func NewSettingHandler(settingService *service.SettingService, emailService *ser
 		paymentConfigService: paymentConfigService,
 		paymentService:       paymentService,
 		userAttributeService: userAttributeService,
+		dailyCheckinService:  checkinService,
 	}
 }
 
@@ -294,11 +300,17 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled:  settings.AvailableChannelsEnabled,
-		WebConsoleEnabled:         settings.WebConsoleEnabled,
-		WebConsoleDefaultEndpoint: settings.WebConsoleDefaultEndpoint,
-		DailyCheckinRewardMinUSD:  settings.DailyCheckinRewardMinUSD,
-		DailyCheckinRewardMaxUSD:  settings.DailyCheckinRewardMaxUSD,
+		AvailableChannelsEnabled:        settings.AvailableChannelsEnabled,
+		WebConsoleEnabled:               settings.WebConsoleEnabled,
+		WebConsoleDefaultEndpoint:       settings.WebConsoleDefaultEndpoint,
+		DailyCheckinEnabled:             settings.DailyCheckinEnabled,
+		DailyCheckinRequiredUsageUSD:    settings.DailyCheckinRequiredUsageUSD,
+		DailyCheckinUsageScope:          settings.DailyCheckinUsageScope,
+		DailyCheckinRewardMinUSD:        settings.DailyCheckinRewardMinUSD,
+		DailyCheckinRewardMaxUSD:        settings.DailyCheckinRewardMaxUSD,
+		DailyCheckinDailyBudgetUSD:      settings.DailyCheckinDailyBudgetUSD,
+		DailyCheckinMonthlyBudgetUSD:    settings.DailyCheckinMonthlyBudgetUSD,
+		DailyCheckinUserMonthlyLimitUSD: settings.DailyCheckinUserMonthlyLimitUSD,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 	}
@@ -318,6 +330,21 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 	}
 
 	response.Success(c, systemSettingsResponseData(payload, authSourceDefaults))
+}
+
+// GetDailyCheckinStats returns lightweight operational metrics for the check-in campaign.
+// GET /api/v1/admin/settings/daily-checkin/stats
+func (h *SettingHandler) GetDailyCheckinStats(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Daily check-in service is unavailable")
+		return
+	}
+	stats, err := h.dailyCheckinService.GetAdminStats(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
 }
 
 // openaiFastPolicySettingsToDTO converts service -> dto for OpenAI fast policy.
@@ -646,9 +673,15 @@ type UpdateSettingsRequest struct {
 	WebConsoleEnabled         *bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint *string `json:"web_console_default_endpoint"`
 
-	// Daily check-in reward range
-	DailyCheckinRewardMinUSD *int `json:"daily_checkin_reward_min_usd"`
-	DailyCheckinRewardMaxUSD *int `json:"daily_checkin_reward_max_usd"`
+	// Daily check-in settings
+	DailyCheckinEnabled             *bool    `json:"daily_checkin_enabled"`
+	DailyCheckinRequiredUsageUSD    *float64 `json:"daily_checkin_required_usage_usd"`
+	DailyCheckinUsageScope          *string  `json:"daily_checkin_usage_scope"`
+	DailyCheckinRewardMinUSD        *int     `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD        *int     `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinDailyBudgetUSD      *float64 `json:"daily_checkin_daily_budget_usd"`
+	DailyCheckinMonthlyBudgetUSD    *float64 `json:"daily_checkin_monthly_budget_usd"`
+	DailyCheckinUserMonthlyLimitUSD *float64 `json:"daily_checkin_user_monthly_limit_usd"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1771,6 +1804,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WebConsoleDefaultEndpoint
 		}(),
+		DailyCheckinEnabled: func() bool {
+			if req.DailyCheckinEnabled != nil {
+				return *req.DailyCheckinEnabled
+			}
+			return previousSettings.DailyCheckinEnabled
+		}(),
+		DailyCheckinRequiredUsageUSD: func() float64 {
+			if req.DailyCheckinRequiredUsageUSD != nil {
+				return *req.DailyCheckinRequiredUsageUSD
+			}
+			return previousSettings.DailyCheckinRequiredUsageUSD
+		}(),
+		DailyCheckinUsageScope: func() string {
+			if req.DailyCheckinUsageScope != nil {
+				return strings.TrimSpace(*req.DailyCheckinUsageScope)
+			}
+			return previousSettings.DailyCheckinUsageScope
+		}(),
 		DailyCheckinRewardMinUSD: func() int {
 			if req.DailyCheckinRewardMinUSD != nil {
 				return *req.DailyCheckinRewardMinUSD
@@ -1782,6 +1833,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.DailyCheckinRewardMaxUSD
 			}
 			return previousSettings.DailyCheckinRewardMaxUSD
+		}(),
+		DailyCheckinDailyBudgetUSD: func() float64 {
+			if req.DailyCheckinDailyBudgetUSD != nil {
+				return *req.DailyCheckinDailyBudgetUSD
+			}
+			return previousSettings.DailyCheckinDailyBudgetUSD
+		}(),
+		DailyCheckinMonthlyBudgetUSD: func() float64 {
+			if req.DailyCheckinMonthlyBudgetUSD != nil {
+				return *req.DailyCheckinMonthlyBudgetUSD
+			}
+			return previousSettings.DailyCheckinMonthlyBudgetUSD
+		}(),
+		DailyCheckinUserMonthlyLimitUSD: func() float64 {
+			if req.DailyCheckinUserMonthlyLimitUSD != nil {
+				return *req.DailyCheckinUserMonthlyLimitUSD
+			}
+			return previousSettings.DailyCheckinUserMonthlyLimitUSD
 		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
@@ -2112,11 +2181,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorEnabled:                updatedSettings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
-		AvailableChannelsEnabled:  updatedSettings.AvailableChannelsEnabled,
-		WebConsoleEnabled:         updatedSettings.WebConsoleEnabled,
-		WebConsoleDefaultEndpoint: updatedSettings.WebConsoleDefaultEndpoint,
-		DailyCheckinRewardMinUSD:  updatedSettings.DailyCheckinRewardMinUSD,
-		DailyCheckinRewardMaxUSD:  updatedSettings.DailyCheckinRewardMaxUSD,
+		AvailableChannelsEnabled:        updatedSettings.AvailableChannelsEnabled,
+		WebConsoleEnabled:               updatedSettings.WebConsoleEnabled,
+		WebConsoleDefaultEndpoint:       updatedSettings.WebConsoleDefaultEndpoint,
+		DailyCheckinEnabled:             updatedSettings.DailyCheckinEnabled,
+		DailyCheckinRequiredUsageUSD:    updatedSettings.DailyCheckinRequiredUsageUSD,
+		DailyCheckinUsageScope:          updatedSettings.DailyCheckinUsageScope,
+		DailyCheckinRewardMinUSD:        updatedSettings.DailyCheckinRewardMinUSD,
+		DailyCheckinRewardMaxUSD:        updatedSettings.DailyCheckinRewardMaxUSD,
+		DailyCheckinDailyBudgetUSD:      updatedSettings.DailyCheckinDailyBudgetUSD,
+		DailyCheckinMonthlyBudgetUSD:    updatedSettings.DailyCheckinMonthlyBudgetUSD,
+		DailyCheckinUserMonthlyLimitUSD: updatedSettings.DailyCheckinUserMonthlyLimitUSD,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2601,11 +2676,29 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.WebConsoleDefaultEndpoint != after.WebConsoleDefaultEndpoint {
 		changed = append(changed, "web_console_default_endpoint")
 	}
+	if before.DailyCheckinEnabled != after.DailyCheckinEnabled {
+		changed = append(changed, "daily_checkin_enabled")
+	}
+	if before.DailyCheckinRequiredUsageUSD != after.DailyCheckinRequiredUsageUSD {
+		changed = append(changed, "daily_checkin_required_usage_usd")
+	}
+	if before.DailyCheckinUsageScope != after.DailyCheckinUsageScope {
+		changed = append(changed, "daily_checkin_usage_scope")
+	}
 	if before.DailyCheckinRewardMinUSD != after.DailyCheckinRewardMinUSD {
 		changed = append(changed, "daily_checkin_reward_min_usd")
 	}
 	if before.DailyCheckinRewardMaxUSD != after.DailyCheckinRewardMaxUSD {
 		changed = append(changed, "daily_checkin_reward_max_usd")
+	}
+	if before.DailyCheckinDailyBudgetUSD != after.DailyCheckinDailyBudgetUSD {
+		changed = append(changed, "daily_checkin_daily_budget_usd")
+	}
+	if before.DailyCheckinMonthlyBudgetUSD != after.DailyCheckinMonthlyBudgetUSD {
+		changed = append(changed, "daily_checkin_monthly_budget_usd")
+	}
+	if before.DailyCheckinUserMonthlyLimitUSD != after.DailyCheckinUserMonthlyLimitUSD {
+		changed = append(changed, "daily_checkin_user_monthly_limit_usd")
 	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")

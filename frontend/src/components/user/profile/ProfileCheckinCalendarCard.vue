@@ -1,5 +1,5 @@
 <template>
-  <div class="card p-4">
+  <div v-if="status !== null && status.enabled !== false" class="card p-4">
     <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <div class="flex items-center gap-2">

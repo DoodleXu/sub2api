@@ -375,8 +375,14 @@ const (
 	SettingKeyWebConsoleDefaultEndpoint = "web_console_default_endpoint"
 
 	// Daily check-in reward settings.
-	SettingKeyDailyCheckinRewardMinUSD = "daily_checkin_reward_min_usd"
-	SettingKeyDailyCheckinRewardMaxUSD = "daily_checkin_reward_max_usd"
+	SettingKeyDailyCheckinEnabled             = "daily_checkin_enabled"
+	SettingKeyDailyCheckinRequiredUsageUSD    = "daily_checkin_required_usage_usd"
+	SettingKeyDailyCheckinUsageScope          = "daily_checkin_usage_scope"
+	SettingKeyDailyCheckinRewardMinUSD        = "daily_checkin_reward_min_usd"
+	SettingKeyDailyCheckinRewardMaxUSD        = "daily_checkin_reward_max_usd"
+	SettingKeyDailyCheckinDailyBudgetUSD      = "daily_checkin_daily_budget_usd"
+	SettingKeyDailyCheckinMonthlyBudgetUSD    = "daily_checkin_monthly_budget_usd"
+	SettingKeyDailyCheckinUserMonthlyLimitUSD = "daily_checkin_user_monthly_limit_usd"
 
 	// =========================
 	// Overload Cooldown (529)

@@ -27,6 +27,15 @@ func TestMigration118DoesNotForceOverwriteAuthSourceGrantDefaults(t *testing.T) 
 	require.Contains(t, sql, "THEN ''")
 }
 
+func TestMigration149AddsCheckinDateIndexForBudgetAggregates(t *testing.T) {
+	content, err := FS.ReadFile("149_daily_checkin_controls.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "idx_user_checkins_checkin_date")
+	require.Contains(t, sql, "ON user_checkins (checkin_date)")
+}
+
 func TestAuthIdentityReportTypeWideningRunsBeforeLongReportWritersAndStillReconcilesAt121(t *testing.T) {
 	preflightContent, err := FS.ReadFile("108a_widen_auth_identity_migration_report_type.sql")
 	require.NoError(t, err)

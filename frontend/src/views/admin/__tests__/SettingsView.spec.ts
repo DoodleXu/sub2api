@@ -7,6 +7,7 @@ import SettingsView from "../SettingsView.vue";
 const {
   getSettings,
   updateSettings,
+  getDailyCheckinStats,
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
@@ -29,6 +30,7 @@ const {
 } = vi.hoisted(() => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
+  getDailyCheckinStats: vi.fn(),
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("@/api", () => ({
     settings: {
       getSettings,
       updateSettings,
+      getDailyCheckinStats,
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
       getAdminApiKey,
@@ -477,6 +480,7 @@ describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
     updateSettings.mockReset();
+    getDailyCheckinStats.mockReset();
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
     getAdminApiKey.mockReset();
@@ -503,6 +507,25 @@ describe("admin SettingsView payment visible method controls", () => {
       ...baseSettingsResponse,
       ...payload,
     }));
+    getDailyCheckinStats.mockResolvedValue({
+      enabled: true,
+      required_usage_usd: 1,
+      usage_scope: "actual_cost",
+      reward_min_usd: 1,
+      reward_max_usd: 3,
+      today_checkins: 0,
+      today_users: 0,
+      today_reward_usd: 0,
+      month_checkins: 0,
+      month_users: 0,
+      month_reward_usd: 0,
+      average_reward_usd: 0,
+      daily_budget_usd: 0,
+      daily_remaining_usd: 0,
+      monthly_budget_usd: 0,
+      monthly_remaining_usd: 0,
+      user_monthly_limit_usd: 0,
+    });
     getWebSearchEmulationConfig.mockResolvedValue({
       enabled: false,
       providers: [],

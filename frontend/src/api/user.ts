@@ -20,8 +20,6 @@ import type {
 } from '@/types'
 
 export interface DailyCheckinRecord {
-  id: number
-  user_id: number
   date: string
   reward_amount: number
   qualified_usage_usd: number
@@ -29,6 +27,7 @@ export interface DailyCheckinRecord {
 }
 
 export interface DailyCheckinStatus {
+  enabled: boolean
   today: string
   month: string
   checked_in: boolean

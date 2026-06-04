@@ -870,9 +870,16 @@ const (
 )
 
 const (
-	DailyCheckinRewardMinDefault = 1
-	DailyCheckinRewardMaxDefault = 3
-	DailyCheckinRewardMaxLimit   = 100
+	DailyCheckinRequiredUsageDefault = 1.0
+	DailyCheckinRewardMinDefault     = 1
+	DailyCheckinRewardMaxDefault     = 3
+	DailyCheckinRewardMaxLimit       = 100
+	DailyCheckinBudgetDefault        = 0.0
+)
+
+const (
+	DailyCheckinUsageScopeActualCost  = "actual_cost"
+	DailyCheckinUsageScopeBalanceOnly = "balance_only"
 )
 
 // parseChannelMonitorInterval parses the stored string and clamps to [15, 3600].
@@ -899,6 +906,33 @@ func parseDailyCheckinRewardRange(minRaw, maxRaw string) (int, int) {
 		}
 	}
 	return normalizeDailyCheckinRewardRange(minValue, maxValue)
+}
+
+func parseDailyCheckinPositiveFloat(raw string, defaultValue float64) float64 {
+	if strings.TrimSpace(raw) == "" {
+		return defaultValue
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v < 0 {
+		return defaultValue
+	}
+	return normalizeDailyCheckinNonNegativeFloat(v, defaultValue)
+}
+
+func normalizeDailyCheckinNonNegativeFloat(value, defaultValue float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return defaultValue
+	}
+	return value
+}
+
+func normalizeDailyCheckinUsageScope(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case DailyCheckinUsageScopeBalanceOnly:
+		return DailyCheckinUsageScopeBalanceOnly
+	default:
+		return DailyCheckinUsageScopeActualCost
+	}
 }
 
 func normalizeDailyCheckinRewardRange(minValue, maxValue int) (int, int) {
@@ -1901,9 +1935,15 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
 	updates[SettingKeyWebConsoleEnabled] = strconv.FormatBool(settings.WebConsoleEnabled)
 	updates[SettingKeyWebConsoleDefaultEndpoint] = strings.TrimSpace(settings.WebConsoleDefaultEndpoint)
+	updates[SettingKeyDailyCheckinEnabled] = strconv.FormatBool(settings.DailyCheckinEnabled)
+	updates[SettingKeyDailyCheckinRequiredUsageUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinRequiredUsageUSD, DailyCheckinRequiredUsageDefault), 'f', 8, 64)
+	updates[SettingKeyDailyCheckinUsageScope] = normalizeDailyCheckinUsageScope(settings.DailyCheckinUsageScope)
 	checkinMin, checkinMax := normalizeDailyCheckinRewardRange(settings.DailyCheckinRewardMinUSD, settings.DailyCheckinRewardMaxUSD)
 	updates[SettingKeyDailyCheckinRewardMinUSD] = strconv.Itoa(checkinMin)
 	updates[SettingKeyDailyCheckinRewardMaxUSD] = strconv.Itoa(checkinMax)
+	updates[SettingKeyDailyCheckinDailyBudgetUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinDailyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
+	updates[SettingKeyDailyCheckinMonthlyBudgetUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinMonthlyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
+	updates[SettingKeyDailyCheckinUserMonthlyLimitUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinUserMonthlyLimitUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
@@ -2818,9 +2858,15 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Web console feature (default disabled; opt-in)
 		SettingKeyWebConsoleEnabled:         "false",
 		SettingKeyWebConsoleDefaultEndpoint: "",
-		// Daily check-in reward range (USD integer)
-		SettingKeyDailyCheckinRewardMinUSD: strconv.Itoa(DailyCheckinRewardMinDefault),
-		SettingKeyDailyCheckinRewardMaxUSD: strconv.Itoa(DailyCheckinRewardMaxDefault),
+		// Daily check-in settings.
+		SettingKeyDailyCheckinEnabled:             "true",
+		SettingKeyDailyCheckinRequiredUsageUSD:    strconv.FormatFloat(DailyCheckinRequiredUsageDefault, 'f', 8, 64),
+		SettingKeyDailyCheckinUsageScope:          DailyCheckinUsageScopeActualCost,
+		SettingKeyDailyCheckinRewardMinUSD:        strconv.Itoa(DailyCheckinRewardMinDefault),
+		SettingKeyDailyCheckinRewardMaxUSD:        strconv.Itoa(DailyCheckinRewardMaxDefault),
+		SettingKeyDailyCheckinDailyBudgetUSD:      strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
+		SettingKeyDailyCheckinMonthlyBudgetUSD:    strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
+		SettingKeyDailyCheckinUserMonthlyLimitUSD: strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
@@ -3330,9 +3376,27 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"
 	result.WebConsoleEnabled = settings[SettingKeyWebConsoleEnabled] == "true"
 	result.WebConsoleDefaultEndpoint = strings.TrimSpace(settings[SettingKeyWebConsoleDefaultEndpoint])
+	result.DailyCheckinEnabled = !isFalseSettingValue(settings[SettingKeyDailyCheckinEnabled])
+	result.DailyCheckinRequiredUsageUSD = parseDailyCheckinPositiveFloat(
+		settings[SettingKeyDailyCheckinRequiredUsageUSD],
+		DailyCheckinRequiredUsageDefault,
+	)
+	result.DailyCheckinUsageScope = normalizeDailyCheckinUsageScope(settings[SettingKeyDailyCheckinUsageScope])
 	result.DailyCheckinRewardMinUSD, result.DailyCheckinRewardMaxUSD = parseDailyCheckinRewardRange(
 		settings[SettingKeyDailyCheckinRewardMinUSD],
 		settings[SettingKeyDailyCheckinRewardMaxUSD],
+	)
+	result.DailyCheckinDailyBudgetUSD = parseDailyCheckinPositiveFloat(
+		settings[SettingKeyDailyCheckinDailyBudgetUSD],
+		DailyCheckinBudgetDefault,
+	)
+	result.DailyCheckinMonthlyBudgetUSD = parseDailyCheckinPositiveFloat(
+		settings[SettingKeyDailyCheckinMonthlyBudgetUSD],
+		DailyCheckinBudgetDefault,
+	)
+	result.DailyCheckinUserMonthlyLimitUSD = parseDailyCheckinPositiveFloat(
+		settings[SettingKeyDailyCheckinUserMonthlyLimitUSD],
+		DailyCheckinBudgetDefault,
 	)
 
 	// Affiliate (邀请返利) feature (default: disabled; strict true)
@@ -3616,22 +3680,62 @@ func (s *SettingService) getStringOrDefault(settings map[string]string, key, def
 	return defaultValue
 }
 
-func (s *SettingService) GetDailyCheckinRewardRange(ctx context.Context) (int, int, error) {
+type DailyCheckinSettings struct {
+	Enabled             bool
+	RequiredUsageUSD    float64
+	UsageScope          string
+	RewardMinUSD        int
+	RewardMaxUSD        int
+	DailyBudgetUSD      float64
+	MonthlyBudgetUSD    float64
+	UserMonthlyLimitUSD float64
+}
+
+func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyCheckinSettings, error) {
 	if s == nil || s.settingRepo == nil {
-		return DailyCheckinRewardMinDefault, DailyCheckinRewardMaxDefault, nil
+		return &DailyCheckinSettings{
+			Enabled:          true,
+			RequiredUsageUSD: DailyCheckinRequiredUsageDefault,
+			UsageScope:       DailyCheckinUsageScopeActualCost,
+			RewardMinUSD:     DailyCheckinRewardMinDefault,
+			RewardMaxUSD:     DailyCheckinRewardMaxDefault,
+		}, nil
 	}
 	settings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyDailyCheckinEnabled,
+		SettingKeyDailyCheckinRequiredUsageUSD,
+		SettingKeyDailyCheckinUsageScope,
 		SettingKeyDailyCheckinRewardMinUSD,
 		SettingKeyDailyCheckinRewardMaxUSD,
+		SettingKeyDailyCheckinDailyBudgetUSD,
+		SettingKeyDailyCheckinMonthlyBudgetUSD,
+		SettingKeyDailyCheckinUserMonthlyLimitUSD,
 	})
 	if err != nil {
-		return 0, 0, fmt.Errorf("get daily checkin reward range: %w", err)
+		return nil, fmt.Errorf("get daily checkin settings: %w", err)
 	}
 	minValue, maxValue := parseDailyCheckinRewardRange(
 		settings[SettingKeyDailyCheckinRewardMinUSD],
 		settings[SettingKeyDailyCheckinRewardMaxUSD],
 	)
-	return minValue, maxValue, nil
+	return &DailyCheckinSettings{
+		Enabled:             !isFalseSettingValue(settings[SettingKeyDailyCheckinEnabled]),
+		RequiredUsageUSD:    parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinRequiredUsageUSD], DailyCheckinRequiredUsageDefault),
+		UsageScope:          normalizeDailyCheckinUsageScope(settings[SettingKeyDailyCheckinUsageScope]),
+		RewardMinUSD:        minValue,
+		RewardMaxUSD:        maxValue,
+		DailyBudgetUSD:      parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinDailyBudgetUSD], DailyCheckinBudgetDefault),
+		MonthlyBudgetUSD:    parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinMonthlyBudgetUSD], DailyCheckinBudgetDefault),
+		UserMonthlyLimitUSD: parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinUserMonthlyLimitUSD], DailyCheckinBudgetDefault),
+	}, nil
+}
+
+func (s *SettingService) GetDailyCheckinRewardRange(ctx context.Context) (int, int, error) {
+	settings, err := s.GetDailyCheckinSettings(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return settings.RewardMinUSD, settings.RewardMaxUSD, nil
 }
 
 // IsTurnstileEnabled 检查是否启用 Turnstile 验证

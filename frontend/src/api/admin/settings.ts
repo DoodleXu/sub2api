@@ -611,9 +611,15 @@ export interface SystemSettings {
   web_console_enabled: boolean;
   web_console_default_endpoint: string;
 
-  // Daily check-in reward range
+  // Daily check-in settings
+  daily_checkin_enabled: boolean;
+  daily_checkin_required_usage_usd: number;
+  daily_checkin_usage_scope: "actual_cost" | "balance_only";
   daily_checkin_reward_min_usd: number;
   daily_checkin_reward_max_usd: number;
+  daily_checkin_daily_budget_usd: number;
+  daily_checkin_monthly_budget_usd: number;
+  daily_checkin_user_monthly_limit_usd: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -849,9 +855,15 @@ export interface UpdateSettingsRequest {
   web_console_enabled?: boolean;
   web_console_default_endpoint?: string;
 
-  // Daily check-in reward range
+  // Daily check-in settings
+  daily_checkin_enabled?: boolean;
+  daily_checkin_required_usage_usd?: number;
+  daily_checkin_usage_scope?: "actual_cost" | "balance_only";
   daily_checkin_reward_min_usd?: number;
   daily_checkin_reward_max_usd?: number;
+  daily_checkin_daily_budget_usd?: number;
+  daily_checkin_monthly_budget_usd?: number;
+  daily_checkin_user_monthly_limit_usd?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
@@ -880,6 +892,33 @@ export async function updateSettings(
   const { data } = await apiClient.put<SystemSettings>(
     "/admin/settings",
     settings,
+  );
+  return data;
+}
+
+export interface DailyCheckinAdminStats {
+  enabled: boolean;
+  required_usage_usd: number;
+  usage_scope: "actual_cost" | "balance_only";
+  reward_min_usd: number;
+  reward_max_usd: number;
+  today_checkins: number;
+  today_users: number;
+  today_reward_usd: number;
+  month_checkins: number;
+  month_users: number;
+  month_reward_usd: number;
+  average_reward_usd: number;
+  daily_budget_usd: number;
+  daily_remaining_usd: number;
+  monthly_budget_usd: number;
+  monthly_remaining_usd: number;
+  user_monthly_limit_usd: number;
+}
+
+export async function getDailyCheckinStats(): Promise<DailyCheckinAdminStats> {
+  const { data } = await apiClient.get<DailyCheckinAdminStats>(
+    "/admin/settings/daily-checkin/stats",
   );
   return data;
 }
@@ -1344,6 +1383,7 @@ export async function resetWebSearchUsage(payload: {
 export const settingsAPI = {
   getSettings,
   updateSettings,
+  getDailyCheckinStats,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

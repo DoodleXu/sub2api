@@ -246,8 +246,14 @@ type SystemSettings struct {
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 
 	// Daily check-in reward range
-	DailyCheckinRewardMinUSD int `json:"daily_checkin_reward_min_usd"`
-	DailyCheckinRewardMaxUSD int `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinEnabled             bool    `json:"daily_checkin_enabled"`
+	DailyCheckinRequiredUsageUSD    float64 `json:"daily_checkin_required_usage_usd"`
+	DailyCheckinUsageScope          string  `json:"daily_checkin_usage_scope"`
+	DailyCheckinRewardMinUSD        int     `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD        int     `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinDailyBudgetUSD      float64 `json:"daily_checkin_daily_budget_usd"`
+	DailyCheckinMonthlyBudgetUSD    float64 `json:"daily_checkin_monthly_budget_usd"`
+	DailyCheckinUserMonthlyLimitUSD float64 `json:"daily_checkin_user_monthly_limit_usd"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
