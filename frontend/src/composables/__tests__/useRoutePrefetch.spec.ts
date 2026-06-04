@@ -86,12 +86,12 @@ describe('useRoutePrefetch', () => {
   })
 
   describe('_getPrefetchConfig', () => {
-    it('管理员 dashboard 应该返回正确的预加载配置', () => {
+    it('管理员 dashboard 不预加载大型管理页面', () => {
       const { _getPrefetchConfig } = useRoutePrefetch(mockRouter)
       const route = createMockRoute('/admin/dashboard')
       const config = _getPrefetchConfig(route)
 
-      expect(config).toHaveLength(2)
+      expect(config).toHaveLength(0)
     })
 
     it('普通用户 dashboard 应该返回正确的预加载配置', () => {
@@ -114,19 +114,19 @@ describe('useRoutePrefetch', () => {
   describe('triggerPrefetch', () => {
     it('应该在浏览器空闲时触发预加载', async () => {
       const { triggerPrefetch, prefetchedRoutes } = useRoutePrefetch(mockRouter)
-      const route = createMockRoute('/admin/dashboard')
+      const route = createMockRoute('/admin/accounts')
 
       triggerPrefetch(route)
 
       // 等待 requestIdleCallback 执行
       await new Promise((resolve) => setTimeout(resolve, 100))
 
-      expect(prefetchedRoutes.value.has('/admin/dashboard')).toBe(true)
+      expect(prefetchedRoutes.value.has('/admin/accounts')).toBe(true)
     })
 
     it('应该避免重复预加载同一路由', async () => {
       const { triggerPrefetch, prefetchedRoutes } = useRoutePrefetch(mockRouter)
-      const route = createMockRoute('/admin/dashboard')
+      const route = createMockRoute('/admin/accounts')
 
       triggerPrefetch(route)
       await new Promise((resolve) => setTimeout(resolve, 100))
@@ -143,7 +143,7 @@ describe('useRoutePrefetch', () => {
   describe('cancelPendingPrefetch', () => {
     it('应该取消挂起的预加载任务', () => {
       const { triggerPrefetch, cancelPendingPrefetch, prefetchedRoutes } = useRoutePrefetch(mockRouter)
-      const route = createMockRoute('/admin/dashboard')
+      const route = createMockRoute('/admin/accounts')
 
       triggerPrefetch(route)
       cancelPendingPrefetch()
@@ -174,7 +174,7 @@ describe('useRoutePrefetch', () => {
   describe('resetPrefetchState', () => {
     it('应该重置所有预加载状态', async () => {
       const { triggerPrefetch, resetPrefetchState, prefetchedRoutes } = useRoutePrefetch(mockRouter)
-      const route = createMockRoute('/admin/dashboard')
+      const route = createMockRoute('/admin/accounts')
 
       triggerPrefetch(route)
       await new Promise((resolve) => setTimeout(resolve, 100))
@@ -190,7 +190,7 @@ describe('useRoutePrefetch', () => {
   describe('预加载映射表', () => {
     it('管理员预加载映射表应该包含正确的路由', () => {
       expect(_adminPrefetchMap).toHaveProperty('/admin/dashboard')
-      expect(_adminPrefetchMap['/admin/dashboard']).toHaveLength(2)
+      expect(_adminPrefetchMap['/admin/dashboard']).toHaveLength(0)
     })
 
     it('用户预加载映射表应该包含正确的路由', () => {

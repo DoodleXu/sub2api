@@ -24,7 +24,7 @@
       <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + Check-in + User Dropdown -->
       <div class="flex items-center gap-3">
         <!-- Announcement Bell -->
-        <AnnouncementBell v-if="user" />
+        <AnnouncementBell v-if="showUserAccountWidgets" />
 
         <!-- Docs Link -->
         <a
@@ -42,7 +42,7 @@
         <LocaleSwitcher />
 
         <!-- Subscription Progress (for users with active subscriptions) -->
-        <SubscriptionProgressMini v-if="user" />
+        <SubscriptionProgressMini v-if="showUserAccountWidgets" />
 
         <!-- Balance Display -->
         <div
@@ -68,7 +68,7 @@
         </div>
 
         <!-- Sign-in -->
-        <DailyCheckinButton v-if="user" />
+        <DailyCheckinButton v-if="showUserAccountWidgets" />
 
         <!-- User Dropdown -->
         <div v-if="user" class="relative" ref="dropdownRef">
@@ -216,16 +216,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { defineAsyncComponent, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
-import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
-import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
-import DailyCheckinButton from '@/components/common/DailyCheckinButton.vue'
 import Icon from '@/components/icons/Icon.vue'
+
+const SubscriptionProgressMini = defineAsyncComponent(() => import('@/components/common/SubscriptionProgressMini.vue'))
+const AnnouncementBell = defineAsyncComponent(() => import('@/components/common/AnnouncementBell.vue'))
+const DailyCheckinButton = defineAsyncComponent(() => import('@/components/common/DailyCheckinButton.vue'))
 
 const router = useRouter()
 const route = useRoute()
@@ -236,6 +237,7 @@ const adminSettingsStore = useAdminSettingsStore()
 const onboardingStore = useOnboardingStore()
 
 const user = computed(() => authStore.user)
+const showUserAccountWidgets = computed(() => !!user.value && !route.path.startsWith('/admin'))
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)

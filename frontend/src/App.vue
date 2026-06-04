@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, watch } from 'vue'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
 import {
@@ -10,16 +10,30 @@ import {
   resolveLegalDocumentSEO,
   resolvePageDescription,
 } from '@/router/title'
-import AnnouncementPopup from '@/components/common/AnnouncementPopup.vue'
-import { useAppStore, useAuthStore, useSubscriptionStore, useAnnouncementStore } from '@/stores'
+import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { getSetupStatus } from '@/api/setup'
 
 const router = useRouter()
 const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
-const subscriptionStore = useSubscriptionStore()
-const announcementStore = useAnnouncementStore()
+const AnnouncementPopup = defineAsyncComponent(() => import('@/components/common/AnnouncementPopup.vue'))
+
+type SubscriptionStore = Awaited<ReturnType<typeof import('@/stores/subscriptions')['useSubscriptionStore']>>
+type AnnouncementStore = Awaited<ReturnType<typeof import('@/stores/announcements')['useAnnouncementStore']>>
+
+let subscriptionStore: SubscriptionStore | null = null
+let announcementStore: AnnouncementStore | null = null
+let visibilityListenerRegistered = false
+let delayedAnnouncementTimer: ReturnType<typeof setTimeout> | null = null
+type IdleHandle = number | ReturnType<typeof setTimeout>
+let setupStatusCheckHandle: IdleHandle | null = null
+
+const shouldUseUserRuntime = computed(() => (
+  authStore.isAuthenticated &&
+  !route.path.startsWith('/admin')
+))
 
 /**
  * Update favicon dynamically
@@ -48,71 +62,100 @@ watch(
   { immediate: true }
 )
 
-// Watch for authentication state and manage subscription data + announcements
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && authStore.isAuthenticated) {
+  if (document.visibilityState === 'visible' && shouldUseUserRuntime.value && announcementStore) {
     announcementStore.fetchAnnouncements()
   }
 }
 
-watch(
-  () => authStore.isAuthenticated,
-  (isAuthenticated, oldValue) => {
-    if (isAuthenticated) {
-      // User logged in: preload subscriptions and start polling
-      subscriptionStore.fetchActiveSubscriptions().catch((error) => {
-        console.error('Failed to preload subscriptions:', error)
-      })
-      subscriptionStore.startPolling()
+function registerVisibilityListener() {
+  if (visibilityListenerRegistered) return
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  visibilityListenerRegistered = true
+}
 
-      // Announcements: new login vs page refresh restore
-      if (oldValue === false) {
-        // New login: delay 3s then force fetch
-        setTimeout(() => announcementStore.fetchAnnouncements(true), 3000)
-      } else {
-        // Page refresh restore (oldValue was undefined)
-        announcementStore.fetchAnnouncements()
+function unregisterVisibilityListener() {
+  if (!visibilityListenerRegistered) return
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  visibilityListenerRegistered = false
+}
+
+function clearDelayedAnnouncementTimer() {
+  if (delayedAnnouncementTimer !== null) {
+    clearTimeout(delayedAnnouncementTimer)
+    delayedAnnouncementTimer = null
+  }
+}
+
+async function ensureUserRuntimeData(forceAnnouncement = false) {
+  const [
+    { useSubscriptionStore },
+    { useAnnouncementStore },
+  ] = await Promise.all([
+    import('@/stores/subscriptions'),
+    import('@/stores/announcements'),
+  ])
+
+  if (!shouldUseUserRuntime.value) {
+    return
+  }
+
+  subscriptionStore = useSubscriptionStore()
+  announcementStore = useAnnouncementStore()
+
+  subscriptionStore.fetchActiveSubscriptions().catch((error) => {
+    console.error('Failed to preload subscriptions:', error)
+  })
+  subscriptionStore.startPolling()
+
+  if (forceAnnouncement) {
+    clearDelayedAnnouncementTimer()
+    delayedAnnouncementTimer = setTimeout(() => {
+      delayedAnnouncementTimer = null
+      if (shouldUseUserRuntime.value) {
+        announcementStore?.fetchAnnouncements(true)
       }
+    }, 3000)
+  } else {
+    announcementStore.fetchAnnouncements()
+  }
 
-      // Register visibility change listener
-      document.addEventListener('visibilitychange', onVisibilityChange)
-    } else {
-      // User logged out: clear data and stop polling
-      subscriptionStore.clear()
-      announcementStore.reset()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+  registerVisibilityListener()
+}
+
+function stopUserRuntime(clearState: boolean) {
+  clearDelayedAnnouncementTimer()
+  unregisterVisibilityListener()
+  if (clearState) {
+    subscriptionStore?.clear()
+    announcementStore?.reset()
+  } else {
+    subscriptionStore?.stopPolling()
+  }
+}
+
+watch(
+  [
+    () => authStore.isAuthenticated,
+    () => route.path,
+  ],
+  ([isAuthenticated, path], oldValue) => {
+    const enabled = isAuthenticated && !path.startsWith('/admin')
+    if (!enabled) {
+      stopUserRuntime(!isAuthenticated)
+      return
     }
+    void ensureUserRuntimeData(oldValue?.[0] === false)
   },
   { immediate: true }
 )
 
-// Route change trigger (throttled by store)
-router.afterEach(() => {
-  if (authStore.isAuthenticated) {
-    announcementStore.fetchAnnouncements()
-  }
-})
-
 onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', onVisibilityChange)
+  stopUserRuntime(false)
+  cancelSetupStatusCheck()
 })
 
-onMounted(async () => {
-  // Check if setup is needed
-  try {
-    const status = await getSetupStatus()
-    if (status.needs_setup && route.path !== '/setup') {
-      router.replace('/setup')
-      return
-    }
-  } catch {
-    // If setup endpoint fails, assume normal mode and continue
-  }
-
-  // Load public settings into appStore (will be cached for other components)
-  await appStore.fetchPublicSettings()
-
-  // Re-resolve SEO metadata now that site settings are available
+function applyCurrentRouteSEO() {
   const siteName = appStore.siteName || 'Sub2API'
   const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
   let title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
@@ -143,12 +186,79 @@ onMounted(async () => {
     image: appStore.siteLogo || '/logo.png',
     indexable,
   })
+}
+
+function runSetupStatusCheck() {
+  setupStatusCheckHandle = null
+  if (route.path === '/setup') {
+    return
+  }
+
+  getSetupStatus()
+    .then((status) => {
+      if (status.needs_setup && route.path !== '/setup') {
+        router.replace('/setup')
+      }
+    })
+    .catch(() => {
+      // If setup endpoint fails, assume normal mode and continue
+    })
+}
+
+function cancelSetupStatusCheck() {
+  if (setupStatusCheckHandle === null) {
+    return
+  }
+  if (typeof window.cancelIdleCallback === 'function' && typeof setupStatusCheckHandle === 'number') {
+    window.cancelIdleCallback(setupStatusCheckHandle)
+  } else {
+    clearTimeout(setupStatusCheckHandle)
+  }
+  setupStatusCheckHandle = null
+}
+
+function scheduleSetupStatusCheck() {
+  if (route.path === '/setup' || setupStatusCheckHandle !== null) {
+    return
+  }
+
+  if (!authStore.isAuthenticated) {
+    runSetupStatusCheck()
+    return
+  }
+
+  if (typeof window.requestIdleCallback === 'function') {
+    setupStatusCheckHandle = window.requestIdleCallback(runSetupStatusCheck, { timeout: 2500 })
+  } else {
+    setupStatusCheckHandle = window.setTimeout(runSetupStatusCheck, 1200)
+  }
+}
+
+onMounted(() => {
+  // Keep the first-run guard, but defer it for authenticated dashboards so it
+  // does not compete with first-screen data.
+  scheduleSetupStatusCheck()
+
+  // Load public settings into appStore (will be cached for other components).
+  void appStore.fetchPublicSettings().then(() => {
+    // Re-resolve SEO metadata now that site settings are available.
+    applyCurrentRouteSEO()
+  })
 })
+
+watch(
+  () => route.fullPath,
+  () => {
+    if (appStore.publicSettingsLoaded) {
+      applyCurrentRouteSEO()
+    }
+  }
+)
 </script>
 
 <template>
   <NavigationProgress />
   <RouterView />
   <Toast />
-  <AnnouncementPopup />
+  <AnnouncementPopup v-if="shouldUseUserRuntime" />
 </template>

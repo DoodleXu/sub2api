@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import type { DashboardStats } from '@/types'
@@ -71,6 +71,11 @@ const createDashboardStats = (): DashboardStats => ({
   total_tokens: 0,
   total_cost: 0,
   total_actual_cost: 0,
+  total_account_cost: 0,
+  total_cost_cny: 0,
+  average_cost_cny_per_usd: 0,
+  anthropic_cost_cny_per_usd: 0,
+  openai_cost_cny_per_usd: 0,
   today_requests: 0,
   today_input_tokens: 0,
   today_output_tokens: 0,
@@ -79,6 +84,7 @@ const createDashboardStats = (): DashboardStats => ({
   today_tokens: 0,
   today_cost: 0,
   today_actual_cost: 0,
+  today_account_cost: 0,
   average_duration_ms: 0,
   uptime: 0,
   rpm: 0,
@@ -112,8 +118,13 @@ describe('admin DashboardView', () => {
     })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
   it('uses last 24 hours as default dashboard range', async () => {
-    mount(DashboardView, {
+    const wrapper = mount(DashboardView, {
       global: {
         stubs: {
           AppLayout: { template: '<div><slot /></div>' },
@@ -139,5 +150,87 @@ describe('admin DashboardView', () => {
       end_date: formatLocalDate(now),
       granularity: 'hour'
     }))
+
+    wrapper.unmount()
+  })
+
+  it('defers secondary trend and ranking requests after the initial snapshot', async () => {
+    let idleCallback: IdleRequestCallback | null = null
+    vi.stubGlobal('requestIdleCallback', (cb: IdleRequestCallback) => {
+      idleCallback = cb
+      return 1
+    })
+    vi.stubGlobal('cancelIdleCallback', vi.fn())
+
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          LoadingSpinner: true,
+          Icon: true,
+          DateRangePicker: true,
+          Select: true,
+          ModelDistributionChart: true,
+          TokenUsageTrend: true,
+          Line: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getSnapshotV2).toHaveBeenCalledTimes(1)
+    expect(getUserUsageTrend).not.toHaveBeenCalled()
+    expect(getUserSpendingRanking).not.toHaveBeenCalled()
+
+    idleCallback?.({ didTimeout: false, timeRemaining: () => 50 })
+    await flushPromises()
+
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+  })
+
+  it('cancels deferred secondary requests when the dashboard is refreshed manually', async () => {
+    let idleCallback: IdleRequestCallback | null = null
+    const cancelIdleCallback = vi.fn(() => {
+      idleCallback = null
+    })
+
+    vi.stubGlobal('requestIdleCallback', (cb: IdleRequestCallback) => {
+      idleCallback = cb
+      return 1
+    })
+    vi.stubGlobal('cancelIdleCallback', cancelIdleCallback)
+
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          LoadingSpinner: true,
+          Icon: true,
+          DateRangePicker: true,
+          Select: true,
+          ModelDistributionChart: true,
+          TokenUsageTrend: true,
+          Line: true
+        }
+      }
+    })
+
+    await flushPromises()
+    expect(idleCallback).not.toBeNull()
+
+    await wrapper.find('button.btn-secondary').trigger('click')
+    await flushPromises()
+
+    expect(cancelIdleCallback).toHaveBeenCalledTimes(1)
+    expect(getSnapshotV2).toHaveBeenCalledTimes(2)
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+    expect(idleCallback).toBeNull()
+
+    wrapper.unmount()
   })
 })

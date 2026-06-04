@@ -305,7 +305,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
@@ -371,6 +371,9 @@ let chartLoadSeq = 0
 let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
 const rankingLimit = 12
+type IdleHandle = number | ReturnType<typeof setTimeout>
+let deferredDashboardLoadHandle: IdleHandle | null = null
+let dashboardMounted = false
 
 // Helper function to format date in local timezone
 const formatLocalDate = (date: Date): string => {
@@ -694,6 +697,7 @@ const loadUserSpendingRanking = async () => {
 }
 
 const loadDashboardStats = async () => {
+  cancelDeferredDashboardLoad()
   await Promise.all([
     loadDashboardSnapshot(true),
     loadUsersTrend(),
@@ -702,6 +706,7 @@ const loadDashboardStats = async () => {
 }
 
 const loadChartData = async () => {
+  cancelDeferredDashboardLoad()
   await Promise.all([
     loadDashboardSnapshot(false),
     loadUsersTrend(),
@@ -709,8 +714,54 @@ const loadChartData = async () => {
   ])
 }
 
+const scheduleDeferredDashboardLoad = () => {
+  if (deferredDashboardLoadHandle !== null) {
+    return
+  }
+
+  const run = () => {
+    deferredDashboardLoadHandle = null
+    if (!dashboardMounted) {
+      return
+    }
+    void Promise.all([
+      loadUsersTrend(),
+      loadUserSpendingRanking()
+    ])
+  }
+
+  if (typeof window.requestIdleCallback === 'function') {
+    deferredDashboardLoadHandle = window.requestIdleCallback(run, { timeout: 1800 })
+  } else {
+    deferredDashboardLoadHandle = window.setTimeout(run, 800)
+  }
+}
+
+const cancelDeferredDashboardLoad = () => {
+  if (deferredDashboardLoadHandle === null) {
+    return
+  }
+
+  if (typeof window.cancelIdleCallback === 'function' && typeof deferredDashboardLoadHandle === 'number') {
+    window.cancelIdleCallback(deferredDashboardLoadHandle)
+  } else {
+    clearTimeout(deferredDashboardLoadHandle)
+  }
+  deferredDashboardLoadHandle = null
+}
+
 onMounted(() => {
-  loadDashboardStats()
+  dashboardMounted = true
+  void loadDashboardSnapshot(true).then(() => {
+    if (dashboardMounted) {
+      scheduleDeferredDashboardLoad()
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  dashboardMounted = false
+  cancelDeferredDashboardLoad()
 })
 </script>
 

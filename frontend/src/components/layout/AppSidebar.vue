@@ -180,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
@@ -237,6 +237,8 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
 const isDark = ref(document.documentElement.classList.contains('dark'))
+type IdleHandle = number | ReturnType<typeof setTimeout>
+let adminSettingsFetchHandle: IdleHandle | null = null
 
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set())
@@ -891,21 +893,52 @@ if (
   document.documentElement.classList.add('dark')
 }
 
-// Fetch admin settings (for feature-gated nav items like Ops).
+function cancelAdminSettingsFetch() {
+  if (adminSettingsFetchHandle === null) {
+    return
+  }
+  if (typeof window.cancelIdleCallback === 'function' && typeof adminSettingsFetchHandle === 'number') {
+    window.cancelIdleCallback(adminSettingsFetchHandle)
+  } else {
+    clearTimeout(adminSettingsFetchHandle)
+  }
+  adminSettingsFetchHandle = null
+}
+
+function scheduleAdminSettingsFetch() {
+  if (adminSettingsStore.loaded || adminSettingsStore.loading || adminSettingsFetchHandle !== null) {
+    return
+  }
+
+  const run = () => {
+    adminSettingsFetchHandle = null
+    if (isAdmin.value) {
+      void adminSettingsStore.fetch()
+    }
+  }
+
+  if (typeof window.requestIdleCallback === 'function') {
+    adminSettingsFetchHandle = window.requestIdleCallback(run, { timeout: 1800 })
+  } else {
+    adminSettingsFetchHandle = window.setTimeout(run, 800)
+  }
+}
+
+// Fetch admin settings lazily for feature-gated nav items like Ops/payment.
 watch(
   isAdmin,
   (v) => {
     if (v) {
-      adminSettingsStore.fetch()
+      scheduleAdminSettingsFetch()
+    } else {
+      cancelAdminSettingsFetch()
     }
   },
   { immediate: true }
 )
 
-onMounted(() => {
-  if (isAdmin.value) {
-    adminSettingsStore.fetch()
-  }
+onBeforeUnmount(() => {
+  cancelAdminSettingsFetch()
 })
 </script>
 

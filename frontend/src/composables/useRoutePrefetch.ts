@@ -20,8 +20,8 @@ type ComponentImportFn = () => Promise<unknown>
  * 只存储路由路径，不存储 import 函数，避免打包问题
  */
 const PREFETCH_ADJACENCY: Record<string, string[]> = {
-  // Admin routes - 预加载最常访问的相邻页面
-  '/admin/dashboard': ['/admin/accounts', '/admin/users'],
+  // Admin routes - avoid preloading large management chunks from the dashboard.
+  '/admin/dashboard': [],
   '/admin/accounts': ['/admin/dashboard', '/admin/users'],
   '/admin/users': ['/admin/groups', '/admin/dashboard'],
   '/admin/groups': ['/admin/subscriptions', '/admin/users'],
