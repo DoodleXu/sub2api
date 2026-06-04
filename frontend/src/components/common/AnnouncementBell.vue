@@ -409,13 +409,15 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleEscape)
-  document.body.style.overflow = ''
+  if (isModalOpen.value || detailModalOpen.value) {
+    document.body.style.overflow = ''
+  }
 })
 
 watch(
-  [isModalOpen, detailModalOpen, () => announcementStore.currentPopup],
-  ([modal, detail, popup]) => {
-    document.body.style.overflow = (modal || detail || popup) ? 'hidden' : ''
+  [isModalOpen, detailModalOpen],
+  ([modal, detail]) => {
+    document.body.style.overflow = (modal || detail) ? 'hidden' : ''
   }
 )
 </script>

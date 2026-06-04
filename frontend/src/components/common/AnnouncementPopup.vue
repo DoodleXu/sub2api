@@ -84,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -93,6 +93,7 @@ import { formatRelativeWithDateTime } from '@/utils/format'
 
 const { t } = useI18n()
 const announcementStore = useAnnouncementStore()
+let previousBodyOverflow: string | null = null
 
 marked.setOptions({
   breaks: true,
@@ -110,15 +111,32 @@ function handleDismiss() {
   announcementStore.dismissPopup()
 }
 
-// Manage body overflow — only set, never unset (bell component handles restore)
+function lockBodyScroll() {
+  if (previousBodyOverflow === null) {
+    previousBodyOverflow = document.body.style.overflow
+  }
+  document.body.style.overflow = 'hidden'
+}
+
+function unlockBodyScroll() {
+  if (previousBodyOverflow === null) return
+  document.body.style.overflow = previousBodyOverflow
+  previousBodyOverflow = null
+}
+
 watch(
   () => announcementStore.currentPopup,
   (popup) => {
     if (popup) {
-      document.body.style.overflow = 'hidden'
+      lockBodyScroll()
+    } else {
+      unlockBodyScroll()
     }
-  }
+  },
+  { immediate: true }
 )
+
+onBeforeUnmount(unlockBodyScroll)
 </script>
 
 <style scoped>

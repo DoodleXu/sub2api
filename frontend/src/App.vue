@@ -30,10 +30,12 @@ let delayedAnnouncementTimer: ReturnType<typeof setTimeout> | null = null
 type IdleHandle = number | ReturnType<typeof setTimeout>
 let setupStatusCheckHandle: IdleHandle | null = null
 
-const shouldUseUserRuntime = computed(() => (
+const shouldUseSubscriptionRuntime = computed(() => (
   authStore.isAuthenticated &&
   !route.path.startsWith('/admin')
 ))
+
+const shouldUseAnnouncementRuntime = computed(() => authStore.isAuthenticated)
 
 /**
  * Update favicon dynamically
@@ -63,7 +65,7 @@ watch(
 )
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible' && shouldUseUserRuntime.value && announcementStore) {
+  if (document.visibilityState === 'visible' && shouldUseAnnouncementRuntime.value && announcementStore) {
     announcementStore.fetchAnnouncements()
   }
 }
@@ -96,23 +98,31 @@ async function ensureUserRuntimeData(forceAnnouncement = false) {
     import('@/stores/announcements'),
   ])
 
-  if (!shouldUseUserRuntime.value) {
+  if (!shouldUseSubscriptionRuntime.value && !shouldUseAnnouncementRuntime.value) {
     return
   }
 
-  subscriptionStore = useSubscriptionStore()
-  announcementStore = useAnnouncementStore()
+  if (shouldUseSubscriptionRuntime.value) {
+    subscriptionStore = useSubscriptionStore()
+    subscriptionStore.fetchActiveSubscriptions().catch((error) => {
+      console.error('Failed to preload subscriptions:', error)
+    })
+    subscriptionStore.startPolling()
+  } else {
+    subscriptionStore?.stopPolling()
+  }
 
-  subscriptionStore.fetchActiveSubscriptions().catch((error) => {
-    console.error('Failed to preload subscriptions:', error)
-  })
-  subscriptionStore.startPolling()
+  if (!shouldUseAnnouncementRuntime.value) {
+    return
+  }
+
+  announcementStore = useAnnouncementStore()
 
   if (forceAnnouncement) {
     clearDelayedAnnouncementTimer()
     delayedAnnouncementTimer = setTimeout(() => {
       delayedAnnouncementTimer = null
-      if (shouldUseUserRuntime.value) {
+      if (shouldUseAnnouncementRuntime.value) {
         announcementStore?.fetchAnnouncements(true)
       }
     }, 3000)
@@ -139,10 +149,9 @@ watch(
     () => authStore.isAuthenticated,
     () => route.path,
   ],
-  ([isAuthenticated, path], oldValue) => {
-    const enabled = isAuthenticated && !path.startsWith('/admin')
-    if (!enabled) {
-      stopUserRuntime(!isAuthenticated)
+  ([isAuthenticated], oldValue) => {
+    if (!isAuthenticated) {
+      stopUserRuntime(true)
       return
     }
     void ensureUserRuntimeData(oldValue?.[0] === false)
@@ -260,5 +269,5 @@ watch(
   <NavigationProgress />
   <RouterView />
   <Toast />
-  <AnnouncementPopup v-if="shouldUseUserRuntime" />
+  <AnnouncementPopup v-if="shouldUseAnnouncementRuntime" />
 </template>

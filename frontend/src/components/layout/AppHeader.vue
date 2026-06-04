@@ -24,7 +24,7 @@
       <!-- Right: Announcements + Docs + Language + Subscriptions + Balance + Check-in + User Dropdown -->
       <div class="flex items-center gap-3">
         <!-- Announcement Bell -->
-        <AnnouncementBell v-if="showUserAccountWidgets" />
+        <AnnouncementBell v-if="showAnnouncementBell" />
 
         <!-- Docs Link -->
         <a
@@ -238,6 +238,7 @@ const onboardingStore = useOnboardingStore()
 
 const user = computed(() => authStore.user)
 const showUserAccountWidgets = computed(() => !!user.value && !route.path.startsWith('/admin'))
+const showAnnouncementBell = computed(() => !!user.value)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
