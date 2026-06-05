@@ -1748,6 +1748,14 @@ func isUndefinedColumnError(err error) bool {
 	return string(pqErr.Code) == "42703"
 }
 
+func isUndefinedTableError(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || pqErr == nil {
+		return false
+	}
+	return string(pqErr.Code) == "42P01"
+}
+
 func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Context, stats *DashboardStats, startUTC, endUTC, todayUTC, now time.Time) error {
 	todayEnd := todayUTC.Add(24 * time.Hour)
 	combinedStatsQuery := `
@@ -2425,6 +2433,21 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 
 // GetUserUsageTrend returns usage trend data grouped by user and date
 func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
+	coverageKind, canCheckCoverage := dashboardUserUsageTrendCoverageKind(startTime, endTime, granularity)
+	if canCheckCoverage {
+		if canUseAggregates, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, coverageKind); coverageErr != nil {
+			return nil, coverageErr
+		} else if canUseAggregates {
+			if aggregated, hit, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, endTime, granularity, limit); aggregatedErr != nil {
+				if !isUndefinedTableError(aggregatedErr) {
+					return nil, aggregatedErr
+				}
+			} else if hit {
+				return aggregated, nil
+			}
+		}
+	}
+
 	dateFormat := safeDateFormat(granularity)
 
 	query := fmt.Sprintf(`
@@ -2481,10 +2504,123 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 	return results, nil
 }
 
+func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]UserUsageTrendPoint, bool, error) {
+	if limit <= 0 {
+		limit = 12
+	}
+
+	dateFormat := safeDateFormat(granularity)
+	query := ""
+	args := []any{startTime, endTime, limit, startTime, endTime}
+	switch granularity {
+	case "hour":
+		query = fmt.Sprintf(`
+			WITH top_users AS (
+				SELECT user_id
+				FROM usage_dashboard_hourly_user_stats
+				WHERE bucket_start >= $1 AND bucket_start < $2
+				GROUP BY user_id
+				ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+				LIMIT $3
+			)
+			SELECT
+				TO_CHAR(s.bucket_start, '%s') as date,
+				s.user_id,
+				COALESCE(u.email, '') as email,
+				COALESCE(u.username, '') as username,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(s.total_cost), 0) as cost,
+				COALESCE(SUM(s.actual_cost), 0) as actual_cost
+			FROM usage_dashboard_hourly_user_stats s
+			LEFT JOIN users u ON u.id = s.user_id
+			WHERE s.user_id IN (SELECT user_id FROM top_users)
+			  AND s.bucket_start >= $4 AND s.bucket_start < $5
+			GROUP BY date, s.user_id, u.email, u.username
+			ORDER BY date ASC, tokens DESC
+		`, dateFormat)
+	case "day":
+		query = fmt.Sprintf(`
+			WITH top_users AS (
+				SELECT user_id
+				FROM usage_dashboard_daily_user_stats
+				WHERE bucket_date >= $1::date AND bucket_date < $2::date
+				GROUP BY user_id
+				ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+				LIMIT $3
+			)
+			SELECT
+				TO_CHAR(s.bucket_date::timestamp, '%s') as date,
+				s.user_id,
+				COALESCE(u.email, '') as email,
+				COALESCE(u.username, '') as username,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens,
+				COALESCE(SUM(s.total_cost), 0) as cost,
+				COALESCE(SUM(s.actual_cost), 0) as actual_cost
+			FROM usage_dashboard_daily_user_stats s
+			LEFT JOIN users u ON u.id = s.user_id
+			WHERE s.user_id IN (SELECT user_id FROM top_users)
+			  AND s.bucket_date >= $4::date AND s.bucket_date < $5::date
+			GROUP BY date, s.user_id, u.email, u.username
+			ORDER BY date ASC, tokens DESC
+		`, dateFormat)
+	default:
+		return nil, false, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	results := make([]UserUsageTrendPoint, 0)
+	for rows.Next() {
+		var row UserUsageTrendPoint
+		if err = rows.Scan(&row.Date, &row.UserID, &row.Email, &row.Username, &row.Requests, &row.Tokens, &row.Cost, &row.ActualCost); err != nil {
+			return nil, false, err
+		}
+		results = append(results, row)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return results, len(results) > 0, nil
+}
+
 // GetUserSpendingRanking returns user spending ranking aggregated within the time range.
 func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTime, endTime time.Time, limit int) (result *UserSpendingRankingResponse, err error) {
 	if limit <= 0 {
 		limit = 12
+	}
+	if isWholeDashboardDayRange(startTime, endTime) {
+		if canUseDaily, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, dashboardUserAggregateCoverageDaily); coverageErr != nil {
+			return nil, coverageErr
+		} else if canUseDaily {
+			if aggregated, hit, aggregatedErr := r.getUserSpendingRankingFromAggregates(ctx, startTime, endTime, limit); aggregatedErr != nil {
+				if !isUndefinedTableError(aggregatedErr) {
+					return nil, aggregatedErr
+				}
+			} else if hit {
+				return aggregated, nil
+			}
+		}
+	}
+	if canUseHourly, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, dashboardUserAggregateCoverageHourly); coverageErr != nil {
+		return nil, coverageErr
+	} else if canUseHourly {
+		if aggregated, hit, aggregatedErr := r.getUserSpendingRankingFromHourlyAggregates(ctx, startTime, endTime, limit); aggregatedErr != nil {
+			if !isUndefinedTableError(aggregatedErr) {
+				return nil, aggregatedErr
+			}
+		} else if hit {
+			return aggregated, nil
+		}
 	}
 
 	query := `
@@ -2538,18 +2674,8 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 		}
 	}()
 
-	ranking := make([]UserSpendingRankingItem, 0)
-	totalActualCost := 0.0
-	totalRequests := int64(0)
-	totalTokens := int64(0)
-	for rows.Next() {
-		var row UserSpendingRankingItem
-		if err = rows.Scan(&row.UserID, &row.Email, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
-			return nil, err
-		}
-		ranking = append(ranking, row)
-	}
-	if err = rows.Err(); err != nil {
+	ranking, totalActualCost, totalRequests, totalTokens, err := scanUserSpendingRankingRows(rows)
+	if err != nil {
 		return nil, err
 	}
 
@@ -2559,6 +2685,214 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 		TotalRequests:   totalRequests,
 		TotalTokens:     totalTokens,
 	}, nil
+}
+
+func (r *usageLogRepository) getUserSpendingRankingFromAggregates(ctx context.Context, startTime, endTime time.Time, limit int) (*UserSpendingRankingResponse, bool, error) {
+	tableName := "usage_dashboard_hourly_user_stats"
+	bucketWhere := "bucket_start >= $1 AND bucket_start < $2"
+	if isWholeDashboardDayRange(startTime, endTime) {
+		tableName = "usage_dashboard_daily_user_stats"
+		bucketWhere = "bucket_date >= $1::date AND bucket_date < $2::date"
+	}
+
+	query := fmt.Sprintf(`
+		WITH user_spend AS (
+			SELECT
+				s.user_id,
+				COALESCE(u.email, '') as email,
+				COALESCE(SUM(s.actual_cost), 0) as actual_cost,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens
+			FROM %s s
+			LEFT JOIN users u ON u.id = s.user_id
+			WHERE %s
+			GROUP BY s.user_id, u.email
+		),
+		ranked AS (
+			SELECT
+				user_id,
+				email,
+				actual_cost,
+				requests,
+				tokens,
+				COALESCE(SUM(actual_cost) OVER (), 0) as total_actual_cost,
+				COALESCE(SUM(requests) OVER (), 0) as total_requests,
+				COALESCE(SUM(tokens) OVER (), 0) as total_tokens
+			FROM user_spend
+			ORDER BY actual_cost DESC, tokens DESC, user_id ASC
+			LIMIT $3
+		)
+		SELECT
+			user_id,
+			email,
+			actual_cost,
+			requests,
+			tokens,
+			total_actual_cost,
+			total_requests,
+			total_tokens
+		FROM ranked
+		ORDER BY actual_cost DESC, tokens DESC, user_id ASC
+	`, tableName, bucketWhere)
+
+	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	ranking, totalActualCost, totalRequests, totalTokens, err := scanUserSpendingRankingRows(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	return &UserSpendingRankingResponse{
+		Ranking:         ranking,
+		TotalActualCost: totalActualCost,
+		TotalRequests:   totalRequests,
+		TotalTokens:     totalTokens,
+	}, len(ranking) > 0, nil
+}
+
+func (r *usageLogRepository) getUserSpendingRankingFromHourlyAggregates(ctx context.Context, startTime, endTime time.Time, limit int) (*UserSpendingRankingResponse, bool, error) {
+	query := `
+		WITH user_spend AS (
+			SELECT
+				s.user_id,
+				COALESCE(u.email, '') as email,
+				COALESCE(SUM(s.actual_cost), 0) as actual_cost,
+				COALESCE(SUM(s.total_requests), 0) as requests,
+				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens
+			FROM usage_dashboard_hourly_user_stats s
+			LEFT JOIN users u ON u.id = s.user_id
+			WHERE s.bucket_start >= $1 AND s.bucket_start < $2
+			GROUP BY s.user_id, u.email
+		),
+		ranked AS (
+			SELECT
+				user_id,
+				email,
+				actual_cost,
+				requests,
+				tokens,
+				COALESCE(SUM(actual_cost) OVER (), 0) as total_actual_cost,
+				COALESCE(SUM(requests) OVER (), 0) as total_requests,
+				COALESCE(SUM(tokens) OVER (), 0) as total_tokens
+			FROM user_spend
+			ORDER BY actual_cost DESC, tokens DESC, user_id ASC
+			LIMIT $3
+		)
+		SELECT
+			user_id,
+			email,
+			actual_cost,
+			requests,
+			tokens,
+			total_actual_cost,
+			total_requests,
+			total_tokens
+		FROM ranked
+		ORDER BY actual_cost DESC, tokens DESC, user_id ASC
+	`
+
+	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	ranking, totalActualCost, totalRequests, totalTokens, err := scanUserSpendingRankingRows(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	return &UserSpendingRankingResponse{
+		Ranking:         ranking,
+		TotalActualCost: totalActualCost,
+		TotalRequests:   totalRequests,
+		TotalTokens:     totalTokens,
+	}, len(ranking) > 0, nil
+}
+
+func isWholeDashboardDayRange(startTime, endTime time.Time) bool {
+	if !endTime.After(startTime) {
+		return false
+	}
+	loc := timezone.Location()
+	startLocal := startTime.In(loc)
+	endLocal := endTime.In(loc)
+	return startLocal.Equal(timezone.StartOfDay(startLocal)) && endLocal.Equal(timezone.StartOfDay(endLocal))
+}
+
+type dashboardUserAggregateCoverageKind int
+
+const (
+	dashboardUserAggregateCoverageHourly dashboardUserAggregateCoverageKind = iota
+	dashboardUserAggregateCoverageDaily
+)
+
+func dashboardUserUsageTrendCoverageKind(startTime, endTime time.Time, granularity string) (dashboardUserAggregateCoverageKind, bool) {
+	switch granularity {
+	case "hour":
+		return dashboardUserAggregateCoverageHourly, true
+	case "day":
+		if isWholeDashboardDayRange(startTime, endTime) {
+			return dashboardUserAggregateCoverageDaily, true
+		}
+		return dashboardUserAggregateCoverageHourly, false
+	default:
+		return dashboardUserAggregateCoverageHourly, false
+	}
+}
+
+func (r *usageLogRepository) dashboardUserAggregatesCoverRange(ctx context.Context, startTime, endTime time.Time, kind dashboardUserAggregateCoverageKind) (bool, error) {
+	if !endTime.After(time.Unix(0, 0).UTC()) {
+		return false, nil
+	}
+	fromColumn := "user_hourly_aggregated_from"
+	toColumn := "user_hourly_last_aggregated_at"
+	if kind == dashboardUserAggregateCoverageDaily {
+		fromColumn = "user_daily_aggregated_from"
+		toColumn = "user_daily_last_aggregated_at"
+	}
+	var coveredFrom, coveredTo time.Time
+	query := fmt.Sprintf("SELECT %s, %s FROM usage_dashboard_aggregation_watermark WHERE id = 1", fromColumn, toColumn)
+	if err := scanSingleRow(ctx, r.sql, query, nil, &coveredFrom, &coveredTo); err != nil {
+		if err == sql.ErrNoRows || isUndefinedTableError(err) || isUndefinedColumnError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	epoch := time.Unix(0, 0).UTC()
+	coveredFrom = coveredFrom.UTC()
+	coveredTo = coveredTo.UTC()
+	startUTC := startTime.UTC()
+	endUTC := endTime.UTC()
+	return coveredTo.After(epoch) && !startUTC.Before(coveredFrom) && !endUTC.After(coveredTo), nil
+}
+
+func scanUserSpendingRankingRows(rows *sql.Rows) ([]UserSpendingRankingItem, float64, int64, int64, error) {
+	ranking := make([]UserSpendingRankingItem, 0)
+	totalActualCost := 0.0
+	totalRequests := int64(0)
+	totalTokens := int64(0)
+	for rows.Next() {
+		var row UserSpendingRankingItem
+		if err := rows.Scan(&row.UserID, &row.Email, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
+			return nil, 0, 0, 0, err
+		}
+		ranking = append(ranking, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, 0, err
+	}
+	return ranking, totalActualCost, totalRequests, totalTokens, nil
 }
 
 // UserDashboardStats 用户仪表盘统计

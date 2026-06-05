@@ -1158,6 +1158,48 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	s.Require().Equal(int64(150), hour2Row.totalDurationMs)
 	s.Require().Equal(int64(1), hour2Row.activeUsers)
 
+	type userAggRow struct {
+		totalRequests       int64
+		inputTokens         int64
+		outputTokens        int64
+		cacheCreationTokens int64
+		cacheReadTokens     int64
+		totalCost           float64
+		actualCost          float64
+		accountCost         float64
+	}
+	fetchHourlyUser := func(bucketStart time.Time, userID int64) userAggRow {
+		var row userAggRow
+		err := scanSingleRow(s.ctx, s.tx, `
+			SELECT total_requests, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+			       total_cost, actual_cost, account_cost
+			FROM usage_dashboard_hourly_user_stats
+			WHERE bucket_start = $1 AND user_id = $2
+		`, []any{bucketStart, userID}, &row.totalRequests, &row.inputTokens, &row.outputTokens,
+			&row.cacheCreationTokens, &row.cacheReadTokens, &row.totalCost, &row.actualCost, &row.accountCost,
+		)
+		s.Require().NoError(err)
+		return row
+	}
+
+	hour1User1 := fetchHourlyUser(hour1, user1.ID)
+	s.Require().Equal(int64(2), hour1User1.totalRequests)
+	s.Require().Equal(int64(15), hour1User1.inputTokens)
+	s.Require().Equal(int64(25), hour1User1.outputTokens)
+	s.Require().Equal(int64(2), hour1User1.cacheCreationTokens)
+	s.Require().Equal(int64(1), hour1User1.cacheReadTokens)
+	s.Require().Equal(1.5, hour1User1.totalCost)
+	s.Require().Equal(1.4, hour1User1.actualCost)
+	s.Require().Equal(1.5, hour1User1.accountCost)
+
+	hour2User2 := fetchHourlyUser(hour2, user2.ID)
+	s.Require().Equal(int64(1), hour2User2.totalRequests)
+	s.Require().Equal(int64(7), hour2User2.inputTokens)
+	s.Require().Equal(int64(8), hour2User2.outputTokens)
+	s.Require().Equal(0.7, hour2User2.totalCost)
+	s.Require().Equal(0.7, hour2User2.actualCost)
+	s.Require().Equal(0.7, hour2User2.accountCost)
+
 	var daily struct {
 		totalRequests       int64
 		inputTokens         int64
@@ -1190,6 +1232,22 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	s.Require().Equal(2.2, daily.accountCost)
 	s.Require().Equal(int64(450), daily.totalDurationMs)
 	s.Require().Equal(int64(2), daily.activeUsers)
+
+	var dailyUser1 userAggRow
+	err = scanSingleRow(s.ctx, s.tx, `
+		SELECT total_requests, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+		       total_cost, actual_cost, account_cost
+		FROM usage_dashboard_daily_user_stats
+		WHERE bucket_date = $1::date AND user_id = $2
+	`, []any{dayStart, user1.ID}, &dailyUser1.totalRequests, &dailyUser1.inputTokens, &dailyUser1.outputTokens,
+		&dailyUser1.cacheCreationTokens, &dailyUser1.cacheReadTokens, &dailyUser1.totalCost, &dailyUser1.actualCost, &dailyUser1.accountCost,
+	)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), dailyUser1.totalRequests)
+	s.Require().Equal(int64(43), dailyUser1.inputTokens+dailyUser1.outputTokens+dailyUser1.cacheCreationTokens+dailyUser1.cacheReadTokens)
+	s.Require().Equal(1.5, dailyUser1.totalCost)
+	s.Require().Equal(1.4, dailyUser1.actualCost)
+	s.Require().Equal(1.5, dailyUser1.accountCost)
 
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, hour2.Add(5*time.Minute), hour2.Add(10*time.Minute)))
 	daily = struct {
@@ -1698,6 +1756,125 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrend() {
 	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
 	s.Require().NoError(err, "GetUserUsageTrend")
 	s.Require().GreaterOrEqual(len(trend), 2)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserUsageTrendUsesDashboardUserAggregates() {
+	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-agg1@test.com"})
+	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-agg2@test.com"})
+	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-usertrend-agg1", Name: "k1"})
+	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user2.ID, Key: "sk-usertrend-agg2", Name: "k2"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-usertrend-agg"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base)
+	s.createUsageLog(user2, apiKey2, account, 50, 100, 0.5, base)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base.Add(24*time.Hour))
+
+	startTime := truncateToDayUTC(base)
+	endTime := startTime.Add(72 * time.Hour)
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, startTime, endTime))
+	s.Require().NoError(aggRepo.UpdateAggregationWatermark(s.ctx, endTime))
+
+	_, err := s.tx.ExecContext(s.ctx, "DELETE FROM usage_logs WHERE created_at >= $1 AND created_at < $2", startTime, endTime)
+	s.Require().NoError(err)
+
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	s.Require().NoError(err, "GetUserUsageTrend should read aggregate rows after raw logs are removed")
+	s.Require().Len(trend, 3)
+	s.Require().Equal(user1.ID, trend[0].UserID)
+	s.Require().Equal(int64(300), trend[0].Tokens)
+	s.Require().Equal(user2.ID, trend[1].UserID)
+	s.Require().Equal(int64(150), trend[1].Tokens)
+	s.Require().Equal(user1.ID, trend[2].UserID)
+	s.Require().Equal(int64(300), trend[2].Tokens)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserUsageTrendFallsBackWhenDashboardUserAggregatesNotCovered() {
+	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-partial1@test.com"})
+	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-partial2@test.com"})
+	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-usertrend-partial1", Name: "k1"})
+	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user2.ID, Key: "sk-usertrend-partial2", Name: "k2"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-usertrend-partial"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base)
+	s.createUsageLog(user2, apiKey2, account, 50, 100, 0.5, base)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base.Add(24*time.Hour))
+
+	startTime := truncateToDayUTC(base)
+	endTime := startTime.Add(72 * time.Hour)
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, startTime.Add(24*time.Hour), endTime))
+	s.Require().NoError(aggRepo.UpdateAggregationWatermark(s.ctx, endTime))
+
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	s.Require().NoError(err)
+	s.Require().Len(trend, 3, "partial aggregate rows must not hide raw rows outside the covered range")
+	s.Require().Equal(user1.ID, trend[0].UserID)
+	s.Require().Equal(user2.ID, trend[1].UserID)
+	s.Require().Equal(user1.ID, trend[2].UserID)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserSpendingRankingUsesDashboardUserAggregates() {
+	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-agg1@test.com"})
+	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-agg2@test.com"})
+	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-ranking-agg1", Name: "k1"})
+	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user2.ID, Key: "sk-ranking-agg2", Name: "k2"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-ranking-agg"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base)
+	s.createUsageLog(user2, apiKey2, account, 50, 100, 0.5, base)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base.Add(24*time.Hour))
+
+	startTime := truncateToDayUTC(base)
+	endTime := startTime.Add(72 * time.Hour)
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, startTime, endTime))
+	s.Require().NoError(aggRepo.UpdateAggregationWatermark(s.ctx, endTime))
+
+	_, err := s.tx.ExecContext(s.ctx, "DELETE FROM usage_logs WHERE created_at >= $1 AND created_at < $2", startTime, endTime)
+	s.Require().NoError(err)
+
+	ranking, err := s.repo.GetUserSpendingRanking(s.ctx, startTime, endTime, 10)
+	s.Require().NoError(err, "GetUserSpendingRanking should read aggregate rows after raw logs are removed")
+	s.Require().Len(ranking.Ranking, 2)
+	s.Require().Equal(user1.ID, ranking.Ranking[0].UserID)
+	s.Require().Equal(2.0, ranking.Ranking[0].ActualCost)
+	s.Require().Equal(int64(2), ranking.Ranking[0].Requests)
+	s.Require().Equal(int64(600), ranking.Ranking[0].Tokens)
+	s.Require().Equal(user2.ID, ranking.Ranking[1].UserID)
+	s.Require().Equal(0.5, ranking.Ranking[1].ActualCost)
+	s.Require().Equal(2.5, ranking.TotalActualCost)
+	s.Require().Equal(int64(3), ranking.TotalRequests)
+	s.Require().Equal(int64(750), ranking.TotalTokens)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserSpendingRankingFallsBackWhenDashboardUserAggregatesNotCovered() {
+	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-partial1@test.com"})
+	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-partial2@test.com"})
+	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-ranking-partial1", Name: "k1"})
+	apiKey2 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user2.ID, Key: "sk-ranking-partial2", Name: "k2"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-ranking-partial"})
+
+	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base)
+	s.createUsageLog(user2, apiKey2, account, 50, 100, 0.5, base)
+	s.createUsageLog(user1, apiKey1, account, 100, 200, 1.0, base.Add(24*time.Hour))
+
+	startTime := truncateToDayUTC(base)
+	endTime := startTime.Add(72 * time.Hour)
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, startTime.Add(24*time.Hour), endTime))
+	s.Require().NoError(aggRepo.UpdateAggregationWatermark(s.ctx, endTime))
+
+	ranking, err := s.repo.GetUserSpendingRanking(s.ctx, startTime, endTime, 10)
+	s.Require().NoError(err)
+	s.Require().Len(ranking.Ranking, 2, "partial aggregate rows must not hide raw rows outside the covered range")
+	s.Require().Equal(2.5, ranking.TotalActualCost)
+	s.Require().Equal(int64(3), ranking.TotalRequests)
+	s.Require().Equal(int64(750), ranking.TotalTokens)
 }
 
 // --- GetAPIKeyUsageTrend ---

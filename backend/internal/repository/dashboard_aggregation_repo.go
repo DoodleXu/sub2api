@@ -66,6 +66,7 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 	if endLocal.After(dayEnd) {
 		dayEnd = dayEnd.Add(24 * time.Hour)
 	}
+	dailyCoverageStart, dailyCoverageEnd := fullDayCoverageRange(startLocal, endLocal)
 
 	if db, ok := r.sql.(*sql.DB); ok {
 		tx, err := db.BeginTx(ctx, nil)
@@ -73,16 +74,16 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 			return err
 		}
 		txRepo := newDashboardAggregationRepositoryWithSQL(tx)
-		if err := txRepo.aggregateRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd); err != nil {
+		if err := txRepo.aggregateRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 		return tx.Commit()
 	}
-	return r.aggregateRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd)
+	return r.aggregateRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd)
 }
 
-func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context, hourStart, hourEnd, dayStart, dayEnd time.Time) error {
+func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context, hourStart, hourEnd, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd time.Time) error {
 	// 以桶边界聚合，允许覆盖 end 所在桶的剩余区间。
 	if err := r.insertHourlyActiveUsers(ctx, hourStart, hourEnd); err != nil {
 		return err
@@ -93,7 +94,16 @@ func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context,
 	if err := r.upsertHourlyAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
+	if err := r.upsertHourlyUserStats(ctx, hourStart, hourEnd); err != nil {
+		return err
+	}
 	if err := r.upsertDailyAggregates(ctx, dayStart, dayEnd); err != nil {
+		return err
+	}
+	if err := r.upsertDailyUserStats(ctx, dayStart, dayEnd); err != nil {
+		return err
+	}
+	if err := r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
 		return err
 	}
 	return nil
@@ -121,6 +131,7 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 	if endLocal.After(dayEnd) {
 		dayEnd = dayEnd.Add(24 * time.Hour)
 	}
+	dailyCoverageStart, dailyCoverageEnd := fullDayCoverageRange(startLocal, endLocal)
 
 	// 尽量使用事务保证范围内的一致性（允许在非 *sql.DB 的情况下退化为非事务执行）。
 	if db, ok := r.sql.(*sql.DB); ok {
@@ -133,9 +144,16 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 			_ = tx.Rollback()
 			return err
 		}
+		if err := txRepo.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 		return tx.Commit()
 	}
-	return r.recomputeRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd)
+	if err := r.recomputeRangeInTx(ctx, hourStart, hourEnd, dayStart, dayEnd); err != nil {
+		return err
+	}
+	return r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd)
 }
 
 func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context, hourStart, hourEnd, dayStart, dayEnd time.Time) error {
@@ -146,10 +164,16 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_users WHERE bucket_start >= $1 AND bucket_start < $2", hourStart, hourEnd); err != nil {
 		return err
 	}
+	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_user_stats WHERE bucket_start >= $1 AND bucket_start < $2", hourStart, hourEnd); err != nil {
+		return err
+	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
 		return err
 	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_users WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
+		return err
+	}
+	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_user_stats WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
 		return err
 	}
 	if err := r.insertHourlyActiveUsers(ctx, hourStart, hourEnd); err != nil {
@@ -161,7 +185,13 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 	if err := r.upsertHourlyAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
+	if err := r.upsertHourlyUserStats(ctx, hourStart, hourEnd); err != nil {
+		return err
+	}
 	if err := r.upsertDailyAggregates(ctx, dayStart, dayEnd); err != nil {
+		return err
+	}
+	if err := r.upsertDailyUserStats(ctx, dayStart, dayEnd); err != nil {
 		return err
 	}
 	return nil
@@ -169,7 +199,11 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 
 func (r *dashboardAggregationRepository) GetAggregationWatermark(ctx context.Context) (time.Time, error) {
 	var ts time.Time
-	query := "SELECT last_aggregated_at FROM usage_dashboard_aggregation_watermark WHERE id = 1"
+	query := `
+		SELECT LEAST(last_aggregated_at, user_hourly_last_aggregated_at)
+		FROM usage_dashboard_aggregation_watermark
+		WHERE id = 1
+	`
 	if err := scanSingleRow(ctx, r.sql, query, nil, &ts); err != nil {
 		if err == sql.ErrNoRows {
 			return time.Unix(0, 0).UTC(), nil
@@ -184,9 +218,77 @@ func (r *dashboardAggregationRepository) UpdateAggregationWatermark(ctx context.
 		INSERT INTO usage_dashboard_aggregation_watermark (id, last_aggregated_at, updated_at)
 		VALUES (1, $1, NOW())
 		ON CONFLICT (id)
-		DO UPDATE SET last_aggregated_at = EXCLUDED.last_aggregated_at, updated_at = EXCLUDED.updated_at
+		DO UPDATE SET
+			last_aggregated_at = EXCLUDED.last_aggregated_at,
+			updated_at = EXCLUDED.updated_at
 	`
 	_, err := r.sql.ExecContext(ctx, query, aggregatedAt.UTC())
+	return err
+}
+
+func (r *dashboardAggregationRepository) advanceUserAggregateCoverage(ctx context.Context, hourlyStart, hourlyEnd, dailyStart, dailyEnd time.Time) error {
+	if hourlyEnd.After(hourlyStart) {
+		if err := r.advanceUserAggregateCoverageColumns(
+			ctx,
+			"user_hourly_aggregated_from",
+			"user_hourly_last_aggregated_at",
+			hourlyStart,
+			hourlyEnd,
+		); err != nil {
+			return err
+		}
+	}
+	if dailyEnd.After(dailyStart) {
+		if err := r.advanceUserAggregateCoverageColumns(
+			ctx,
+			"user_daily_aggregated_from",
+			"user_daily_last_aggregated_at",
+			dailyStart,
+			dailyEnd,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *dashboardAggregationRepository) advanceUserAggregateCoverageColumns(ctx context.Context, fromColumn, toColumn string, start, end time.Time) error {
+	epoch := time.Unix(0, 0).UTC()
+	query := fmt.Sprintf(`
+		INSERT INTO usage_dashboard_aggregation_watermark (id, last_aggregated_at, %s, %s, updated_at)
+		VALUES (1, $3, $1, $2, NOW())
+		ON CONFLICT (id)
+		DO UPDATE SET
+			%s = CASE
+				WHEN usage_dashboard_aggregation_watermark.%s <= $3 THEN EXCLUDED.%s
+				WHEN EXCLUDED.%s < usage_dashboard_aggregation_watermark.%s
+				  OR EXCLUDED.%s > usage_dashboard_aggregation_watermark.%s
+					THEN usage_dashboard_aggregation_watermark.%s
+				ELSE LEAST(usage_dashboard_aggregation_watermark.%s, EXCLUDED.%s)
+			END,
+			%s = CASE
+				WHEN usage_dashboard_aggregation_watermark.%s <= $3 THEN EXCLUDED.%s
+				WHEN EXCLUDED.%s < usage_dashboard_aggregation_watermark.%s
+				  OR EXCLUDED.%s > usage_dashboard_aggregation_watermark.%s
+					THEN usage_dashboard_aggregation_watermark.%s
+				ELSE GREATEST(usage_dashboard_aggregation_watermark.%s, EXCLUDED.%s)
+			END,
+			updated_at = EXCLUDED.updated_at
+	`, fromColumn, toColumn,
+		fromColumn,
+		toColumn, fromColumn,
+		toColumn, fromColumn,
+		fromColumn, toColumn,
+		fromColumn,
+		fromColumn, fromColumn,
+		toColumn,
+		toColumn, toColumn,
+		toColumn, fromColumn,
+		fromColumn, toColumn,
+		toColumn,
+		toColumn, toColumn,
+	)
+	_, err := r.sql.ExecContext(ctx, query, start.UTC(), end.UTC(), epoch)
 	return err
 }
 
@@ -199,13 +301,46 @@ func (r *dashboardAggregationRepository) CleanupAggregates(ctx context.Context, 
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_users WHERE bucket_start < $1", hourlyCutoffUTC); err != nil {
 		return err
 	}
+	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_user_stats WHERE bucket_start < $1", hourlyCutoffUTC); err != nil {
+		return err
+	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily WHERE bucket_date < $1::date", dailyCutoffUTC); err != nil {
 		return err
 	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_users WHERE bucket_date < $1::date", dailyCutoffUTC); err != nil {
 		return err
 	}
+	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_user_stats WHERE bucket_date < $1::date", dailyCutoffUTC); err != nil {
+		return err
+	}
+	if err := r.trimUserAggregateCoverage(ctx, "user_hourly_aggregated_from", "user_hourly_last_aggregated_at", hourlyCutoffUTC); err != nil {
+		return err
+	}
+	if err := r.trimUserAggregateCoverage(ctx, "user_daily_aggregated_from", "user_daily_last_aggregated_at", dailyCutoffUTC); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (r *dashboardAggregationRepository) trimUserAggregateCoverage(ctx context.Context, fromColumn, toColumn string, cutoff time.Time) error {
+	epoch := time.Unix(0, 0).UTC()
+	query := fmt.Sprintf(`
+		UPDATE usage_dashboard_aggregation_watermark
+		SET
+			%s = CASE
+				WHEN %s <= $1 THEN $2
+				WHEN %s < $1 THEN $1
+				ELSE %s
+			END,
+			%s = CASE
+				WHEN %s <= $1 THEN $2
+				ELSE %s
+			END,
+			updated_at = NOW()
+		WHERE id = 1
+	`, fromColumn, toColumn, fromColumn, fromColumn, toColumn, toColumn, toColumn)
+	_, err := r.sql.ExecContext(ctx, query, cutoff.UTC(), epoch)
+	return err
 }
 
 func (r *dashboardAggregationRepository) CleanupUsageLogs(ctx context.Context, cutoff time.Time) error {
@@ -461,6 +596,128 @@ func (r *dashboardAggregationRepository) upsertDailyAggregates(ctx context.Conte
 	return err
 }
 
+func (r *dashboardAggregationRepository) upsertHourlyUserStats(ctx context.Context, start, end time.Time) error {
+	tzName := timezone.Name()
+	query := `
+		WITH hourly AS (
+			SELECT
+				date_trunc('hour', created_at AT TIME ZONE $3) AT TIME ZONE $3 AS bucket_start,
+				user_id,
+				COUNT(*) AS total_requests,
+				COALESCE(SUM(input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(total_cost), 0) AS total_cost,
+				COALESCE(SUM(actual_cost), 0) AS actual_cost,
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost
+			FROM usage_logs
+			WHERE created_at >= $1 AND created_at < $2
+			GROUP BY 1, user_id
+		)
+		INSERT INTO usage_dashboard_hourly_user_stats (
+			bucket_start,
+			user_id,
+			total_requests,
+			input_tokens,
+			output_tokens,
+			cache_creation_tokens,
+			cache_read_tokens,
+			total_cost,
+			actual_cost,
+			account_cost,
+			computed_at
+		)
+		SELECT
+			bucket_start,
+			user_id,
+			total_requests,
+			input_tokens,
+			output_tokens,
+			cache_creation_tokens,
+			cache_read_tokens,
+			total_cost,
+			actual_cost,
+			account_cost,
+			NOW()
+		FROM hourly
+		ON CONFLICT (bucket_start, user_id)
+		DO UPDATE SET
+			total_requests = EXCLUDED.total_requests,
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			cache_creation_tokens = EXCLUDED.cache_creation_tokens,
+			cache_read_tokens = EXCLUDED.cache_read_tokens,
+			total_cost = EXCLUDED.total_cost,
+			actual_cost = EXCLUDED.actual_cost,
+			account_cost = EXCLUDED.account_cost,
+			computed_at = EXCLUDED.computed_at
+	`
+	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
+	return err
+}
+
+func (r *dashboardAggregationRepository) upsertDailyUserStats(ctx context.Context, start, end time.Time) error {
+	tzName := timezone.Name()
+	query := `
+		WITH daily AS (
+			SELECT
+				(bucket_start AT TIME ZONE $3)::date AS bucket_date,
+				user_id,
+				COALESCE(SUM(total_requests), 0) AS total_requests,
+				COALESCE(SUM(input_tokens), 0) AS input_tokens,
+				COALESCE(SUM(output_tokens), 0) AS output_tokens,
+				COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+				COALESCE(SUM(total_cost), 0) AS total_cost,
+				COALESCE(SUM(actual_cost), 0) AS actual_cost,
+				COALESCE(SUM(account_cost), 0) AS account_cost
+			FROM usage_dashboard_hourly_user_stats
+			WHERE bucket_start >= $1 AND bucket_start < $2
+			GROUP BY (bucket_start AT TIME ZONE $3)::date, user_id
+		)
+		INSERT INTO usage_dashboard_daily_user_stats (
+			bucket_date,
+			user_id,
+			total_requests,
+			input_tokens,
+			output_tokens,
+			cache_creation_tokens,
+			cache_read_tokens,
+			total_cost,
+			actual_cost,
+			account_cost,
+			computed_at
+		)
+		SELECT
+			bucket_date,
+			user_id,
+			total_requests,
+			input_tokens,
+			output_tokens,
+			cache_creation_tokens,
+			cache_read_tokens,
+			total_cost,
+			actual_cost,
+			account_cost,
+			NOW()
+		FROM daily
+		ON CONFLICT (bucket_date, user_id)
+		DO UPDATE SET
+			total_requests = EXCLUDED.total_requests,
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			cache_creation_tokens = EXCLUDED.cache_creation_tokens,
+			cache_read_tokens = EXCLUDED.cache_read_tokens,
+			total_cost = EXCLUDED.total_cost,
+			actual_cost = EXCLUDED.actual_cost,
+			account_cost = EXCLUDED.account_cost,
+			computed_at = EXCLUDED.computed_at
+	`
+	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
+	return err
+}
+
 func (r *dashboardAggregationRepository) isUsageLogsPartitioned(ctx context.Context) (bool, error) {
 	query := `
 		SELECT EXISTS(
@@ -532,6 +789,18 @@ func (r *dashboardAggregationRepository) createUsageLogsPartition(ctx context.Co
 
 func truncateToDay(t time.Time) time.Time {
 	return timezone.StartOfDay(t)
+}
+
+func fullDayCoverageRange(start, end time.Time) (time.Time, time.Time) {
+	dailyStart := truncateToDay(start)
+	if start.After(dailyStart) {
+		dailyStart = dailyStart.Add(24 * time.Hour)
+	}
+	dailyEnd := truncateToDay(end)
+	if !dailyEnd.After(dailyStart) {
+		return dailyStart, dailyStart
+	}
+	return dailyStart, dailyEnd
 }
 
 func truncateToMonthUTC(t time.Time) time.Time {

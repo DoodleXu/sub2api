@@ -537,6 +537,9 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 		AddRow(int64(1), "alpha@example.com", 12.5, int64(8), int64(800), 40.0, int64(30), int64(2600)).
 		AddRow(int64(3), "gamma@example.com", 4.25, int64(5), int64(300), 40.0, int64(30), int64(2600))
 
+	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
+			AddRow(time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC()))
 	mock.ExpectQuery("WITH user_spend AS \\(").
 		WithArgs(start, end, 12).
 		WillReturnRows(rows)
