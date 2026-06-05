@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="mx-auto flex h-[calc(100vh-8rem)] max-w-7xl gap-4">
+    <div class="web-console mx-auto flex h-[calc(100vh-8rem)] max-w-7xl gap-4">
       <aside class="hidden w-72 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900 lg:flex lg:flex-col">
         <div class="border-b border-gray-100 p-4 dark:border-dark-700">
           <button type="button" class="btn btn-primary w-full" @click="startSession(activeMode)">
@@ -30,8 +30,8 @@
             </p>
           </button>
         </div>
-        <div class="border-t border-gray-100 p-3 dark:border-dark-700">
-          <button type="button" class="btn btn-secondary w-full" @click="clearCurrentMessages" :disabled="!currentSession">
+        <div class="border-t border-gray-100 p-[14px] dark:border-dark-700">
+          <button type="button" class="btn btn-secondary h-[50px] w-full" @click="clearCurrentMessages" :disabled="!currentSession">
             <Icon name="trash" size="sm" class="mr-2" />
             清空当前会话
           </button>
@@ -41,11 +41,12 @@
       <section class="flex min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900">
         <div class="border-b border-gray-100 p-4 dark:border-dark-700">
           <div class="mb-3 flex items-center gap-2 lg:hidden">
-            <select v-model="currentSessionId" class="input min-w-0 flex-1" aria-label="切换会话">
-              <option v-for="session in sessions" :key="session.id" :value="session.id">
-                {{ session.title }} · {{ session.mode === 'image' ? '生图' : '对话' }}
-              </option>
-            </select>
+            <Select
+              v-model="currentSessionId"
+              :options="sessionOptions"
+              aria-label="切换会话"
+              class="web-console-control min-w-0 flex-1"
+            />
             <button
               type="button"
               class="btn btn-secondary shrink-0 px-3"
@@ -67,43 +68,36 @@
             </button>
           </div>
           <div class="flex flex-col gap-3 xl:flex-row xl:items-end">
-            <div class="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div class="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               <label class="block">
                 <span class="input-label">API 端点</span>
-                <select v-model="selectedEndpoint" class="input" aria-label="API 端点">
-                  <option v-for="endpoint in endpointOptions" :key="endpoint.endpoint" :value="endpoint.endpoint">
-                    {{ endpoint.name }}
-                  </option>
-                </select>
+                <Select
+                  v-model="selectedEndpoint"
+                  :options="endpointSelectOptions"
+                  aria-label="API 端点"
+                  class="web-console-control"
+                />
               </label>
               <label class="block">
                 <span class="input-label">API Key / 额度</span>
-                <select v-model.number="selectedKeyId" class="input" aria-label="API Key / 额度">
-                  <option :value="0">{{ compatibleApiKeys.length > 0 ? '请选择 API Key' : '当前端点无可用 API Key' }}</option>
-                  <option v-for="key in compatibleApiKeys" :key="key.id" :value="key.id">
-                    {{ key.name }} - {{ key.group?.name || '未分组' }}
-                  </option>
-                </select>
+                <Select
+                  v-model="selectedKeyId"
+                  :options="apiKeySelectOptions"
+                  aria-label="API Key / 额度"
+                  class="web-console-control"
+                />
                 <p v-if="keyCompatibilityMessage" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
                   {{ keyCompatibilityMessage }}
                 </p>
               </label>
               <label class="block">
                 <span class="input-label">模型</span>
-                <input v-model.trim="model" class="input" placeholder="gpt-5.4" />
-              </label>
-              <label class="block">
-                <span class="input-label">响应模式</span>
-                <select v-if="activeMode === 'chat'" v-model="chatMode" class="input">
-                  <option value="auto">自动 fallback</option>
-                  <option value="responses">Responses</option>
-                  <option value="chat">Chat Completions</option>
-                </select>
-                <select v-else v-model="imageMode" class="input">
-                  <option value="auto">自动 fallback</option>
-                  <option value="images">Images 原生接口</option>
-                  <option value="responses">Responses 生图</option>
-                </select>
+                <Select
+                  v-model="model"
+                  :options="modelOptions"
+                  aria-label="模型"
+                  class="web-console-control"
+                />
               </label>
             </div>
             <div class="flex rounded-lg border border-gray-200 p-1 dark:border-dark-700">
@@ -135,46 +129,23 @@
           <div v-if="activeMode === 'image'" class="mt-3 grid grid-cols-2 gap-3 md:grid-cols-5">
             <label class="block">
               <span class="input-label">尺寸</span>
-              <select v-model="imageSize" class="input">
-                <option value="">默认</option>
-                <option value="1024x1024">1024 x 1024</option>
-                <option value="1536x1024">1536 x 1024</option>
-                <option value="1024x1536">1024 x 1536</option>
-                <option value="2048x2048">2048 x 2048</option>
-                <option value="2048x1152">2048 x 1152</option>
-                <option value="3840x2160">3840 x 2160</option>
-                <option value="2160x3840">2160 x 3840</option>
-              </select>
+              <Select v-model="imageSize" :options="imageSizeOptions" class="web-console-control" />
             </label>
             <label class="block">
               <span class="input-label">质量</span>
-              <select v-model="imageQuality" class="input">
-                <option value="">默认</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
-              </select>
+              <Select v-model="imageQuality" :options="imageQualityOptions" class="web-console-control" />
             </label>
             <label class="block">
               <span class="input-label">背景</span>
-              <select v-model="imageBackground" class="input">
-                <option value="">默认</option>
-                <option value="auto">自动</option>
-                <option value="transparent">透明</option>
-                <option value="opaque">不透明</option>
-              </select>
+              <Select v-model="imageBackground" :options="imageBackgroundOptions" class="web-console-control" />
             </label>
             <label class="block">
               <span class="input-label">格式</span>
-              <select v-model="imageOutputFormat" class="input">
-                <option value="png">PNG</option>
-                <option value="jpeg">JPEG</option>
-                <option value="webp">WebP</option>
-              </select>
+              <Select v-model="imageOutputFormat" :options="imageOutputFormatOptions" class="web-console-control" />
             </label>
             <label class="block">
               <span class="input-label">张数</span>
-              <input v-model.number="imageCount" class="input" type="number" min="1" max="4" step="1" @change="clampImageCount" />
+              <input v-model.number="imageCount" class="input web-console-control" type="number" min="1" max="4" step="1" @change="clampImageCount" />
             </label>
           </div>
         </div>
@@ -249,18 +220,18 @@
           </div>
         </div>
 
-        <form class="border-t border-gray-100 p-4 dark:border-dark-700" @submit.prevent="submit">
+        <form class="border-t border-gray-100 p-[14px] dark:border-dark-700" @submit.prevent="submit">
           <div v-if="errorMessage" class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
             {{ errorMessage }}
           </div>
-          <div class="flex gap-3">
+          <div class="flex items-center gap-3">
             <textarea
               v-model="prompt"
-              class="input min-h-[72px] flex-1 resize-none"
+              class="input h-[50px] min-h-[50px] flex-1 resize-none overflow-y-auto"
               :placeholder="activeMode === 'image' ? '描述你想生成的图片...' : '输入消息...'"
               @keydown.enter.exact.prevent="submit"
             />
-            <button type="submit" class="btn btn-primary self-end" :disabled="submitting || !canSubmit">
+            <button type="submit" class="btn btn-primary h-[50px] self-center" :disabled="submitting || !canSubmit">
               <Icon :name="submitting ? 'refresh' : 'arrowRight'" size="md" :class="submitting ? 'mr-2 animate-spin' : 'mr-2'" />
               {{ submitting ? '处理中' : activeMode === 'image' ? '生成' : '发送' }}
             </button>
@@ -275,6 +246,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { keysAPI } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { isSubscriptionType } from '@/utils/subscriptionType'
@@ -293,8 +265,6 @@ import {
   webConsoleErrorMessage,
 } from '@/features/web-console/openaiClient'
 import type {
-  ChatResponseMode,
-  ImageResponseMode,
   WebConsoleImage,
   WebConsoleImageOptions,
   WebConsoleImageRequest,
@@ -315,10 +285,8 @@ const currentSessionId = ref('')
 const apiKeys = ref<ApiKey[]>([])
 const selectedKeyId = ref(0)
 const selectedEndpoint = ref('')
-const chatModel = ref('gpt-5.4')
-const imageModelValue = ref('gpt-image-2')
-const chatMode = ref<ChatResponseMode>('auto')
-const imageMode = ref<ImageResponseMode>('auto')
+const chatModel = ref('gpt-5.5')
+const imageModelValue = ref('gpt-5.5')
 const activeMode = ref<WebConsoleMode>('chat')
 const imageSize = ref('')
 const imageQuality = ref('')
@@ -370,6 +338,24 @@ const compatibleApiKeys = computed(() => {
     return Boolean(platform && platforms.has(platform))
   })
 })
+const sessionOptions = computed<SelectOption[]>(() => sessions.value.map((session) => ({
+  value: session.id,
+  label: `${session.title} · ${session.mode === 'image' ? '生图' : '对话'}`,
+})))
+const endpointSelectOptions = computed<SelectOption[]>(() => endpointOptions.value.map((endpoint) => ({
+  value: endpoint.endpoint,
+  label: endpoint.name,
+})))
+const apiKeySelectOptions = computed<SelectOption[]>(() => [
+  {
+    value: 0,
+    label: compatibleApiKeys.value.length > 0 ? '请选择 API Key' : '当前端点无可用 API Key',
+  },
+  ...compatibleApiKeys.value.map((key) => ({
+    value: key.id,
+    label: `${key.name} - ${key.group?.name || '未分组'}`,
+  })),
+])
 const selectedKey = computed(() => compatibleApiKeys.value.find((key) => key.id === selectedKeyId.value) || null)
 const keyCompatibilityMessage = computed(() => {
   if (!selectedEndpoint.value || compatibleApiKeys.value.length > 0) return ''
@@ -379,15 +365,47 @@ const keyCompatibilityMessage = computed(() => {
 const currentSession = computed(() => sessions.value.find((session) => session.id === currentSessionId.value) || null)
 const model = computed({
   get: () => activeMode.value === 'image' ? imageModelValue.value : chatModel.value,
-  set: (value: string) => {
+  set: (value: string | number | boolean | null) => {
+    const nextValue = String(value ?? '')
     if (activeMode.value === 'image') {
-      imageModelValue.value = value
+      imageModelValue.value = nextValue
     } else {
-      chatModel.value = value
+      chatModel.value = nextValue
     }
   },
 })
 const canSubmit = computed(() => Boolean(prompt.value.trim() && selectedEndpoint.value && selectedKey.value && model.value.trim()))
+const modelOptions: SelectOption[] = [
+  { value: 'gpt-5.5', label: 'gpt-5.5' },
+  { value: 'gpt-5.4', label: 'gpt-5.4' },
+]
+const imageSizeOptions: SelectOption[] = [
+  { value: '', label: '默认' },
+  { value: '1024x1024', label: '1024 x 1024' },
+  { value: '1536x1024', label: '1536 x 1024' },
+  { value: '1024x1536', label: '1024 x 1536' },
+  { value: '2048x2048', label: '2048 x 2048' },
+  { value: '2048x1152', label: '2048 x 1152' },
+  { value: '3840x2160', label: '3840 x 2160' },
+  { value: '2160x3840', label: '2160 x 3840' },
+]
+const imageQualityOptions: SelectOption[] = [
+  { value: '', label: '默认' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+]
+const imageBackgroundOptions: SelectOption[] = [
+  { value: '', label: '默认' },
+  { value: 'auto', label: '自动' },
+  { value: 'transparent', label: '透明' },
+  { value: 'opaque', label: '不透明' },
+]
+const imageOutputFormatOptions: SelectOption[] = [
+  { value: 'png', label: 'PNG' },
+  { value: 'jpeg', label: 'JPEG' },
+  { value: 'webp', label: 'WebP' },
+]
 
 function persistSessions(): void {
   saveWebConsoleSessions(sessions.value)
@@ -464,11 +482,17 @@ function currentImageOptions(): WebConsoleImageOptions {
   }
 }
 
+function defaultChatTools(): unknown[] {
+  return [
+    { type: 'web_search' },
+    { type: 'image_generation' },
+  ]
+}
+
 function createImageRequest(input: string): WebConsoleImageRequest {
   return {
     prompt: input,
     model: imageModelValue.value.trim(),
-    mode: imageMode.value,
     options: currentImageOptions(),
   }
 }
@@ -486,8 +510,8 @@ async function scrollToBottom(): Promise<void> {
   }
 }
 
-function assistantImageContent(result: { images: WebConsoleImage[]; usedMode: string; fallbackUsed: boolean; text?: string }): string {
-  return result.text || `已生成 ${result.images.length} 张图片（${result.usedMode}${result.fallbackUsed ? ' fallback' : ''}）`
+function assistantImageContent(result: { images: WebConsoleImage[]; text?: string }): string {
+  return result.text || `已生成 ${result.images.length} 张图片。`
 }
 
 function imageLabel(message: WebConsoleMessage, index: number): string {
@@ -552,8 +576,7 @@ async function regenerateImage(message: WebConsoleMessage): Promise<void> {
         prompt: request.prompt,
         history: currentSession.value?.messages.filter((item) => item.id !== message.id) || [],
         imageOptions: request.options,
-      },
-      request.mode,
+      }
     )
     message.content = assistantImageContent(result)
     message.images = result.images
@@ -576,6 +599,8 @@ async function submit(): Promise<void> {
     return
   }
   if (!canSubmit.value || submitting.value || !selectedKey.value) return
+  const chatTools = activeMode.value === 'chat' ? defaultChatTools() : []
+  const toolChoice = chatTools.length > 0 ? 'auto' : undefined
   const session = ensureSession(activeMode.value)
   const input = prompt.value.trim()
   prompt.value = ''
@@ -603,8 +628,7 @@ async function submit(): Promise<void> {
           prompt: input,
           history: session.messages.slice(0, -1),
           imageOptions: imageRequest.options,
-        },
-        imageRequest.mode,
+        }
       )
       session.messages.push({
         id: createWebConsoleMessageId(),
@@ -622,13 +646,15 @@ async function submit(): Promise<void> {
           model: model.value.trim(),
           prompt: input,
           history: session.messages.slice(0, -1),
-        },
-        chatMode.value,
+          tools: chatTools,
+          toolChoice,
+        }
       )
       session.messages.push({
         id: createWebConsoleMessageId(),
         role: 'assistant',
         content: result.text,
+        images: result.images,
         created_at: new Date().toISOString(),
       })
     }
@@ -694,3 +720,13 @@ onMounted(async () => {
   await loadApiKeys()
 })
 </script>
+
+<style scoped>
+.web-console-control {
+  @apply h-[42px];
+}
+
+.web-console-control :deep(.select-trigger) {
+  @apply h-[42px];
+}
+</style>

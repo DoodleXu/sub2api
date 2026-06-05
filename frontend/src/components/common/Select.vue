@@ -7,7 +7,7 @@
       :disabled="disabled"
       :aria-expanded="isOpen"
       :aria-haspopup="true"
-      aria-label="Select option"
+      :aria-label="props.ariaLabel || 'Select option'"
       :class="[
         'select-trigger',
         isOpen && 'select-trigger-open',
@@ -131,6 +131,7 @@ interface Props {
   searchable?: boolean | 'auto'
   searchPlaceholder?: string
   emptyText?: string
+  ariaLabel?: string
   valueKey?: string
   labelKey?: string
   creatable?: boolean

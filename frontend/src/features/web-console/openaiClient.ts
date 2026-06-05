@@ -1,7 +1,5 @@
 import type {
-  ChatResponseMode,
   WebConsoleImageOptions,
-  ImageResponseMode,
   WebConsoleImage,
   WebConsoleImageResult,
   WebConsoleMessage,
@@ -19,6 +17,8 @@ class WebConsoleRequestError extends Error {
     this.name = 'WebConsoleRequestError'
   }
 }
+
+const defaultImageGenerationToolModel = 'gpt-image-2'
 
 function endpointPath(base: string): string {
   const value = base.trim()
@@ -50,21 +50,6 @@ function endpointUrl(base: string, path: string): string {
   }
   if (normalized.endsWith('/v1')) return `${normalized}${path}`
   return `${normalized}/v1${path}`
-}
-
-function isFatalError(error: unknown): boolean {
-  if (!(error instanceof WebConsoleRequestError)) return false
-  if ([400, 401, 402, 403, 404].includes(error.status)) return true
-  const text = `${error.code || ''} ${error.message}`.toLowerCase()
-  return (
-    text.includes('api_key') ||
-    text.includes('invalid api key') ||
-    text.includes('insufficient') ||
-    text.includes('quota') ||
-    text.includes('balance') ||
-    text.includes('subscription') ||
-    text.includes('not supported')
-  )
 }
 
 async function postJSON<T>(endpoint: string, apiKey: string, path: string, payload: unknown): Promise<T> {
@@ -133,44 +118,36 @@ function extractResponseText(body: any): string {
   return ''
 }
 
-async function sendResponsesChat(ctx: WebConsoleRequestContext): Promise<string> {
-  const body = await postJSON<any>(ctx.endpoint, ctx.apiKey, '/responses', {
-    model: ctx.model,
-    input: responseInput(ctx.history, ctx.prompt),
-  })
-  return extractResponseText(body) || '请求已完成，但没有返回文本内容。'
+function normalizedTools(ctx: WebConsoleRequestContext): unknown[] {
+  return Array.isArray(ctx.tools) ? ctx.tools.filter(Boolean) : []
 }
 
-async function sendChatCompletions(ctx: WebConsoleRequestContext): Promise<string> {
-  const body = await postJSON<any>(ctx.endpoint, ctx.apiKey, '/chat/completions', {
+function responsesPayload(ctx: WebConsoleRequestContext, input: unknown): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
     model: ctx.model,
-    messages: chatMessages(ctx.history, ctx.prompt),
-  })
-  const text = contentText(body?.choices?.[0]?.message?.content)
-  return text || '请求已完成，但没有返回文本内容。'
-}
-
-export async function sendWebConsoleChat(
-  ctx: WebConsoleRequestContext,
-  mode: ChatResponseMode,
-): Promise<WebConsoleTextResult> {
-  const order: Array<Exclude<ChatResponseMode, 'auto'>> =
-    mode === 'chat' ? ['chat'] : mode === 'responses' ? ['responses'] : ['responses', 'chat']
-  let lastError: unknown
-
-  for (const current of order) {
-    try {
-      const text = current === 'responses'
-        ? await sendResponsesChat(ctx)
-        : await sendChatCompletions(ctx)
-      return { text, usedMode: current, fallbackUsed: current !== order[0] }
-    } catch (error) {
-      lastError = error
-      if (mode !== 'auto' || isFatalError(error)) break
-    }
+    input,
   }
+  const tools = normalizedTools(ctx)
+  if (tools.length > 0) payload.tools = tools
+  if (ctx.toolChoice !== undefined && ctx.toolChoice !== null && ctx.toolChoice !== '') {
+    payload.tool_choice = ctx.toolChoice
+  }
+  return payload
+}
 
-  throw lastError
+async function sendResponsesChat(ctx: WebConsoleRequestContext): Promise<WebConsoleTextResult> {
+  const body = await postJSON<any>(ctx.endpoint, ctx.apiKey, '/responses', responsesPayload(ctx, responseInput(ctx.history, ctx.prompt)))
+  const images: WebConsoleImage[] = []
+  collectImages(body, ctx.prompt, images)
+  return {
+    text: extractResponseText(body) || (images.length > 0 ? `已生成 ${images.length} 张图片。` : '请求已完成，但没有返回文本内容。'),
+    images,
+    usedMode: 'responses',
+  }
+}
+
+export async function sendWebConsoleChat(ctx: WebConsoleRequestContext): Promise<WebConsoleTextResult> {
+  return sendResponsesChat(ctx)
 }
 
 function imageFromValue(value: string, alt: string): WebConsoleImage {
@@ -186,28 +163,6 @@ function normalizedImageOptions(options?: WebConsoleImageOptions): WebConsoleIma
     outputFormat: options?.outputFormat?.trim() || 'png',
     count: Math.min(Math.max(Math.trunc(Number(options?.count) || 1), 1), 4),
   }
-}
-
-function imageGenerationPayload(ctx: WebConsoleRequestContext): Record<string, unknown> {
-  const options = normalizedImageOptions(ctx.imageOptions)
-  const payload: Record<string, unknown> = {
-    prompt: ctx.prompt,
-    n: options.count,
-    response_format: 'b64_json',
-  }
-
-  const model = ctx.model.trim()
-  if (model && model !== 'gpt-image-2') {
-    payload.model = model
-  }
-  if (options.size) payload.size = options.size
-  if (options.quality) payload.quality = options.quality
-  if (options.background) payload.background = options.background
-  if (options.outputFormat && options.outputFormat !== 'png') {
-    payload.output_format = options.outputFormat
-  }
-
-  return payload
 }
 
 function collectImages(value: unknown, alt: string, out: WebConsoleImage[]): void {
@@ -226,27 +181,20 @@ function collectImages(value: unknown, alt: string, out: WebConsoleImage[]): voi
   }
 }
 
-async function generateImages(ctx: WebConsoleRequestContext): Promise<WebConsoleImageResult> {
-  const body = await postJSON<any>(ctx.endpoint, ctx.apiKey, '/images/generations', imageGenerationPayload(ctx))
-  const images: WebConsoleImage[] = []
-  collectImages(body?.data || body, ctx.prompt, images)
-  if (images.length === 0) throw new WebConsoleRequestError('生图接口未返回图片。', 502)
-  return { images, usedMode: 'images', fallbackUsed: false }
-}
-
 async function generateImagesWithResponses(ctx: WebConsoleRequestContext): Promise<WebConsoleImageResult> {
   const options = normalizedImageOptions(ctx.imageOptions)
-  const requestBody = {
-    model: ctx.model,
-    input: ctx.prompt,
-    tools: [{
+  const requestBody = responsesPayload(ctx, ctx.prompt)
+  requestBody.tools = [
+    {
       type: 'image_generation',
+      model: defaultImageGenerationToolModel,
       ...(options.size ? { size: options.size } : {}),
       ...(options.quality ? { quality: options.quality } : {}),
       ...(options.background ? { background: options.background } : {}),
       ...(options.outputFormat && options.outputFormat !== 'png' ? { output_format: options.outputFormat } : {}),
-    }],
-  }
+    },
+  ]
+  requestBody.tool_choice = { type: 'image_generation' }
   const images: WebConsoleImage[] = []
   const texts: string[] = []
 
@@ -262,31 +210,11 @@ async function generateImagesWithResponses(ctx: WebConsoleRequestContext): Promi
     images,
     text: texts.join('\n\n'),
     usedMode: 'responses',
-    fallbackUsed: false,
   }
 }
 
-export async function generateWebConsoleImage(
-  ctx: WebConsoleRequestContext,
-  mode: ImageResponseMode,
-): Promise<WebConsoleImageResult> {
-  const order: Array<Exclude<ImageResponseMode, 'auto'>> =
-    mode === 'responses' ? ['responses'] : mode === 'images' ? ['images'] : ['images', 'responses']
-  let lastError: unknown
-
-  for (const current of order) {
-    try {
-      const result = current === 'images'
-        ? await generateImages(ctx)
-        : await generateImagesWithResponses(ctx)
-      return { ...result, fallbackUsed: current !== order[0] }
-    } catch (error) {
-      lastError = error
-      if (mode !== 'auto' || isFatalError(error)) break
-    }
-  }
-
-  throw lastError
+export async function generateWebConsoleImage(ctx: WebConsoleRequestContext): Promise<WebConsoleImageResult> {
+  return generateImagesWithResponses(ctx)
 }
 
 export function webConsoleErrorMessage(error: unknown): string {

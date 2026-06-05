@@ -19,21 +19,18 @@ describe('web console openai client', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await sendWebConsoleChat(
-      {
-        endpoint: 'https://api.example.com',
-        apiKey: 'sk-test',
-        model: 'gpt-5.4',
-        prompt: '你好',
-        history: [{
-          id: 'message-1',
-          role: 'assistant',
-          content: '上一轮回复',
-          created_at: '2026-05-29T00:00:00.000Z',
-        }],
-      },
-      'auto',
-    )
+    const result = await sendWebConsoleChat({
+      endpoint: 'https://api.example.com',
+      apiKey: 'sk-test',
+      model: 'gpt-5.4',
+      prompt: '你好',
+      history: [{
+        id: 'message-1',
+        role: 'assistant',
+        content: '上一轮回复',
+        created_at: '2026-05-29T00:00:00.000Z',
+      }],
+    })
 
     expect(result.text).toBe('你好，有什么可以帮你？')
     expect(result.usedMode).toBe('responses')
@@ -63,104 +60,75 @@ describe('web console openai client', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(sendWebConsoleChat(
-      {
-        endpoint: 'https://api.example.com/v1beta',
-        apiKey: 'sk-test',
-        model: 'gpt-5.4',
-        prompt: '你好',
-        history: [],
-      },
-      'responses',
-    )).rejects.toThrow('网页工作台当前只支持 OpenAI-compatible /v1 端点')
+    await expect(sendWebConsoleChat({
+      endpoint: 'https://api.example.com/v1beta',
+      apiKey: 'sk-test',
+      model: 'gpt-5.4',
+      prompt: '你好',
+      history: [],
+    })).rejects.toThrow('网页工作台当前只支持 OpenAI-compatible /v1 端点')
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('发送 Images 生图参数并保留默认模型兼容路径', async () => {
+  it('对话带 tools 时强制使用 Responses 并透传 tool_choice', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: [{ b64_json: 'ZmFrZS1pbWFnZQ==' }],
+      output_text: '已搜索到结果',
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await generateWebConsoleImage(
-      {
-        endpoint: 'https://api.example.com',
-        apiKey: 'sk-test',
-        model: 'gpt-image-2',
-        prompt: '画一张霓虹城市',
-        history: [],
-        imageOptions: {
-          size: '1536x1024',
-          quality: 'high',
-          background: 'transparent',
-          outputFormat: 'webp',
-          count: 3,
-        },
-      },
-      'images',
-    )
+    const result = await sendWebConsoleChat({
+      endpoint: 'https://api.example.com',
+      apiKey: 'sk-test',
+      model: 'gpt-5.4',
+      prompt: '查一下今天的新闻',
+      history: [],
+      tools: [{ type: 'web_search' }],
+      toolChoice: 'required',
+    })
 
-    expect(result.images).toHaveLength(1)
+    expect(result.text).toBe('已搜索到结果')
+    expect(result.usedMode).toBe('responses')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://api.example.com/v1/images/generations')
-    expect(init.headers).toEqual(expect.objectContaining({
-      Authorization: 'Bearer sk-test',
-      'Content-Type': 'application/json',
-    }))
+    expect(url).toBe('https://api.example.com/v1/responses')
     expect(JSON.parse(String(init.body))).toEqual({
-      prompt: '画一张霓虹城市',
-      n: 3,
-      response_format: 'b64_json',
-      size: '1536x1024',
-      quality: 'high',
-      background: 'transparent',
-      output_format: 'webp',
+      model: 'gpt-5.4',
+      input: [
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: '查一下今天的新闻' }],
+        },
+      ],
+      tools: [{ type: 'web_search' }],
+      tool_choice: 'required',
     })
   })
 
-  it('限制张数范围并在非默认图片模型时显式传 model', async () => {
+  it('对话模式能收集 Responses tools 返回的图片', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-      data: [{ url: 'https://cdn.example.com/out.png' }],
+      output: [{ type: 'image_generation_call', result: 'ZmFrZS1pbWFnZQ==' }],
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await generateWebConsoleImage(
-      {
-        endpoint: 'https://api.example.com/v1',
-        apiKey: 'sk-test',
-        model: 'gpt-image-1.5',
-        prompt: '一只猫',
-        history: [],
-        imageOptions: {
-          size: '',
-          quality: '',
-          background: '',
-          outputFormat: 'png',
-          count: 99,
-        },
-      },
-      'images',
-    )
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({
-      prompt: '一只猫',
-      n: 4,
-      response_format: 'b64_json',
-      model: 'gpt-image-1.5',
+    const result = await sendWebConsoleChat({
+      endpoint: 'https://api.example.com',
+      apiKey: 'sk-test',
+      model: 'gpt-5.4',
+      prompt: '画一只猫',
+      history: [],
+      tools: [{ type: 'image_generation' }],
     })
+
+    expect(result.text).toBe('已生成 1 张图片。')
+    expect(result.images).toEqual([{
+      url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==',
+      alt: '画一只猫',
+    }])
   })
 
-  it('自动 fallback 到 Responses 生图时按张数发起请求并合并展示结果', async () => {
+  it('生图模式强制走 Responses image_generation tool 并按张数合并展示结果', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        error: { message: 'Images endpoint unavailable' },
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      }))
       .mockResolvedValueOnce(jsonResponse({
         output: [{ type: 'image_generation_call', result: 'ZmFrZS0x' }],
       }))
@@ -169,46 +137,43 @@ describe('web console openai client', () => {
       }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await generateWebConsoleImage(
-      {
-        endpoint: 'https://api.example.com',
-        apiKey: 'sk-test',
-        model: 'gpt-5.4',
-        prompt: '画两张海报',
-        history: [],
-        imageOptions: {
-          size: '1024x1024',
-          quality: 'high',
-          background: 'transparent',
-          outputFormat: 'webp',
-          count: 2,
-        },
+    const result = await generateWebConsoleImage({
+      endpoint: 'https://api.example.com',
+      apiKey: 'sk-test',
+      model: 'gpt-5.4',
+      prompt: '画两张海报',
+      history: [],
+      imageOptions: {
+        size: '1024x1024',
+        quality: 'high',
+        background: 'transparent',
+        outputFormat: 'webp',
+        count: 2,
       },
-      'auto',
-    )
+    })
 
     expect(result.usedMode).toBe('responses')
-    expect(result.fallbackUsed).toBe(true)
     expect(result.images).toHaveLength(2)
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://api.example.com/v1/images/generations',
       'https://api.example.com/v1/responses',
       'https://api.example.com/v1/responses',
     ])
 
-    const [, firstResponsesInit] = fetchMock.mock.calls[1] as [string, RequestInit]
-    const [, secondResponsesInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+    const [, firstResponsesInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [, secondResponsesInit] = fetchMock.mock.calls[1] as [string, RequestInit]
     const expectedResponsesBody = {
       model: 'gpt-5.4',
       input: '画两张海报',
       tools: [{
         type: 'image_generation',
+        model: 'gpt-image-2',
         size: '1024x1024',
         quality: 'high',
         background: 'transparent',
         output_format: 'webp',
       }],
+      tool_choice: { type: 'image_generation' },
     }
     expect(JSON.parse(String(firstResponsesInit.body))).toEqual(expectedResponsesBody)
     expect(JSON.parse(String(secondResponsesInit.body))).toEqual(expectedResponsesBody)

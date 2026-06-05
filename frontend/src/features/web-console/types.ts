@@ -2,9 +2,7 @@ export type WebConsoleRole = 'user' | 'assistant'
 
 export type WebConsoleMode = 'chat' | 'image'
 
-export type ChatResponseMode = 'auto' | 'responses' | 'chat'
-
-export type ImageResponseMode = 'auto' | 'images' | 'responses'
+export type WebConsoleResponseMode = 'responses'
 
 export interface WebConsoleImageOptions {
   size: string
@@ -44,24 +42,24 @@ export interface WebConsoleRequestContext {
   prompt: string
   history: WebConsoleMessage[]
   imageOptions?: WebConsoleImageOptions
+  tools?: unknown[]
+  toolChoice?: unknown
 }
 
 export interface WebConsoleTextResult {
   text: string
-  usedMode: Exclude<ChatResponseMode, 'auto'>
-  fallbackUsed: boolean
+  usedMode: WebConsoleResponseMode
+  images?: WebConsoleImage[]
 }
 
 export interface WebConsoleImageResult {
   images: WebConsoleImage[]
   text?: string
-  usedMode: Exclude<ImageResponseMode, 'auto'>
-  fallbackUsed: boolean
+  usedMode: WebConsoleResponseMode
 }
 
 export interface WebConsoleImageRequest {
   prompt: string
   model: string
-  mode: ImageResponseMode
   options: WebConsoleImageOptions
 }
