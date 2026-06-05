@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -32,6 +33,13 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if err != nil {
 		return fmt.Errorf("marshal moderation thresholds: %w", err)
 	}
+	policySnapshot, err := json.Marshal(log.PolicySnapshot)
+	if err != nil {
+		return fmt.Errorf("marshal moderation policy snapshot: %w", err)
+	}
+	if log.PolicySnapshot == nil {
+		policySnapshot = []byte("{}")
+	}
 	var userID any
 	if log.UserID != nil {
 		userID = *log.UserID
@@ -44,25 +52,32 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if log.GroupID != nil {
 		groupID = *log.GroupID
 	}
+	var policyID any
+	if log.PolicyID != nil {
+		policyID = *log.PolicyID
+	}
 	var latency any
 	if log.UpstreamLatencyMS != nil {
 		latency = *log.UpstreamLatencyMS
 	}
 	err = r.db.QueryRowContext(ctx, `
-INSERT INTO content_moderation_logs (
-    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
-    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
-    category_scores, threshold_snapshot, input_excerpt, upstream_latency_ms, error,
-    violation_count, auto_banned, email_sent, queue_delay_ms
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12, $13, $14, $15,
-    $16::jsonb, $17::jsonb, $18, $19, $20,
-    $21, $22, $23, $24
-) RETURNING id, created_at`,
+	INSERT INTO content_moderation_logs (
+	    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
+	    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
+	    category_scores, threshold_snapshot, input_excerpt, matched_keyword, policy_id, policy_action,
+	    policy_snapshot, block_status, error_code, upstream_latency_ms, error,
+	    violation_count, auto_banned, email_sent, queue_delay_ms
+	) VALUES (
+	    $1, $2, $3, $4, $5, $6, $7,
+	    $8, $9, $10, $11, $12, $13, $14, $15,
+	    $16::jsonb, $17::jsonb, $18, $19, $20, $21,
+	    $22::jsonb, $23, $24, $25, $26,
+	    $27, $28, $29, $30
+	) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
-		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, latency, log.Error,
+		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.MatchedKeyword, policyID, log.PolicyAction,
+		string(policySnapshot), log.BlockStatus, log.ErrorCode, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS),
 	).Scan(&log.ID, &log.CreatedAt)
 	if err != nil {
@@ -94,10 +109,11 @@ func (r *contentModerationRepository) ListLogs(ctx context.Context, filter servi
 	queryArgs = append(queryArgs, params.Limit(), params.Offset())
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
-    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
-    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
-    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.upstream_latency_ms, l.error,
-    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
+	    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+	    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
+	    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.matched_keyword,
+	    l.policy_id, l.policy_action, l.policy_snapshot, l.block_status, l.error_code, l.upstream_latency_ms, l.error,
+	    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
 FROM content_moderation_logs l
 LEFT JOIN users u ON u.id = l.user_id `+whereSQL+`
 ORDER BY l.created_at DESC, l.id DESC
@@ -112,8 +128,8 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	items := make([]service.ContentModerationLog, 0)
 	for rows.Next() {
 		var item service.ContentModerationLog
-		var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
-		var scoresRaw, thresholdsRaw []byte
+		var userID, apiKeyID, groupID, policyID, latency, queueDelay sql.NullInt64
+		var scoresRaw, thresholdsRaw, policySnapshotRaw []byte
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
@@ -134,6 +150,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&scoresRaw,
 			&thresholdsRaw,
 			&item.InputExcerpt,
+			&item.MatchedKeyword,
+			&policyID,
+			&item.PolicyAction,
+			&policySnapshotRaw,
+			&item.BlockStatus,
+			&item.ErrorCode,
 			&latency,
 			&item.Error,
 			&item.ViolationCount,
@@ -157,6 +179,10 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			v := groupID.Int64
 			item.GroupID = &v
 		}
+		if policyID.Valid {
+			v := policyID.Int64
+			item.PolicyID = &v
+		}
 		if latency.Valid {
 			v := int(latency.Int64)
 			item.UpstreamLatencyMS = &v
@@ -169,6 +195,8 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
 		item.ThresholdSnapshot = map[string]float64{}
 		_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
+		item.PolicySnapshot = map[string]any{}
+		_ = json.Unmarshal(policySnapshotRaw, &item.PolicySnapshot)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -229,7 +257,140 @@ WHERE flagged = FALSE AND created_at < $1
 	return result, nil
 }
 
+func (r *contentModerationRepository) ListUserPolicies(ctx context.Context) ([]service.ContentModerationUserPolicy, error) {
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT
+	    p.id, p.user_id, COALESCE(u.email, ''), COALESCE(u.status, ''),
+	    p.enabled, p.action, p.block_status, p.error_code, p.block_message,
+	    p.ban_threshold, p.violation_window_hours, p.apply_to_hash_block, p.note,
+	    p.created_by, p.updated_by, p.created_at, p.updated_at
+	FROM content_moderation_user_policies p
+	LEFT JOIN users u ON u.id = p.user_id
+	ORDER BY p.updated_at DESC, p.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list content moderation user policies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]service.ContentModerationUserPolicy, 0)
+	for rows.Next() {
+		var policy service.ContentModerationUserPolicy
+		var createdBy, updatedBy sql.NullInt64
+		if err := rows.Scan(
+			&policy.ID,
+			&policy.UserID,
+			&policy.UserEmail,
+			&policy.UserStatus,
+			&policy.Enabled,
+			&policy.Action,
+			&policy.BlockStatus,
+			&policy.ErrorCode,
+			&policy.BlockMessage,
+			&policy.BanThreshold,
+			&policy.ViolationWindowHours,
+			&policy.ApplyToHashBlock,
+			&policy.Note,
+			&createdBy,
+			&updatedBy,
+			&policy.CreatedAt,
+			&policy.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan content moderation user policy: %w", err)
+		}
+		if createdBy.Valid {
+			v := createdBy.Int64
+			policy.CreatedBy = &v
+		}
+		if updatedBy.Valid {
+			v := updatedBy.Int64
+			policy.UpdatedBy = &v
+		}
+		out = append(out, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate content moderation user policies: %w", err)
+	}
+	return out, nil
+}
+
+func (r *contentModerationRepository) CreateUserPolicy(ctx context.Context, policy *service.ContentModerationUserPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	err := r.db.QueryRowContext(ctx, `
+	INSERT INTO content_moderation_user_policies (
+	    user_id, enabled, action, block_status, error_code, block_message,
+	    ban_threshold, violation_window_hours, apply_to_hash_block, note,
+	    created_by, updated_by
+	) VALUES (
+	    $1, $2, $3, $4, $5, $6,
+	    $7, $8, $9, $10,
+	    $11, $12
+	)
+	RETURNING id, created_at, updated_at`,
+		policy.UserID, policy.Enabled, policy.Action, policy.BlockStatus, policy.ErrorCode, policy.BlockMessage,
+		policy.BanThreshold, policy.ViolationWindowHours, policy.ApplyToHashBlock, policy.Note,
+		nullableInt64Ptr(policy.CreatedBy), nullableInt64Ptr(policy.UpdatedBy),
+	).Scan(&policy.ID, &policy.CreatedAt, &policy.UpdatedAt)
+	if err != nil {
+		return translatePersistenceError(err, nil, infraerrors.Conflict("CONTENT_MODERATION_POLICY_USER_EXISTS", "该用户已存在风控策略"))
+	}
+	return nil
+}
+
+func (r *contentModerationRepository) UpdateUserPolicy(ctx context.Context, policy *service.ContentModerationUserPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	err := r.db.QueryRowContext(ctx, `
+	UPDATE content_moderation_user_policies
+	SET user_id = $2,
+	    enabled = $3,
+	    action = $4,
+	    block_status = $5,
+	    error_code = $6,
+	    block_message = $7,
+	    ban_threshold = $8,
+	    violation_window_hours = $9,
+	    apply_to_hash_block = $10,
+	    note = $11,
+	    updated_by = $12,
+	    updated_at = NOW()
+	WHERE id = $1
+	RETURNING created_at, updated_at`,
+		policy.ID, policy.UserID, policy.Enabled, policy.Action, policy.BlockStatus, policy.ErrorCode, policy.BlockMessage,
+		policy.BanThreshold, policy.ViolationWindowHours, policy.ApplyToHashBlock, policy.Note, nullableInt64Ptr(policy.UpdatedBy),
+	).Scan(&policy.CreatedAt, &policy.UpdatedAt)
+	if err != nil {
+		return translatePersistenceError(
+			err,
+			infraerrors.NotFound("CONTENT_MODERATION_POLICY_NOT_FOUND", "风控用户策略不存在"),
+			infraerrors.Conflict("CONTENT_MODERATION_POLICY_USER_EXISTS", "该用户已存在风控策略"),
+		)
+	}
+	return nil
+}
+
+func (r *contentModerationRepository) DeleteUserPolicy(ctx context.Context, id int64) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM content_moderation_user_policies WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete content moderation user policy: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return infraerrors.NotFound("CONTENT_MODERATION_POLICY_NOT_FOUND", "风控用户策略不存在")
+	}
+	return nil
+}
+
 func nullableIntPtr(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullableInt64Ptr(value *int64) any {
 	if value == nil {
 		return nil
 	}
@@ -261,9 +422,9 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		like := "%" + search + "%"
-		args = append(args, like, like, like, like, like)
-		idx := len(args) - 4
-		where = append(where, fmt.Sprintf("(l.request_id ILIKE $%d OR l.user_email ILIKE $%d OR l.api_key_name ILIKE $%d OR l.model ILIKE $%d OR l.input_excerpt ILIKE $%d)", idx, idx+1, idx+2, idx+3, idx+4))
+		args = append(args, like, like, like, like, like, like)
+		idx := len(args) - 5
+		where = append(where, fmt.Sprintf("(l.request_id ILIKE $%d OR l.user_email ILIKE $%d OR l.api_key_name ILIKE $%d OR l.model ILIKE $%d OR l.input_excerpt ILIKE $%d OR l.matched_keyword ILIKE $%d)", idx, idx+1, idx+2, idx+3, idx+4, idx+5))
 	}
 	if filter.From != nil && !filter.From.IsZero() {
 		add("l.created_at >= $%d", *filter.From)

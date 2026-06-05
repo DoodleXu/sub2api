@@ -778,6 +778,22 @@ func (r *contentModerationHandlerTestRepo) CleanupExpiredLogs(ctx context.Contex
 	return &service.ContentModerationCleanupResult{}, nil
 }
 
+func (r *contentModerationHandlerTestRepo) ListUserPolicies(ctx context.Context) ([]service.ContentModerationUserPolicy, error) {
+	return nil, nil
+}
+
+func (r *contentModerationHandlerTestRepo) CreateUserPolicy(ctx context.Context, policy *service.ContentModerationUserPolicy) error {
+	return nil
+}
+
+func (r *contentModerationHandlerTestRepo) UpdateUserPolicy(ctx context.Context, policy *service.ContentModerationUserPolicy) error {
+	return nil
+}
+
+func (r *contentModerationHandlerTestRepo) DeleteUserPolicy(ctx context.Context, id int64) error {
+	return nil
+}
+
 func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

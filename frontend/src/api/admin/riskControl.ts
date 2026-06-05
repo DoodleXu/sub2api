@@ -3,6 +3,10 @@ import { apiClient } from '../client'
 export type ModerationMode = 'off' | 'observe' | 'pre_block'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
+export type ContentModerationUserPolicyAction =
+  | 'block_only'
+  | 'block_notify'
+  | 'block_notify_disable'
 
 export interface ContentModerationModelFilter {
   type: ContentModerationModelFilterType
@@ -186,6 +190,12 @@ export interface ContentModerationLog {
   category_scores: Record<string, number>
   threshold_snapshot: Record<string, number>
   input_excerpt: string
+  matched_keyword: string
+  policy_id: number | null
+  policy_action: ContentModerationUserPolicyAction | ''
+  policy_snapshot: Record<string, unknown>
+  block_status: number
+  error_code: string
   upstream_latency_ms: number | null
   error: string
   violation_count: number
@@ -218,6 +228,39 @@ export interface ContentModerationLogsResponse {
 export interface ContentModerationUnbanUserResponse {
   user_id: number
   status: string
+}
+
+export interface ContentModerationUserPolicy {
+  id: number
+  user_id: number
+  user_email: string
+  user_status: string
+  enabled: boolean
+  action: ContentModerationUserPolicyAction
+  block_status: number
+  error_code: string
+  block_message: string
+  ban_threshold: number
+  violation_window_hours: number
+  apply_to_hash_block: boolean
+  note: string
+  created_by?: number
+  updated_by?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface UpsertContentModerationUserPolicyPayload {
+  user_id: number
+  enabled?: boolean
+  action: ContentModerationUserPolicyAction
+  block_status?: number
+  error_code?: string
+  block_message?: string
+  ban_threshold?: number
+  violation_window_hours?: number
+  apply_to_hash_block?: boolean
+  note?: string
 }
 
 export interface DeleteFlaggedHashResponse {
@@ -262,6 +305,31 @@ export async function listLogs(
   return data
 }
 
+export async function listUserPolicies(): Promise<ContentModerationUserPolicy[]> {
+  const { data } = await apiClient.get<ContentModerationUserPolicy[]>('/admin/risk-control/user-policies')
+  return data
+}
+
+export async function createUserPolicy(
+  payload: UpsertContentModerationUserPolicyPayload
+): Promise<ContentModerationUserPolicy> {
+  const { data } = await apiClient.post<ContentModerationUserPolicy>('/admin/risk-control/user-policies', payload)
+  return data
+}
+
+export async function updateUserPolicy(
+  policyID: number,
+  payload: UpsertContentModerationUserPolicyPayload
+): Promise<ContentModerationUserPolicy> {
+  const { data } = await apiClient.put<ContentModerationUserPolicy>(`/admin/risk-control/user-policies/${policyID}`, payload)
+  return data
+}
+
+export async function deleteUserPolicy(policyID: number): Promise<{ id: number }> {
+  const { data } = await apiClient.delete<{ id: number }>(`/admin/risk-control/user-policies/${policyID}`)
+  return data
+}
+
 export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
   const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
     `/admin/risk-control/users/${userID}/unban`
@@ -287,6 +355,10 @@ export const riskControlAPI = {
   getStatus,
   testAPIKeys,
   listLogs,
+  listUserPolicies,
+  createUserPolicy,
+  updateUserPolicy,
+  deleteUserPolicy,
   unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,

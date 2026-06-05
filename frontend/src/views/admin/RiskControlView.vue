@@ -317,10 +317,16 @@
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.highest_category || '-' }}</div>
                       <div class="text-xs text-gray-400">{{ percent(row.highest_score) }}</div>
+                      <div v-if="matchedKeywordText(row)" class="mt-1 max-w-[180px] truncate text-xs font-medium text-red-600 dark:text-red-300">
+                        {{ t('admin.riskControl.matchedKeyword', { keyword: matchedKeywordText(row) }) }}
+                      </div>
                     </td>
-                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
-                      <div>{{ violationCountText(row) }}</div>
-                      <div class="text-xs text-gray-400">
+	                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
+	                      <div>{{ violationCountText(row) }}</div>
+	                      <div v-if="row.policy_action" class="mt-1 text-xs font-medium text-red-600 dark:text-red-300">
+	                        {{ userPolicyActionLabel(row.policy_action) }} · {{ row.error_code || 'content_policy_violation' }}
+	                      </div>
+	                      <div class="text-xs text-gray-400">
                         {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
                         <span v-if="row.auto_banned"> / {{ t('admin.riskControl.autoBanned') }}</span>
                       </div>
@@ -935,8 +941,8 @@
             </div>
           </div>
 
-          <div v-else-if="activeSettingsTab === 'response'" class="space-y-5">
-            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+	          <div v-else-if="activeSettingsTab === 'response'" class="space-y-5">
+	            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>
                 <label class="input-label">{{ t('admin.riskControl.blockStatus') }}</label>
                 <input v-model.number="configForm.block_status" type="number" min="400" max="599" class="input" />
@@ -966,11 +972,87 @@
               <div>
                 <label class="input-label">{{ t('admin.riskControl.violationWindowHours') }}</label>
                 <input v-model.number="configForm.violation_window_hours" type="number" min="1" max="8760" class="input" />
-              </div>
-            </div>
-          </div>
+	              </div>
+	            </div>
+	          </div>
 
-          <div v-else-if="activeSettingsTab === 'riskThresholds'" class="space-y-5">
+	          <div v-else-if="activeSettingsTab === 'userPolicies'" class="space-y-5">
+	            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+	              <div>
+	                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.userPolicy.title') }}</h3>
+	                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.hint') }}</p>
+	              </div>
+	              <div class="flex flex-col gap-2 sm:flex-row">
+	                <input v-model.trim="userPolicySearch" type="search" class="input sm:w-64" :placeholder="t('admin.riskControl.userPolicy.search')" />
+	                <button type="button" class="btn btn-secondary inline-flex items-center justify-center gap-2" :disabled="userPoliciesLoading" @click="loadUserPolicies">
+	                  <Icon name="refresh" size="sm" :class="userPoliciesLoading ? 'animate-spin' : ''" />
+	                  {{ t('admin.riskControl.refresh') }}
+	                </button>
+	                <button type="button" class="btn btn-primary inline-flex items-center justify-center gap-2" @click="openCreateUserPolicy">
+	                  <Icon name="plus" size="sm" />
+	                  {{ t('admin.riskControl.userPolicy.create') }}
+	                </button>
+	              </div>
+	            </div>
+
+	            <div class="overflow-hidden rounded-lg border border-gray-100 dark:border-dark-700">
+	              <table class="min-w-full divide-y divide-gray-100 dark:divide-dark-700">
+	                <thead class="bg-gray-50 dark:bg-dark-800">
+	                  <tr>
+	                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.columns.user') }}</th>
+	                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.columns.action') }}</th>
+	                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.columns.response') }}</th>
+	                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.columns.status') }}</th>
+	                    <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('common.actions') }}</th>
+	                  </tr>
+	                </thead>
+	                <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-800 dark:bg-dark-800">
+	                  <tr v-if="userPoliciesLoading">
+	                    <td colspan="5" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</td>
+	                  </tr>
+	                  <tr v-else-if="filteredUserPolicies.length === 0">
+	                    <td colspan="5" class="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.empty') }}</td>
+	                  </tr>
+	                  <template v-else>
+	                    <tr v-for="policy in filteredUserPolicies" :key="policy.id" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
+	                      <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+	                        <div class="font-medium text-gray-900 dark:text-white">{{ policy.user_email || `UID ${policy.user_id}` }}</div>
+	                        <div class="text-xs text-gray-400">UID {{ policy.user_id }} · {{ policy.user_status || '-' }}</div>
+	                      </td>
+	                      <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+	                        <span class="inline-flex rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700 dark:bg-red-900/20 dark:text-red-300">
+	                          {{ userPolicyActionLabel(policy.action) }}
+	                        </span>
+	                        <div v-if="policy.action === 'block_notify_disable'" class="mt-1 text-xs text-gray-400">
+	                          {{ t('admin.riskControl.userPolicy.thresholdSummary', { count: policy.ban_threshold, hours: policy.violation_window_hours }) }}
+	                        </div>
+	                      </td>
+	                      <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+	                        <div>{{ policy.block_status || t('admin.riskControl.userPolicy.inheritGlobal') }}</div>
+	                        <div class="font-mono text-xs text-gray-400">{{ policy.error_code || 'content_policy_violation' }}</div>
+	                      </td>
+	                      <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+	                        <div>{{ userPolicyStatusText(policy) }}</div>
+	                        <div class="text-xs text-gray-400">{{ formatDateTime(policy.updated_at) }}</div>
+	                      </td>
+	                      <td class="whitespace-nowrap px-4 py-3 text-right">
+	                        <div class="inline-flex items-center gap-1">
+	                          <button type="button" class="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700" :title="t('common.edit')" @click="openEditUserPolicy(policy)">
+	                            <Icon name="edit" size="sm" />
+	                          </button>
+	                          <button type="button" class="rounded-md p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-900/20" :disabled="deletingUserPolicyID === policy.id" :title="t('common.delete')" @click="deleteUserPolicy(policy)">
+	                            <Icon name="trash" size="sm" />
+	                          </button>
+	                        </div>
+	                      </td>
+	                    </tr>
+	                  </template>
+	                </tbody>
+	              </table>
+	            </div>
+	          </div>
+
+	          <div v-else-if="activeSettingsTab === 'riskThresholds'" class="space-y-5">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.riskThresholds') }}</h3>
@@ -1119,11 +1201,119 @@
             </button>
           </div>
         </template>
-      </BaseDialog>
+	      </BaseDialog>
 
-      <BaseDialog
+	      <BaseDialog
+	        :show="userPolicyDialogOpen"
+	        :title="userPolicyDialogTitle"
+	        width="wide"
+	        @close="closeUserPolicyDialog"
+	      >
+	        <div class="space-y-5">
+	          <div>
+	            <label class="input-label">{{ t('admin.riskControl.userPolicy.form.user') }}</label>
+	            <div class="relative">
+	              <Icon name="search" size="sm" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+	              <input
+	                v-model.trim="userPolicySearch"
+	                type="search"
+	                class="input pl-9"
+	                :disabled="Boolean(editingUserPolicyID)"
+	                :placeholder="t('admin.riskControl.userPolicy.form.userSearch')"
+	                @focus="userPolicySearchOpen = userPolicySearchResults.length > 0"
+	                @input="debounceSearchPolicyUsers"
+	              />
+	              <div
+	                v-if="userPolicySearchOpen"
+	                class="absolute z-30 mt-2 max-h-64 w-full overflow-y-auto rounded-lg border border-gray-100 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
+	              >
+	                <div v-if="userPolicySearchLoading" class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</div>
+	                <button
+	                  v-for="user in userPolicySearchResults"
+	                  :key="user.id"
+	                  type="button"
+	                  class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-dark-700/60"
+	                  @click="selectPolicyUser(user)"
+	                >
+	                  <span class="min-w-0">
+	                    <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ userDisplayName(user) }}</span>
+	                    <span class="mt-0.5 block truncate text-xs text-gray-500 dark:text-gray-400">{{ user.email || `UID ${user.id}` }}</span>
+	                  </span>
+	                  <span class="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-300">UID {{ user.id }}</span>
+	                </button>
+	                <div v-if="!userPolicySearchLoading && userPolicySearchResults.length === 0" class="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+	                  {{ t('admin.riskControl.userPolicy.form.noUsers') }}
+	                </div>
+	              </div>
+	            </div>
+	            <p v-if="selectedPolicyUser" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+	              {{ selectedPolicyUser.email || `UID ${selectedPolicyUser.id}` }} · UID {{ selectedPolicyUser.id }}
+	            </p>
+	          </div>
+
+	          <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+	            <div>
+	              <label class="input-label">{{ t('admin.riskControl.userPolicy.form.action') }}</label>
+	              <Select v-model="userPolicyForm.action" :options="userPolicyActionOptions" />
+	            </div>
+	            <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+	              <div>
+	                <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.userPolicy.form.enabled') }}</p>
+	                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.form.enabledHint') }}</p>
+	              </div>
+	              <Toggle v-model="userPolicyForm.enabled" />
+	            </div>
+	            <div>
+	              <label class="input-label">{{ t('admin.riskControl.userPolicy.form.blockStatus') }}</label>
+	              <input v-model.number="userPolicyForm.block_status" type="number" min="0" max="599" class="input" @blur="normalizeUserPolicyBlockStatus" />
+	            </div>
+	            <div>
+	              <label class="input-label">{{ t('admin.riskControl.userPolicy.form.errorCode') }}</label>
+	              <input v-model.trim="userPolicyForm.error_code" type="text" class="input font-mono" />
+	            </div>
+	            <div class="lg:col-span-2">
+	              <label class="input-label">{{ t('admin.riskControl.userPolicy.form.blockMessage') }}</label>
+	              <input v-model.trim="userPolicyForm.block_message" type="text" class="input" :placeholder="t('admin.riskControl.userPolicy.form.inheritMessage')" />
+	            </div>
+	            <template v-if="userPolicyActionRequiresBan">
+	              <div>
+	                <label class="input-label">{{ t('admin.riskControl.banThreshold') }}</label>
+	                <input v-model.number="userPolicyForm.ban_threshold" type="number" min="1" max="1000" class="input" />
+	              </div>
+	              <div>
+	                <label class="input-label">{{ t('admin.riskControl.violationWindowHours') }}</label>
+	                <input v-model.number="userPolicyForm.violation_window_hours" type="number" min="1" max="8760" class="input" />
+	              </div>
+	            </template>
+	            <div class="flex items-center justify-between rounded-lg border border-gray-100 p-4 dark:border-dark-700 lg:col-span-2">
+	              <div>
+	                <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.riskControl.userPolicy.form.applyToHashBlock') }}</p>
+	                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.userPolicy.form.applyToHashBlockHint') }}</p>
+	              </div>
+	              <Toggle v-model="userPolicyForm.apply_to_hash_block" />
+	            </div>
+	            <div class="lg:col-span-2">
+	              <label class="input-label">{{ t('admin.riskControl.userPolicy.form.note') }}</label>
+	              <textarea v-model.trim="userPolicyForm.note" rows="3" class="input resize-none" />
+	            </div>
+	          </div>
+	        </div>
+
+	        <template #footer>
+	          <div class="flex justify-end gap-2">
+	            <button type="button" class="btn btn-secondary" @click="closeUserPolicyDialog">{{ t('common.cancel') }}</button>
+	            <button type="button" class="btn btn-primary inline-flex items-center gap-2" :disabled="userPolicySaving || !selectedPolicyUser" @click="saveUserPolicy">
+	              <Icon v-if="userPolicySaving" name="refresh" size="sm" class="animate-spin" />
+	              <Icon v-else name="check" size="sm" />
+	              {{ userPolicySaving ? t('common.saving') : t('common.save') }}
+	            </button>
+	          </div>
+	        </template>
+	      </BaseDialog>
+
+	      <BaseDialog
         :show="inputDetailRow !== null"
-        :title="t('admin.riskControl.inputDetailTitle')"
+        :title="inputDetailTitle"
         width="wide"
         @close="closeInputDetail"
       >
@@ -1148,13 +1338,16 @@
               <p class="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white">
                 {{ inputDetailRow.highest_category || '-' }} / {{ percent(inputDetailRow.highest_score) }}
               </p>
+              <p v-if="matchedKeywordText(inputDetailRow)" class="mt-1 truncate text-xs font-medium text-red-600 dark:text-red-300">
+                {{ t('admin.riskControl.matchedKeyword', { keyword: matchedKeywordText(inputDetailRow) }) }}
+              </p>
             </div>
           </div>
 
           <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.inputDetailContent') }}</p>
+                <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ inputDetailContentLabel }}</p>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   {{ inputDetailRow.endpoint || '-' }} · {{ inputDetailRow.provider || '-' }} / {{ inputDetailRow.model || '-' }}
                 </p>
@@ -1191,22 +1384,25 @@ import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationAPIKeyLoad,
   ContentModerationAPIKeyStatus,
-  ContentModerationConfig,
-  ContentModerationLog,
-  ContentModerationModelFilter,
-  ContentModerationModelFilterType,
-  ContentModerationRuntimeStatus,
-  ContentModerationTestAuditResult,
-  KeywordBlockingMode,
-  ModerationMode,
-  UpdateContentModerationConfig,
-} from '@/api/admin/riskControl'
+	  ContentModerationConfig,
+	  ContentModerationLog,
+	  ContentModerationModelFilter,
+	  ContentModerationModelFilterType,
+	  ContentModerationRuntimeStatus,
+	  ContentModerationTestAuditResult,
+	  ContentModerationUserPolicy,
+	  ContentModerationUserPolicyAction,
+	  KeywordBlockingMode,
+	  ModerationMode,
+	  UpdateContentModerationConfig,
+	  UpsertContentModerationUserPolicyPayload,
+	} from '@/api/admin/riskControl'
 import type { AdminGroup, AdminUser, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
-type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
+type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'userPolicies' | 'riskThresholds' | 'retention' | 'keywords'
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
 type APIKeysWriteMode = 'append' | 'replace'
 type OverviewIcon = 'shield' | 'key' | 'users' | 'document'
@@ -1232,6 +1428,7 @@ type RiskThresholdRow = {
   defaultValue: number
 }
 type WhitelistUserSummary = Pick<AdminUser, 'id' | 'username' | 'email' | 'role' | 'status'>
+type PolicyUserSummary = Pick<AdminUser, 'id' | 'username' | 'email' | 'role' | 'status'>
 
 const maxModerationTestImages = 1
 const maxModerationTestImageSize = 8 * 1024 * 1024
@@ -1264,8 +1461,12 @@ const logsLoading = ref(false)
 const statusLoading = ref(false)
 const apiKeyTesting = ref(false)
 const hashActionLoading = ref(false)
+const userPoliciesLoading = ref(false)
+const userPolicySaving = ref(false)
 const unbanningUserID = ref<number | null>(null)
+const deletingUserPolicyID = ref<number | null>(null)
 const settingsOpen = ref(false)
+const userPolicyDialogOpen = ref(false)
 const activeSettingsTab = ref<SettingsTab>('basic')
 const groupSearch = ref('')
 const whitelistUserSearch = ref('')
@@ -1274,6 +1475,13 @@ const whitelistUserSearchLoading = ref(false)
 const flaggedHashInput = ref('')
 const groups = ref<AdminGroup[]>([])
 const whitelistUsers = ref<Record<number, WhitelistUserSummary>>({})
+const userPolicies = ref<ContentModerationUserPolicy[]>([])
+const userPolicySearch = ref('')
+const userPolicySearchOpen = ref(false)
+const userPolicySearchLoading = ref(false)
+const userPolicySearchResults = ref<AdminUser[]>([])
+const selectedPolicyUser = ref<PolicyUserSummary | null>(null)
+const editingUserPolicyID = ref<number | null>(null)
 const forcedWhitelistUserIDs = ref<number[]>([])
 const whitelistUserSearchResults = ref<AdminUser[]>([])
 const logs = ref<ContentModerationLog[]>([])
@@ -1287,8 +1495,10 @@ const moderationTestResult = ref<ContentModerationTestAuditResult | null>(null)
 const inputDetailRow = ref<ContentModerationLog | null>(null)
 let statusTimer: number | null = null
 let whitelistUserSearchTimer: number | null = null
+let userPolicySearchTimer: number | null = null
 let whitelistHydrateSeq = 0
 let whitelistUserSearchSeq = 0
+let userPolicySearchSeq = 0
 
 const configForm = reactive({
   enabled: false,
@@ -1327,6 +1537,18 @@ const configForm = reactive({
   model_filter_models: [] as string[],
 })
 
+const userPolicyForm = reactive({
+  enabled: true,
+  action: 'block_only' as ContentModerationUserPolicyAction,
+  block_status: 0,
+  error_code: 'content_policy_violation',
+  block_message: '',
+  ban_threshold: 1,
+  violation_window_hours: 720,
+  apply_to_hash_block: false,
+  note: '',
+})
+
 const pagination = reactive({
   page: 1,
   page_size: 20,
@@ -1348,6 +1570,7 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'scope', label: t('admin.riskControl.tabs.scope') },
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
   { id: 'response', label: t('admin.riskControl.tabs.response') },
+  { id: 'userPolicies', label: t('admin.riskControl.tabs.userPolicies') },
   { id: 'riskThresholds', label: t('admin.riskControl.tabs.riskThresholds') },
   { id: 'keywords', label: t('admin.riskControl.tabs.keywords') },
   { id: 'retention', label: t('admin.riskControl.tabs.retention') },
@@ -1394,6 +1617,30 @@ const modelFilterOptions = computed<Array<{ value: ContentModerationModelFilterT
     description: t('admin.riskControl.modelFilterExcludeDesc'),
   },
 ])
+
+const userPolicyActionOptions = computed<SelectOption[]>(() => [
+  { value: 'block_only', label: t('admin.riskControl.userPolicy.actions.blockOnly') },
+  { value: 'block_notify', label: t('admin.riskControl.userPolicy.actions.blockNotify') },
+  { value: 'block_notify_disable', label: t('admin.riskControl.userPolicy.actions.blockNotifyDisable') },
+])
+
+const filteredUserPolicies = computed(() => {
+  const keyword = userPolicySearch.value.trim().toLowerCase()
+  if (!keyword) return userPolicies.value
+  return userPolicies.value.filter((policy) => (
+    String(policy.user_id).includes(keyword)
+    || (policy.user_email || '').toLowerCase().includes(keyword)
+    || (policy.note || '').toLowerCase().includes(keyword)
+  ))
+})
+
+const userPolicyDialogTitle = computed(() => (
+  editingUserPolicyID.value
+    ? t('admin.riskControl.userPolicy.editTitle')
+    : t('admin.riskControl.userPolicy.createTitle')
+))
+
+const userPolicyActionRequiresBan = computed(() => userPolicyForm.action === 'block_notify_disable')
 
 type KeywordNoticeView = {
   title: string
@@ -1662,6 +1909,18 @@ const inputDetailText = computed(() => {
   return inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
 })
 
+const inputDetailTitle = computed(() => (
+  inputDetailRow.value && isBlockedRow(inputDetailRow.value)
+    ? t('admin.riskControl.inputDetailFullTitle')
+    : t('admin.riskControl.inputDetailTitle')
+))
+
+const inputDetailContentLabel = computed(() => (
+  inputDetailRow.value && isBlockedRow(inputDetailRow.value)
+    ? t('admin.riskControl.inputDetailContent')
+    : t('admin.riskControl.inputDetailSummaryContent')
+))
+
 const queueUsagePercent = computed(() => `${Math.min(100, Math.max(0, status.value?.queue_usage_percent ?? 0)).toFixed(1)}%`)
 
 const queueUsageStyle = computed(() => ({
@@ -1817,14 +2076,16 @@ function applyConfig(config: ContentModerationConfig) {
 async function loadAll() {
   loading.value = true
   try {
-    const [config, groupItems, runtimeStatus] = await Promise.all([
-      adminAPI.riskControl.getConfig(),
-      adminAPI.groups.getAll(),
-      adminAPI.riskControl.getStatus(),
-    ])
-    applyConfig(config)
-    groups.value = groupItems
-    status.value = runtimeStatus
+	    const [config, groupItems, runtimeStatus, policies] = await Promise.all([
+	      adminAPI.riskControl.getConfig(),
+	      adminAPI.groups.getAll(),
+	      adminAPI.riskControl.getStatus(),
+	      adminAPI.riskControl.listUserPolicies(),
+	    ])
+	    applyConfig(config)
+	    groups.value = groupItems
+	    status.value = runtimeStatus
+	    userPolicies.value = policies
     if (Array.isArray(runtimeStatus.api_key_statuses)) {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
       prunePendingDeleteAPIKeyHashes()
@@ -1952,6 +2213,14 @@ function inputSummaryText(row: ContentModerationLog): string {
   return row.input_excerpt || row.error || '-'
 }
 
+function matchedKeywordText(row: ContentModerationLog): string {
+  return row.action === 'keyword_block' ? (row.matched_keyword || '').trim() : ''
+}
+
+function isBlockedRow(row: ContentModerationLog): boolean {
+  return row.action === 'block' || row.action === 'keyword_block' || row.action === 'hash_block'
+}
+
 function openInputDetail(row: ContentModerationLog) {
   inputDetailRow.value = row
 }
@@ -2011,6 +2280,17 @@ async function clearFlaggedHashes() {
 function openSettings() {
   activeSettingsTab.value = 'basic'
   settingsOpen.value = true
+}
+
+async function loadUserPolicies() {
+  userPoliciesLoading.value = true
+  try {
+    userPolicies.value = await adminAPI.riskControl.listUserPolicies()
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.userPolicy.loadFailed')))
+  } finally {
+    userPoliciesLoading.value = false
+  }
 }
 
 function reloadLogsFromFirstPage() {
@@ -2205,7 +2485,7 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
-  if (row.action === 'block' || row.action === 'keyword_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (isBlockedRow(row)) return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
@@ -2380,6 +2660,10 @@ function isWhitelistUserSelected(userID: number): boolean {
   return whitelistUserIDs.value.includes(userID)
 }
 
+function isUserPolicySelected(userID: number): boolean {
+  return userPolicies.value.some((policy) => policy.user_id === userID)
+}
+
 function isForcedWhitelistUser(userID: number): boolean {
   return forcedWhitelistUserIDSet.value.has(userID)
 }
@@ -2431,6 +2715,174 @@ async function searchWhitelistUsers() {
       whitelistUserSearchLoading.value = false
     }
   }
+}
+
+function resetUserPolicyForm() {
+  editingUserPolicyID.value = null
+  selectedPolicyUser.value = null
+  userPolicySearch.value = ''
+  userPolicySearchResults.value = []
+  userPolicySearchOpen.value = false
+  userPolicyForm.enabled = true
+  userPolicyForm.action = 'block_only'
+  userPolicyForm.block_status = 0
+  userPolicyForm.error_code = 'content_policy_violation'
+  userPolicyForm.block_message = ''
+  userPolicyForm.ban_threshold = 1
+  userPolicyForm.violation_window_hours = 720
+  userPolicyForm.apply_to_hash_block = false
+  userPolicyForm.note = ''
+}
+
+function openCreateUserPolicy() {
+  resetUserPolicyForm()
+  userPolicyDialogOpen.value = true
+}
+
+function openEditUserPolicy(policy: ContentModerationUserPolicy) {
+  editingUserPolicyID.value = policy.id
+  selectedPolicyUser.value = {
+    id: policy.user_id,
+    username: '',
+    email: policy.user_email || '',
+    role: 'user',
+    status: policy.user_status === 'disabled' ? 'disabled' : 'active',
+  }
+  userPolicySearch.value = policy.user_email || `UID ${policy.user_id}`
+  userPolicyForm.enabled = policy.enabled
+  userPolicyForm.action = normalizeUserPolicyAction(policy.action)
+  userPolicyForm.block_status = policy.block_status || 0
+  userPolicyForm.error_code = policy.error_code || 'content_policy_violation'
+  userPolicyForm.block_message = policy.block_message || ''
+  userPolicyForm.ban_threshold = policy.ban_threshold || 1
+  userPolicyForm.violation_window_hours = policy.violation_window_hours || 720
+  userPolicyForm.apply_to_hash_block = Boolean(policy.apply_to_hash_block)
+  userPolicyForm.note = policy.note || ''
+  userPolicySearchResults.value = []
+  userPolicySearchOpen.value = false
+  userPolicyDialogOpen.value = true
+}
+
+function closeUserPolicyDialog() {
+  userPolicyDialogOpen.value = false
+  resetUserPolicyForm()
+}
+
+function selectPolicyUser(user: AdminUser) {
+  selectedPolicyUser.value = {
+    id: user.id,
+    username: user.username || '',
+    email: user.email || '',
+    role: user.role,
+    status: user.status,
+  }
+  userPolicySearch.value = user.email || user.username || `UID ${user.id}`
+  userPolicySearchResults.value = []
+  userPolicySearchOpen.value = false
+}
+
+function debounceSearchPolicyUsers() {
+  if (userPolicySearchTimer !== null) {
+    window.clearTimeout(userPolicySearchTimer)
+  }
+  userPolicySearchTimer = window.setTimeout(searchPolicyUsers, 300)
+}
+
+async function searchPolicyUsers() {
+  const keyword = userPolicySearch.value.trim()
+  const seq = ++userPolicySearchSeq
+  if (!keyword || editingUserPolicyID.value) {
+    userPolicySearchResults.value = []
+    userPolicySearchOpen.value = false
+    userPolicySearchLoading.value = false
+    return
+  }
+  userPolicySearchLoading.value = true
+  userPolicySearchOpen.value = true
+  try {
+    const res = await adminAPI.users.list(1, 10, { search: keyword })
+    if (seq !== userPolicySearchSeq || keyword !== userPolicySearch.value.trim()) return
+    userPolicySearchResults.value = res.items.filter((user) => (
+      !isForcedWhitelistUser(user.id)
+      && !isWhitelistUserSelected(user.id)
+      && !isUserPolicySelected(user.id)
+    ))
+  } catch {
+    if (seq !== userPolicySearchSeq) return
+    userPolicySearchResults.value = []
+  } finally {
+    if (seq === userPolicySearchSeq) {
+      userPolicySearchLoading.value = false
+    }
+  }
+}
+
+function normalizeUserPolicyBlockStatus() {
+  const status = Number(userPolicyForm.block_status) || 0
+  userPolicyForm.block_status = status === 0 || (status >= 400 && status <= 599) ? status : 0
+}
+
+async function saveUserPolicy() {
+  if (!selectedPolicyUser.value || userPolicySaving.value) return
+  normalizeUserPolicyBlockStatus()
+  userPolicySaving.value = true
+  try {
+    const payload: UpsertContentModerationUserPolicyPayload = {
+      user_id: selectedPolicyUser.value.id,
+      enabled: userPolicyForm.enabled,
+      action: userPolicyForm.action,
+      block_status: Number(userPolicyForm.block_status) || 0,
+      error_code: userPolicyForm.error_code || 'content_policy_violation',
+      block_message: userPolicyForm.block_message,
+      ban_threshold: Number(userPolicyForm.ban_threshold) || 1,
+      violation_window_hours: Number(userPolicyForm.violation_window_hours) || 720,
+      apply_to_hash_block: userPolicyForm.apply_to_hash_block,
+      note: userPolicyForm.note,
+    }
+    if (editingUserPolicyID.value) {
+      await adminAPI.riskControl.updateUserPolicy(editingUserPolicyID.value, payload)
+    } else {
+      await adminAPI.riskControl.createUserPolicy(payload)
+    }
+    closeUserPolicyDialog()
+    appStore.showSuccess(t('admin.riskControl.userPolicy.saved'))
+    await Promise.all([loadUserPolicies(), loadLogs()])
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.userPolicy.saveFailed')))
+  } finally {
+    userPolicySaving.value = false
+  }
+}
+
+async function deleteUserPolicy(policy: ContentModerationUserPolicy) {
+  if (deletingUserPolicyID.value !== null) return
+  const confirmed = window.confirm(t('admin.riskControl.userPolicy.deleteConfirm'))
+  if (!confirmed) return
+  deletingUserPolicyID.value = policy.id
+  try {
+    await adminAPI.riskControl.deleteUserPolicy(policy.id)
+    appStore.showSuccess(t('admin.riskControl.userPolicy.deleted'))
+    await Promise.all([loadUserPolicies(), loadLogs()])
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.userPolicy.deleteFailed')))
+  } finally {
+    deletingUserPolicyID.value = null
+  }
+}
+
+function normalizeUserPolicyAction(value: unknown): ContentModerationUserPolicyAction {
+  if (value === 'block_notify' || value === 'block_notify_disable') return value
+  return 'block_only'
+}
+
+function userPolicyActionLabel(action: ContentModerationUserPolicyAction | ''): string {
+  if (action === 'block_notify') return t('admin.riskControl.userPolicy.actions.blockNotify')
+  if (action === 'block_notify_disable') return t('admin.riskControl.userPolicy.actions.blockNotifyDisable')
+  return t('admin.riskControl.userPolicy.actions.blockOnly')
+}
+
+function userPolicyStatusText(policy: ContentModerationUserPolicy): string {
+  return policy.enabled ? t('admin.riskControl.userPolicy.enabled') : t('admin.riskControl.userPolicy.disabled')
 }
 
 function normalizeKeywordBlockingMode(value: unknown): KeywordBlockingMode {
@@ -2564,9 +3016,13 @@ onUnmounted(() => {
     window.clearInterval(statusTimer)
     statusTimer = null
   }
-  if (whitelistUserSearchTimer !== null) {
-    window.clearTimeout(whitelistUserSearchTimer)
-    whitelistUserSearchTimer = null
-  }
-})
+	  if (whitelistUserSearchTimer !== null) {
+	    window.clearTimeout(whitelistUserSearchTimer)
+	    whitelistUserSearchTimer = null
+	  }
+	  if (userPolicySearchTimer !== null) {
+	    window.clearTimeout(userPolicySearchTimer)
+	    userPolicySearchTimer = null
+	  }
+	})
 </script>

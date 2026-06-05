@@ -66,6 +66,19 @@ type contentModerationHashRequest struct {
 	InputHash string `json:"input_hash"`
 }
 
+type contentModerationUserPolicyRequest struct {
+	UserID               int64  `json:"user_id"`
+	Enabled              *bool  `json:"enabled"`
+	Action               string `json:"action"`
+	BlockStatus          int    `json:"block_status"`
+	ErrorCode            string `json:"error_code"`
+	BlockMessage         string `json:"block_message"`
+	BanThreshold         int    `json:"ban_threshold"`
+	ViolationWindowHours int    `json:"violation_window_hours"`
+	ApplyToHashBlock     bool   `json:"apply_to_hash_block"`
+	Note                 string `json:"note"`
+}
+
 func (h *ContentModerationHandler) GetConfig(c *gin.Context) {
 	cfg, err := h.service.GetConfig(c.Request.Context())
 	if err != nil {
@@ -198,6 +211,61 @@ func (h *ContentModerationHandler) ListLogs(c *gin.Context) {
 	response.Paginated(c, items, pageResult.Total, pageResult.Page, pageResult.PageSize)
 }
 
+func (h *ContentModerationHandler) ListUserPolicies(c *gin.Context) {
+	items, err := h.service.ListUserPolicies(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
+func (h *ContentModerationHandler) CreateUserPolicy(c *gin.Context) {
+	var req contentModerationUserPolicyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	policy, err := h.service.CreateUserPolicy(c.Request.Context(), contentModerationUserPolicyInput(req, getAdminIDFromContext(c)))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, policy)
+}
+
+func (h *ContentModerationHandler) UpdateUserPolicy(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("policy_id")), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid policy_id")
+		return
+	}
+	var req contentModerationUserPolicyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	policy, err := h.service.UpdateUserPolicy(c.Request.Context(), id, contentModerationUserPolicyInput(req, getAdminIDFromContext(c)))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, policy)
+}
+
+func (h *ContentModerationHandler) DeleteUserPolicy(c *gin.Context) {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("policy_id")), 10, 64)
+	if err != nil || id <= 0 {
+		response.BadRequest(c, "Invalid policy_id")
+		return
+	}
+	if err := h.service.DeleteUserPolicy(c.Request.Context(), id); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"id": id})
+}
+
 func (h *ContentModerationHandler) UnbanUser(c *gin.Context) {
 	userID, err := strconv.ParseInt(strings.TrimSpace(c.Param("user_id")), 10, 64)
 	if err != nil || userID <= 0 {
@@ -245,4 +313,24 @@ func parseContentModerationDate(raw string) (time.Time, bool, error) {
 	}
 	t, err := time.Parse("2006-01-02", raw)
 	return t, err == nil, err
+}
+
+func contentModerationUserPolicyInput(req contentModerationUserPolicyRequest, actorID int64) service.ContentModerationUserPolicyInput {
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	return service.ContentModerationUserPolicyInput{
+		UserID:               req.UserID,
+		Enabled:              enabled,
+		Action:               req.Action,
+		BlockStatus:          req.BlockStatus,
+		ErrorCode:            req.ErrorCode,
+		BlockMessage:         req.BlockMessage,
+		BanThreshold:         req.BanThreshold,
+		ViolationWindowHours: req.ViolationWindowHours,
+		ApplyToHashBlock:     req.ApplyToHashBlock,
+		Note:                 req.Note,
+		ActorID:              actorID,
+	}
 }

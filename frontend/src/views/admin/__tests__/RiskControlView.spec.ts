@@ -4,13 +4,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 
 import RiskControlView from '../RiskControlView.vue'
-import type { ContentModerationConfig, UpdateContentModerationConfig } from '@/api/admin/riskControl'
+import type { ContentModerationConfig, ContentModerationLog, UpdateContentModerationConfig } from '@/api/admin/riskControl'
 
 const {
   getConfig,
   updateConfig,
   getStatus,
   listLogs,
+  listUserPolicies,
   getGroups,
   getUserById,
   listUsers,
@@ -21,6 +22,7 @@ const {
   updateConfig: vi.fn(),
   getStatus: vi.fn(),
   listLogs: vi.fn(),
+  listUserPolicies: vi.fn(),
   getGroups: vi.fn(),
   getUserById: vi.fn(),
   listUsers: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      listUserPolicies,
       testAPIKeys: vi.fn(),
       deleteFlaggedHash: vi.fn(),
       clearFlaggedHashes: vi.fn(),
@@ -155,8 +158,12 @@ const BaseDialogStub = defineComponent({
       type: Boolean,
       default: false,
     },
+    title: {
+      type: String,
+      default: '',
+    },
   },
-  template: '<div v-if="show"><slot /><slot name="footer" /></div>',
+  template: '<div v-if="show"><h2>{{ title }}</h2><slot /><slot name="footer" /></div>',
 })
 const ModelWhitelistSelectorStub = defineComponent({
   props: {
@@ -184,6 +191,43 @@ const ModelWhitelistSelectorStub = defineComponent({
         onInput,
       })
   },
+})
+
+const moderationLog = (overrides: Partial<ContentModerationLog> = {}): ContentModerationLog => ({
+  id: 1,
+  request_id: 'req-1',
+  user_id: 1001,
+  user_email: 'user@example.com',
+  api_key_id: 10,
+  api_key_name: 'primary key',
+  group_id: 2,
+  group_name: 'default',
+  endpoint: '/v1/responses',
+  provider: 'openai',
+  model: 'gpt-5.5',
+  mode: 'pre_block',
+  action: 'allow',
+  flagged: false,
+  highest_category: '',
+  highest_score: 0,
+  category_scores: {},
+  threshold_snapshot: {},
+  policy_id: null,
+  policy_action: '',
+  policy_snapshot: {},
+  block_status: 0,
+  error_code: '',
+  input_excerpt: 'normal summary',
+  matched_keyword: '',
+  upstream_latency_ms: null,
+  error: '',
+  violation_count: 0,
+  auto_banned: false,
+  email_sent: false,
+  user_status: 'active',
+  queue_delay_ms: null,
+  created_at: '2026-06-05T03:43:09Z',
+  ...overrides,
 })
 
 function findButtonByText(wrapper: VueWrapper, text: string): DOMWrapper<HTMLButtonElement> {
@@ -216,6 +260,7 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    listUserPolicies.mockReset()
     getGroups.mockReset()
     getUserById.mockReset()
     listUsers.mockReset()
@@ -225,6 +270,7 @@ describe('admin RiskControlView', () => {
     getConfig.mockResolvedValue(baseConfig())
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
+    listUserPolicies.mockResolvedValue([])
     getGroups.mockResolvedValue([])
     getUserById.mockImplementation(async (id: number) => ({
       id,
@@ -244,6 +290,60 @@ describe('admin RiskControlView', () => {
       api_key_masks: [],
       api_key_statuses: [],
     }))
+  })
+
+  it('shows matched keyword and full input for keyword-blocked logs', async () => {
+    const fullInput = 'pullPage 这个函数有问题，触发 secret-token 后需要展示完整输入内容'
+    listLogs.mockResolvedValue({
+      items: [
+        moderationLog({
+          action: 'keyword_block',
+          flagged: true,
+          highest_category: 'keyword',
+          highest_score: 1,
+          input_excerpt: fullInput,
+          matched_keyword: 'secret-token',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.matchedKeyword')
+    expect(wrapper.text()).toContain('secret-token')
+    expect(wrapper.text()).toContain(fullInput)
+
+    await findButtonByText(wrapper, fullInput).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailFullTitle')
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailContent')
+    expect(wrapper.text()).toContain(fullInput)
+  })
+
+  it('keeps normal allowed logs as summary content in the input dialog', async () => {
+    listLogs.mockResolvedValue({
+      items: [moderationLog({ input_excerpt: 'normal request summary' })],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    await findButtonByText(wrapper, 'normal request summary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailTitle')
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailSummaryContent')
+    expect(wrapper.text()).not.toContain('admin.riskControl.inputDetailFullTitle')
   })
 
   it('saves the selected model filter mode and models', async () => {

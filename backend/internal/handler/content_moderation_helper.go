@@ -27,7 +27,10 @@ func contentModerationStatus(decision *service.ContentModerationDecision) int {
 }
 
 func contentModerationErrorCode(decision *service.ContentModerationDecision) string {
-	return "content_policy_violation"
+	if decision == nil || strings.TrimSpace(decision.ErrorCode) == "" {
+		return "content_policy_violation"
+	}
+	return strings.TrimSpace(decision.ErrorCode)
 }
 
 func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {

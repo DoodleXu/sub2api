@@ -54,6 +54,10 @@ const (
 	ContentModerationProtocolGemini            = "gemini"
 	ContentModerationProtocolOpenAIImages      = "openai_images"
 
+	ContentModerationUserPolicyActionBlockOnly      = "block_only"
+	ContentModerationUserPolicyActionBlockNotify    = "block_notify"
+	ContentModerationUserPolicyActionBlockNotifyBan = "block_notify_disable"
+
 	defaultContentModerationAdminUserID = 1
 
 	defaultContentModerationBaseURL   = "https://api.openai.com"
@@ -71,6 +75,7 @@ const (
 	defaultContentModerationViolationWindowHours = 720
 	defaultContentModerationBlockHTTPStatus      = http.StatusForbidden
 	defaultContentModerationBlockMessage         = "内容审计命中风险规则，请调整输入后重试"
+	defaultContentModerationErrorCode            = "content_policy_violation"
 	defaultContentModerationRetryCount           = 2
 	maxContentModerationRetryCount               = 5
 	defaultContentModerationHitRetentionDays     = 180
@@ -89,6 +94,8 @@ const (
 	maxContentModerationModelFilterModels        = 1000
 	maxContentModerationModelFilterRunes         = 200
 	maxContentModerationWhitelistUserIDs         = 1000
+	maxContentModerationPolicyNoteRunes          = 500
+	contentModerationPolicyCacheTTL              = 30 * time.Second
 	contentModerationForcedWhitelistCacheTTL     = time.Minute
 
 	contentModerationCleanupInterval = 24 * time.Hour
@@ -155,6 +162,7 @@ type ContentModerationConfig struct {
 	QueueSize              int                          `json:"queue_size"`
 	BlockStatus            int                          `json:"block_status"`
 	BlockMessage           string                       `json:"block_message"`
+	BlockErrorCode         string                       `json:"-"`
 	EmailOnHit             bool                         `json:"email_on_hit"`
 	AutoBanEnabled         bool                         `json:"auto_ban_enabled"`
 	BanThreshold           int                          `json:"ban_threshold"`
@@ -166,6 +174,7 @@ type ContentModerationConfig struct {
 	BlockedKeywords        []string                     `json:"blocked_keywords"`
 	KeywordBlockingMode    string                       `json:"keyword_blocking_mode"`
 	ModelFilter            ContentModerationModelFilter `json:"model_filter"`
+	UserPolicy             *ContentModerationUserPolicy `json:"-"`
 }
 
 type ContentModerationConfigView struct {
@@ -368,6 +377,7 @@ type ContentModerationDecision struct {
 	Flagged         bool               `json:"flagged"`
 	Message         string             `json:"message"`
 	StatusCode      int                `json:"status_code"`
+	ErrorCode       string             `json:"error_code"`
 	InputHash       string             `json:"input_hash,omitempty"`
 	HighestCategory string             `json:"highest_category"`
 	HighestScore    float64            `json:"highest_score"`
@@ -395,6 +405,12 @@ type ContentModerationLog struct {
 	CategoryScores    map[string]float64 `json:"category_scores"`
 	ThresholdSnapshot map[string]float64 `json:"threshold_snapshot"`
 	InputExcerpt      string             `json:"input_excerpt"`
+	MatchedKeyword    string             `json:"matched_keyword"`
+	PolicyID          *int64             `json:"policy_id,omitempty"`
+	PolicyAction      string             `json:"policy_action"`
+	PolicySnapshot    map[string]any     `json:"policy_snapshot,omitempty"`
+	BlockStatus       int                `json:"block_status"`
+	ErrorCode         string             `json:"error_code"`
 	UpstreamLatencyMS *int               `json:"upstream_latency_ms,omitempty"`
 	Error             string             `json:"error"`
 	ViolationCount    int                `json:"violation_count"`
@@ -458,6 +474,40 @@ type ContentModerationUnbanUserResult struct {
 	Status string `json:"status"`
 }
 
+type ContentModerationUserPolicy struct {
+	ID                   int64     `json:"id"`
+	UserID               int64     `json:"user_id"`
+	UserEmail            string    `json:"user_email"`
+	UserStatus           string    `json:"user_status"`
+	Enabled              bool      `json:"enabled"`
+	Action               string    `json:"action"`
+	BlockStatus          int       `json:"block_status"`
+	ErrorCode            string    `json:"error_code"`
+	BlockMessage         string    `json:"block_message"`
+	BanThreshold         int       `json:"ban_threshold"`
+	ViolationWindowHours int       `json:"violation_window_hours"`
+	ApplyToHashBlock     bool      `json:"apply_to_hash_block"`
+	Note                 string    `json:"note"`
+	CreatedBy            *int64    `json:"created_by,omitempty"`
+	UpdatedBy            *int64    `json:"updated_by,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type ContentModerationUserPolicyInput struct {
+	UserID               int64  `json:"user_id"`
+	Enabled              bool   `json:"enabled"`
+	Action               string `json:"action"`
+	BlockStatus          int    `json:"block_status"`
+	ErrorCode            string `json:"error_code"`
+	BlockMessage         string `json:"block_message"`
+	BanThreshold         int    `json:"ban_threshold"`
+	ViolationWindowHours int    `json:"violation_window_hours"`
+	ApplyToHashBlock     bool   `json:"apply_to_hash_block"`
+	Note                 string `json:"note"`
+	ActorID              int64  `json:"-"`
+}
+
 type ContentModerationDeleteHashResult struct {
 	InputHash string `json:"input_hash"`
 	Deleted   bool   `json:"deleted"`
@@ -472,6 +522,10 @@ type ContentModerationRepository interface {
 	ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error)
 	CountFlaggedByUserSince(ctx context.Context, userID int64, since time.Time) (int, error)
 	CleanupExpiredLogs(ctx context.Context, hitBefore time.Time, nonHitBefore time.Time) (*ContentModerationCleanupResult, error)
+	ListUserPolicies(ctx context.Context) ([]ContentModerationUserPolicy, error)
+	CreateUserPolicy(ctx context.Context, policy *ContentModerationUserPolicy) error
+	UpdateUserPolicy(ctx context.Context, policy *ContentModerationUserPolicy) error
+	DeleteUserPolicy(ctx context.Context, id int64) error
 }
 
 type ContentModerationHashCache interface {
@@ -513,6 +567,9 @@ type ContentModerationService struct {
 	forcedWhitelistMu        sync.Mutex
 	forcedWhitelistIDs       []int64
 	forcedWhitelistLoadedAt  time.Time
+	policyMu                 sync.RWMutex
+	policyByUserID           map[int64]ContentModerationUserPolicy
+	policyLoadedAt           time.Time
 }
 
 type contentModerationTask struct {
@@ -895,9 +952,10 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"text_runes", len([]rune(content.Text)),
 		"image_count", len(content.Images))
 	hashText := content.Hash()
-	if cfg.Mode == ContentModerationModePreBlock {
-		if cfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && len(cfg.BlockedKeywords) > 0 {
-			if keyword, hit := matchBlockedKeyword(content.Text, cfg.BlockedKeywords); hit {
+	effectiveCfg := s.effectiveConfigForUserPolicy(ctx, cfg, input.UserID)
+	if effectiveCfg.Mode == ContentModerationModePreBlock {
+		if effectiveCfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && len(effectiveCfg.BlockedKeywords) > 0 {
+			if keyword, hit := matchBlockedKeyword(content.Text, effectiveCfg.BlockedKeywords); hit {
 				s.recordPreBlockSyncMetric(0, ContentModerationActionKeywordBlock)
 				slog.Info("content_moderation.keyword_block",
 					"user_id", input.UserID,
@@ -905,17 +963,19 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 					"group_id", contentModerationLogGroupID(input.GroupID),
 					"endpoint", input.Endpoint,
 					"protocol", input.Protocol,
-					"keyword_blocking_mode", cfg.KeywordBlockingMode,
+					"keyword_blocking_mode", effectiveCfg.KeywordBlockingMode,
 					"keyword", keyword)
 				scores := map[string]float64{contentModerationKeywordCategory: 1.0}
-				log := s.buildLog(input, cfg, ContentModerationActionKeywordBlock, true, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
-				s.enqueueRecord(input, cfg, log, hashText, false, true)
+				log := s.buildLog(input, effectiveCfg, ContentModerationActionKeywordBlock, true, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
+				log.MatchedKeyword = keyword
+				s.enqueueRecord(input, effectiveCfg, log, hashText, false, true)
 				return &ContentModerationDecision{
 					Allowed:         false,
 					Blocked:         true,
 					Flagged:         true,
-					Message:         cfg.BlockMessage,
-					StatusCode:      cfg.BlockStatus,
+					Message:         effectiveCfg.BlockMessage,
+					StatusCode:      effectiveCfg.BlockStatus,
+					ErrorCode:       effectiveCfg.BlockErrorCode,
 					HighestCategory: contentModerationKeywordCategory,
 					HighestScore:    1.0,
 					CategoryScores:  scores,
@@ -923,7 +983,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				}, nil
 			}
 		}
-		if cfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly {
+		if effectiveCfg.KeywordBlockingMode == ContentModerationKeywordModeKeywordOnly {
 			s.recordPreBlockSyncMetric(0, ContentModerationActionAllow)
 			slog.Info("content_moderation.skip_api_keyword_only",
 				"user_id", input.UserID,
@@ -934,13 +994,13 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			return allow, nil
 		}
 	}
-	if cfg.PreHashCheckEnabled && s.hashCache != nil {
+	if effectiveCfg.PreHashCheckEnabled && s.hashCache != nil {
 		matched, err := s.hashCache.HasFlaggedInputHash(ctx, hashText)
 		if err != nil {
 			slog.Warn("content_moderation.hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
 		}
 		if matched {
-			if cfg.Mode == ContentModerationModePreBlock {
+			if effectiveCfg.Mode == ContentModerationModePreBlock {
 				s.recordPreBlockSyncMetric(0, ContentModerationActionHashBlock)
 			}
 			slog.Info("content_moderation.hash_block",
@@ -950,19 +1010,21 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 				"endpoint", input.Endpoint,
 				"protocol", input.Protocol,
 				"input_hash", hashText)
-			message := cfg.BlockMessage
+			message := effectiveCfg.BlockMessage
 			if message != "" {
 				message = fmt.Sprintf("%s（hash: %s）", message, hashText)
 			}
 			scores := map[string]float64{"hash": 1.0}
-			log := s.buildLog(input, cfg, ContentModerationActionHashBlock, true, "hash", 1.0, scores, content.ExcerptText(), nil, nil, "")
-			s.enqueueRecord(input, cfg, log, hashText, false, false)
+			log := s.buildLog(input, effectiveCfg, ContentModerationActionHashBlock, true, "hash", 1.0, scores, content.ExcerptText(), nil, nil, "")
+			applyHashSideEffects := effectiveCfg.UserPolicy != nil && effectiveCfg.UserPolicy.ApplyToHashBlock
+			s.enqueueRecord(input, effectiveCfg, log, hashText, false, applyHashSideEffects)
 			return &ContentModerationDecision{
 				Allowed:    false,
 				Blocked:    true,
 				Flagged:    true,
 				Message:    message,
-				StatusCode: cfg.BlockStatus,
+				StatusCode: effectiveCfg.BlockStatus,
+				ErrorCode:  effectiveCfg.BlockErrorCode,
 				InputHash:  hashText,
 				Action:     ContentModerationActionHashBlock,
 			}, nil
@@ -1001,11 +1063,11 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			"endpoint", input.Endpoint,
 			"protocol", input.Protocol,
 			"queue_len", len(s.asyncQueue))
-		s.enqueueAsync(input, cfg, content, hashText)
+		s.enqueueAsync(input, effectiveCfg, content, hashText)
 		return allow, nil
 	}
 
-	return s.checkSync(ctx, input, cfg, content, hashText, nil, true), nil
+	return s.checkSync(ctx, input, effectiveCfg, content, hashText, nil, true), nil
 }
 
 func (s *ContentModerationService) checkSync(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string, queueDelay *int, allowBlock bool) *ContentModerationDecision {
@@ -1084,6 +1146,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 			Flagged:         true,
 			Message:         cfg.BlockMessage,
 			StatusCode:      cfg.BlockStatus,
+			ErrorCode:       cfg.BlockErrorCode,
 			HighestCategory: highestCategory,
 			HighestScore:    highestScore,
 			CategoryScores:  result.CategoryScores,
@@ -1094,6 +1157,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		Allowed:         true,
 		Flagged:         flagged,
 		Message:         "",
+		ErrorCode:       cfg.BlockErrorCode,
 		HighestCategory: highestCategory,
 		HighestScore:    highestScore,
 		CategoryScores:  result.CategoryScores,
@@ -1137,6 +1201,7 @@ func (s *ContentModerationService) enqueueAsync(input ContentModerationCheckInpu
 		input:      input,
 		content:    content,
 		inputHash:  hashText,
+		config:     cloneContentModerationConfig(cfg),
 		enqueuedAt: time.Now(),
 	}
 	select {
@@ -1220,22 +1285,26 @@ func (s *ContentModerationService) worker(id int) {
 				s.asyncProcessed.Add(1)
 				return
 			}
-			if !cfg.Enabled || cfg.Mode == ContentModerationModeOff || len(cfg.apiKeys()) == 0 {
+			taskCfg := task.config
+			if taskCfg == nil {
+				taskCfg = cfg
+			}
+			if !taskCfg.Enabled || taskCfg.Mode == ContentModerationModeOff || len(taskCfg.apiKeys()) == 0 {
 				return
 			}
-			if cfg.includesWhitelistedUser(task.input.UserID) {
+			if taskCfg.includesWhitelistedUser(task.input.UserID) {
 				return
 			}
-			if !cfg.includesGroup(task.input.GroupID) {
+			if !taskCfg.includesGroup(task.input.GroupID) {
 				return
 			}
-			if !cfg.includesModel(task.input.Model) {
+			if !taskCfg.includesModel(task.input.Model) {
 				return
 			}
 			s.asyncActive.Add(1)
 			defer s.asyncActive.Add(-1)
 			queueDelay := int(time.Since(task.enqueuedAt).Milliseconds())
-			_ = s.checkSync(ctx, task.input, cfg, task.content, task.inputHash, &queueDelay, false)
+			_ = s.checkSync(ctx, task.input, taskCfg, task.content, task.inputHash, &queueDelay, false)
 			s.asyncProcessed.Add(1)
 		}()
 	}
@@ -1275,6 +1344,72 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 		filter.Pagination.SortOrder = pagination.SortOrderDesc
 	}
 	return s.repo.ListLogs(ctx, filter)
+}
+
+func (s *ContentModerationService) ListUserPolicies(ctx context.Context) ([]ContentModerationUserPolicy, error) {
+	if s == nil || s.repo == nil {
+		return []ContentModerationUserPolicy{}, nil
+	}
+	policies, err := s.repo.ListUserPolicies(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list content moderation user policies: %w", err)
+	}
+	out := make([]ContentModerationUserPolicy, 0, len(policies))
+	for _, policy := range policies {
+		out = append(out, normalizeContentModerationUserPolicy(policy))
+	}
+	s.setCachedUserPolicies(out)
+	return out, nil
+}
+
+func (s *ContentModerationService) CreateUserPolicy(ctx context.Context, input ContentModerationUserPolicyInput) (*ContentModerationUserPolicy, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_POLICY_REPOSITORY_UNAVAILABLE", "风控用户策略仓储不可用")
+	}
+	policy, err := s.buildUserPolicyFromInput(ctx, input, 0)
+	if err != nil {
+		return nil, err
+	}
+	policy.CreatedBy = positiveInt64Ptr(input.ActorID)
+	policy.UpdatedBy = positiveInt64Ptr(input.ActorID)
+	if err := s.repo.CreateUserPolicy(ctx, policy); err != nil {
+		return nil, fmt.Errorf("create content moderation user policy: %w", err)
+	}
+	s.clearCachedUserPolicies()
+	return policy, nil
+}
+
+func (s *ContentModerationService) UpdateUserPolicy(ctx context.Context, id int64, input ContentModerationUserPolicyInput) (*ContentModerationUserPolicy, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_POLICY_REPOSITORY_UNAVAILABLE", "风控用户策略仓储不可用")
+	}
+	if id <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY_ID", "风控用户策略 ID 无效")
+	}
+	policy, err := s.buildUserPolicyFromInput(ctx, input, id)
+	if err != nil {
+		return nil, err
+	}
+	policy.UpdatedBy = positiveInt64Ptr(input.ActorID)
+	if err := s.repo.UpdateUserPolicy(ctx, policy); err != nil {
+		return nil, fmt.Errorf("update content moderation user policy: %w", err)
+	}
+	s.clearCachedUserPolicies()
+	return policy, nil
+}
+
+func (s *ContentModerationService) DeleteUserPolicy(ctx context.Context, id int64) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.InternalServer("CONTENT_MODERATION_POLICY_REPOSITORY_UNAVAILABLE", "风控用户策略仓储不可用")
+	}
+	if id <= 0 {
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY_ID", "风控用户策略 ID 无效")
+	}
+	if err := s.repo.DeleteUserPolicy(ctx, id); err != nil {
+		return fmt.Errorf("delete content moderation user policy: %w", err)
+	}
+	s.clearCachedUserPolicies()
+	return nil
 }
 
 func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) (*ContentModerationUnbanUserResult, error) {
@@ -1481,6 +1616,58 @@ func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) boo
 		return false
 	}
 	return raw == "true"
+}
+
+func (s *ContentModerationService) buildUserPolicyFromInput(ctx context.Context, input ContentModerationUserPolicyInput, id int64) (*ContentModerationUserPolicy, error) {
+	if input.UserID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY_USER", "风控策略用户无效")
+	}
+	if input.BlockStatus != 0 && (input.BlockStatus < 400 || input.BlockStatus > 599) {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY_BLOCK_STATUS", "风控策略拦截 HTTP 状态码必须为 0 或 400-599")
+	}
+	if s.userRepo != nil {
+		user, err := s.userRepo.GetByID(ctx, input.UserID)
+		if err != nil {
+			if errors.Is(err, ErrUserNotFound) {
+				return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_POLICY_USER", "风控策略用户不存在")
+			}
+			return nil, fmt.Errorf("get content moderation policy user: %w", err)
+		}
+		cfg, cfgErr := s.loadConfig(ctx)
+		if cfgErr == nil && cfg.includesWhitelistedUser(input.UserID) {
+			return nil, infraerrors.BadRequest("CONTENT_MODERATION_POLICY_USER_WHITELISTED", "白名单用户不会触发风控策略，请先移除白名单")
+		}
+		policy := normalizeContentModerationUserPolicy(ContentModerationUserPolicy{
+			ID:                   id,
+			UserID:               input.UserID,
+			UserEmail:            user.Email,
+			UserStatus:           user.Status,
+			Enabled:              input.Enabled,
+			Action:               input.Action,
+			BlockStatus:          input.BlockStatus,
+			ErrorCode:            input.ErrorCode,
+			BlockMessage:         input.BlockMessage,
+			BanThreshold:         input.BanThreshold,
+			ViolationWindowHours: input.ViolationWindowHours,
+			ApplyToHashBlock:     input.ApplyToHashBlock,
+			Note:                 input.Note,
+		})
+		return &policy, nil
+	}
+	policy := normalizeContentModerationUserPolicy(ContentModerationUserPolicy{
+		ID:                   id,
+		UserID:               input.UserID,
+		Enabled:              input.Enabled,
+		Action:               input.Action,
+		BlockStatus:          input.BlockStatus,
+		ErrorCode:            input.ErrorCode,
+		BlockMessage:         input.BlockMessage,
+		BanThreshold:         input.BanThreshold,
+		ViolationWindowHours: input.ViolationWindowHours,
+		ApplyToHashBlock:     input.ApplyToHashBlock,
+		Note:                 input.Note,
+	})
+	return &policy, nil
 }
 
 func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *ContentModerationConfig) error {
@@ -1735,6 +1922,10 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 	if input.APIKeyID > 0 {
 		apiKeyID = &input.APIKeyID
 	}
+	excerptLimit := maxModerationExcerptRunes
+	if isContentModerationBlockedAction(action) {
+		excerptLimit = maxModerationInputRunes
+	}
 	return &ContentModerationLog{
 		RequestID:         input.RequestID,
 		UserID:            userID,
@@ -1753,10 +1944,24 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		HighestScore:      highestScore,
 		CategoryScores:    cloneFloatMap(scores),
 		ThresholdSnapshot: cloneFloatMap(cfg.Thresholds),
-		InputExcerpt:      trimRunes(redactContentModerationSecrets(text), maxModerationExcerptRunes),
+		InputExcerpt:      trimRunes(redactContentModerationSecrets(text), excerptLimit),
+		PolicyID:          contentModerationPolicyIDPtr(cfg.UserPolicy),
+		PolicyAction:      contentModerationPolicyAction(cfg.UserPolicy),
+		PolicySnapshot:    contentModerationPolicySnapshot(cfg.UserPolicy),
+		BlockStatus:       cfg.BlockStatus,
+		ErrorCode:         cfg.BlockErrorCode,
 		UpstreamLatencyMS: latency,
 		QueueDelayMS:      queueDelay,
 		Error:             errText,
+	}
+}
+
+func isContentModerationBlockedAction(action string) bool {
+	switch action {
+	case ContentModerationActionBlock, ContentModerationActionHashBlock, ContentModerationActionKeywordBlock:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1962,6 +2167,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		QueueSize:            defaultContentModerationQueueSize,
 		BlockStatus:          defaultContentModerationBlockHTTPStatus,
 		BlockMessage:         defaultContentModerationBlockMessage,
+		BlockErrorCode:       defaultContentModerationErrorCode,
 		EmailOnHit:           true,
 		AutoBanEnabled:       true,
 		BanThreshold:         defaultContentModerationBanThreshold,
@@ -1990,6 +2196,10 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 	clone.ForcedWhitelistUserIDs = append([]int64(nil), cfg.ForcedWhitelistUserIDs...)
 	clone.BlockedKeywords = append([]string(nil), cfg.BlockedKeywords...)
 	clone.Thresholds = cloneFloatMap(cfg.Thresholds)
+	if cfg.UserPolicy != nil {
+		policy := cloneContentModerationUserPolicy(cfg.UserPolicy)
+		clone.UserPolicy = &policy
+	}
 	clone.ModelFilter = ContentModerationModelFilter{
 		Type:   cfg.ModelFilter.Type,
 		Models: append([]string(nil), cfg.ModelFilter.Models...),
@@ -2043,6 +2253,7 @@ func (cfg *ContentModerationConfig) normalize() {
 		cfg.BlockMessage = defaultContentModerationBlockMessage
 	}
 	cfg.BlockMessage = strings.TrimSpace(cfg.BlockMessage)
+	cfg.BlockErrorCode = normalizeContentModerationErrorCode(cfg.BlockErrorCode)
 	if cfg.BlockStatus <= 0 {
 		cfg.BlockStatus = defaultContentModerationBlockHTTPStatus
 	}
@@ -2327,6 +2538,104 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		KeywordBlockingMode:    cfg.KeywordBlockingMode,
 		ModelFilter:            cloneContentModerationModelFilter(cfg.ModelFilter),
 	}
+}
+
+func (s *ContentModerationService) effectiveConfigForUserPolicy(ctx context.Context, cfg *ContentModerationConfig, userID int64) *ContentModerationConfig {
+	effective := cloneContentModerationConfig(cfg)
+	if effective == nil {
+		return nil
+	}
+	policy, ok := s.userPolicyForUser(ctx, userID)
+	if !ok || !policy.Enabled {
+		effective.UserPolicy = nil
+		return effective
+	}
+	normalized := normalizeContentModerationUserPolicy(policy)
+	effective.UserPolicy = &normalized
+	if normalized.BlockStatus >= 400 && normalized.BlockStatus <= 599 {
+		effective.BlockStatus = normalized.BlockStatus
+	}
+	if strings.TrimSpace(normalized.BlockMessage) != "" {
+		effective.BlockMessage = normalized.BlockMessage
+	}
+	effective.BlockErrorCode = normalizeContentModerationErrorCode(normalized.ErrorCode)
+	switch normalized.Action {
+	case ContentModerationUserPolicyActionBlockNotify:
+		effective.EmailOnHit = true
+		effective.AutoBanEnabled = false
+	case ContentModerationUserPolicyActionBlockNotifyBan:
+		effective.EmailOnHit = true
+		effective.AutoBanEnabled = true
+		if normalized.BanThreshold > 0 {
+			effective.BanThreshold = normalized.BanThreshold
+		} else {
+			effective.BanThreshold = 1
+		}
+		if normalized.ViolationWindowHours > 0 {
+			effective.ViolationWindowHours = normalized.ViolationWindowHours
+		}
+	default:
+		effective.EmailOnHit = false
+		effective.AutoBanEnabled = false
+	}
+	return effective
+}
+
+func (s *ContentModerationService) userPolicyForUser(ctx context.Context, userID int64) (ContentModerationUserPolicy, bool) {
+	if s == nil || userID <= 0 || s.repo == nil {
+		return ContentModerationUserPolicy{}, false
+	}
+	if policy, found, fresh := s.cachedUserPolicy(userID); fresh {
+		return policy, found
+	}
+	policies, err := s.repo.ListUserPolicies(ctx)
+	if err != nil {
+		slog.Warn("content_moderation.policy_load_failed", "user_id", userID, "error", err)
+		return ContentModerationUserPolicy{}, false
+	}
+	s.setCachedUserPolicies(policies)
+	policy, found, _ := s.cachedUserPolicy(userID)
+	return policy, found
+}
+
+func (s *ContentModerationService) cachedUserPolicy(userID int64) (ContentModerationUserPolicy, bool, bool) {
+	if s == nil || userID <= 0 {
+		return ContentModerationUserPolicy{}, false, false
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	if s.policyByUserID == nil || s.policyLoadedAt.IsZero() || time.Since(s.policyLoadedAt) > contentModerationPolicyCacheTTL {
+		return ContentModerationUserPolicy{}, false, false
+	}
+	policy, ok := s.policyByUserID[userID]
+	return policy, ok, true
+}
+
+func (s *ContentModerationService) setCachedUserPolicies(policies []ContentModerationUserPolicy) {
+	if s == nil {
+		return
+	}
+	byUser := make(map[int64]ContentModerationUserPolicy, len(policies))
+	for _, policy := range policies {
+		normalized := normalizeContentModerationUserPolicy(policy)
+		if normalized.UserID > 0 {
+			byUser[normalized.UserID] = normalized
+		}
+	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	s.policyByUserID = byUser
+	s.policyLoadedAt = time.Now()
+}
+
+func (s *ContentModerationService) clearCachedUserPolicies() {
+	if s == nil {
+		return
+	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	s.policyByUserID = nil
+	s.policyLoadedAt = time.Time{}
 }
 
 func (s *ContentModerationService) apiKeyStatuses(keys []string) []ContentModerationAPIKeyStatus {
@@ -2632,6 +2941,110 @@ func normalizeInt64IDs(ids []int64) []int64 {
 
 func normalizeContentModerationWhitelistUserIDs(ids []int64) []int64 {
 	return normalizeInt64IDs(ids)
+}
+
+func normalizeContentModerationUserPolicy(policy ContentModerationUserPolicy) ContentModerationUserPolicy {
+	policy.Action = normalizeContentModerationUserPolicyAction(policy.Action)
+	if policy.BlockStatus != 0 && (policy.BlockStatus < 400 || policy.BlockStatus > 599) {
+		policy.BlockStatus = defaultContentModerationBlockHTTPStatus
+	}
+	policy.ErrorCode = normalizeContentModerationErrorCode(policy.ErrorCode)
+	policy.BlockMessage = strings.TrimSpace(policy.BlockMessage)
+	if policy.BanThreshold <= 0 {
+		policy.BanThreshold = 1
+	}
+	if policy.ViolationWindowHours <= 0 {
+		policy.ViolationWindowHours = defaultContentModerationViolationWindowHours
+	}
+	policy.Note = trimRunes(strings.TrimSpace(policy.Note), maxContentModerationPolicyNoteRunes)
+	return policy
+}
+
+func normalizeContentModerationUserPolicyAction(action string) string {
+	switch strings.TrimSpace(action) {
+	case ContentModerationUserPolicyActionBlockNotify:
+		return ContentModerationUserPolicyActionBlockNotify
+	case ContentModerationUserPolicyActionBlockNotifyBan:
+		return ContentModerationUserPolicyActionBlockNotifyBan
+	default:
+		return ContentModerationUserPolicyActionBlockOnly
+	}
+}
+
+func normalizeContentModerationErrorCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return defaultContentModerationErrorCode
+	}
+	var b strings.Builder
+	for _, r := range code {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			_, _ = b.WriteRune(r)
+		}
+	}
+	normalized := trimRunes(b.String(), 80)
+	if normalized == "" {
+		return defaultContentModerationErrorCode
+	}
+	return normalized
+}
+
+func contentModerationPolicyIDPtr(policy *ContentModerationUserPolicy) *int64 {
+	if policy == nil || policy.ID <= 0 {
+		return nil
+	}
+	id := policy.ID
+	return &id
+}
+
+func contentModerationPolicyAction(policy *ContentModerationUserPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	return normalizeContentModerationUserPolicyAction(policy.Action)
+}
+
+func contentModerationPolicySnapshot(policy *ContentModerationUserPolicy) map[string]any {
+	if policy == nil {
+		return nil
+	}
+	normalized := normalizeContentModerationUserPolicy(*policy)
+	return map[string]any{
+		"id":                     normalized.ID,
+		"user_id":                normalized.UserID,
+		"enabled":                normalized.Enabled,
+		"action":                 normalized.Action,
+		"block_status":           normalized.BlockStatus,
+		"error_code":             normalized.ErrorCode,
+		"block_message":          normalized.BlockMessage,
+		"ban_threshold":          normalized.BanThreshold,
+		"violation_window_hours": normalized.ViolationWindowHours,
+		"apply_to_hash_block":    normalized.ApplyToHashBlock,
+	}
+}
+
+func cloneContentModerationUserPolicy(policy *ContentModerationUserPolicy) ContentModerationUserPolicy {
+	if policy == nil {
+		return ContentModerationUserPolicy{}
+	}
+	clone := *policy
+	if policy.CreatedBy != nil {
+		v := *policy.CreatedBy
+		clone.CreatedBy = &v
+	}
+	if policy.UpdatedBy != nil {
+		v := *policy.UpdatedBy
+		clone.UpdatedBy = &v
+	}
+	return clone
+}
+
+func positiveInt64Ptr(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	v := value
+	return &v
 }
 
 func subtractInt64IDs(ids []int64, remove []int64) []int64 {
