@@ -10,6 +10,7 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
+    stableRunning: '本站已稳定运行{days}天{hours}小时{minutes}分{seconds}秒',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
     heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
@@ -6057,6 +6058,8 @@ export default {
         apiBaseUrl: 'API 端点地址',
         apiBaseUrlHint: '用于"使用密钥"和"导入到 CC Switch"功能，留空则使用当前站点地址',
         apiBaseUrlPlaceholder: 'https://api.example.com',
+        siteLaunchAt: '稳定运行起始时间',
+        siteLaunchAtHint: '用于首页展示“本站已稳定运行”时间，留空则不展示。保存时会转换为带时区的绝对时间。',
         tablePreferencesTitle: '通用表格设置',
         tablePreferencesDescription: '设置后台与用户侧表格组件的默认分页行为',
         tableDefaultPageSize: '默认每页条数',

@@ -134,6 +134,7 @@ type SystemSettings struct {
 	ContactInfo                 string
 	DocURL                      string
 	HomeContent                 string
+	SiteLaunchAt                string
 	HideCcsImportButton         bool
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
@@ -270,6 +271,7 @@ type PublicSettings struct {
 	ContactInfo                      string
 	DocURL                           string
 	HomeContent                      string
+	SiteLaunchAt                     string
 	HideCcsImportButton              bool
 
 	PurchaseSubscriptionEnabled bool

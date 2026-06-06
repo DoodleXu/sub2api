@@ -122,9 +122,17 @@
             >
               {{ siteName }}
             </h1>
-            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
+            <p class="mb-5 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
               {{ siteSubtitle }}
             </p>
+
+            <div
+              v-if="siteUptimeText"
+              class="mb-8 inline-flex max-w-full items-center gap-2 rounded-full border border-primary-200/70 bg-white/80 px-4 py-2 text-sm font-medium text-gray-700 shadow-sm backdrop-blur-sm dark:border-primary-500/30 dark:bg-dark-800/80 dark:text-dark-100"
+            >
+              <Icon name="clock" size="sm" class="shrink-0 text-primary-500" />
+              <span class="break-words">{{ siteUptimeText }}</span>
+            </div>
 
             <!-- CTA Button -->
             <div>
@@ -397,7 +405,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
@@ -414,6 +422,7 @@ const siteLogo = computed(() => appStore.cachedPublicSettings?.site_logo || appS
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const docUrl = computed(() => appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const siteLaunchAt = computed(() => appStore.cachedPublicSettings?.site_launch_at || '')
 
 // Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
@@ -436,6 +445,17 @@ const userInitial = computed(() => {
 
 // Current year for footer
 const currentYear = computed(() => new Date().getFullYear())
+const now = ref(Date.now())
+
+const siteUptimeText = computed(() => {
+  const launchAt = parseLaunchDate(siteLaunchAt.value)
+  if (!launchAt || launchAt.getTime() > now.value) return ''
+
+  const parts = getCalendarDurationParts(launchAt, new Date(now.value))
+  return t('home.stableRunning', parts)
+})
+
+let uptimeTimer: number | undefined
 
 // Toggle theme
 function toggleTheme() {
@@ -456,6 +476,25 @@ function initTheme() {
   }
 }
 
+function parseLaunchDate(value: string): Date | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const date = new Date(trimmed)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function getCalendarDurationParts(start: Date, end: Date) {
+  let remainingSeconds = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000))
+  const days = Math.floor(remainingSeconds / 86400)
+  remainingSeconds %= 86400
+  const hours = Math.floor(remainingSeconds / 3600)
+  remainingSeconds %= 3600
+  const minutes = Math.floor(remainingSeconds / 60)
+  const seconds = remainingSeconds % 60
+
+  return { days, hours, minutes, seconds }
+}
+
 onMounted(() => {
   initTheme()
 
@@ -465,6 +504,16 @@ onMounted(() => {
   // Ensure public settings are loaded (will use cache if already loaded from injected config)
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()
+  }
+
+  uptimeTimer = window.setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (uptimeTimer) {
+    window.clearInterval(uptimeTimer)
   }
 })
 </script>

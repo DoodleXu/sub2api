@@ -432,6 +432,7 @@ export interface SystemSettings {
   contact_info: string;
   doc_url: string;
   home_content: string;
+  site_launch_at: string;
   hide_ccs_import_button: boolean;
   table_default_page_size: number;
   table_page_size_options: number[];
@@ -704,6 +705,7 @@ export interface UpdateSettingsRequest {
   contact_info?: string;
   doc_url?: string;
   home_content?: string;
+  site_launch_at?: string;
   hide_ccs_import_button?: boolean;
   table_default_page_size?: number;
   table_page_size_options?: number[];

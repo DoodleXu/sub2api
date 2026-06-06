@@ -10,6 +10,7 @@ export default {
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
+    stableRunning: 'Stable for {days}d {hours}h {minutes}m {seconds}s',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
     heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
@@ -5904,6 +5905,8 @@ export default {
         apiBaseUrlPlaceholder: 'https://api.example.com',
         apiBaseUrlHint:
           'Used for "Use Key" and "Import to CC Switch" features. Leave empty to use current site URL.',
+        siteLaunchAt: 'Stable Since',
+        siteLaunchAtHint: 'Shown on the home page as site uptime. Leave empty to hide it. Saved as an absolute time with timezone.',
         tablePreferencesTitle: 'Global Table Preferences',
         tablePreferencesDescription: 'Configure default pagination behavior for shared table components',
         tableDefaultPageSize: 'Default Rows Per Page',
