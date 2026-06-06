@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"math/big"
 	"strings"
@@ -36,12 +37,111 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 		collectLastRoleMessage(gjson.GetBytes(body, "messages"), "user", &parts, &images)
 		collectLastGeminiContent(gjson.GetBytes(body, "contents"), &parts, &images)
 	}
+	rawText := stripKnownClassifierPolicyPreamble(strings.Join(parts, "\n"))
 	out := ContentModerationInput{
-		Text:   normalizeContentModerationText(strings.Join(parts, "\n")),
+		Text:   normalizeContentModerationText(rawText),
 		Images: normalizeModerationImages(images),
 	}
 	out.Normalize()
 	return out
+}
+
+const (
+	codexAmbientOpeningMarker = "You are an expert at upholding safety and compliance standards for Codex ambient suggestions."
+	codexAmbientPolicyMarker  = "## 1. Policies to always exclude"
+	codexAmbientContentMarker = "# Ambient suggestion candidates"
+	codexAmbientOutputMarker  = "# Output Format"
+)
+
+var knownClassifierPolicyPreambleHashes = map[string]struct{}{
+	// Codex ambient suggestions safety classifier policy preamble.
+	"232bba41e5449567489bb74e36a5d34ffc7be1845a0fb7326cd10a5adf33d3a6": {},
+}
+
+func stripKnownClassifierPolicyPreamble(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.HasPrefix(trimmed, codexAmbientOpeningMarker) {
+		return text
+	}
+	contentIdx := findMarkdownSectionHeading(trimmed, codexAmbientContentMarker, 0)
+	if contentIdx < 0 {
+		return text
+	}
+	preamble := strings.TrimSpace(trimmed[:contentIdx])
+	if !knownClassifierPolicyPreambleHashAllowed(preamble) {
+		return text
+	}
+	outputIdx := findCodexAmbientOutputMarker(trimmed, contentIdx)
+	if outputIdx < 0 {
+		return text
+	}
+	content := strings.TrimSpace(trimmed[contentIdx:outputIdx])
+	if content == "" || !strings.Contains(content, "suggestion_id:") {
+		return text
+	}
+	return content
+}
+
+func knownClassifierPolicyPreambleHashAllowed(preamble string) bool {
+	if !strings.Contains(preamble, codexAmbientPolicyMarker) {
+		return false
+	}
+	_, ok := knownClassifierPolicyPreambleHashes[knownClassifierPolicyPreambleHash(preamble)]
+	return ok
+}
+
+func knownClassifierPolicyPreambleHash(preamble string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(preamble)), " ")
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func findMarkdownSectionHeading(text string, heading string, start int) int {
+	if start < 0 {
+		start = 0
+	}
+	for offset := start; offset < len(text); {
+		idx := strings.Index(text[offset:], heading)
+		if idx < 0 {
+			return -1
+		}
+		abs := offset + idx
+		lineStart := strings.LastIndexByte(text[:abs], '\n') + 1
+		nextLine := strings.IndexByte(text[abs:], '\n')
+		lineEnd := len(text)
+		if nextLine >= 0 {
+			lineEnd = abs + nextLine
+		}
+		if strings.TrimSpace(text[lineStart:lineEnd]) == heading {
+			return lineStart
+		}
+		offset = abs + len(heading)
+	}
+	return -1
+}
+
+func findCodexAmbientOutputMarker(text string, contentIdx int) int {
+	if contentIdx < 0 {
+		contentIdx = 0
+	}
+	inFence := false
+	for lineStart := contentIdx; lineStart < len(text); {
+		lineEnd := len(text)
+		if nextLine := strings.IndexByte(text[lineStart:], '\n'); nextLine >= 0 {
+			lineEnd = lineStart + nextLine
+		}
+		line := strings.TrimSpace(text[lineStart:lineEnd])
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		} else if !inFence && line == codexAmbientOutputMarker {
+			return lineStart
+		}
+		if lineEnd == len(text) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	return -1
 }
 
 func collectLastRoleMessage(messages gjson.Result, role string, parts *[]string, images *[]string) {
