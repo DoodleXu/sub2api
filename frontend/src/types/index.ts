@@ -97,6 +97,7 @@ export interface User {
   last_active_at?: string | null
   created_at: string
   updated_at: string
+  deleted_at?: string | null
 }
 
 export interface AdminUser extends User {
@@ -234,7 +235,9 @@ export interface PublicSettings {
   available_channels_enabled: boolean
   web_console_enabled: boolean
   web_console_default_endpoint: string
+  service_quota_enabled: boolean
   affiliate_enabled: boolean
+  allow_user_view_error_requests?: boolean
 }
 
 export interface AuthResponse {
@@ -1240,7 +1243,7 @@ export interface UsageLog {
   request_type?: UsageRequestType
   stream: boolean
   openai_ws_mode?: boolean
-  duration_ms: number
+  duration_ms: number | null
   first_token_ms: number | null
 
   // 图片生成字段
@@ -1250,6 +1253,8 @@ export interface UsageLog {
   image_output_size: string | null
   image_size_source: ImageSizeSource | null
   image_size_breakdown: ImageSizeBreakdown | null
+  image_output_tokens: number
+  image_output_cost: number
 
   // User-Agent
   user_agent: string | null
@@ -1428,6 +1433,8 @@ export interface UsageStatsResponse {
   total_input_tokens: number
   total_output_tokens: number
   total_cache_tokens: number
+  total_cache_read_tokens: number
+  total_cache_creation_tokens: number
   total_tokens: number
   total_cost: number // 标准计费
   total_actual_cost: number // 实际扣除
@@ -1610,6 +1617,36 @@ export interface ExtendSubscriptionRequest {
 }
 
 // ==================== Query Parameters ====================
+
+export interface UserErrorRequest {
+  id: number
+  created_at: string
+  model: string
+  inbound_endpoint: string
+  status_code: number
+  category: string
+  platform: string
+  message: string
+  key_name: string
+  key_deleted: boolean
+}
+
+export interface UserErrorRequestDetail extends UserErrorRequest {
+  error_body: string
+  upstream_status_code?: number
+}
+
+export interface UserErrorListParams {
+  page?: number
+  page_size?: number
+  start_date?: string
+  end_date?: string
+  timezone?: string
+  model?: string
+  status_code?: number
+  category?: string
+  api_key_id?: number
+}
 
 export interface UsageQueryParams {
   page?: number

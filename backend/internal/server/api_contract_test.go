@@ -590,6 +590,8 @@ func TestAPIContracts(t *testing.T) {
 							"image_size": null,
 							"image_input_size": null,
 							"image_output_size": null,
+							"image_output_tokens": 0,
+							"image_output_cost": 0,
 							"image_size_source": null,
 							"image_size_breakdown": null,
 							"media_type": null,
@@ -953,7 +955,8 @@ func TestAPIContracts(t *testing.T) {
 					"wechat_connect_mobile_app_secret_configured": false,
 					"wechat_connect_redirect_url": "",
 					"wechat_connect_frontend_redirect_url": "/auth/wechat/callback",
-					"wechat_connect_scopes": "snsapi_login"
+					"wechat_connect_scopes": "snsapi_login",
+					"allow_user_view_error_requests": false
 				}
 			}`,
 		},
@@ -1224,19 +1227,20 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_dingtalk_subscriptions": [],
 					"auth_source_default_dingtalk_grant_on_signup": false,
 					"auth_source_default_dingtalk_grant_on_first_bind": false,
-							"force_email_on_third_party_signup": false,
-							"web_console_enabled": false,
-							"daily_checkin_enabled": true,
-							"daily_checkin_required_usage_usd": 1,
-							"daily_checkin_usage_scope": "actual_cost",
-							"daily_checkin_reward_min_usd": 1,
-							"daily_checkin_reward_max_usd": 3,
-							"daily_checkin_daily_budget_usd": 0,
-							"daily_checkin_monthly_budget_usd": 0,
-							"daily_checkin_user_monthly_limit_usd": 0,
-							"web_console_default_endpoint": ""
-					}
-				}`,
+					"force_email_on_third_party_signup": false,
+					"web_console_enabled": false,
+					"daily_checkin_enabled": true,
+					"daily_checkin_required_usage_usd": 1,
+					"daily_checkin_usage_scope": "actual_cost",
+					"daily_checkin_reward_min_usd": 1,
+					"daily_checkin_reward_max_usd": 3,
+					"daily_checkin_daily_budget_usd": 0,
+					"daily_checkin_monthly_budget_usd": 0,
+					"daily_checkin_user_monthly_limit_usd": 0,
+					"web_console_default_endpoint": "",
+					"allow_user_view_error_requests": false
+				}
+			}`,
 		},
 		{
 			name:   "POST /api/v1/admin/accounts/bulk-update",
@@ -1415,7 +1419,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
-	usageHandler := handler.NewUsageHandler(usageService, apiKeyService)
+	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil, dailyCheckinService)
 	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
@@ -1709,6 +1713,10 @@ func (r *stubUserRepo) EnableTotp(ctx context.Context, userID int64) error {
 
 func (r *stubUserRepo) DisableTotp(ctx context.Context, userID int64) error {
 	return errors.New("not implemented")
+}
+
+func (r *stubUserRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
+	panic("unexpected GetByIDIncludeDeleted call")
 }
 
 type stubApiKeyCache struct{}
@@ -2338,6 +2346,10 @@ func (r *stubApiKeyRepo) Delete(ctx context.Context, id int64) error {
 	delete(r.byID, id)
 	delete(r.byKey, key.Key)
 	return nil
+}
+
+func (r *stubApiKeyRepo) DeleteWithAudit(ctx context.Context, id int64) error {
+	return r.Delete(ctx, id)
 }
 
 func (r *stubApiKeyRepo) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, _ service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {

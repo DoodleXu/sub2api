@@ -916,6 +916,9 @@ export default {
     imageBillingSize: '计费尺寸',
     imageInputSize: '输入尺寸',
     imageOutputSize: '输出尺寸',
+    imageOutputTokens: '图片输出 Token',
+    imageOutputTokenPrice: '图片输出单价',
+    imageOutputCost: '图片输出成本',
     imageSizeSource: '尺寸来源',
     imageSizeBreakdown: '尺寸明细',
     imageSizeSourceOutput: '上游输出',
@@ -943,7 +946,26 @@ export default {
     exportExcelSuccess: '使用数据导出成功（Excel格式）',
     exportExcelFailed: '使用数据导出失败',
     imageUnit: '张',
-    userAgent: 'User-Agent'
+    userAgent: 'User-Agent',
+    tabs: { usage: '用量明细', errors: '错误请求' },
+    errors: {
+      time: '时间', model: '模型', endpoint: '端点', status: '状态码',
+      category: '分类', platform: '平台', message: '错误信息',
+      keyName: 'Key 名称', keyDeleted: '已删除', allKeys: '全部 Key',
+      modelPlaceholder: '搜索模型', allCategories: '全部分类',
+      empty: '暂无错误请求', failedToLoad: '加载错误请求失败',
+      categories: {
+        auth: '认证失败', rate_limit: '限流', quota: '余额/订阅',
+        invalid_request: '参数错误', service_unavailable: '服务暂时不可用',
+        upstream: '上游错误', internal: '平台错误', other: '其他',
+      },
+      detail: {
+        title: '错误请求详情',
+        responseBody: '上游响应内容',
+        upstreamStatus: '上游状态码',
+        loadFailed: '加载详情失败，请稍后重试',
+      },
+    },
   },
 
   // Shared keys for channel monitor (admin + user views)
@@ -3290,6 +3312,7 @@ export default {
         expiresAt: '过期时间',
         actions: '操作'
       },
+      usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
       allPrivacyModes: '全部Privacy状态',
       privacyUnset: '未设置',
       privacyTrainingOff: '已关闭训练数据共享',
@@ -3764,6 +3787,12 @@ export default {
       interceptWarmupRequestsDesc: '启用后，标题生成等预热请求将返回 mock 响应，不消耗上游 token',
       autoPauseOnExpired: '过期自动暂停调度',
       autoPauseOnExpiredDesc: '启用后，账号过期将自动暂停调度',
+	  autoPause5hThreshold: '5h 用量阈值(%)',
+	  autoPause7dThreshold: '7d 用量阈值(%)',
+	  autoPauseThresholdHint: '留空或填 0 表示使用全局默认阈值（在运维设置中配置）；填具体值则覆盖全局默认。达到阈值后仅在调度时跳过账号，不修改 schedulable。',
+	  autoPause5hDisabled: '禁用 5h 自动暂停',
+	  autoPause7dDisabled: '禁用 7d 自动暂停',
+	  autoPauseDisabledHint: '开启后该账号永不进入自动暂停（即使全局默认阈值已配置）。',
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',
@@ -4827,6 +4856,7 @@ export default {
       ipAddress: 'IP',
       clickToViewBalance: '点击查看充值记录',
       failedToLoadUser: '加载用户信息失败',
+      userDeletedBadge: '已删除',
       cleanup: {
         button: '清理',
         title: '清理使用记录',
@@ -5064,6 +5094,8 @@ export default {
         group: '分组',
         user: '用户',
         userId: '用户 ID',
+        apiKey: 'API Key',
+        keyDeletedBadge: 'Key 已删除',
         account: '账号',
         accountId: '账号 ID',
         status: '状态码',
@@ -5190,7 +5222,11 @@ export default {
         suggestRequest: '⚠️ 客户端请求错误，建议：联系客户修正请求参数 / 手动标记已解决',
         suggestAuth: '⚠️ 认证失败，建议：检查 API Key 是否有效 / 联系客户更新凭证',
         suggestPlatform: '🚨 平台错误，建议立即排查修复',
-        suggestGeneric: '查看详情了解更多信息'
+        suggestGeneric: '查看详情了解更多信息',
+        apiKeyPrefix: 'Key 前缀',
+        attemptedKeyPrefix: '尝试的 Key 前缀',
+        deletedKeyOwner: '已删除 Key 所有者',
+        keyDeletedBadge: 'Key 已删除'
       },
       requestDetails: {
         title: '请求明细',
@@ -5505,6 +5541,11 @@ export default {
         aggregation: '预聚合任务',
         enableAggregation: '启用预聚合任务',
         aggregationHint: '预聚合可提升长时间窗口查询性能',
+        openaiQuotaAutoPause: 'OpenAI 账号配额自动暂停',
+        openaiQuotaAutoPauseHint: '当 OpenAI 账号 5h / 7d 用量达到阈值时，调度会自动跳过该账号；窗口滚动后自动恢复。账号级阈值优先于此全局默认值。',
+        openaiQuotaAutoPauseDefault5h: '默认 5h 用量阈值 (%)',
+        openaiQuotaAutoPauseDefault7d: '默认 7d 用量阈值 (%)',
+        openaiQuotaAutoPauseThresholdHint: '取值 0-100，留空或 0 表示不启用全局默认阈值。',
         errorFiltering: '错误过滤',
         ignoreCountTokensErrors: '忽略 count_tokens 错误',
         ignoreCountTokensErrorsHint: '启用后，count_tokens 请求的错误将不会写入错误日志。',
@@ -5538,7 +5579,8 @@ export default {
           slaMinPercentRange: 'SLA最低百分比必须在0-100之间',
           ttftP99MaxRange: 'TTFT P99最大值必须大于等于0',
           requestErrorRateMaxRange: '请求错误率最大值必须在0-100之间',
-          upstreamErrorRateMaxRange: '上游错误率最大值必须在0-100之间'
+          upstreamErrorRateMaxRange: '上游错误率最大值必须在0-100之间',
+          openaiQuotaAutoPauseRange: 'OpenAI 配额自动暂停阈值必须在 0-100 之间'
         }
       },
       concurrency: {
@@ -6662,6 +6704,14 @@ export default {
       openaiExperimentalScheduler: {
         title: 'OpenAI 实验调度策略',
         description: '默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。'
+      },
+      usageRecords: {
+        title: '使用记录',
+        description: '与终端用户可见的用量及失败请求记录相关的设置。',
+      },
+      user_error_view: {
+        label: '允许用户查看自己的错误请求',
+        description: '开启后，用户可在用量页查看自己失败请求的精简信息（不含内部/上游错误细节）。需运维监控开启才有数据。',
       },
       saveSettings: '保存设置',
       saving: '保存中...',
