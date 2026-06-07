@@ -338,6 +338,9 @@ const (
 	// SettingKeyOpsEmailNotificationConfig stores JSON config for ops email notifications.
 	SettingKeyOpsEmailNotificationConfig = "ops_email_notification_config"
 
+	// SettingKeyNotificationConfig stores JSON config for the lightweight global notification dispatcher.
+	SettingKeyNotificationConfig = "notification_config"
+
 	// SettingKeyOpsAlertRuntimeSettings stores JSON config for ops alert evaluator runtime settings.
 	SettingKeyOpsAlertRuntimeSettings = "ops_alert_runtime_settings"
 

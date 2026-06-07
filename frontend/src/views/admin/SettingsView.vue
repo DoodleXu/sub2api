@@ -3766,6 +3766,57 @@
                 </div>
                 <Toggle v-model="form.openai_advanced_scheduler_enabled" />
               </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.openaiAccountScheduler.strategy") }}
+                  </label>
+                  <Select
+                    :modelValue="form.openai_account_scheduler_strategy"
+                    @update:modelValue="form.openai_account_scheduler_strategy = $event === 'strict_priority' ? 'strict_priority' : 'legacy'"
+                    :options="openaiAccountSchedulerStrategyOptions"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.openaiAccountScheduler.strategyHint") }}
+                  </p>
+                </div>
+
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.openaiAccountScheduler.strictRetryCount") }}
+                  </label>
+                  <input
+                    v-model.number="form.openai_account_strict_retry_count"
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="1"
+                    :disabled="form.openai_account_scheduler_strategy !== 'strict_priority'"
+                    class="input"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.openaiAccountScheduler.strictRetryCountHint") }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.openaiAccountScheduler.recordRecoveredUpstream") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.openaiAccountScheduler.recordRecoveredUpstreamHint") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.openai_account_strict_record_recovered_upstream"
+                  :disabled="form.openai_account_scheduler_strategy !== 'strict_priority'"
+                />
+              </div>
             </div>
           </div>
 
@@ -6683,6 +6734,310 @@
             </div>
           </div>
 
+          <!-- Global Notification Settings -->
+          <div class="card">
+            <div
+              class="flex flex-col gap-3 border-b border-gray-100 px-6 py-4 dark:border-dark-700 md:flex-row md:items-center md:justify-between"
+            >
+              <div>
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                  {{ t("admin.settings.notifications.title") }}
+                </h2>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.notifications.description") }}
+                </p>
+              </div>
+              <Toggle
+                v-if="!notificationConfigLoadFailed"
+                v-model="notificationConfig.enabled"
+              />
+            </div>
+
+            <div
+              v-if="notificationConfigLoading"
+              class="flex items-center gap-2 px-6 py-6 text-sm text-gray-500 dark:text-gray-400"
+            >
+              <div
+                class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+              ></div>
+              {{ t("common.loading") }}
+            </div>
+
+            <div
+              v-else-if="notificationConfigLoadFailed"
+              class="px-6 py-6 text-sm text-red-600 dark:text-red-400"
+            >
+              {{ t("admin.settings.notifications.loadFailed") }}
+            </div>
+
+            <div v-else class="space-y-6 px-6 py-6">
+              <div class="grid gap-4 lg:grid-cols-3">
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div class="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.notifications.email") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.notifications.emailHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="notificationConfig.transports.email.enabled" />
+                  </div>
+                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.notifications.recipients") }}
+                  </label>
+                  <textarea
+                    v-model="notificationEmailRecipientsInput"
+                    rows="4"
+                    class="input min-h-[108px]"
+                    :placeholder="t('admin.settings.notifications.recipientsPlaceholder')"
+                  ></textarea>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div class="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.notifications.bark") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.notifications.barkHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="notificationConfig.transports.bark.enabled" />
+                  </div>
+                  <div class="space-y-3">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.barkServerUrl") }}
+                      </label>
+                      <input
+                        v-model="notificationConfig.transports.bark.server_url"
+                        type="url"
+                        class="input"
+                        placeholder="https://api.day.app"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.barkDeviceKeys") }}
+                      </label>
+                      <textarea
+                        v-model="notificationBarkDeviceKeysInput"
+                        rows="3"
+                        class="input min-h-[84px]"
+                        :disabled="notificationClearBarkDeviceKeys"
+                        :placeholder="
+                          notificationConfig.transports.bark.device_keys_configured
+                            ? t('admin.settings.notifications.secretConfiguredPlaceholder')
+                            : t('admin.settings.notifications.barkDeviceKeysPlaceholder')
+                        "
+                      ></textarea>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{
+                          notificationConfig.transports.bark.device_keys_configured
+                            ? t("admin.settings.notifications.secretConfiguredHint")
+                            : t("admin.settings.notifications.onePerLineHint")
+                        }}
+                      </p>
+                      <label
+                        v-if="notificationConfig.transports.bark.device_keys_configured"
+                        class="mt-2 inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                      >
+                        <input
+                          v-model="notificationClearBarkDeviceKeys"
+                          type="checkbox"
+                          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        {{ t("admin.settings.notifications.clearBarkDeviceKeys") }}
+                      </label>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.barkLevel") }}
+                      </label>
+                      <Select
+                        :modelValue="notificationConfig.transports.bark.level"
+                        @update:modelValue="setNotificationBarkLevel"
+                        :options="notificationBarkLevelOptions"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                  <div class="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 class="font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.settings.notifications.telegram") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.notifications.telegramHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="notificationConfig.transports.telegram.enabled" />
+                  </div>
+                  <div class="space-y-3">
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.telegramBotToken") }}
+                      </label>
+                      <input
+                        v-model="notificationConfig.transports.telegram.bot_token"
+                        type="password"
+                        class="input"
+                        :disabled="notificationClearTelegramBotToken"
+                        :placeholder="
+                          notificationConfig.transports.telegram.bot_token_configured
+                            ? t('admin.settings.notifications.secretConfiguredPlaceholder')
+                            : '123456:ABC...'
+                        "
+                      />
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{
+                          notificationConfig.transports.telegram.bot_token_configured
+                            ? t("admin.settings.notifications.secretConfiguredHint")
+                            : t("admin.settings.notifications.telegramBotTokenHint")
+                        }}
+                      </p>
+                      <label
+                        v-if="notificationConfig.transports.telegram.bot_token_configured"
+                        class="mt-2 inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                      >
+                        <input
+                          v-model="notificationClearTelegramBotToken"
+                          type="checkbox"
+                          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        {{ t("admin.settings.notifications.clearTelegramBotToken") }}
+                      </label>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.telegramChatIds") }}
+                      </label>
+                      <textarea
+                        v-model="notificationTelegramChatIDsInput"
+                        rows="3"
+                        class="input min-h-[84px]"
+                        :placeholder="t('admin.settings.notifications.telegramChatIdsPlaceholder')"
+                      ></textarea>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                <h3 class="mb-4 font-medium text-gray-900 dark:text-white">
+                  {{ t("admin.settings.notifications.routes") }}
+                </h3>
+                <div class="space-y-4">
+                  <div
+                    v-for="event in notificationEvents"
+                    :key="event"
+                    class="grid gap-4 border-b border-gray-100 pb-4 last:border-0 last:pb-0 dark:border-dark-700 md:grid-cols-[minmax(0,1fr)_minmax(220px,auto)_160px]"
+                  >
+                    <div class="flex items-start gap-3">
+                      <Toggle v-model="notificationConfig.routes[event].enabled" />
+                      <div>
+                        <div class="font-medium text-gray-900 dark:text-white">
+                          {{ notificationEventLabel(event) }}
+                        </div>
+                        <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {{ event }}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                      <label
+                        v-for="transport in notificationTransports"
+                        :key="transport"
+                        class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                      >
+                        <input
+                          type="checkbox"
+                          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          :checked="notificationRouteHasTransport(event, transport)"
+                          @change="
+                            toggleNotificationRouteTransport(
+                              event,
+                              transport,
+                              ($event.target as HTMLInputElement).checked,
+                            )
+                          "
+                        />
+                        {{ t(`admin.settings.notifications.transports.${transport}`) }}
+                      </label>
+                    </div>
+                    <div>
+                      <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                        {{ t("admin.settings.notifications.minInterval") }}
+                      </label>
+                      <input
+                        v-model.number="notificationConfig.routes[event].min_interval_seconds"
+                        type="number"
+                        min="0"
+                        step="60"
+                        class="input"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      v-for="transport in notificationTransports"
+                      :key="transport"
+                      type="button"
+                      class="btn btn-secondary btn-sm"
+                      :disabled="
+                        testingNotificationTransport !== null ||
+                        notificationConfigDirty ||
+                        notificationConfigSaving ||
+                        loadFailed
+                      "
+                      @click="testNotificationTransport(transport)"
+                    >
+                      <span
+                        v-if="testingNotificationTransport === transport"
+                        class="h-3 w-3 animate-spin rounded-full border-b-2 border-current"
+                      ></span>
+                      {{ t("admin.settings.notifications.testTransport", {
+                        transport: t(`admin.settings.notifications.transports.${transport}`),
+                      }) }}
+                    </button>
+                  </div>
+                  <p
+                    v-if="notificationConfigDirty"
+                    class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+                  >
+                    {{ t("admin.settings.notifications.testSavedHint") }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  :disabled="notificationConfigSaving || loadFailed"
+                  @click="saveNotificationConfig"
+                >
+                  <span
+                    v-if="notificationConfigSaving"
+                    class="h-4 w-4 animate-spin rounded-full border-b-2 border-current"
+                  ></span>
+                  {{
+                    notificationConfigSaving
+                      ? t("admin.settings.notifications.saving")
+                      : t("admin.settings.notifications.save")
+                  }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- 订阅到期提醒 -->
           <div class="card">
             <div
@@ -6955,6 +7310,9 @@ import type {
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
   WebSearchTestResult,
+  NotificationConfig,
+  NotificationEvent,
+  NotificationTransport,
 } from "@/api/admin/settings";
 import type {
   AdminGroup,
@@ -7091,8 +7449,19 @@ const loadFailed = ref(false);
 const saving = ref(false);
 const testingSmtp = ref(false);
 const sendingTestEmail = ref(false);
+const notificationConfigLoading = ref(false);
+const notificationConfigSaving = ref(false);
+const notificationConfigLoadFailed = ref(false);
+const notificationConfigDirty = ref(false);
+const notificationConfigApplying = ref(false);
+const testingNotificationTransport = ref<NotificationTransport | null>(null);
 const smtpPasswordManuallyEdited = ref(false);
 const testEmailAddress = ref("");
+const notificationEmailRecipientsInput = ref("");
+const notificationBarkDeviceKeysInput = ref("");
+const notificationTelegramChatIDsInput = ref("");
+const notificationClearBarkDeviceKeys = ref(false);
+const notificationClearTelegramBotToken = ref(false);
 const registrationEmailSuffixWhitelistTags = ref<string[]>([]);
 const registrationEmailSuffixWhitelistDraft = ref("");
 const tablePageSizeOptionsInput = ref("10, 20, 50, 100");
@@ -7173,6 +7542,171 @@ const tablePageSizeMin = 5;
 const tablePageSizeMax = 1000;
 const tablePageSizeDefault = 20;
 
+const notificationEvents: NotificationEvent[] = [
+  "channel_monitor.failed",
+  "channel_monitor.recovered",
+];
+
+const notificationTransports: NotificationTransport[] = [
+  "email",
+  "bark",
+  "telegram",
+];
+
+function defaultNotificationConfig(): NotificationConfig {
+  return {
+    enabled: false,
+    transports: {
+      email: {
+        enabled: true,
+        recipients: [],
+      },
+      bark: {
+        enabled: false,
+        server_url: "https://api.day.app",
+        device_keys: [],
+        device_keys_configured: false,
+        clear_device_keys: false,
+        level: "active",
+      },
+      telegram: {
+        enabled: false,
+        bot_token: "",
+        bot_token_configured: false,
+        clear_bot_token: false,
+        chat_ids: [],
+      },
+    },
+    routes: {
+      "channel_monitor.failed": {
+        enabled: true,
+        transports: ["email"],
+        min_interval_seconds: 1800,
+      },
+      "channel_monitor.recovered": {
+        enabled: true,
+        transports: ["email"],
+        min_interval_seconds: 300,
+      },
+    },
+  };
+}
+
+const notificationConfig = reactive<NotificationConfig>(defaultNotificationConfig());
+
+function splitNotificationInput(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item) return false;
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function formatNotificationInput(values?: string[] | null): string {
+  return Array.isArray(values) ? values.join("\n") : "";
+}
+
+function normalizeNotificationConfig(raw?: Partial<NotificationConfig> | null): NotificationConfig {
+  const defaults = defaultNotificationConfig();
+  const routes = { ...defaults.routes, ...(raw?.routes || {}) } as Record<
+    NotificationEvent,
+    NotificationConfig["routes"][NotificationEvent]
+  >;
+  for (const event of notificationEvents) {
+    routes[event] = {
+      ...defaults.routes[event],
+      ...(routes[event] || {}),
+      transports: Array.isArray(routes[event]?.transports)
+        ? routes[event].transports.filter((transport) =>
+            notificationTransports.includes(transport),
+          )
+        : defaults.routes[event].transports,
+      min_interval_seconds: Number.isFinite(
+        Number(routes[event]?.min_interval_seconds),
+      )
+        ? Math.max(0, Number(routes[event].min_interval_seconds))
+        : defaults.routes[event].min_interval_seconds,
+    };
+  }
+  return {
+    enabled: raw?.enabled ?? defaults.enabled,
+    transports: {
+      email: {
+        ...defaults.transports.email,
+        ...(raw?.transports?.email || {}),
+        recipients: Array.isArray(raw?.transports?.email?.recipients)
+          ? raw.transports.email.recipients
+          : [],
+      },
+      bark: {
+        ...defaults.transports.bark,
+        ...(raw?.transports?.bark || {}),
+        device_keys: Array.isArray(raw?.transports?.bark?.device_keys)
+          ? raw.transports.bark.device_keys
+          : [],
+      },
+      telegram: {
+        ...defaults.transports.telegram,
+        ...(raw?.transports?.telegram || {}),
+        chat_ids: Array.isArray(raw?.transports?.telegram?.chat_ids)
+          ? raw.transports.telegram.chat_ids
+          : [],
+      },
+    },
+    routes,
+  };
+}
+
+function applyNotificationConfig(raw: NotificationConfig): void {
+  notificationConfigApplying.value = true;
+  const next = normalizeNotificationConfig(raw);
+  Object.assign(notificationConfig, next);
+  notificationEmailRecipientsInput.value = formatNotificationInput(
+    next.transports.email.recipients,
+  );
+  notificationBarkDeviceKeysInput.value = "";
+  notificationTelegramChatIDsInput.value = formatNotificationInput(
+    next.transports.telegram.chat_ids,
+  );
+  notificationClearBarkDeviceKeys.value = false;
+  notificationClearTelegramBotToken.value = false;
+  notificationConfigDirty.value = false;
+  queueMicrotask(() => {
+    notificationConfigApplying.value = false;
+  });
+}
+
+watch(
+  notificationConfig,
+  () => {
+    if (!notificationConfigApplying.value && !notificationConfigLoading.value) {
+      notificationConfigDirty.value = true;
+    }
+  },
+  { deep: true },
+);
+
+watch(
+  [
+    notificationEmailRecipientsInput,
+    notificationBarkDeviceKeysInput,
+    notificationTelegramChatIDsInput,
+    notificationClearBarkDeviceKeys,
+    notificationClearTelegramBotToken,
+  ],
+  () => {
+    if (!notificationConfigApplying.value && !notificationConfigLoading.value) {
+      notificationConfigDirty.value = true;
+    }
+  },
+);
+
 function defaultLoginAgreementDocuments(): LoginAgreementDocument[] {
   return [
     {
@@ -7248,6 +7782,9 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
+  openai_account_scheduler_strategy: "legacy" | "strict_priority";
+  openai_account_strict_retry_count: number;
+  openai_account_strict_record_recovered_upstream: boolean;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
 };
@@ -7438,6 +7975,9 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_advanced_scheduler_enabled: false,
+  openai_account_scheduler_strategy: "legacy",
+  openai_account_strict_retry_count: 3,
+  openai_account_strict_record_recovered_upstream: false,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -7513,6 +8053,42 @@ const dailyCheckinUsageScopeOptions = computed(() => [
     label: t("admin.settings.features.dailyCheckin.usageScopeBalanceOnly"),
   },
 ]);
+
+const openaiAccountSchedulerStrategyOptions = computed(() => [
+  {
+    value: "legacy",
+    label: t("admin.settings.openaiAccountScheduler.legacy"),
+  },
+  {
+    value: "strict_priority",
+    label: t("admin.settings.openaiAccountScheduler.strictPriority"),
+  },
+]);
+
+const notificationBarkLevelOptions = computed(() => [
+  { value: "active", label: t("admin.settings.notifications.barkLevels.active") },
+  {
+    value: "timeSensitive",
+    label: t("admin.settings.notifications.barkLevels.timeSensitive"),
+  },
+  { value: "passive", label: t("admin.settings.notifications.barkLevels.passive") },
+  {
+    value: "critical",
+    label: t("admin.settings.notifications.barkLevels.critical"),
+  },
+]);
+
+function setNotificationBarkLevel(value: string | number | boolean | null): void {
+  if (
+    typeof value === "string" &&
+    ["active", "timeSensitive", "passive", "critical"].includes(value)
+  ) {
+    notificationConfig.transports.bark.level =
+      value as NotificationConfig["transports"]["bark"]["level"];
+    return;
+  }
+  notificationConfig.transports.bark.level = "active";
+}
 
 function formatUSD(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
@@ -8283,8 +8859,8 @@ async function loadSettings() {
       openaiFastPolicyLoaded.value = true;
     }
 
-    // Load web search emulation config separately
-    await loadWebSearchConfig();
+    // Load independent settings panels separately.
+    await Promise.all([loadWebSearchConfig(), loadNotificationConfig()]);
   } catch (error: unknown) {
     loadFailed.value = true;
     appStore.showError(
@@ -8292,6 +8868,120 @@ async function loadSettings() {
     );
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadNotificationConfig() {
+  notificationConfigLoading.value = true;
+  notificationConfigLoadFailed.value = false;
+  try {
+    const cfg = await adminAPI.settings.getNotificationConfig();
+    applyNotificationConfig(cfg);
+  } catch (error: unknown) {
+    notificationConfigLoadFailed.value = true;
+    notificationConfigDirty.value = false;
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.notifications.loadFailed")),
+    );
+  } finally {
+    notificationConfigLoading.value = false;
+  }
+}
+
+function buildNotificationConfigPayload(): NotificationConfig {
+  const payload = normalizeNotificationConfig(notificationConfig);
+  payload.transports.email.recipients = splitNotificationInput(
+    notificationEmailRecipientsInput.value,
+  );
+  payload.transports.bark.device_keys = splitNotificationInput(
+    notificationBarkDeviceKeysInput.value,
+  );
+  payload.transports.bark.clear_device_keys =
+    notificationClearBarkDeviceKeys.value;
+  if (payload.transports.bark.clear_device_keys) {
+    payload.transports.bark.enabled = false;
+  }
+  payload.transports.telegram.chat_ids = splitNotificationInput(
+    notificationTelegramChatIDsInput.value,
+  );
+  payload.transports.telegram.clear_bot_token =
+    notificationClearTelegramBotToken.value;
+  if (payload.transports.telegram.clear_bot_token) {
+    payload.transports.telegram.enabled = false;
+  }
+  if (!payload.transports.telegram.bot_token?.trim()) {
+    delete payload.transports.telegram.bot_token;
+  }
+  return payload;
+}
+
+function notificationRouteHasTransport(
+  event: NotificationEvent,
+  transport: NotificationTransport,
+): boolean {
+  return notificationConfig.routes[event]?.transports.includes(transport) ?? false;
+}
+
+function notificationEventLabel(event: NotificationEvent): string {
+  if (event === "channel_monitor.recovered") {
+    return t("admin.settings.notifications.events.recovered");
+  }
+  return t("admin.settings.notifications.events.failed");
+}
+
+function toggleNotificationRouteTransport(
+  event: NotificationEvent,
+  transport: NotificationTransport,
+  enabled: boolean,
+): void {
+  const route = notificationConfig.routes[event];
+  if (!route) return;
+  const next = new Set(route.transports);
+  if (enabled) {
+    next.add(transport);
+  } else {
+    next.delete(transport);
+  }
+  route.transports = notificationTransports.filter((item) => next.has(item));
+}
+
+async function saveNotificationConfig() {
+  if (notificationConfigLoadFailed.value) {
+    appStore.showError(t("admin.settings.notifications.loadFailed"));
+    return;
+  }
+  notificationConfigSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateNotificationConfig(
+      buildNotificationConfigPayload(),
+    );
+    notificationConfigLoadFailed.value = false;
+    applyNotificationConfig(updated);
+    appStore.showSuccess(t("admin.settings.notifications.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.notifications.saveFailed")),
+    );
+  } finally {
+    notificationConfigSaving.value = false;
+  }
+}
+
+async function testNotificationTransport(transport: NotificationTransport) {
+  if (notificationConfigDirty.value) {
+    appStore.showError(t("admin.settings.notifications.testSavedHint"));
+    return;
+  }
+  testingNotificationTransport.value = transport;
+  try {
+    await adminAPI.settings.testNotificationTransport({ transport });
+    appStore.showSuccess(t("admin.settings.notifications.testSuccess"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.notifications.testFailed")),
+    );
+  } finally {
+    testingNotificationTransport.value = null;
   }
 }
 
@@ -8721,6 +9411,13 @@ async function saveSettings() {
         form.payment_cancel_rate_limit_window_mode,
       payment_alipay_force_qrcode: form.payment_alipay_force_qrcode,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
+      openai_account_scheduler_strategy: form.openai_account_scheduler_strategy,
+      openai_account_strict_retry_count:
+        Number.isFinite(Number(form.openai_account_strict_retry_count))
+          ? Math.max(0, Math.min(10, Number(form.openai_account_strict_retry_count)))
+          : 3,
+      openai_account_strict_record_recovered_upstream:
+        form.openai_account_strict_record_recovered_upstream,
       // 余额、订阅到期与账号限额通知
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

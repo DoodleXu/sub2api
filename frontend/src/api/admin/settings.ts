@@ -592,6 +592,9 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_account_scheduler_strategy?: "legacy" | "strict_priority";
+  openai_account_strict_retry_count?: number;
+  openai_account_strict_record_recovered_upstream?: boolean;
 
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled: boolean;
@@ -841,6 +844,9 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_account_scheduler_strategy?: "legacy" | "strict_priority";
+  openai_account_strict_retry_count?: number;
+  openai_account_strict_record_recovered_upstream?: boolean;
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;
@@ -1037,6 +1043,47 @@ export interface EmailTemplatePreviewResponse {
   html: string;
 }
 
+export type NotificationTransport = "email" | "bark" | "telegram";
+export type NotificationEvent =
+  | "channel_monitor.failed"
+  | "channel_monitor.recovered";
+
+export interface NotificationRoute {
+  enabled: boolean;
+  transports: NotificationTransport[];
+  min_interval_seconds: number;
+}
+
+export interface NotificationConfig {
+  enabled: boolean;
+  transports: {
+    email: {
+      enabled: boolean;
+      recipients: string[];
+    };
+    bark: {
+      enabled: boolean;
+      server_url: string;
+      device_keys?: string[];
+      device_keys_configured: boolean;
+      clear_device_keys?: boolean;
+      level: "active" | "timeSensitive" | "passive" | "critical";
+    };
+    telegram: {
+      enabled: boolean;
+      bot_token?: string;
+      bot_token_configured: boolean;
+      clear_bot_token?: boolean;
+      chat_ids: string[];
+    };
+  };
+  routes: Record<NotificationEvent, NotificationRoute>;
+}
+
+export interface TestNotificationRequest {
+  transport: NotificationTransport;
+}
+
 export async function getEmailTemplates(): Promise<EmailTemplateListResponse> {
   const { data } = await apiClient.get<EmailTemplateListResponse>(
     "/admin/settings/email-templates",
@@ -1081,6 +1128,33 @@ export async function previewEmailTemplate(
 ): Promise<EmailTemplatePreviewResponse> {
   const { data } = await apiClient.post<EmailTemplatePreviewResponse>(
     "/admin/settings/email-template-preview",
+    request,
+  );
+  return data;
+}
+
+export async function getNotificationConfig(): Promise<NotificationConfig> {
+  const { data } = await apiClient.get<NotificationConfig>(
+    "/admin/settings/notifications",
+  );
+  return data;
+}
+
+export async function updateNotificationConfig(
+  request: NotificationConfig,
+): Promise<NotificationConfig> {
+  const { data } = await apiClient.put<NotificationConfig>(
+    "/admin/settings/notifications",
+    request,
+  );
+  return data;
+}
+
+export async function testNotificationTransport(
+  request: TestNotificationRequest,
+): Promise<{ ok: boolean }> {
+  const { data } = await apiClient.post<{ ok: boolean }>(
+    "/admin/settings/notifications/test",
     request,
   );
   return data;
@@ -1398,6 +1472,9 @@ export const settingsAPI = {
   updateEmailTemplate,
   restoreOfficialEmailTemplate,
   previewEmailTemplate,
+  getNotificationConfig,
+  updateNotificationConfig,
+  testNotificationTransport,
   getAdminApiKey,
   regenerateAdminApiKey,
   deleteAdminApiKey,

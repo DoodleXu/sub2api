@@ -32,6 +32,8 @@ const (
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
+	NotificationEmailEventChannelMonitorFailed        = NotificationEventChannelMonitorFailed
+	NotificationEmailEventChannelMonitorRecovered     = NotificationEventChannelMonitorRecovered
 
 	notificationEmailTemplateKeyPrefix    = "notification_email_template:"
 	notificationEmailPreferenceKeyPrefix  = "notification_email_preference:"
@@ -887,6 +889,14 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"report_start_time":   "2026-05-19 12:00",
 			"report_end_time":     "2026-05-20 12:00",
 			"report_html":         "<h2>日报</h2><p>请求量：1024</p>",
+			"monitor_name":        "主线路",
+			"provider":            "openai",
+			"model":               "gpt-5.4",
+			"old_status":          "failed",
+			"new_status":          "operational",
+			"latency_ms":          "123",
+			"message":             "检测恢复正常",
+			"monitor_url":         "https://example.com/admin/channels/monitor",
 		}
 	}
 	return map[string]string{
@@ -933,6 +943,14 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"report_start_time":   "2026-05-19 12:00",
 		"report_end_time":     "2026-05-20 12:00",
 		"report_html":         "<h2>Daily summary</h2><p>Requests: 1024</p>",
+		"monitor_name":        "Primary route",
+		"provider":            "openai",
+		"model":               "gpt-5.4",
+		"old_status":          "failed",
+		"new_status":          "operational",
+		"latency_ms":          "123",
+		"message":             "Monitor recovered",
+		"monitor_url":         "https://example.com/admin/channels/monitor",
 	}
 }
 
@@ -949,6 +967,8 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventOpsAlert,
 	NotificationEmailEventOpsScheduledReport,
+	NotificationEmailEventChannelMonitorFailed,
+	NotificationEmailEventChannelMonitorRecovered,
 }
 
 var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
@@ -1052,6 +1072,24 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
 			"report_name", "report_type", "report_start_time", "report_end_time", "report_html"),
+	},
+	NotificationEmailEventChannelMonitorFailed: {
+		Event:       NotificationEmailEventChannelMonitorFailed,
+		Label:       "Channel monitor failure",
+		Description: "Sent when a channel monitor model changes from healthy to failed/error.",
+		Category:    "channel_monitor",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"monitor_name", "provider", "group_name", "model", "old_status", "new_status", "latency_ms", "message", "triggered_at", "monitor_url"),
+	},
+	NotificationEmailEventChannelMonitorRecovered: {
+		Event:       NotificationEmailEventChannelMonitorRecovered,
+		Label:       "Channel monitor recovered",
+		Description: "Sent when a channel monitor model recovers from failed/error.",
+		Category:    "channel_monitor",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"monitor_name", "provider", "group_name", "model", "old_status", "new_status", "latency_ms", "message", "triggered_at", "monitor_url"),
 	},
 }
 
@@ -1315,6 +1353,70 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p><strong>类型</strong>：{{report_type}}</p>
 <p><strong>时间范围</strong>：{{report_start_time}} - {{report_end_time}}</p>
 <div>{{report_html}}</div>`),
+		},
+	},
+	NotificationEmailEventChannelMonitorFailed: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Channel monitor failed: {{monitor_name}} / {{model}}",
+			HTML: notificationEmailCard("#dc2626", "Channel monitor failed", `
+<p>A monitored channel changed from healthy to failed/error.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Monitor</td><td>{{monitor_name}}</td></tr>
+  <tr><td>Provider</td><td>{{provider}}</td></tr>
+  <tr><td>Group</td><td>{{group_name}}</td></tr>
+  <tr><td>Model</td><td>{{model}}</td></tr>
+  <tr><td>Status</td><td>{{old_status}} → {{new_status}}</td></tr>
+  <tr><td>Latency</td><td>{{latency_ms}} ms</td></tr>
+  <tr><td>Checked at</td><td>{{triggered_at}}</td></tr>
+</table>
+<p><strong>Message</strong>: {{message}}</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 渠道监控故障：{{monitor_name}} / {{model}}",
+			HTML: notificationEmailCard("#dc2626", "渠道监控故障", `
+<p>一个渠道监控模型从健康状态变为失败/错误。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>监控</td><td>{{monitor_name}}</td></tr>
+  <tr><td>平台</td><td>{{provider}}</td></tr>
+  <tr><td>分组</td><td>{{group_name}}</td></tr>
+  <tr><td>模型</td><td>{{model}}</td></tr>
+  <tr><td>状态</td><td>{{old_status}} → {{new_status}}</td></tr>
+  <tr><td>延迟</td><td>{{latency_ms}} ms</td></tr>
+  <tr><td>检测时间</td><td>{{triggered_at}}</td></tr>
+</table>
+<p><strong>信息</strong>：{{message}}</p>`),
+		},
+	},
+	NotificationEmailEventChannelMonitorRecovered: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Channel monitor recovered: {{monitor_name}} / {{model}}",
+			HTML: notificationEmailCard("#16a34a", "Channel monitor recovered", `
+<p>A monitored channel recovered from failed/error.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Monitor</td><td>{{monitor_name}}</td></tr>
+  <tr><td>Provider</td><td>{{provider}}</td></tr>
+  <tr><td>Group</td><td>{{group_name}}</td></tr>
+  <tr><td>Model</td><td>{{model}}</td></tr>
+  <tr><td>Status</td><td>{{old_status}} → {{new_status}}</td></tr>
+  <tr><td>Latency</td><td>{{latency_ms}} ms</td></tr>
+  <tr><td>Checked at</td><td>{{triggered_at}}</td></tr>
+</table>
+<p><strong>Message</strong>: {{message}}</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 渠道监控恢复：{{monitor_name}} / {{model}}",
+			HTML: notificationEmailCard("#16a34a", "渠道监控恢复", `
+<p>一个渠道监控模型已从失败/错误状态恢复。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>监控</td><td>{{monitor_name}}</td></tr>
+  <tr><td>平台</td><td>{{provider}}</td></tr>
+  <tr><td>分组</td><td>{{group_name}}</td></tr>
+  <tr><td>模型</td><td>{{model}}</td></tr>
+  <tr><td>状态</td><td>{{old_status}} → {{new_status}}</td></tr>
+  <tr><td>延迟</td><td>{{latency_ms}} ms</td></tr>
+  <tr><td>检测时间</td><td>{{triggered_at}}</td></tr>
+</table>
+<p><strong>信息</strong>：{{message}}</p>`),
 		},
 	},
 }

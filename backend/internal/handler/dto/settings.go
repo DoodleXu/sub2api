@@ -198,7 +198,10 @@ type SystemSettings struct {
 	PaymentVisibleMethodWxpayEnabled  bool   `json:"payment_visible_method_wxpay_enabled"`
 
 	// OpenAI account scheduling
-	OpenAIAdvancedSchedulerEnabled bool `json:"openai_advanced_scheduler_enabled"`
+	OpenAIAdvancedSchedulerEnabled             bool   `json:"openai_advanced_scheduler_enabled"`
+	OpenAIAccountSchedulerStrategy             string `json:"openai_account_scheduler_strategy"`
+	OpenAIAccountStrictRetryCount              int    `json:"openai_account_strict_retry_count"`
+	OpenAIAccountStrictRecordRecoveredUpstream bool   `json:"openai_account_strict_record_recovered_upstream"`
 
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`
@@ -466,6 +469,17 @@ type PreviewEmailTemplateRequest struct {
 type EmailTemplatePreviewResponse struct {
 	Subject string `json:"subject"`
 	HTML    string `json:"html"`
+}
+
+// NotificationConfig is the lightweight global notification dispatcher config.
+type NotificationConfig = service.NotificationConfig
+
+// UpdateNotificationConfigRequest updates the lightweight global notification config.
+type UpdateNotificationConfigRequest = service.NotificationConfig
+
+// TestNotificationRequest sends a test notification through one transport.
+type TestNotificationRequest struct {
+	Transport string `json:"transport"`
 }
 
 // ParseCustomMenuItems parses a JSON string into a slice of CustomMenuItem.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,8 +60,9 @@ type ChannelMonitorRepository interface {
 
 // ChannelMonitorService 渠道监控管理服务。
 type ChannelMonitorService struct {
-	repo      ChannelMonitorRepository
-	encryptor SecretEncryptor
+	repo                ChannelMonitorRepository
+	encryptor           SecretEncryptor
+	notificationService *NotificationService
 	// scheduler 由 wire 通过 SetScheduler 注入；CRUD 后调用对应钩子即时同步任务。
 	// 测试或未注入场景下保持 nil，所有钩子调用变为 no-op。
 	scheduler MonitorScheduler
@@ -69,6 +71,10 @@ type ChannelMonitorService struct {
 // NewChannelMonitorService 创建渠道监控服务实例。
 func NewChannelMonitorService(repo ChannelMonitorRepository, encryptor SecretEncryptor) *ChannelMonitorService {
 	return &ChannelMonitorService{repo: repo, encryptor: encryptor}
+}
+
+func (s *ChannelMonitorService) SetNotificationService(notificationService *NotificationService) {
+	s.notificationService = notificationService
 }
 
 // ---------- CRUD ----------
@@ -261,9 +267,112 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 	if m.APIKeyDecryptFailed {
 		return nil, ErrChannelMonitorAPIKeyDecryptFailed
 	}
+	previous := s.latestStatusMap(ctx, m.ID)
 	results := s.runChecksConcurrent(ctx, m)
 	s.persistCheckResults(ctx, m, results)
+	s.notifyStatusChanges(ctx, m, previous, results)
 	return results, nil
+}
+
+func (s *ChannelMonitorService) latestStatusMap(ctx context.Context, monitorID int64) map[string]string {
+	latest, err := s.repo.ListLatestPerModel(ctx, monitorID)
+	if err != nil {
+		slog.Warn("channel_monitor: load latest status before check failed",
+			"monitor_id", monitorID, "error", err)
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(latest))
+	for _, item := range latest {
+		out[item.Model] = item.Status
+	}
+	return out
+}
+
+func (s *ChannelMonitorService) notifyStatusChanges(ctx context.Context, m *ChannelMonitor, previous map[string]string, results []*CheckResult) {
+	if s == nil || s.notificationService == nil || m == nil {
+		return
+	}
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		oldStatus := strings.TrimSpace(previous[result.Model])
+		if oldStatus == "" || oldStatus == result.Status {
+			continue
+		}
+		event := channelMonitorNotificationEvent(oldStatus, result.Status)
+		if event == "" {
+			continue
+		}
+		payload := channelMonitorNotificationPayload(event, m, oldStatus, result)
+		s.notificationService.DispatchAsync(ctx, event, payload)
+	}
+}
+
+func channelMonitorNotificationEvent(oldStatus, newStatus string) string {
+	oldBad := isChannelMonitorFailureStatus(oldStatus)
+	newBad := isChannelMonitorFailureStatus(newStatus)
+	if !oldBad && newBad {
+		return NotificationEventChannelMonitorFailed
+	}
+	if oldBad && !newBad {
+		return NotificationEventChannelMonitorRecovered
+	}
+	return ""
+}
+
+func isChannelMonitorFailureStatus(status string) bool {
+	switch status {
+	case MonitorStatusFailed, MonitorStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
+func channelMonitorNotificationPayload(event string, m *ChannelMonitor, oldStatus string, result *CheckResult) NotificationPayload {
+	title := fmt.Sprintf("[Channel Monitor] %s %s", m.Name, result.Status)
+	if event == NotificationEventChannelMonitorRecovered {
+		title = fmt.Sprintf("[Channel Monitor] %s recovered", m.Name)
+	}
+	latency := "-"
+	if result.LatencyMs != nil {
+		latency = strconv.Itoa(*result.LatencyMs)
+	}
+	groupName := strings.TrimSpace(m.GroupName)
+	if groupName == "" {
+		groupName = "-"
+	}
+	triggeredAt := result.CheckedAt.UTC().Format(time.RFC3339)
+	content := strings.Join([]string{
+		"Monitor: " + m.Name,
+		"Provider: " + m.Provider,
+		"Group: " + groupName,
+		"Model: " + result.Model,
+		"Status: " + oldStatus + " -> " + result.Status,
+		"Latency: " + latency + " ms",
+		"Message: " + strings.TrimSpace(result.Message),
+		"Checked at: " + triggeredAt,
+	}, "\n")
+	return NotificationPayload{
+		Title:      title,
+		Content:    content,
+		Event:      event + ":" + result.Status,
+		SourceType: "channel_monitor",
+		SourceID:   fmt.Sprintf("%d:%s", m.ID, result.Model),
+		Variables: map[string]string{
+			"monitor_name": m.Name,
+			"provider":     m.Provider,
+			"group_name":   groupName,
+			"model":        result.Model,
+			"old_status":   oldStatus,
+			"new_status":   result.Status,
+			"latency_ms":   latency,
+			"message":      strings.TrimSpace(result.Message),
+			"triggered_at": triggeredAt,
+			"monitor_url":  "",
+		},
+	}
 }
 
 // persistCheckResults 写入本次检测的历史记录并更新 last_checked_at。
