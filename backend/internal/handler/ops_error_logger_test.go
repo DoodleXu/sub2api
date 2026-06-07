@@ -139,6 +139,54 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+func TestOpsErrorLoggerMiddleware_SkipsRecoveredUpstreamWhenMarked(t *testing.T) {
+	resetOpsErrorLoggerStateForTest(t)
+	opsErrorLogOnce.Do(func() {})
+	opsErrorLogMu.Lock()
+	opsErrorLogQueue = make(chan opsErrorLogJob, 2)
+	opsErrorLogMu.Unlock()
+
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	serve := func(markSkip bool) int64 {
+		opsErrorLogEnqueued.Store(0)
+		opsErrorLogQueueLen.Store(0)
+		for {
+			select {
+			case <-opsErrorLogQueue:
+			default:
+				goto drained
+			}
+		}
+	drained:
+
+		r := gin.New()
+		r.GET("/v1/responses", OpsErrorLoggerMiddleware(ops), func(c *gin.Context) {
+			c.Set(service.OpsUpstreamErrorsKey, []*service.OpsUpstreamErrorEvent{
+				{
+					AccountID:          42,
+					UpstreamStatusCode: http.StatusTooManyRequests,
+					Message:            "rate limited",
+				},
+			})
+			if markSkip {
+				service.MarkOpsSkipRecoveredUpstream(c)
+			}
+			c.String(http.StatusOK, "ok")
+		})
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		return OpsErrorLogEnqueuedTotal()
+	}
+
+	require.Equal(t, int64(1), serve(false))
+	require.Equal(t, int64(0), serve(true))
+}
+
 func TestIsKnownOpsErrorType(t *testing.T) {
 	known := []string{
 		"invalid_request_error",

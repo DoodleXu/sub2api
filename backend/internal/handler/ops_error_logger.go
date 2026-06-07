@@ -552,6 +552,11 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 
 		status := c.Writer.Status()
 		if status < 400 {
+			if v, ok := c.Get(service.OpsSkipRecoveredUpstreamKey); ok {
+				if skip, _ := v.(bool); skip {
+					return
+				}
+			}
 			// Even when the client request succeeds, we still want to persist upstream error attempts
 			// (retries/failover) so ops can observe upstream instability that gets "covered" by retries.
 			var events []*service.OpsUpstreamErrorEvent

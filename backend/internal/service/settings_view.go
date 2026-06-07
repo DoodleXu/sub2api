@@ -222,7 +222,10 @@ type SystemSettings struct {
 	PaymentVisibleMethodWxpayEnabled  bool
 
 	// OpenAI 账号调度
-	OpenAIAdvancedSchedulerEnabled bool
+	OpenAIAdvancedSchedulerEnabled             bool
+	OpenAIAccountSchedulerStrategy             string
+	OpenAIAccountStrictRetryCount              int
+	OpenAIAccountStrictRecordRecoveredUpstream bool
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled     bool
