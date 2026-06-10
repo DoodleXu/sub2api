@@ -1218,17 +1218,7 @@ type openAIWSUsageHandlerChannelRepoStub struct {
 	groupPlatforms map[int64]string
 }
 
-type openAIHandlerHTTPUpstream struct{}
-
 type openAIHandlerHTTPUpstreamFunc func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
-
-func (openAIHandlerHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	return http.DefaultClient.Do(req)
-}
-
-func (u openAIHandlerHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-	return u.Do(req, proxyURL, accountID, accountConcurrency)
-}
 
 func (f openAIHandlerHTTPUpstreamFunc) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	return f(req, proxyURL, accountID, accountConcurrency)
