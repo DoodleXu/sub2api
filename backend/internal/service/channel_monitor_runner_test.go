@@ -125,6 +125,67 @@ func TestSchedule_ReplaceCancelsOldTask(t *testing.T) {
 	stoppedWithin(t, r, 3*time.Second)
 }
 
+// TestSchedule_UsesMonitorIntervalForPeriodicTicks 验证定时周期使用 monitor 自身 IntervalSeconds，
+// 而不是全局固定扫描间隔。这里直接使用 1 秒防御 runner 回退到 1 分钟扫描实现。
+func TestSchedule_UsesMonitorIntervalForPeriodicTicks(t *testing.T) {
+	svc := &stubMonitorSvc{runCalled: make(chan int64, 8)}
+	r := newRunnerForTest(svc)
+	r.Start()
+	defer stoppedWithin(t, r, 3*time.Second)
+
+	r.Schedule(&ChannelMonitor{ID: 11, Name: "m11", Enabled: true, IntervalSeconds: 1})
+
+	select {
+	case id := <-svc.runCalled:
+		if id != 11 {
+			t.Fatalf("expected immediate fire for id=11, got %d", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected immediate first fire")
+	}
+
+	select {
+	case id := <-svc.runCalled:
+		if id != 11 {
+			t.Fatalf("expected periodic fire for id=11, got %d", id)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("expected periodic fire to follow monitor interval")
+	}
+}
+
+// TestSchedule_ReplacesIntervalForPeriodicTicks 验证更新 interval 后旧 ticker 被取消，
+// 新 ticker 会按新的 IntervalSeconds 继续触发。
+func TestSchedule_ReplacesIntervalForPeriodicTicks(t *testing.T) {
+	svc := &stubMonitorSvc{runCalled: make(chan int64, 8)}
+	r := newRunnerForTest(svc)
+	r.Start()
+	defer stoppedWithin(t, r, 3*time.Second)
+
+	r.Schedule(&ChannelMonitor{ID: 12, Name: "m12", Enabled: true, IntervalSeconds: 60})
+	select {
+	case <-svc.runCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected immediate first fire for original schedule")
+	}
+
+	r.Schedule(&ChannelMonitor{ID: 12, Name: "m12", Enabled: true, IntervalSeconds: 1})
+	select {
+	case <-svc.runCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected immediate fire after reschedule")
+	}
+
+	select {
+	case id := <-svc.runCalled:
+		if id != 12 {
+			t.Fatalf("expected periodic fire for id=12, got %d", id)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("expected periodic fire to use replaced interval")
+	}
+}
+
 // TestUnschedule_RemovesTask 验证 Unschedule 删除 task 并使对应 goroutine 退出。
 func TestUnschedule_RemovesTask(t *testing.T) {
 	svc := &stubMonitorSvc{runCalled: make(chan int64, 4)}

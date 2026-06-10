@@ -2,10 +2,10 @@
   <AppLayout>
     <MonitorHero
       :overall-status="overallStatus"
-      :interval-seconds="DEFAULT_INTERVAL_SECONDS"
+      :interval-seconds="channelMonitorRefreshInterval"
       :window="currentWindow"
       :loading="loading"
-      :auto-refresh="autoRefresh"
+      :auto-refresh="autoRefreshControl"
       @update:window="handleWindowChange"
       @refresh="manualReload"
     />
@@ -62,13 +62,29 @@ const detailTarget = ref<UserMonitorView | null>(null)
 
 let abortController: AbortController | null = null
 
+const channelMonitorRefreshInterval = computed<number>(() => {
+  const configured = appStore.cachedPublicSettings?.channel_monitor_default_interval_seconds
+  return configured && configured > 0 ? configured : DEFAULT_INTERVAL_SECONDS
+})
+
+const autoRefreshIntervals = computed<readonly number[]>(() => {
+  return Array.from(new Set([30, 60, 120, channelMonitorRefreshInterval.value]))
+    .filter((sec) => sec > 0)
+    .sort((a, b) => a - b)
+})
+
 const autoRefresh = useAutoRefresh({
   storageKey: 'channel-status-auto-refresh',
-  intervals: [30, 60, 120] as const,
-  defaultInterval: DEFAULT_INTERVAL_SECONDS,
+  intervals: autoRefreshIntervals.value,
+  defaultInterval: channelMonitorRefreshInterval.value,
   onRefresh: () => reload(true),
   shouldPause: () => document.hidden || loading.value,
 })
+
+const autoRefreshControl = computed(() => ({
+  ...autoRefresh,
+  intervals: autoRefreshIntervals.value,
+}))
 const countdown = autoRefresh.countdown
 
 // ── Computed ──
@@ -102,7 +118,7 @@ async function reload(silent = false) {
   } finally {
     if (abortController === ctrl) {
       if (!silent) loading.value = false
-      countdown.value = DEFAULT_INTERVAL_SECONDS
+      autoRefresh.resetCountdown()
       abortController = null
     }
   }
@@ -159,7 +175,12 @@ watch(
   },
 )
 
+watch(channelMonitorRefreshInterval, (seconds) => {
+  autoRefresh.setInterval(seconds)
+})
+
 onMounted(() => {
+  autoRefresh.setInterval(channelMonitorRefreshInterval.value)
   void reload(false)
   if (appStore.cachedPublicSettings?.channel_monitor_enabled !== false) {
     autoRefresh.setEnabled(true)
