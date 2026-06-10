@@ -128,6 +128,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var failoverAttempts []openAIFailoverAttemptLog
 	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(c.Request.Context())
 	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(c.Request.Context())
 
@@ -161,8 +162,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		if err != nil {
 			reqLog.Warn("openai_chat_completions.account_select_failed",
-				zap.Error(err),
-				zap.Int("excluded_account_count", len(failedAccountIDs)),
+				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -264,20 +264,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
+					if !strictPriority && switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if !strictPriority && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					reqLog.Warn("openai_chat_completions.upstream_failover_switching",
-						zap.Int64("account_id", account.ID),
-						zap.Int("upstream_status", failoverErr.StatusCode),
-						zap.Int("switch_count", switchCount),
-						zap.Int("max_switches", maxAccountSwitches),
+						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
 					)
 					continue
 				}

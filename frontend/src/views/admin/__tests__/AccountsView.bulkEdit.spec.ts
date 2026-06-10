@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
@@ -155,6 +155,10 @@ describe('admin AccountsView bulk edit scope', () => {
       results: []
     })
     vi.spyOn(window, 'confirm').mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('opens bulk edit in filtered-results mode from the bulk actions dropdown', async () => {
@@ -369,6 +373,95 @@ describe('admin AccountsView bulk edit scope', () => {
 
     expect(bulkUpdate).toHaveBeenCalledWith([1, 2], { archived: true })
     expect(wrapper.findAll('[data-test="account-name"]').map(node => node.text())).toEqual(['archive-failed'])
+  })
+
+  it('keeps the selected 5s auto refresh cadence after a local account update', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-10T00:00:00Z'))
+    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled: true, interval_seconds: 5 }))
+
+    const account = {
+      id: 1,
+      name: 'auto-refresh-account',
+      platform: 'anthropic',
+      type: 'oauth',
+      status: 'active',
+      schedulable: true,
+      created_at: '2026-03-07T10:00:00Z',
+      updated_at: '2026-03-07T10:00:00Z'
+    }
+    listAccounts.mockResolvedValue({
+      items: [account],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    listWithEtag.mockResolvedValue({
+      notModified: true,
+      etag: 'etag-1',
+      data: null
+    })
+
+    const wrapper = mountAccountsView()
+    await flushPromises()
+
+    ;(wrapper.vm as any).handleAccountUpdated({
+      ...account,
+      updated_at: '2026-06-10T00:00:01Z'
+    })
+
+    await vi.advanceTimersByTimeAsync(4999)
+    await flushPromises()
+    expect(listWithEtag).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
+  })
+
+  it('reschedules auto refresh by the selected interval after manual refresh', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-10T00:00:00Z'))
+    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled: true, interval_seconds: 5 }))
+
+    const account = {
+      id: 1,
+      name: 'manual-refresh-account',
+      platform: 'anthropic',
+      type: 'oauth',
+      status: 'active',
+      schedulable: true,
+      created_at: '2026-03-07T10:00:00Z',
+      updated_at: '2026-03-07T10:00:00Z'
+    }
+    listAccounts.mockResolvedValue({
+      items: [account],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    listWithEtag.mockResolvedValue({
+      notModified: true,
+      etag: 'etag-1',
+      data: null
+    })
+
+    const wrapper = mountAccountsView()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await (wrapper.vm as any).handleManualRefresh()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(4999)
+    await flushPromises()
+    expect(listWithEtag).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(listWithEtag).toHaveBeenCalledTimes(1)
   })
 })
 

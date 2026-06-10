@@ -241,6 +241,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
@@ -249,6 +252,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false)
 	releaseUpstreamCtx()
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
@@ -293,6 +299,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+			return nil, failoverErr
+		}
 		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream request failed")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
@@ -342,8 +351,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
+		}
+		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+			return nil, failoverErr
 		}
 		// Non-failover error: return Anthropic-formatted error to client
 		return s.handleAnthropicErrorResponse(ctx, resp, c, account, billingModel)

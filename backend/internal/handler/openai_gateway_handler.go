@@ -312,6 +312,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var failoverAttempts []openAIFailoverAttemptLog
 	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(c.Request.Context())
 	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(c.Request.Context())
 
@@ -346,8 +347,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		if err != nil {
 			reqLog.Warn("openai.account_select_failed",
-				zap.Error(err),
-				zap.Int("excluded_account_count", len(failedAccountIDs)),
+				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -458,20 +458,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
+					if !strictPriority && switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if !strictPriority && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					reqLog.Warn("openai.upstream_failover_switching",
-						zap.Int64("account_id", account.ID),
-						zap.Int("upstream_status", failoverErr.StatusCode),
-						zap.Int("switch_count", switchCount),
-						zap.Int("max_switches", maxAccountSwitches),
+						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
 					)
 					continue
 				}
@@ -746,6 +744,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
+	var failoverAttempts []openAIFailoverAttemptLog
 	effectiveMappedModel := preferredMappedModel
 	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(c.Request.Context())
 	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(c.Request.Context())
@@ -784,8 +783,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		}
 		if err != nil {
 			reqLog.Warn("openai_messages.account_select_failed",
-				zap.Error(err),
-				zap.Int("excluded_account_count", len(failedAccountIDs)),
+				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
@@ -888,20 +886,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
+					if !strictPriority && switchCount >= maxAccountSwitches {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if !strictPriority && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					reqLog.Warn("openai_messages.upstream_failover_switching",
-						zap.Int64("account_id", account.ID),
-						zap.Int("upstream_status", failoverErr.StatusCode),
-						zap.Int("switch_count", switchCount),
-						zap.Int("max_switches", maxAccountSwitches),
+						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
 					)
 					continue
 				}
@@ -1883,6 +1879,66 @@ func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, st
 	default:
 		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
 	}
+}
+
+type openAIFailoverAttemptLog struct {
+	AccountID  int64  `json:"account_id"`
+	Priority   int    `json:"priority"`
+	StatusCode int    `json:"status_code"`
+	Message    string `json:"message,omitempty"`
+}
+
+func appendOpenAIFailoverAttemptLog(attempts []openAIFailoverAttemptLog, account *service.Account, failoverErr *service.UpstreamFailoverError) []openAIFailoverAttemptLog {
+	if account == nil || failoverErr == nil {
+		return attempts
+	}
+	message := strings.TrimSpace(service.ExtractUpstreamErrorMessage(failoverErr.ResponseBody))
+	if message == "" {
+		message = failoverErr.Error()
+	}
+	return append(attempts, openAIFailoverAttemptLog{
+		AccountID:  account.ID,
+		Priority:   account.Priority,
+		StatusCode: failoverErr.StatusCode,
+		Message:    truncateOpenAIFailoverLogMessage(message),
+	})
+}
+
+func truncateOpenAIFailoverLogMessage(message string) string {
+	const maxRunes = 256
+	runes := []rune(message)
+	if len(runes) <= maxRunes {
+		return message
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+func openAIAccountSelectFailedLogFields(err error, excludedAccountCount int, attempts []openAIFailoverAttemptLog) []zap.Field {
+	fields := []zap.Field{
+		zap.Error(err),
+		zap.Int("excluded_account_count", excludedAccountCount),
+	}
+	if len(attempts) > 0 {
+		fields = append(fields, zap.Any("failover_attempts", attempts))
+	}
+	return fields
+}
+
+func openAIFailoverSwitchLogFields(accountID int64, upstreamStatus int, switchCount int, maxAccountSwitches int, strictPriority bool, attempts []openAIFailoverAttemptLog) []zap.Field {
+	fields := []zap.Field{
+		zap.Int64("account_id", accountID),
+		zap.Int("upstream_status", upstreamStatus),
+		zap.Int("switch_count", switchCount),
+	}
+	if strictPriority {
+		fields = append(fields, zap.Bool("strict_priority_exhaust_candidates", true))
+	} else {
+		fields = append(fields, zap.Int("max_switches", maxAccountSwitches))
+	}
+	if len(attempts) > 0 {
+		fields = append(fields, zap.Any("failover_attempts", attempts))
+	}
+	return fields
 }
 
 // handleStreamingAwareError handles errors that may occur after streaming has started
