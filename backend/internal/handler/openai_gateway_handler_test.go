@@ -4,16 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -1178,6 +1183,45 @@ type openAIWSUsageHandlerChannelRepoStub struct {
 	groupPlatforms map[int64]string
 }
 
+type openAIHandlerHTTPUpstream struct{}
+
+type openAIHandlerHTTPUpstreamFunc func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
+
+func (openAIHandlerHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return http.DefaultClient.Do(req)
+}
+
+func (u openAIHandlerHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func (f openAIHandlerHTTPUpstreamFunc) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	return f(req, proxyURL, accountID, accountConcurrency)
+}
+
+func (f openAIHandlerHTTPUpstreamFunc) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return f.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
+func enableOpenAIStrictPriorityForTest(t *testing.T, settingSvc *service.SettingService) {
+	t.Helper()
+	require.NoError(t, settingSvc.UpdateSettings(context.Background(), &service.SystemSettings{
+		OpenAIAdvancedSchedulerEnabled:             true,
+		OpenAIAccountSchedulerStrategy:             service.OpenAIAccountSchedulerStrategyStrict,
+		OpenAIAccountStrictRetryCount:              0,
+		OpenAIAccountStrictRecordRecoveredUpstream: false,
+	}))
+}
+
+func primeOpenAIOAuth429StormForTest(t *testing.T, gatewaySvc *service.OpenAIGatewayService) {
+	t.Helper()
+	value := reflect.ValueOf(gatewaySvc).Elem()
+	windowStart := (*atomic.Int64)(unsafe.Pointer(value.FieldByName("openaiOAuth429WindowStartUnixNano").UnsafeAddr()))
+	windowCount := (*atomic.Int64)(unsafe.Pointer(value.FieldByName("openaiOAuth429WindowCount").UnsafeAddr()))
+	windowStart.Store(time.Now().UnixNano())
+	windowCount.Store(20)
+}
+
 func (s *openAIWSUsageHandlerChannelRepoStub) ListAll(ctx context.Context) ([]service.Channel, error) {
 	return s.channels, nil
 }
@@ -1190,6 +1234,342 @@ func (s *openAIWSUsageHandlerChannelRepoStub) GetGroupPlatforms(ctx context.Cont
 		}
 	}
 	return out, nil
+}
+
+func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var hitMu sync.Mutex
+	hits := map[int]int{}
+	strictOKBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_strict_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_strict_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	httpUpstream := openAIHandlerHTTPUpstreamFunc(func(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+		hitMu.Lock()
+		defer hitMu.Unlock()
+		switch accountID {
+		case 9911:
+			hits[1]++
+			return nil, errors.New("dial timeout")
+		case 9912:
+			hits[2]++
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Status:     "429 Too Many Requests",
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"second account limited"}}`)),
+			}, nil
+		case 9913:
+			hits[3]++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(strictOKBody)),
+			}, nil
+		default:
+			return nil, errors.New("unexpected account")
+		}
+	})
+
+	groupID := int64(4302)
+	baseURL := "https://example.com"
+	accounts := []service.Account{
+		{
+			ID:          9911,
+			Name:        "strict-priority-first",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    1,
+			Credentials: map[string]any{"api_key": "sk-first", "base_url": baseURL},
+			Extra:       map[string]any{"openai_responses_supported": true},
+		},
+		{
+			ID:          9912,
+			Name:        "strict-priority-second",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    2,
+			Credentials: map[string]any{"api_key": "sk-second", "base_url": baseURL},
+			Extra:       map[string]any{"openai_responses_supported": true},
+		},
+		{
+			ID:          9913,
+			Name:        "strict-priority-third",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    3,
+			Credentials: map[string]any{"api_key": "sk-third", "base_url": baseURL},
+			Extra:       map[string]any{"openai_responses_supported": true},
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.RunMode = config.RunModeSimple
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.MaxAccountSwitches = 1
+
+	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
+		"openai_account_scheduler_strategy":               service.OpenAIAccountSchedulerStrategyStrict,
+		"openai_account_strict_retry_count":               "0",
+		"openai_account_strict_record_recovered_upstream": "false",
+	}}
+	settingSvc := service.NewSettingService(settingRepo, cfg)
+	enableOpenAIStrictPriorityForTest(t, settingSvc)
+	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
+	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	rateLimitSvc.SetSettingService(settingSvc)
+	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	gatewaySvc := service.NewOpenAIGatewayService(
+		accountRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		service.NewBillingService(cfg, nil),
+		rateLimitSvc,
+		billingCacheSvc,
+		httpUpstream,
+		&service.DeferredService{},
+		nil,
+		nil,
+		nil,
+		nil,
+		settingSvc,
+		nil,
+	)
+
+	h := &OpenAIGatewayHandler{
+		gatewayService:      gatewaySvc,
+		billingCacheService: billingCacheSvc,
+		apiKeyService:       &service.APIKeyService{},
+		concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(&concurrencyCacheMock{
+			acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+				return true, nil
+			},
+		}), SSEPingFormatNone, time.Second),
+		maxAccountSwitches: 1,
+	}
+	require.True(t, gatewaySvc.IsOpenAIAccountStrictPrioritySchedulerEnabled(context.Background()))
+
+	apiKey := &service.APIKey{
+		ID:      1803,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1703, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
+		c.Next()
+	})
+	router.POST("/v1/chat/completions", h.ChatCompletions)
+
+	reqBody := `{"model":"gpt-5.1","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	hitMu.Lock()
+	hitSnapshot := map[int]int{1: hits[1], 2: hits[2], 3: hits[3]}
+	hitMu.Unlock()
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s hits=%v", rec.Body.String(), hitSnapshot)
+	require.Equal(t, "ok", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+	hitMu.Lock()
+	defer hitMu.Unlock()
+	require.Equal(t, 1, hits[1])
+	require.Equal(t, 1, hits[2])
+	require.Equal(t, 1, hits[3])
+}
+
+func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var hitMu sync.Mutex
+	hits := map[int]int{}
+	strictOKBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_oauth_strict_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_oauth_strict_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	httpUpstream := openAIHandlerHTTPUpstreamFunc(func(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+		hitMu.Lock()
+		defer hitMu.Unlock()
+		switch accountID {
+		case 9921:
+			hits[1]++
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Status:     "429 Too Many Requests",
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"first oauth limited"}}`)),
+			}, nil
+		case 9922:
+			hits[2]++
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Status:     "429 Too Many Requests",
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"second oauth limited"}}`)),
+			}, nil
+		case 9923:
+			hits[3]++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(strictOKBody)),
+			}, nil
+		default:
+			return nil, errors.New("unexpected account")
+		}
+	})
+
+	groupID := int64(4303)
+	accounts := []service.Account{
+		{
+			ID:          9921,
+			Name:        "strict-oauth-first",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    1,
+			Credentials: map[string]any{"access_token": "access-first", "chatgpt_account_id": "chatgpt-first"},
+		},
+		{
+			ID:          9922,
+			Name:        "strict-oauth-second",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    2,
+			Credentials: map[string]any{"access_token": "access-second", "chatgpt_account_id": "chatgpt-second"},
+		},
+		{
+			ID:          9923,
+			Name:        "strict-oauth-third",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    3,
+			Credentials: map[string]any{"access_token": "access-third", "chatgpt_account_id": "chatgpt-third"},
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.RunMode = config.RunModeSimple
+	cfg.Default.RateMultiplier = 1
+	cfg.Gateway.MaxAccountSwitches = 1
+
+	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
+		"openai_account_scheduler_strategy":               service.OpenAIAccountSchedulerStrategyStrict,
+		"openai_account_strict_retry_count":               "0",
+		"openai_account_strict_record_recovered_upstream": "false",
+	}}
+	settingSvc := service.NewSettingService(settingRepo, cfg)
+	enableOpenAIStrictPriorityForTest(t, settingSvc)
+	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
+	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	rateLimitSvc.SetSettingService(settingSvc)
+	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	gatewaySvc := service.NewOpenAIGatewayService(
+		accountRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		service.NewBillingService(cfg, nil),
+		rateLimitSvc,
+		billingCacheSvc,
+		httpUpstream,
+		&service.DeferredService{},
+		nil,
+		nil,
+		nil,
+		nil,
+		settingSvc,
+		nil,
+	)
+	primeOpenAIOAuth429StormForTest(t, gatewaySvc)
+
+	h := &OpenAIGatewayHandler{
+		gatewayService:      gatewaySvc,
+		billingCacheService: billingCacheSvc,
+		apiKeyService:       &service.APIKeyService{},
+		concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(&concurrencyCacheMock{
+			acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+				return true, nil
+			},
+		}), SSEPingFormatNone, time.Second),
+		maxAccountSwitches: 1,
+	}
+	require.True(t, gatewaySvc.IsOpenAIAccountStrictPrioritySchedulerEnabled(context.Background()))
+
+	apiKey := &service.APIKey{
+		ID:      1804,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1704, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
+		c.Next()
+	})
+	router.POST("/v1/chat/completions", h.ChatCompletions)
+
+	reqBody := `{"model":"gpt-5.1","messages":[{"role":"user","content":"hello"}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	hitMu.Lock()
+	hitSnapshot := map[int]int{1: hits[1], 2: hits[2], 3: hits[3]}
+	hitMu.Unlock()
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s hits=%v", rec.Body.String(), hitSnapshot)
+	require.Equal(t, "ok", gjson.GetBytes(rec.Body.Bytes(), "choices.0.message.content").String())
+	hitMu.Lock()
+	defer hitMu.Unlock()
+	require.Equal(t, 1, hits[1])
+	require.Equal(t, 1, hits[2])
+	require.Equal(t, 1, hits[3])
 }
 
 func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T) {
