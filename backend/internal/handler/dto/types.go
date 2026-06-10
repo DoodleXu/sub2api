@@ -161,25 +161,27 @@ type Account struct {
 	Type     string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
-	Credentials        map[string]any  `json:"credentials"`
-	CredentialsStatus  map[string]bool `json:"credentials_status,omitempty"`
-	Extra              map[string]any  `json:"extra"`
-	ProxyID            *int64          `json:"proxy_id"`
-	Concurrency        int             `json:"concurrency"`
-	LoadFactor         *int            `json:"load_factor,omitempty"`
-	Priority           int             `json:"priority"`
-	RateMultiplier     float64         `json:"rate_multiplier"`
-	TotalCostCNY       float64         `json:"total_cost_cny"`
-	TotalAccountCost   float64         `json:"total_account_cost"`
-	CostCNYPerUSD      float64         `json:"cost_cny_per_usd"`
-	Status             string          `json:"status"`
-	ArchivedAt         *time.Time      `json:"archived_at"`
-	ErrorMessage       string          `json:"error_message"`
-	LastUsedAt         *time.Time      `json:"last_used_at"`
-	ExpiresAt          *int64          `json:"expires_at"`
-	AutoPauseOnExpired bool            `json:"auto_pause_on_expired"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	Credentials             map[string]any  `json:"credentials"`
+	CredentialsStatus       map[string]bool `json:"credentials_status,omitempty"`
+	Extra                   map[string]any  `json:"extra"`
+	ProxyID                 *int64          `json:"proxy_id"`
+	ProxyFallbackOriginID   *int64          `json:"proxy_fallback_origin_id"`
+	ProxyFallbackOriginName *string         `json:"proxy_fallback_origin_name,omitempty"`
+	Concurrency             int             `json:"concurrency"`
+	LoadFactor              *int            `json:"load_factor,omitempty"`
+	Priority                int             `json:"priority"`
+	RateMultiplier          float64         `json:"rate_multiplier"`
+	TotalCostCNY            float64         `json:"total_cost_cny"`
+	TotalAccountCost        float64         `json:"total_account_cost"`
+	CostCNYPerUSD           float64         `json:"cost_cny_per_usd"`
+	Status                  string          `json:"status"`
+	ArchivedAt              *time.Time      `json:"archived_at"`
+	ErrorMessage            string          `json:"error_message"`
+	LastUsedAt              *time.Time      `json:"last_used_at"`
+	ExpiresAt               *int64          `json:"expires_at"`
+	AutoPauseOnExpired      bool            `json:"auto_pause_on_expired"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
 
 	Schedulable bool `json:"schedulable"`
 
@@ -284,6 +286,11 @@ type Proxy struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	ExpiresAt      *time.Time `json:"expires_at"`
+	FallbackMode   string     `json:"fallback_mode"`
+	BackupProxyID  *int64     `json:"backup_proxy_id"`
+	ExpiryWarnDays int        `json:"expiry_warn_days"`
 }
 
 type ProxyWithAccountCount struct {
