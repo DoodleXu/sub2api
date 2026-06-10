@@ -543,10 +543,9 @@ const autoRefreshIntervals = [5, 10, 15, 30] as const
 const autoRefreshEnabled = ref(false)
 const autoRefreshIntervalSeconds = ref<(typeof autoRefreshIntervals)[number]>(30)
 const autoRefreshCountdown = ref(0)
+const autoRefreshNextDueAt = ref(0)
 const autoRefreshETag = ref<string | null>(null)
 const autoRefreshFetching = ref(false)
-const AUTO_REFRESH_SILENT_WINDOW_MS = 15000
-const autoRefreshSilentUntil = ref(0)
 const hasPendingListSync = ref(false)
 let pendingListSyncTimer: number | null = null
 const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
@@ -679,15 +678,31 @@ if (typeof window !== 'undefined') {
   loadSavedAutoRefresh()
 }
 
+const scheduleNextAutoRefresh = (from = Date.now()) => {
+  autoRefreshNextDueAt.value = from + autoRefreshIntervalSeconds.value * 1000
+  autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
+}
+
+const syncAutoRefreshCountdown = () => {
+  if (!autoRefreshNextDueAt.value) {
+    autoRefreshCountdown.value = 0
+    return Number.POSITIVE_INFINITY
+  }
+  const remainingMs = autoRefreshNextDueAt.value - Date.now()
+  autoRefreshCountdown.value = Math.max(0, Math.ceil(remainingMs / 1000))
+  return remainingMs
+}
+
 const setAutoRefreshEnabled = (enabled: boolean) => {
   autoRefreshEnabled.value = enabled
   saveAutoRefreshToStorage()
   if (enabled) {
-    autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
+    scheduleNextAutoRefresh()
     resumeAutoRefresh()
   } else {
     pauseAutoRefresh()
     autoRefreshCountdown.value = 0
+    autoRefreshNextDueAt.value = 0
   }
 }
 
@@ -695,7 +710,7 @@ const setAutoRefreshInterval = (seconds: (typeof autoRefreshIntervals)[number]) 
   autoRefreshIntervalSeconds.value = seconds
   saveAutoRefreshToStorage()
   if (autoRefreshEnabled.value) {
-    autoRefreshCountdown.value = seconds
+    scheduleNextAutoRefresh()
   }
 }
 
@@ -876,13 +891,8 @@ const isAnyModalOpen = computed(() => {
   )
 })
 
-const enterAutoRefreshSilentWindow = () => {
-  autoRefreshSilentUntil.value = Date.now() + AUTO_REFRESH_SILENT_WINDOW_MS
-  autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
-}
-
-const inAutoRefreshSilentWindow = () => {
-  return Date.now() < autoRefreshSilentUntil.value
+const markLocalAccountMutation = () => {
+  resetAutoRefreshCache()
 }
 
 const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
@@ -978,9 +988,15 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await load()
-  // Force usage cells to refetch /usage on explicit user refresh.
-  usageManualRefreshToken.value += 1
+  try {
+    await load()
+    // Force usage cells to refetch /usage on explicit user refresh.
+    usageManualRefreshToken.value += 1
+  } finally {
+    if (autoRefreshEnabled.value) {
+      scheduleNextAutoRefresh()
+    }
+  }
 }
 
 const closeAccountToolsDropdown = () => {
@@ -1070,21 +1086,12 @@ const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
     if (loading.value || autoRefreshFetching.value) return
     if (isAnyModalOpen.value) return
     if (menu.show || showAccountToolsDropdown.value || showAutoRefreshDropdown.value) return
-    if (inAutoRefreshSilentWindow()) {
-      autoRefreshCountdown.value = Math.max(
-        0,
-        Math.ceil((autoRefreshSilentUntil.value - Date.now()) / 1000)
-      )
-      return
-    }
-
-    if (autoRefreshCountdown.value <= 0) {
-      autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
+    const remainingMs = syncAutoRefreshCountdown()
+    if (remainingMs <= 0) {
       await refreshAccountsIncrementally()
+      scheduleNextAutoRefresh()
       return
     }
-
-    autoRefreshCountdown.value -= 1
   },
   1000,
   { immediate: false }
@@ -1290,7 +1297,7 @@ const handleBulkArchive = async () => {
       accounts.value = accounts.value.filter(account => !successSet.has(account.id))
       removeSelectedAccounts(successIds)
       syncPaginationAfterLocalRemoval(successIds.length)
-      enterAutoRefreshSilentWindow()
+      markLocalAccountMutation()
     }
   } catch (error) {
     console.error('Failed to bulk archive accounts:', error)
@@ -1621,7 +1628,7 @@ const patchAccountInList = (updatedAccount: Account) => {
 }
 const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
-  enterAutoRefreshSilentWindow()
+  markLocalAccountMutation()
 }
 const formatExportTimestamp = () => {
   const now = new Date()
@@ -1683,7 +1690,7 @@ const handleRefresh = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
   }
@@ -1692,7 +1699,7 @@ const handleRecoverState = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.recoverState(a.id)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
     appStore.showSuccess(t('admin.accounts.recoverStateSuccess'))
   } catch (error: any) {
     console.error('Failed to recover account state:', error)
@@ -1703,7 +1710,7 @@ const handleResetQuota = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.resetAccountQuota(a.id)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
     appStore.showSuccess(t('common.success'))
   } catch (error) {
     console.error('Failed to reset quota:', error)
@@ -1713,7 +1720,7 @@ const handleSetPrivacy = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setPrivacy(a.id)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
     appStore.showSuccess(t('common.success'))
   } catch (error: any) {
     console.error('Failed to set privacy:', error)
@@ -1725,7 +1732,7 @@ const handleArchive = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setArchived(a.id, true)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
     appStore.showSuccess(t('admin.accounts.archiveSuccess'))
   } catch (error: any) {
     console.error('Failed to archive account:', error)
@@ -1736,7 +1743,7 @@ const handleUnarchive = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setArchived(a.id, false)
     patchAccountInList(updated)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
     appStore.showSuccess(t('admin.accounts.unarchiveSuccess'))
   } catch (error: any) {
     console.error('Failed to unarchive account:', error)
@@ -1751,7 +1758,7 @@ const handleToggleSchedulable = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.setSchedulable(a.id, nextSchedulable)
     updateSchedulableInList([a.id], updated?.schedulable ?? nextSchedulable)
-    enterAutoRefreshSilentWindow()
+    markLocalAccountMutation()
   } catch (error) {
     console.error('Failed to toggle schedulable:', error)
     appStore.showError(t('admin.accounts.failedToToggleSchedulable'))
@@ -1764,7 +1771,7 @@ const handleTempUnschedReset = async (updated: Account) => {
   showTempUnsched.value = false
   tempUnschedAcc.value = null
   patchAccountInList(updated)
-  enterAutoRefreshSilentWindow()
+  markLocalAccountMutation()
 }
 const formatExpiresAt = (value: number | null) => {
   if (!value) return '-'
@@ -1815,7 +1822,7 @@ onMounted(async () => {
   document.addEventListener('click', handleClickOutside)
 
   if (autoRefreshEnabled.value) {
-    autoRefreshCountdown.value = autoRefreshIntervalSeconds.value
+    scheduleNextAutoRefresh()
     resumeAutoRefresh()
   } else {
     pauseAutoRefresh()
