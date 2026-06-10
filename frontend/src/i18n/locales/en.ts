@@ -4857,6 +4857,8 @@ export default {
       addStreakRule: 'Add Multiplier',
       days: 'Days',
       multiplier: 'Multiplier',
+      streakDays: 'Streak Days',
+      streakMultiplierValue: 'Reward Multiplier',
       critEnabled: 'Enable Lucky Critical',
       critProbability: 'Critical Probability %',
       critMaxReward: 'Critical Eligibility Cap',

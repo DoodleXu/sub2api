@@ -160,10 +160,19 @@
           </div>
           <div class="mt-4 space-y-3">
             <div v-for="(tier, index) in form.daily_checkin_reward_tiers" :key="index" class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
-              <input v-model.number="tier.min_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.minReward')" />
-              <input v-model.number="tier.max_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.maxReward')" />
-              <input v-model.number="tier.probability_percent" class="input" type="number" min="0" max="100" step="0.0001" :placeholder="t('admin.operations.probability')" />
-              <button type="button" class="btn btn-secondary" @click="removeRewardTier(index)">{{ t('admin.operations.delete') }}</button>
+              <label class="space-y-1">
+                <span class="input-label">{{ t('admin.operations.minReward') }}</span>
+                <input v-model.number="tier.min_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.minReward')" />
+              </label>
+              <label class="space-y-1">
+                <span class="input-label">{{ t('admin.operations.maxReward') }}</span>
+                <input v-model.number="tier.max_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.maxReward')" />
+              </label>
+              <label class="space-y-1">
+                <span class="input-label">{{ t('admin.operations.probability') }}</span>
+                <input v-model.number="tier.probability_percent" class="input" type="number" min="0" max="100" step="0.0001" :placeholder="t('admin.operations.probability')" />
+              </label>
+              <button type="button" class="btn btn-secondary self-end" @click="removeRewardTier(index)">{{ t('admin.operations.delete') }}</button>
             </div>
           </div>
           <p class="mt-3 text-xs" :class="Math.abs(rewardProbabilityTotal - 100) < 0.000001 ? 'text-gray-500 dark:text-gray-400' : 'text-red-500'">
@@ -187,9 +196,15 @@
           </div>
           <div class="mt-4 space-y-3">
             <div v-for="(rule, index) in form.daily_checkin_streak_multipliers" :key="index" class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
-              <input v-model.number="rule.days" class="input" type="number" min="1" step="1" :placeholder="t('admin.operations.days')" />
-              <input v-model.number="rule.multiplier" class="input" type="number" min="1" step="0.01" :placeholder="t('admin.operations.multiplier')" />
-              <button type="button" class="btn btn-secondary" @click="removeStreakRule(index)">{{ t('admin.operations.delete') }}</button>
+              <label class="space-y-1">
+                <span class="input-label">{{ t('admin.operations.streakDays') }}</span>
+                <input v-model.number="rule.days" class="input" type="number" min="1" step="1" :placeholder="t('admin.operations.days')" />
+              </label>
+              <label class="space-y-1">
+                <span class="input-label">{{ t('admin.operations.streakMultiplierValue') }}</span>
+                <input v-model.number="rule.multiplier" class="input" type="number" min="1" step="0.01" :placeholder="t('admin.operations.multiplier')" />
+              </label>
+              <button type="button" class="btn btn-secondary self-end" @click="removeStreakRule(index)">{{ t('admin.operations.delete') }}</button>
             </div>
           </div>
         </div>

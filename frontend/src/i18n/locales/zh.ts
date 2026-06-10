@@ -5010,6 +5010,8 @@ export default {
       addStreakRule: '添加倍数',
       days: '天数',
       multiplier: '倍数',
+      streakDays: '连续天数',
+      streakMultiplierValue: '奖励倍数',
       critEnabled: '启用幸运暴击',
       critProbability: '暴击概率 %',
       critMaxReward: '参与暴击上限',
