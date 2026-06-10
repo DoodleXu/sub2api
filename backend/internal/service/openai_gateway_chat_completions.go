@@ -202,6 +202,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
@@ -210,6 +213,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 	releaseUpstreamCtx()
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
@@ -234,6 +240,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+			return nil, failoverErr
+		}
 		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
@@ -280,8 +289,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
+		}
+		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+			return nil, failoverErr
 		}
 		return s.handleChatCompletionsErrorResponse(ctx, resp, c, account, billingModel)
 	}

@@ -99,6 +99,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 
 	failedAccountIDs := make(map[int64]struct{})
 	var lastFailoverErr *service.UpstreamFailoverError
+	var failoverAttempts []openAIFailoverAttemptLog
 	switchCount := 0
 	maxAccountSwitches := h.maxAccountSwitches
 	if maxAccountSwitches <= 0 {
@@ -137,8 +138,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		}
 		if err != nil {
 			reqLog.Warn("openai_embeddings.account_select_failed",
-				zap.Error(err),
-				zap.Int("excluded_account_count", len(failedAccountIDs)),
+				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -222,16 +222,14 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 				h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
-				if switchCount >= maxAccountSwitches {
+				failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
+				if !strictPriority && switchCount >= maxAccountSwitches {
 					h.handleFailoverExhausted(c, failoverErr, false)
 					return
 				}
 				switchCount++
 				reqLog.Warn("openai_embeddings.upstream_failover_switching",
-					zap.Int64("account_id", account.ID),
-					zap.Int("upstream_status", failoverErr.StatusCode),
-					zap.Int("switch_count", switchCount),
-					zap.Int("max_switches", maxAccountSwitches),
+					openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
 				)
 				continue
 			}

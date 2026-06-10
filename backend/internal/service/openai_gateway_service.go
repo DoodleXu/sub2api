@@ -3023,6 +3023,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, reqStream, promptCacheKey, isCodexCLI)
 		releaseUpstreamCtx()
 		if err != nil {
+			if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+				return nil, failoverErr
+			}
 			return nil, err
 		}
 
@@ -3048,6 +3051,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				Kind:               "request_error",
 				Message:            safeErr,
 			})
+			if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+				return nil, failoverErr
+			}
 			c.JSON(http.StatusBadGateway, gin.H{
 				"error": gin.H{
 					"type":    "upstream_error",
@@ -3106,8 +3112,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
+					ResponseHeaders:        resp.Header.Clone(),
 					RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 				}
+			}
+			if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+				return nil, failoverErr
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
 		}
@@ -3315,6 +3325,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, err
 	}
 
@@ -3322,6 +3335,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	upstreamReq, err := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
 	releaseUpstreamCtx()
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, err
 	}
 
@@ -3349,6 +3365,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+			return nil, failoverErr
+		}
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": gin.H{
 				"type":    "upstream_error",
@@ -3364,6 +3383,17 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// 上游容量类错误，应先触发多账号 failover 以维持基础 SLA。
 		if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body)
+		}
+		respBody := []byte(nil)
+		upstreamMsg := resp.Status
+		if IsOpenAIStrictPriorityNoPenalty(ctx) {
+			respBody = s.readUpstreamErrorBody(resp)
+			if msg := strings.TrimSpace(extractUpstreamErrorMessage(respBody)); msg != "" {
+				upstreamMsg = sanitizeUpstreamErrorMessage(msg)
+			}
+		}
+		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+			return nil, failoverErr
 		}
 		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
 	}
@@ -4436,6 +4466,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
+			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
@@ -4576,6 +4607,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           body,
+			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}

@@ -585,6 +585,35 @@ func (e *UpstreamFailoverError) Error() string {
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
 }
 
+func newOpenAIStrictPriorityFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
+	return newOpenAIStrictPriorityFailoverHTTPError(ctx, statusCode, message, nil, nil)
+}
+
+func newOpenAIStrictPriorityFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
+	if !IsOpenAIStrictPriorityNoPenalty(ctx) {
+		return nil
+	}
+	if statusCode <= 0 {
+		statusCode = http.StatusBadGateway
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Upstream request failed"
+	}
+	if len(responseBody) == 0 {
+		responseBody = []byte(`{"error":{"message":` + strconv.Quote(message) + `}}`)
+	}
+	headers := responseHeaders
+	if headers != nil {
+		headers = headers.Clone()
+	}
+	return &UpstreamFailoverError{
+		StatusCode:      statusCode,
+		ResponseBody:    responseBody,
+		ResponseHeaders: headers,
+	}
+}
+
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {

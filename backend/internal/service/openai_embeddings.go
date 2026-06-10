@@ -48,6 +48,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 
 	apiKey := account.GetOpenAIApiKey()
 	if apiKey == "" {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, "missing api_key"); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpenAIBaseURL()
@@ -56,6 +59,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("invalid base_url: %w", err)
 	}
 	targetURL := buildOpenAIEmbeddingsURL(validatedURL)
@@ -64,6 +70,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	releaseUpstreamCtx()
 	if err != nil {
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			return nil, failoverErr
+		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
@@ -98,6 +107,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+			return nil, failoverErr
+		}
 		writeOpenAIEmbeddingsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
@@ -133,8 +145,12 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
+		}
+		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+			return nil, failoverErr
 		}
 		writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
