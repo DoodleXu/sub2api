@@ -5560,7 +5560,7 @@ export default {
         security: 'Security',
         users: 'Users',
         gateway: 'Gateway',
-        email: 'Email',
+        email: 'Notifications',
         backup: 'Backup',
         payment: 'Payment',
       },
