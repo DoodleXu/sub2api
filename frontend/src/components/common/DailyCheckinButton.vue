@@ -122,7 +122,7 @@ async function handleCheckin() {
   try {
     const result = await userAPI.dailyCheckin()
     status.value = result
-    appStore.showSuccess(t('profile.checkin.success', { amount: formatUSD(result.reward_amount) }))
+    appStore.showSuccess(checkinSuccessMessage(result))
     window.dispatchEvent(new CustomEvent('daily-checkin-updated'))
     authStore.refreshUser().catch((error) => {
       console.error('Failed to refresh user after daily check-in:', error)
@@ -133,6 +133,37 @@ async function handleCheckin() {
   } finally {
     submitting.value = false
   }
+}
+
+function formatMultiplier(value: number | undefined): string {
+  const n = Number(value || 1)
+  return `${n.toFixed(2).replace(/\.?0+$/, '')}倍`
+}
+
+function checkinSuccessMessage(result: { reward_amount: number; streak_days?: number; streak_multiplier?: number; crit_hit?: boolean; crit_multiplier?: number }): string {
+  const hasStreakBonus = (result.streak_multiplier || 1) > 1 || (result.streak_days || 1) > 1
+  if (result.crit_hit) {
+    if (!hasStreakBonus) {
+      return t('profile.checkin.successCritSimple', {
+        critMultiplier: formatMultiplier(result.crit_multiplier),
+        amount: formatUSD(result.reward_amount),
+      })
+    }
+    return t('profile.checkin.successCrit', {
+      days: result.streak_days || 1,
+      streakMultiplier: formatMultiplier(result.streak_multiplier),
+      critMultiplier: formatMultiplier(result.crit_multiplier),
+      amount: formatUSD(result.reward_amount),
+    })
+  }
+  if (hasStreakBonus) {
+    return t('profile.checkin.successStreak', {
+      days: result.streak_days || 1,
+      multiplier: formatMultiplier(result.streak_multiplier),
+      amount: formatUSD(result.reward_amount),
+    })
+  }
+  return t('profile.checkin.success', { amount: formatUSD(result.reward_amount) })
 }
 
 onMounted(() => {

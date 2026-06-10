@@ -41,6 +41,12 @@ export interface DailyCheckinStatus {
 
 export interface DailyCheckinResult extends DailyCheckinStatus {
   reward_amount: number
+  base_reward_amount: number
+  streak_days: number
+  streak_multiplier: number
+  crit_hit: boolean
+  crit_multiplier: number
+  pre_crit_reward_amount: number
   balance: number
   checked_in_at: string
 }

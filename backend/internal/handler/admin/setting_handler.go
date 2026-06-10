@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -321,6 +322,14 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DailyCheckinDailyBudgetUSD:      settings.DailyCheckinDailyBudgetUSD,
 		DailyCheckinMonthlyBudgetUSD:    settings.DailyCheckinMonthlyBudgetUSD,
 		DailyCheckinUserMonthlyLimitUSD: settings.DailyCheckinUserMonthlyLimitUSD,
+		DailyCheckinRewardTiers:         settings.DailyCheckinRewardTiers,
+		DailyCheckinStreakEnabled:       settings.DailyCheckinStreakEnabled,
+		DailyCheckinStreakScope:         settings.DailyCheckinStreakScope,
+		DailyCheckinStreakMultipliers:   settings.DailyCheckinStreakMultipliers,
+		DailyCheckinCritEnabled:         settings.DailyCheckinCritEnabled,
+		DailyCheckinCritProbability:     settings.DailyCheckinCritProbability,
+		DailyCheckinCritMultiplier:      settings.DailyCheckinCritMultiplier,
+		DailyCheckinCritMaxRewardUSD:    settings.DailyCheckinCritMaxRewardUSD,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
@@ -357,6 +366,68 @@ func (h *SettingHandler) GetDailyCheckinStats(c *gin.Context) {
 		return
 	}
 	response.Success(c, stats)
+}
+
+// ListDailyCheckinRecords returns admin-facing check-in records for operations center.
+// GET /api/v1/admin/operations/daily-checkin/records
+func (h *SettingHandler) ListDailyCheckinRecords(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Daily check-in service is unavailable")
+		return
+	}
+	filter := service.DailyCheckinAdminRecordFilter{
+		Page:      parsePositiveIntQuery(c, "page", 1),
+		PageSize:  parsePositiveIntQuery(c, "page_size", 20),
+		DateFrom:  strings.TrimSpace(c.Query("date_from")),
+		DateTo:    strings.TrimSpace(c.Query("date_to")),
+		UserQuery: strings.TrimSpace(c.Query("user")),
+	}
+	if v, ok := parseOptionalFloatQuery(c, "reward_min"); ok {
+		filter.RewardMin = &v
+	}
+	if v, ok := parseOptionalFloatQuery(c, "reward_max"); ok {
+		filter.RewardMax = &v
+	}
+	if raw := strings.TrimSpace(c.Query("crit_hit")); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			filter.CritHit = &v
+		}
+	}
+	if raw := strings.TrimSpace(c.Query("streak_days")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			filter.StreakDays = &v
+		}
+	}
+	result, err := h.dailyCheckinService.ListAdminRecords(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func parsePositiveIntQuery(c *gin.Context, key string, fallback int) int {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func parseOptionalFloatQuery(c *gin.Context, key string) (float64, bool) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // openaiFastPolicySettingsToDTO converts service -> dto for OpenAI fast policy.
@@ -690,14 +761,22 @@ type UpdateSettingsRequest struct {
 	WebConsoleDefaultEndpoint *string `json:"web_console_default_endpoint"`
 
 	// Daily check-in settings
-	DailyCheckinEnabled             *bool    `json:"daily_checkin_enabled"`
-	DailyCheckinRequiredUsageUSD    *float64 `json:"daily_checkin_required_usage_usd"`
-	DailyCheckinUsageScope          *string  `json:"daily_checkin_usage_scope"`
-	DailyCheckinRewardMinUSD        *int     `json:"daily_checkin_reward_min_usd"`
-	DailyCheckinRewardMaxUSD        *int     `json:"daily_checkin_reward_max_usd"`
-	DailyCheckinDailyBudgetUSD      *float64 `json:"daily_checkin_daily_budget_usd"`
-	DailyCheckinMonthlyBudgetUSD    *float64 `json:"daily_checkin_monthly_budget_usd"`
-	DailyCheckinUserMonthlyLimitUSD *float64 `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinEnabled             *bool                                   `json:"daily_checkin_enabled"`
+	DailyCheckinRequiredUsageUSD    *float64                                `json:"daily_checkin_required_usage_usd"`
+	DailyCheckinUsageScope          *string                                 `json:"daily_checkin_usage_scope"`
+	DailyCheckinRewardMinUSD        *int                                    `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD        *int                                    `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinDailyBudgetUSD      *float64                                `json:"daily_checkin_daily_budget_usd"`
+	DailyCheckinMonthlyBudgetUSD    *float64                                `json:"daily_checkin_monthly_budget_usd"`
+	DailyCheckinUserMonthlyLimitUSD *float64                                `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinRewardTiers         *[]service.DailyCheckinRewardTier       `json:"daily_checkin_reward_tiers"`
+	DailyCheckinStreakEnabled       *bool                                   `json:"daily_checkin_streak_multiplier_enabled"`
+	DailyCheckinStreakScope         *string                                 `json:"daily_checkin_streak_multiplier_scope"`
+	DailyCheckinStreakMultipliers   *[]service.DailyCheckinStreakMultiplier `json:"daily_checkin_streak_multipliers"`
+	DailyCheckinCritEnabled         *bool                                   `json:"daily_checkin_crit_enabled"`
+	DailyCheckinCritProbability     *float64                                `json:"daily_checkin_crit_probability_percent"`
+	DailyCheckinCritMultiplier      *float64                                `json:"daily_checkin_crit_multiplier"`
+	DailyCheckinCritMaxRewardUSD    *float64                                `json:"daily_checkin_crit_max_reward_usd"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1895,6 +1974,54 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.DailyCheckinUserMonthlyLimitUSD
 		}(),
+		DailyCheckinRewardTiers: func() []service.DailyCheckinRewardTier {
+			if req.DailyCheckinRewardTiers != nil {
+				return *req.DailyCheckinRewardTiers
+			}
+			return previousSettings.DailyCheckinRewardTiers
+		}(),
+		DailyCheckinStreakEnabled: func() bool {
+			if req.DailyCheckinStreakEnabled != nil {
+				return *req.DailyCheckinStreakEnabled
+			}
+			return previousSettings.DailyCheckinStreakEnabled
+		}(),
+		DailyCheckinStreakScope: func() string {
+			if req.DailyCheckinStreakScope != nil {
+				return strings.TrimSpace(*req.DailyCheckinStreakScope)
+			}
+			return previousSettings.DailyCheckinStreakScope
+		}(),
+		DailyCheckinStreakMultipliers: func() []service.DailyCheckinStreakMultiplier {
+			if req.DailyCheckinStreakMultipliers != nil {
+				return *req.DailyCheckinStreakMultipliers
+			}
+			return previousSettings.DailyCheckinStreakMultipliers
+		}(),
+		DailyCheckinCritEnabled: func() bool {
+			if req.DailyCheckinCritEnabled != nil {
+				return *req.DailyCheckinCritEnabled
+			}
+			return previousSettings.DailyCheckinCritEnabled
+		}(),
+		DailyCheckinCritProbability: func() float64 {
+			if req.DailyCheckinCritProbability != nil {
+				return *req.DailyCheckinCritProbability
+			}
+			return previousSettings.DailyCheckinCritProbability
+		}(),
+		DailyCheckinCritMultiplier: func() float64 {
+			if req.DailyCheckinCritMultiplier != nil {
+				return *req.DailyCheckinCritMultiplier
+			}
+			return previousSettings.DailyCheckinCritMultiplier
+		}(),
+		DailyCheckinCritMaxRewardUSD: func() float64 {
+			if req.DailyCheckinCritMaxRewardUSD != nil {
+				return *req.DailyCheckinCritMaxRewardUSD
+			}
+			return previousSettings.DailyCheckinCritMaxRewardUSD
+		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
 				return *req.AffiliateEnabled
@@ -2239,6 +2366,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DailyCheckinDailyBudgetUSD:      updatedSettings.DailyCheckinDailyBudgetUSD,
 		DailyCheckinMonthlyBudgetUSD:    updatedSettings.DailyCheckinMonthlyBudgetUSD,
 		DailyCheckinUserMonthlyLimitUSD: updatedSettings.DailyCheckinUserMonthlyLimitUSD,
+		DailyCheckinRewardTiers:         updatedSettings.DailyCheckinRewardTiers,
+		DailyCheckinStreakEnabled:       updatedSettings.DailyCheckinStreakEnabled,
+		DailyCheckinStreakScope:         updatedSettings.DailyCheckinStreakScope,
+		DailyCheckinStreakMultipliers:   updatedSettings.DailyCheckinStreakMultipliers,
+		DailyCheckinCritEnabled:         updatedSettings.DailyCheckinCritEnabled,
+		DailyCheckinCritProbability:     updatedSettings.DailyCheckinCritProbability,
+		DailyCheckinCritMultiplier:      updatedSettings.DailyCheckinCritMultiplier,
+		DailyCheckinCritMaxRewardUSD:    updatedSettings.DailyCheckinCritMaxRewardUSD,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2760,6 +2895,30 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.DailyCheckinUserMonthlyLimitUSD != after.DailyCheckinUserMonthlyLimitUSD {
 		changed = append(changed, "daily_checkin_user_monthly_limit_usd")
 	}
+	if !equalJSONComparable(before.DailyCheckinRewardTiers, after.DailyCheckinRewardTiers) {
+		changed = append(changed, "daily_checkin_reward_tiers")
+	}
+	if before.DailyCheckinStreakEnabled != after.DailyCheckinStreakEnabled {
+		changed = append(changed, "daily_checkin_streak_multiplier_enabled")
+	}
+	if before.DailyCheckinStreakScope != after.DailyCheckinStreakScope {
+		changed = append(changed, "daily_checkin_streak_multiplier_scope")
+	}
+	if !equalJSONComparable(before.DailyCheckinStreakMultipliers, after.DailyCheckinStreakMultipliers) {
+		changed = append(changed, "daily_checkin_streak_multipliers")
+	}
+	if before.DailyCheckinCritEnabled != after.DailyCheckinCritEnabled {
+		changed = append(changed, "daily_checkin_crit_enabled")
+	}
+	if before.DailyCheckinCritProbability != after.DailyCheckinCritProbability {
+		changed = append(changed, "daily_checkin_crit_probability_percent")
+	}
+	if before.DailyCheckinCritMultiplier != after.DailyCheckinCritMultiplier {
+		changed = append(changed, "daily_checkin_crit_multiplier")
+	}
+	if before.DailyCheckinCritMaxRewardUSD != after.DailyCheckinCritMaxRewardUSD {
+		changed = append(changed, "daily_checkin_crit_max_reward_usd")
+	}
 	if before.AffiliateEnabled != after.AffiliateEnabled {
 		changed = append(changed, "affiliate_enabled")
 	}
@@ -3010,6 +3169,15 @@ func equalNotifyEmailEntries(a, b []service.NotifyEmailEntry) bool {
 		}
 	}
 	return true
+}
+
+func equalJSONComparable(a, b any) bool {
+	aj, aerr := json.Marshal(a)
+	bj, berr := json.Marshal(b)
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return string(aj) == string(bj)
 }
 
 // TestSMTPRequest 测试SMTP连接请求

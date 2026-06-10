@@ -387,6 +387,14 @@ const (
 	SettingKeyDailyCheckinDailyBudgetUSD      = "daily_checkin_daily_budget_usd"
 	SettingKeyDailyCheckinMonthlyBudgetUSD    = "daily_checkin_monthly_budget_usd"
 	SettingKeyDailyCheckinUserMonthlyLimitUSD = "daily_checkin_user_monthly_limit_usd"
+	SettingKeyDailyCheckinRewardTiers         = "daily_checkin_reward_tiers"
+	SettingKeyDailyCheckinStreakEnabled       = "daily_checkin_streak_multiplier_enabled"
+	SettingKeyDailyCheckinStreakScope         = "daily_checkin_streak_multiplier_scope"
+	SettingKeyDailyCheckinStreakMultipliers   = "daily_checkin_streak_multipliers"
+	SettingKeyDailyCheckinCritEnabled         = "daily_checkin_crit_enabled"
+	SettingKeyDailyCheckinCritProbability     = "daily_checkin_crit_probability_percent"
+	SettingKeyDailyCheckinCritMultiplier      = "daily_checkin_crit_multiplier"
+	SettingKeyDailyCheckinCritMaxRewardUSD    = "daily_checkin_crit_max_reward_usd"
 
 	// =========================
 	// Overload Cooldown (529)

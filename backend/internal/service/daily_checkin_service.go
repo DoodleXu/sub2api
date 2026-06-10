@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,13 +26,14 @@ var (
 )
 
 type DailyCheckinRecord struct {
-	ID                int64     `json:"-"`
-	UserID            int64     `json:"-"`
-	Date              string    `json:"date"`
-	RewardAmount      float64   `json:"reward_amount"`
-	QualifiedUsageUSD float64   `json:"qualified_usage_usd"`
-	RedeemCodeID      *int64    `json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                int64                       `json:"-"`
+	UserID            int64                       `json:"-"`
+	Date              string                      `json:"date"`
+	RewardAmount      float64                     `json:"reward_amount"`
+	QualifiedUsageUSD float64                     `json:"qualified_usage_usd"`
+	RewardMetadata    *DailyCheckinRewardMetadata `json:"reward_metadata,omitempty"`
+	RedeemCodeID      *int64                      `json:"-"`
+	CreatedAt         time.Time                   `json:"created_at"`
 }
 
 type DailyCheckinStatus struct {
@@ -56,9 +59,27 @@ type DailyCheckinStatus struct {
 
 type DailyCheckinResult struct {
 	DailyCheckinStatus
-	RewardAmount float64   `json:"reward_amount"`
-	Balance      float64   `json:"balance"`
-	CheckedInAt  time.Time `json:"checked_in_at"`
+	RewardAmount        float64   `json:"reward_amount"`
+	BaseRewardAmount    float64   `json:"base_reward_amount"`
+	StreakDays          int       `json:"streak_days"`
+	StreakMultiplier    float64   `json:"streak_multiplier"`
+	CritHit             bool      `json:"crit_hit"`
+	CritMultiplier      float64   `json:"crit_multiplier"`
+	PreCritRewardAmount float64   `json:"pre_crit_reward_amount"`
+	Balance             float64   `json:"balance"`
+	CheckedInAt         time.Time `json:"checked_in_at"`
+}
+
+type DailyCheckinRewardMetadata struct {
+	BaseRewardAmount    float64                 `json:"base_reward_amount"`
+	RewardTier          *DailyCheckinRewardTier `json:"reward_tier,omitempty"`
+	StreakDays          int                     `json:"streak_days"`
+	StreakMultiplier    float64                 `json:"streak_multiplier"`
+	CritEligible        bool                    `json:"crit_eligible"`
+	CritHit             bool                    `json:"crit_hit"`
+	CritMultiplier      float64                 `json:"crit_multiplier"`
+	PreCritRewardAmount float64                 `json:"pre_crit_reward_amount"`
+	FinalRewardAmount   float64                 `json:"final_reward_amount"`
 }
 
 type DailyCheckinAdminStats struct {
@@ -79,6 +100,37 @@ type DailyCheckinAdminStats struct {
 	MonthlyBudgetUSD    float64 `json:"monthly_budget_usd"`
 	MonthlyRemainingUSD float64 `json:"monthly_remaining_usd"`
 	UserMonthlyLimitUSD float64 `json:"user_monthly_limit_usd"`
+}
+
+type DailyCheckinAdminRecord struct {
+	ID                int64                       `json:"id"`
+	UserID            int64                       `json:"user_id"`
+	Username          string                      `json:"username"`
+	Email             string                      `json:"email"`
+	Date              string                      `json:"date"`
+	RewardAmount      float64                     `json:"reward_amount"`
+	QualifiedUsageUSD float64                     `json:"qualified_usage_usd"`
+	RewardMetadata    *DailyCheckinRewardMetadata `json:"reward_metadata,omitempty"`
+	CreatedAt         time.Time                   `json:"created_at"`
+}
+
+type DailyCheckinAdminRecordFilter struct {
+	Page       int
+	PageSize   int
+	DateFrom   string
+	DateTo     string
+	UserQuery  string
+	RewardMin  *float64
+	RewardMax  *float64
+	CritHit    *bool
+	StreakDays *int
+}
+
+type DailyCheckinAdminRecordList struct {
+	Items    []DailyCheckinAdminRecord `json:"items"`
+	Total    int64                     `json:"total"`
+	Page     int                       `json:"page"`
+	PageSize int                       `json:"page_size"`
 }
 
 type DailyCheckinService struct {
@@ -153,19 +205,23 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 		return nil, dailyCheckinUsageNotEnoughError(todayUsage, settings.RequiredUsageUSD)
 	}
 
-	rewardInt, err := chooseDailyCheckinReward(ctx, tx, userID, todayStart, tomorrowStart, monthStart, nextMonthStart, settings)
+	reward, err := chooseDailyCheckinReward(ctx, tx, userID, todayStart, tomorrowStart, monthStart, nextMonthStart, settings)
 	if err != nil {
 		return nil, err
 	}
-	rewardAmount := float64(rewardInt)
+	rewardAmount := reward.Metadata.FinalRewardAmount
+	metadataJSON, err := json.Marshal(reward.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal daily checkin reward metadata: %w", err)
+	}
 
 	var checkedInAt time.Time
 	var checkinID int64
 	insertErr := tx.QueryRowContext(ctx, `
-			INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at, reward_metadata)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING id, created_at
-		`, userID, today, rewardAmount, todayUsage, now).Scan(&checkinID, &checkedInAt)
+		`, userID, today, rewardAmount, todayUsage, now, string(metadataJSON)).Scan(&checkinID, &checkedInAt)
 	if insertErr != nil {
 		if isDailyCheckinDuplicateError(insertErr) {
 			return nil, ErrDailyCheckinAlreadyCheckedIn
@@ -205,10 +261,16 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 		return nil, err
 	}
 	return &DailyCheckinResult{
-		DailyCheckinStatus: *status,
-		RewardAmount:       rewardAmount,
-		Balance:            balance,
-		CheckedInAt:        checkedInAt,
+		DailyCheckinStatus:  *status,
+		RewardAmount:        rewardAmount,
+		BaseRewardAmount:    reward.Metadata.BaseRewardAmount,
+		StreakDays:          reward.Metadata.StreakDays,
+		StreakMultiplier:    reward.Metadata.StreakMultiplier,
+		CritHit:             reward.Metadata.CritHit,
+		CritMultiplier:      reward.Metadata.CritMultiplier,
+		PreCritRewardAmount: reward.Metadata.PreCritRewardAmount,
+		Balance:             balance,
+		CheckedInAt:         checkedInAt,
 	}, nil
 }
 
@@ -256,6 +318,63 @@ func (s *DailyCheckinService) GetAdminStats(ctx context.Context) (*DailyCheckinA
 		MonthlyBudgetUSD:    settings.MonthlyBudgetUSD,
 		MonthlyRemainingUSD: remainingBudget(settings.MonthlyBudgetUSD, monthReward),
 		UserMonthlyLimitUSD: settings.UserMonthlyLimitUSD,
+	}, nil
+}
+
+func (s *DailyCheckinService) ListAdminRecords(ctx context.Context, filter DailyCheckinAdminRecordFilter) (*DailyCheckinAdminRecordList, error) {
+	if s == nil || s.db == nil {
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
+	}
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize <= 0 {
+		filter.PageSize = 20
+	}
+	if filter.PageSize > 100 {
+		filter.PageSize = 100
+	}
+	where, args := buildDailyCheckinRecordWhere(filter)
+	var total int64
+	countQuery := `SELECT COUNT(*) FROM user_checkins c JOIN users u ON u.id = c.user_id ` + where
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count daily checkin records: %w", err)
+	}
+
+	limitArg := len(args) + 1
+	offsetArg := len(args) + 2
+	query := fmt.Sprintf(`
+		SELECT c.id, c.user_id, COALESCE(u.username, ''), COALESCE(u.email, ''), c.checkin_date,
+		       c.reward_amount, c.qualified_usage_usd, c.reward_metadata, c.created_at
+		FROM user_checkins c
+		JOIN users u ON u.id = c.user_id
+		%s
+		ORDER BY c.checkin_date DESC, c.id DESC
+		LIMIT $%d OFFSET $%d
+	`, where, limitArg, offsetArg)
+	args = append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list daily checkin records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]DailyCheckinAdminRecord, 0, filter.PageSize)
+	for rows.Next() {
+		var item DailyCheckinAdminRecord
+		if err := rows.Scan(&item.ID, &item.UserID, &item.Username, &item.Email, &item.Date, &item.RewardAmount, &item.QualifiedUsageUSD, newRewardMetadataScanner(&item.RewardMetadata), &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan daily checkin admin record: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daily checkin admin records: %w", err)
+	}
+	return &DailyCheckinAdminRecordList{
+		Items:    items,
+		Total:    total,
+		Page:     filter.Page,
+		PageSize: filter.PageSize,
 	}, nil
 }
 
@@ -350,10 +469,10 @@ func (s *DailyCheckinService) getCheckinByDate(ctx context.Context, q dailyCheck
 	var record DailyCheckinRecord
 	var redeemCodeID sql.NullInt64
 	err := q.QueryRowContext(ctx, `
-				SELECT id, user_id, checkin_date, reward_amount, qualified_usage_usd, redeem_code_id, created_at
+				SELECT id, user_id, checkin_date, reward_amount, qualified_usage_usd, redeem_code_id, created_at, reward_metadata
 				FROM user_checkins
 				WHERE user_id = $1 AND checkin_date = $2
-			`, userID, date).Scan(&record.ID, &record.UserID, &record.Date, &record.RewardAmount, &record.QualifiedUsageUSD, &redeemCodeID, &record.CreatedAt)
+			`, userID, date).Scan(&record.ID, &record.UserID, &record.Date, &record.RewardAmount, &record.QualifiedUsageUSD, &redeemCodeID, &record.CreatedAt, newRewardMetadataScanner(&record.RewardMetadata))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -384,7 +503,7 @@ func sumEligibleUsage(ctx context.Context, q dailyCheckinQuerier, userID int64, 
 
 func listMonthlyCheckins(ctx context.Context, q dailyCheckinQuerier, userID int64, monthStart, nextMonthStart string) ([]DailyCheckinRecord, error) {
 	rows, err := q.QueryContext(ctx, `
-			SELECT id, user_id, checkin_date, reward_amount, qualified_usage_usd, redeem_code_id, created_at
+			SELECT id, user_id, checkin_date, reward_amount, qualified_usage_usd, redeem_code_id, created_at, reward_metadata
 			FROM user_checkins
 			WHERE user_id = $1 AND checkin_date >= $2 AND checkin_date < $3
 			ORDER BY checkin_date ASC
@@ -398,7 +517,7 @@ func listMonthlyCheckins(ctx context.Context, q dailyCheckinQuerier, userID int6
 	for rows.Next() {
 		var record DailyCheckinRecord
 		var redeemCodeID sql.NullInt64
-		if err := rows.Scan(&record.ID, &record.UserID, &record.Date, &record.RewardAmount, &record.QualifiedUsageUSD, &redeemCodeID, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.UserID, &record.Date, &record.RewardAmount, &record.QualifiedUsageUSD, &redeemCodeID, &record.CreatedAt, newRewardMetadataScanner(&record.RewardMetadata)); err != nil {
 			return nil, fmt.Errorf("scan daily checkin: %w", err)
 		}
 		if redeemCodeID.Valid {
@@ -410,6 +529,43 @@ func listMonthlyCheckins(ctx context.Context, q dailyCheckinQuerier, userID int6
 		return nil, fmt.Errorf("iterate daily checkins: %w", err)
 	}
 	return records, nil
+}
+
+type rewardMetadataScanner struct {
+	target **DailyCheckinRewardMetadata
+}
+
+func newRewardMetadataScanner(target **DailyCheckinRewardMetadata) *rewardMetadataScanner {
+	return &rewardMetadataScanner{target: target}
+}
+
+func (s *rewardMetadataScanner) Scan(value any) error {
+	if s == nil || s.target == nil {
+		return nil
+	}
+	if value == nil {
+		*s.target = nil
+		return nil
+	}
+	var raw []byte
+	switch v := value.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		return fmt.Errorf("scan daily checkin reward metadata: unsupported type %T", value)
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		*s.target = nil
+		return nil
+	}
+	var metadata DailyCheckinRewardMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return fmt.Errorf("scan daily checkin reward metadata: %w", err)
+	}
+	*s.target = &metadata
+	return nil
 }
 
 func insertDailyCheckinBalanceRecord(ctx context.Context, tx *sql.Tx, userID int64, rewardAmount float64, now time.Time) (int64, error) {
@@ -440,52 +596,107 @@ func linkDailyCheckinBalanceRecord(ctx context.Context, tx *sql.Tx, checkinID, r
 	return nil
 }
 
-func chooseDailyCheckinReward(ctx context.Context, tx *sql.Tx, userID int64, todayStart, tomorrowStart, monthStart, nextMonthStart time.Time, settings *DailyCheckinSettings) (int, error) {
+type dailyCheckinRewardChoice struct {
+	Metadata DailyCheckinRewardMetadata
+}
+
+func chooseDailyCheckinReward(ctx context.Context, tx *sql.Tx, userID int64, todayStart, tomorrowStart, monthStart, nextMonthStart time.Time, settings *DailyCheckinSettings) (*dailyCheckinRewardChoice, error) {
 	if settings == nil {
-		return 0, infraerrors.InternalServer("DAILY_CHECKIN_SETTINGS_MISSING", "daily check-in settings are missing")
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_SETTINGS_MISSING", "daily check-in settings are missing")
 	}
-	if !hasDailyCheckinBudget(settings) {
-		return randomDailyCheckinReward(settings.RewardMinUSD, settings.RewardMaxUSD)
+	if hasDailyCheckinBudget(settings) {
+		if err := lockDailyCheckinBudget(ctx, tx); err != nil {
+			return nil, err
+		}
 	}
-	if err := lockDailyCheckinBudget(ctx, tx); err != nil {
-		return 0, err
+
+	dailyReward, monthlyReward, userMonthlyReward := 0.0, 0.0, 0.0
+	var err error
+	if settings.DailyBudgetUSD > 0 {
+		dailyReward, err = sumCheckinRewards(ctx, tx, 0, todayStart.Format("2006-01-02"), tomorrowStart.Format("2006-01-02"))
+		if err != nil {
+			return nil, err
+		}
 	}
-	dailyReward, err := sumCheckinRewards(ctx, tx, 0, todayStart.Format("2006-01-02"), tomorrowStart.Format("2006-01-02"))
+	if settings.MonthlyBudgetUSD > 0 {
+		monthlyReward, err = sumCheckinRewards(ctx, tx, 0, monthStart.Format("2006-01-02"), nextMonthStart.Format("2006-01-02"))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if settings.UserMonthlyLimitUSD > 0 {
+		userMonthlyReward, err = sumCheckinRewards(ctx, tx, userID, monthStart.Format("2006-01-02"), nextMonthStart.Format("2006-01-02"))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	baseReward, tier, err := randomDailyCheckinRewardFromTiers(settings)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	monthlyReward, err := sumCheckinRewards(ctx, tx, 0, monthStart.Format("2006-01-02"), nextMonthStart.Format("2006-01-02"))
+	streakDays, err := countDailyCheckinStreak(ctx, tx, userID, todayStart, settings)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	userMonthlyReward, err := sumCheckinRewards(ctx, tx, userID, monthStart.Format("2006-01-02"), nextMonthStart.Format("2006-01-02"))
-	if err != nil {
-		return 0, err
+	streakMultiplier := dailyCheckinStreakMultiplier(streakDays, settings)
+	preCritReward := roundDailyCheckinAmount(float64(baseReward) * streakMultiplier)
+	critEligible := settings.CritEnabled && (settings.CritMaxRewardUSD <= 0 || preCritReward <= settings.CritMaxRewardUSD)
+	critHit := false
+	critMultiplier := 1.0
+	finalReward := preCritReward
+	if critEligible {
+		critHit, err = randomDailyCheckinPercentHit(settings.CritProbability)
+		if err != nil {
+			return nil, err
+		}
+		if critHit {
+			critMultiplier = settings.CritMultiplier
+			finalReward = roundDailyCheckinAmount(preCritReward * critMultiplier)
+		}
 	}
-	maxReward := maxDailyCheckinRewardByBudget(settings.RewardMaxUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
-	if maxReward < settings.RewardMinUSD {
-		return 0, dailyCheckinBudgetExhaustedError(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
+
+	maxAllowed := maxDailyCheckinRewardByBudget(finalReward, dailyReward, monthlyReward, userMonthlyReward, settings)
+	if maxAllowed < float64(settings.RewardMinUSD) {
+		return nil, dailyCheckinBudgetExhaustedError(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
 	}
-	return randomDailyCheckinReward(settings.RewardMinUSD, maxReward)
+	if finalReward > maxAllowed {
+		finalReward = roundDailyCheckinAmount(maxAllowed)
+	}
+	if finalReward <= 0 {
+		return nil, dailyCheckinBudgetExhaustedError(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
+	}
+
+	return &dailyCheckinRewardChoice{Metadata: DailyCheckinRewardMetadata{
+		BaseRewardAmount:    float64(baseReward),
+		RewardTier:          tier,
+		StreakDays:          streakDays,
+		StreakMultiplier:    streakMultiplier,
+		CritEligible:        critEligible,
+		CritHit:             critHit,
+		CritMultiplier:      critMultiplier,
+		PreCritRewardAmount: preCritReward,
+		FinalRewardAmount:   finalReward,
+	}}, nil
 }
 
 func hasDailyCheckinBudget(settings *DailyCheckinSettings) bool {
 	return settings.DailyBudgetUSD > 0 || settings.MonthlyBudgetUSD > 0 || settings.UserMonthlyLimitUSD > 0
 }
 
-func maxDailyCheckinRewardByBudget(maxReward int, dailyReward, monthlyReward, userMonthlyReward float64, settings *DailyCheckinSettings) int {
+func maxDailyCheckinRewardByBudget(maxReward float64, dailyReward, monthlyReward, userMonthlyReward float64, settings *DailyCheckinSettings) float64 {
 	if settings == nil {
 		return maxReward
 	}
 	allowed := maxReward
 	if settings.DailyBudgetUSD > 0 {
-		allowed = min(allowed, int(math.Floor(settings.DailyBudgetUSD-dailyReward)))
+		allowed = math.Min(allowed, settings.DailyBudgetUSD-dailyReward)
 	}
 	if settings.MonthlyBudgetUSD > 0 {
-		allowed = min(allowed, int(math.Floor(settings.MonthlyBudgetUSD-monthlyReward)))
+		allowed = math.Min(allowed, settings.MonthlyBudgetUSD-monthlyReward)
 	}
 	if settings.UserMonthlyLimitUSD > 0 {
-		allowed = min(allowed, int(math.Floor(settings.UserMonthlyLimitUSD-userMonthlyReward)))
+		allowed = math.Min(allowed, settings.UserMonthlyLimitUSD-userMonthlyReward)
 	}
 	return allowed
 }
@@ -546,6 +757,64 @@ func sumCheckinRewards(ctx context.Context, q dailyCheckinQuerier, userID int64,
 	return total, nil
 }
 
+func countDailyCheckinStreak(ctx context.Context, q dailyCheckinQuerier, userID int64, todayStart time.Time, settings *DailyCheckinSettings) (int, error) {
+	startDate := ""
+	if settings != nil && settings.StreakScope == DailyCheckinStreakScopeMonthly {
+		startDate = timezone.StartOfMonth(todayStart).Format("2006-01-02")
+	}
+	query := `
+		SELECT checkin_date
+		FROM user_checkins
+		WHERE user_id = $1 AND checkin_date < $2
+	`
+	args := []any{userID, todayStart.Format("2006-01-02")}
+	if startDate != "" {
+		query += ` AND checkin_date >= $3`
+		args = append(args, startDate)
+	}
+	query += ` ORDER BY checkin_date DESC`
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("count daily checkin streak: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	streak := 1
+	expected := todayStart.AddDate(0, 0, -1).Format("2006-01-02")
+	for rows.Next() {
+		var date string
+		if err := rows.Scan(&date); err != nil {
+			return 0, fmt.Errorf("scan daily checkin streak: %w", err)
+		}
+		if date != expected {
+			break
+		}
+		streak++
+		parsed, err := time.ParseInLocation("2006-01-02", expected, timezone.Location())
+		if err != nil {
+			break
+		}
+		expected = parsed.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate daily checkin streak: %w", err)
+	}
+	return streak, nil
+}
+
+func dailyCheckinStreakMultiplier(streakDays int, settings *DailyCheckinSettings) float64 {
+	if settings == nil || !settings.StreakEnabled || streakDays <= 0 {
+		return 1
+	}
+	multiplier := 1.0
+	for _, item := range settings.StreakMultipliers {
+		if streakDays >= item.Days {
+			multiplier = item.Multiplier
+		}
+	}
+	return normalizeDailyCheckinMultiplier(multiplier)
+}
+
 func aggregateCheckinStats(ctx context.Context, q dailyCheckinQuerier, startDate, endDate string) (int64, int64, float64, error) {
 	var count, users int64
 	var reward float64
@@ -570,6 +839,43 @@ func remainingBudget(limit, used float64) float64 {
 	return remaining
 }
 
+func buildDailyCheckinRecordWhere(filter DailyCheckinAdminRecordFilter) (string, []any) {
+	clauses := []string{"u.deleted_at IS NULL"}
+	args := make([]any, 0)
+	add := func(clause string, value any) {
+		args = append(args, value)
+		clauses = append(clauses, fmt.Sprintf(clause, len(args)))
+	}
+	if strings.TrimSpace(filter.DateFrom) != "" {
+		add("c.checkin_date >= $%d", strings.TrimSpace(filter.DateFrom))
+	}
+	if strings.TrimSpace(filter.DateTo) != "" {
+		add("c.checkin_date <= $%d", strings.TrimSpace(filter.DateTo))
+	}
+	if strings.TrimSpace(filter.UserQuery) != "" {
+		q := "%" + strings.ToLower(strings.TrimSpace(filter.UserQuery)) + "%"
+		exact := strings.TrimSpace(filter.UserQuery)
+		args = append(args, q, q, exact)
+		clauses = append(clauses, fmt.Sprintf("(LOWER(u.email) LIKE $%d OR LOWER(u.username) LIKE $%d OR CAST(u.id AS TEXT) = $%d)", len(args)-2, len(args)-1, len(args)))
+	}
+	if filter.RewardMin != nil {
+		add("c.reward_amount >= $%d", *filter.RewardMin)
+	}
+	if filter.RewardMax != nil {
+		add("c.reward_amount <= $%d", *filter.RewardMax)
+	}
+	if filter.CritHit != nil {
+		add("COALESCE(c.reward_metadata ->> 'crit_hit', 'false') = $%d", strconv.FormatBool(*filter.CritHit))
+	}
+	if filter.StreakDays != nil {
+		add("COALESCE((c.reward_metadata ->> 'streak_days')::int, 0) >= $%d", *filter.StreakDays)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(clauses, " AND "), args
+}
+
 func dailyCheckinUsageNotEnoughError(todayUsage, requiredUsage float64) error {
 	return ErrDailyCheckinUsageNotEnough.WithMetadata(map[string]string{
 		"today_usage_usd":    fmt.Sprintf("%.4f", todayUsage),
@@ -587,6 +893,70 @@ func randomIntInclusive(minValue, maxValue int) (int, error) {
 		return 0, err
 	}
 	return int(n.Int64()) + minValue, nil
+}
+
+func randomDailyCheckinRewardFromTiers(settings *DailyCheckinSettings) (int, *DailyCheckinRewardTier, error) {
+	tiers := settings.RewardTiers
+	if len(tiers) == 0 {
+		tiers = []DailyCheckinRewardTier{{MinUSD: settings.RewardMinUSD, MaxUSD: settings.RewardMaxUSD, ProbabilityPercent: 100}}
+	}
+	totalWeight := 0
+	weights := make([]int64, 0, len(tiers))
+	for _, tier := range tiers {
+		weight := int64(math.Round(normalizeDailyCheckinPercent(tier.ProbabilityPercent) * 10000))
+		if weight < 0 {
+			weight = 0
+		}
+		weights = append(weights, weight)
+		totalWeight += int(weight)
+	}
+	if totalWeight <= 0 {
+		return 0, nil, infraerrors.InternalServer("DAILY_CHECKIN_REWARD_TIERS_INVALID", "daily check-in reward tiers are invalid")
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(totalWeight)))
+	if err != nil {
+		return 0, nil, infraerrors.InternalServer("DAILY_CHECKIN_REWARD_RANDOM_FAILED", "failed to generate daily check-in reward").WithCause(err)
+	}
+	pick := n.Int64()
+	acc := int64(0)
+	selected := tiers[len(tiers)-1]
+	for i, tier := range tiers {
+		acc += weights[i]
+		if pick < acc {
+			selected = tier
+			break
+		}
+	}
+	minValue, maxValue := normalizeDailyCheckinRewardRange(selected.MinUSD, selected.MaxUSD)
+	reward, err := randomDailyCheckinReward(minValue, maxValue)
+	if err != nil {
+		return 0, nil, err
+	}
+	selected.MinUSD = minValue
+	selected.MaxUSD = maxValue
+	return reward, &selected, nil
+}
+
+func randomDailyCheckinPercentHit(probability float64) (bool, error) {
+	probability = normalizeDailyCheckinPercent(probability)
+	if probability <= 0 {
+		return false, nil
+	}
+	if probability >= 100 {
+		return true, nil
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return false, infraerrors.InternalServer("DAILY_CHECKIN_CRIT_RANDOM_FAILED", "failed to generate daily check-in critical reward").WithCause(err)
+	}
+	return float64(n.Int64()) < probability*10000, nil
+}
+
+func roundDailyCheckinAmount(value float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	return math.Round(value*100) / 100
 }
 
 func randomDailyCheckinReward(minValue, maxValue int) (int, error) {

@@ -62,6 +62,9 @@ func RegisterAdminRoutes(
 		// 运维监控（Ops）
 		registerOpsRoutes(admin, h)
 
+		// 运营中心
+		registerOperationsRoutes(admin, h)
+
 		// 系统管理
 		registerSystemRoutes(admin, h)
 
@@ -207,6 +210,17 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		ops.GET("/dashboard/error-trend", h.Admin.Ops.GetDashboardErrorTrend)
 		ops.GET("/dashboard/error-distribution", h.Admin.Ops.GetDashboardErrorDistribution)
 		ops.GET("/dashboard/openai-token-stats", h.Admin.Ops.GetDashboardOpenAITokenStats)
+	}
+}
+
+func registerOperationsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	operations := admin.Group("/operations")
+	{
+		checkin := operations.Group("/daily-checkin")
+		{
+			checkin.GET("/stats", h.Admin.Setting.GetDailyCheckinStats)
+			checkin.GET("/records", h.Admin.Setting.ListDailyCheckinRecords)
+		}
 	}
 }
 

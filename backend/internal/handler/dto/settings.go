@@ -250,14 +250,22 @@ type SystemSettings struct {
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 
 	// Daily check-in reward range
-	DailyCheckinEnabled             bool    `json:"daily_checkin_enabled"`
-	DailyCheckinRequiredUsageUSD    float64 `json:"daily_checkin_required_usage_usd"`
-	DailyCheckinUsageScope          string  `json:"daily_checkin_usage_scope"`
-	DailyCheckinRewardMinUSD        int     `json:"daily_checkin_reward_min_usd"`
-	DailyCheckinRewardMaxUSD        int     `json:"daily_checkin_reward_max_usd"`
-	DailyCheckinDailyBudgetUSD      float64 `json:"daily_checkin_daily_budget_usd"`
-	DailyCheckinMonthlyBudgetUSD    float64 `json:"daily_checkin_monthly_budget_usd"`
-	DailyCheckinUserMonthlyLimitUSD float64 `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinEnabled             bool                                   `json:"daily_checkin_enabled"`
+	DailyCheckinRequiredUsageUSD    float64                                `json:"daily_checkin_required_usage_usd"`
+	DailyCheckinUsageScope          string                                 `json:"daily_checkin_usage_scope"`
+	DailyCheckinRewardMinUSD        int                                    `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD        int                                    `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinDailyBudgetUSD      float64                                `json:"daily_checkin_daily_budget_usd"`
+	DailyCheckinMonthlyBudgetUSD    float64                                `json:"daily_checkin_monthly_budget_usd"`
+	DailyCheckinUserMonthlyLimitUSD float64                                `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinRewardTiers         []service.DailyCheckinRewardTier       `json:"daily_checkin_reward_tiers"`
+	DailyCheckinStreakEnabled       bool                                   `json:"daily_checkin_streak_multiplier_enabled"`
+	DailyCheckinStreakScope         string                                 `json:"daily_checkin_streak_multiplier_scope"`
+	DailyCheckinStreakMultipliers   []service.DailyCheckinStreakMultiplier `json:"daily_checkin_streak_multipliers"`
+	DailyCheckinCritEnabled         bool                                   `json:"daily_checkin_crit_enabled"`
+	DailyCheckinCritProbability     float64                                `json:"daily_checkin_crit_probability_percent"`
+	DailyCheckinCritMultiplier      float64                                `json:"daily_checkin_crit_multiplier"`
+	DailyCheckinCritMaxRewardUSD    float64                                `json:"daily_checkin_crit_max_reward_usd"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`

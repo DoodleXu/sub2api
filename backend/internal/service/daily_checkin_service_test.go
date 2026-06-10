@@ -95,6 +95,7 @@ func newDailyCheckinTestService(t *testing.T, values map[string]string) (*DailyC
 				reward_amount REAL NOT NULL DEFAULT 0,
 				qualified_usage_usd REAL NOT NULL DEFAULT 0,
 				redeem_code_id INTEGER,
+				reward_metadata TEXT,
 				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 			);
 		CREATE UNIQUE INDEX idx_user_checkins_user_date ON user_checkins (user_id, checkin_date);
@@ -301,6 +302,111 @@ func TestDailyCheckinRewardsBalanceAndPreventsDuplicate(t *testing.T) {
 	_, err = svc.CheckIn(ctx, 1)
 	require.Error(t, err)
 	require.Equal(t, "DAILY_CHECKIN_ALREADY_CHECKED_IN", apperrors.Reason(err))
+}
+
+func TestDailyCheckinAppliesRewardTierStreakAndCrit(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardTiers:       `[{"min_usd":2,"max_usd":2,"probability_percent":100}]`,
+		SettingKeyDailyCheckinStreakEnabled:     "true",
+		SettingKeyDailyCheckinStreakMultipliers: `[{"days":3,"multiplier":2}]`,
+		SettingKeyDailyCheckinCritEnabled:       "true",
+		SettingKeyDailyCheckinCritProbability:   "100",
+		SettingKeyDailyCheckinCritMultiplier:    "3",
+		SettingKeyDailyCheckinCritMaxRewardUSD:  "4",
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+	today := timezone.StartOfDay(now)
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 2, ?)`, now)
+	require.NoError(t, err)
+	for i := 1; i <= 2; i++ {
+		_, err = db.Exec(`INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at) VALUES (1, ?, 1, 2, ?)`, today.AddDate(0, 0, -i).Format("2006-01-02"), now)
+		require.NoError(t, err)
+	}
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 12.0, result.RewardAmount)
+	require.Equal(t, 3, result.StreakDays)
+	require.Equal(t, 2.0, result.StreakMultiplier)
+	require.True(t, result.CritHit)
+	require.Equal(t, 3.0, result.CritMultiplier)
+}
+
+func TestDailyCheckinRegularCheckinCanCritWhenRewardWithinCap(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardTiers:      `[{"min_usd":2,"max_usd":2,"probability_percent":100}]`,
+		SettingKeyDailyCheckinStreakEnabled:    "false",
+		SettingKeyDailyCheckinCritEnabled:      "true",
+		SettingKeyDailyCheckinCritProbability:  "100",
+		SettingKeyDailyCheckinCritMultiplier:   "3",
+		SettingKeyDailyCheckinCritMaxRewardUSD: "2",
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 2, ?)`, now)
+	require.NoError(t, err)
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 6.0, result.RewardAmount)
+	require.Equal(t, 2.0, result.BaseRewardAmount)
+	require.Equal(t, 2.0, result.PreCritRewardAmount)
+	require.Equal(t, 1, result.StreakDays)
+	require.Equal(t, 1.0, result.StreakMultiplier)
+	require.True(t, result.CritHit)
+	require.Equal(t, 3.0, result.CritMultiplier)
+}
+
+func TestDailyCheckinCritSkipsWhenPreCritRewardExceedsCap(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardTiers:       `[{"min_usd":2,"max_usd":2,"probability_percent":100}]`,
+		SettingKeyDailyCheckinStreakEnabled:     "true",
+		SettingKeyDailyCheckinStreakMultipliers: `[{"days":2,"multiplier":2}]`,
+		SettingKeyDailyCheckinCritEnabled:       "true",
+		SettingKeyDailyCheckinCritProbability:   "100",
+		SettingKeyDailyCheckinCritMultiplier:    "3",
+		SettingKeyDailyCheckinCritMaxRewardUSD:  "3",
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+	today := timezone.StartOfDay(now)
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 2, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at) VALUES (1, ?, 1, 2, ?)`, today.AddDate(0, 0, -1).Format("2006-01-02"), now)
+	require.NoError(t, err)
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 4.0, result.RewardAmount)
+	require.Equal(t, 2, result.StreakDays)
+	require.False(t, result.CritHit)
+}
+
+func TestDailyCheckinZeroRewardConfigIsRaisedToMinimumReward(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardMinUSD: "0",
+		SettingKeyDailyCheckinRewardMaxUSD: "0",
+		SettingKeyDailyCheckinRewardTiers:  `[{"min_usd":0,"max_usd":0,"probability_percent":100}]`,
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 2, ?)`, now)
+	require.NoError(t, err)
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, result.RewardAmount)
+	require.Equal(t, 1, result.RewardMinUSD)
+	require.Equal(t, 1, result.RewardMaxUSD)
 }
 
 func TestDailyCheckinRewardRangeIsClampedToMaxLimit(t *testing.T) {

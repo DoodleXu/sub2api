@@ -5384,178 +5384,6 @@
 
         <div class="card">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ t('admin.settings.features.dailyCheckin.title') }}
-                </h2>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.description') }}
-                </p>
-              </div>
-              <button
-                type="button"
-                class="btn btn-secondary btn-sm"
-                :disabled="dailyCheckinStatsLoading"
-                @click="loadDailyCheckinStats"
-              >
-                <Icon name="refresh" size="xs" :class="dailyCheckinStatsLoading ? 'animate-spin' : ''" />
-                {{ t('common.refresh') }}
-              </button>
-            </div>
-          </div>
-          <div class="space-y-5 p-6">
-            <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.todayCheckins') }}
-                </p>
-                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ formatCount(dailyCheckinStats?.today_checkins) }}
-                </p>
-              </div>
-              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.todayReward') }}
-                </p>
-                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ formatUSD(dailyCheckinStats?.today_reward_usd) }}
-                </p>
-              </div>
-              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.monthReward') }}
-                </p>
-                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ formatUSD(dailyCheckinStats?.month_reward_usd) }}
-                </p>
-              </div>
-              <div class="rounded-lg border border-gray-100 p-3 dark:border-dark-700">
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.averageReward') }}
-                </p>
-                <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ formatUSD(dailyCheckinStats?.average_reward_usd) }}
-                </p>
-              </div>
-            </div>
-
-            <div class="flex items-start justify-between gap-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.enabled') }}
-                </label>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.features.dailyCheckin.enabledHint') }}
-                </p>
-              </div>
-              <Toggle v-model="form.daily_checkin_enabled" />
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.requiredUsage') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_required_usage_usd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  class="input"
-                />
-              </div>
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.usageScope') }}
-                </label>
-                <Select
-                  v-model="form.daily_checkin_usage_scope"
-                  :options="dailyCheckinUsageScopeOptions"
-                />
-              </div>
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.userMonthlyLimit') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_user_monthly_limit_usd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  class="input"
-                />
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.rewardMin') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_reward_min_usd"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  class="input"
-                />
-              </div>
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.rewardMax') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_reward_max_usd"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  class="input"
-                />
-              </div>
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.dailyBudget') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_daily_budget_usd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  class="input"
-                />
-              </div>
-              <div>
-                <label class="input-label">
-                  {{ t('admin.settings.features.dailyCheckin.monthlyBudget') }}
-                </label>
-                <input
-                  v-model.number="form.daily_checkin_monthly_budget_usd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  class="input"
-                />
-              </div>
-            </div>
-            <div class="grid grid-cols-1 gap-2 text-xs text-gray-500 dark:text-gray-400 sm:grid-cols-3">
-              <span>{{ t('admin.settings.features.dailyCheckin.dailyRemaining') }}: {{ formatUnlimitedBudget(dailyCheckinStats?.daily_budget_usd) }} / {{ formatUSD(dailyCheckinStats?.daily_remaining_usd) }}</span>
-              <span>{{ t('admin.settings.features.dailyCheckin.monthlyRemaining') }}: {{ formatUnlimitedBudget(dailyCheckinStats?.monthly_budget_usd) }} / {{ formatUSD(dailyCheckinStats?.monthly_remaining_usd) }}</span>
-              <span>{{ t('admin.settings.features.dailyCheckin.monthUsers') }}: {{ formatCount(dailyCheckinStats?.month_users) }}</span>
-            </div>
-            <p v-if="dailyCheckinStatsError" class="text-xs text-red-500 dark:text-red-400">
-              {{ t('admin.settings.features.dailyCheckin.statsLoadFailed') }}
-            </p>
-            <p class="text-xs text-gray-400">
-              {{ t('admin.settings.features.dailyCheckin.rewardHint') }}
-            </p>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.riskControl.title') }}
             </h2>
@@ -7302,7 +7130,6 @@ import type {
   AuthSourceType,
   SystemSettings,
   UpdateSettingsRequest,
-  DailyCheckinAdminStats,
   DefaultSubscriptionSetting,
   DefaultPlatformQuotasMap,
   OpenAIFastPolicyRule,
@@ -7465,9 +7292,6 @@ const notificationClearTelegramBotToken = ref(false);
 const registrationEmailSuffixWhitelistTags = ref<string[]>([]);
 const registrationEmailSuffixWhitelistDraft = ref("");
 const tablePageSizeOptionsInput = ref("10, 20, 50, 100");
-const dailyCheckinStats = ref<DailyCheckinAdminStats | null>(null);
-const dailyCheckinStatsLoading = ref(false);
-const dailyCheckinStatsError = ref(false);
 
 // Admin API Key 状态
 const adminApiKeyLoading = ref(true);
@@ -8011,6 +7835,14 @@ const form = reactive<SettingsForm>({
   daily_checkin_daily_budget_usd: 0,
   daily_checkin_monthly_budget_usd: 0,
   daily_checkin_user_monthly_limit_usd: 0,
+  daily_checkin_reward_tiers: [{ min_usd: 1, max_usd: 3, probability_percent: 100 }],
+  daily_checkin_streak_multiplier_enabled: false,
+  daily_checkin_streak_multiplier_scope: "cross_month",
+  daily_checkin_streak_multipliers: [],
+  daily_checkin_crit_enabled: false,
+  daily_checkin_crit_probability_percent: 0,
+  daily_checkin_crit_multiplier: 1,
+  daily_checkin_crit_max_reward_usd: 0,
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: false,
   // Allow user view error requests
@@ -8042,17 +7874,6 @@ const webConsoleEndpointOptions = computed(() => {
 
   return options;
 });
-
-const dailyCheckinUsageScopeOptions = computed(() => [
-  {
-    value: "actual_cost",
-    label: t("admin.settings.features.dailyCheckin.usageScopeActualCost"),
-  },
-  {
-    value: "balance_only",
-    label: t("admin.settings.features.dailyCheckin.usageScopeBalanceOnly"),
-  },
-]);
 
 const openaiAccountSchedulerStrategyOptions = computed(() => [
   {
@@ -8088,42 +7909,6 @@ function setNotificationBarkLevel(value: string | number | boolean | null): void
     return;
   }
   notificationConfig.transports.bark.level = "active";
-}
-
-function formatUSD(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "--";
-  }
-  return `$${Number(value).toFixed(2)}`;
-}
-
-function formatCount(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "--";
-  }
-  return String(Number(value));
-}
-
-function formatUnlimitedBudget(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return "--";
-  }
-  const amount = Number(value);
-  return amount > 0 ? formatUSD(amount) : t("admin.settings.features.dailyCheckin.unlimited");
-}
-
-async function loadDailyCheckinStats() {
-  dailyCheckinStatsLoading.value = true;
-  dailyCheckinStatsError.value = false;
-  try {
-    dailyCheckinStats.value = await adminAPI.settings.getDailyCheckinStats();
-  } catch (error) {
-    dailyCheckinStats.value = null;
-    dailyCheckinStatsError.value = true;
-    console.error("Failed to load daily check-in stats:", error);
-  } finally {
-    dailyCheckinStatsLoading.value = false;
-  }
 }
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -8767,7 +8552,6 @@ async function loadSettings() {
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
     );
-    loadDailyCheckinStats();
     registrationEmailSuffixWhitelistTags.value =
       normalizeRegistrationEmailSuffixDomains(
         settings.registration_email_suffix_whitelist,
@@ -9192,35 +8976,6 @@ async function saveSettings() {
       form.wechat_connect_mobile_enabled,
       form.wechat_connect_mode,
     );
-    const dailyCheckinRequiredUsage = Math.max(
-      0,
-      Number(form.daily_checkin_required_usage_usd) || 0,
-    );
-    const dailyCheckinUsageScope =
-      form.daily_checkin_usage_scope === "balance_only"
-        ? "balance_only"
-        : "actual_cost";
-    const dailyCheckinRewardMin = Math.max(
-      0,
-      Math.min(100, Math.floor(Number(form.daily_checkin_reward_min_usd) || 0)),
-    );
-    const dailyCheckinRewardMax = Math.max(
-      dailyCheckinRewardMin,
-      Math.min(100, Math.floor(Number(form.daily_checkin_reward_max_usd) || dailyCheckinRewardMin)),
-    );
-    const dailyCheckinDailyBudget = Math.max(
-      0,
-      Number(form.daily_checkin_daily_budget_usd) || 0,
-    );
-    const dailyCheckinMonthlyBudget = Math.max(
-      0,
-      Number(form.daily_checkin_monthly_budget_usd) || 0,
-    );
-    const dailyCheckinUserMonthlyLimit = Math.max(
-      0,
-      Number(form.daily_checkin_user_monthly_limit_usd) || 0,
-    );
-
     const payload: UpdateSettingsRequest = {
       registration_enabled: form.registration_enabled,
       email_verify_enabled: form.email_verify_enabled,
@@ -9440,14 +9195,6 @@ async function saveSettings() {
       web_console_enabled: form.web_console_enabled,
       web_console_default_endpoint:
         form.web_console_default_endpoint?.trim() || "",
-      daily_checkin_enabled: form.daily_checkin_enabled,
-      daily_checkin_required_usage_usd: dailyCheckinRequiredUsage,
-      daily_checkin_usage_scope: dailyCheckinUsageScope,
-      daily_checkin_reward_min_usd: dailyCheckinRewardMin,
-      daily_checkin_reward_max_usd: dailyCheckinRewardMax,
-      daily_checkin_daily_budget_usd: dailyCheckinDailyBudget,
-      daily_checkin_monthly_budget_usd: dailyCheckinMonthlyBudget,
-      daily_checkin_user_monthly_limit_usd: dailyCheckinUserMonthlyLimit,
       // Affiliate (邀请返利) feature switch
       affiliate_enabled: form.affiliate_enabled,
       allow_user_view_error_requests: form.allow_user_view_error_requests,
@@ -9554,7 +9301,6 @@ async function saveSettings() {
     // Refresh cached settings so sidebar/header update immediately
     await appStore.fetchPublicSettings(true);
     await adminSettingsStore.fetch(true);
-    await loadDailyCheckinStats();
     if (wsOk) {
       appStore.showSuccess(t("admin.settings.settingsSaved"));
     }

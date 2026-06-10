@@ -624,6 +624,14 @@ export interface SystemSettings {
   daily_checkin_daily_budget_usd: number;
   daily_checkin_monthly_budget_usd: number;
   daily_checkin_user_monthly_limit_usd: number;
+  daily_checkin_reward_tiers: DailyCheckinRewardTier[];
+  daily_checkin_streak_multiplier_enabled: boolean;
+  daily_checkin_streak_multiplier_scope: "cross_month" | "monthly";
+  daily_checkin_streak_multipliers: DailyCheckinStreakMultiplier[];
+  daily_checkin_crit_enabled: boolean;
+  daily_checkin_crit_probability_percent: number;
+  daily_checkin_crit_multiplier: number;
+  daily_checkin_crit_max_reward_usd: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -633,6 +641,17 @@ export interface SystemSettings {
 
   // Allow user view error requests
   allow_user_view_error_requests: boolean;
+}
+
+export interface DailyCheckinRewardTier {
+  min_usd: number;
+  max_usd: number;
+  probability_percent: number;
+}
+
+export interface DailyCheckinStreakMultiplier {
+  days: number;
+  multiplier: number;
 }
 
 export interface UpdateSettingsRequest {
@@ -875,6 +894,14 @@ export interface UpdateSettingsRequest {
   daily_checkin_daily_budget_usd?: number;
   daily_checkin_monthly_budget_usd?: number;
   daily_checkin_user_monthly_limit_usd?: number;
+  daily_checkin_reward_tiers?: DailyCheckinRewardTier[];
+  daily_checkin_streak_multiplier_enabled?: boolean;
+  daily_checkin_streak_multiplier_scope?: "cross_month" | "monthly";
+  daily_checkin_streak_multipliers?: DailyCheckinStreakMultiplier[];
+  daily_checkin_crit_enabled?: boolean;
+  daily_checkin_crit_probability_percent?: number;
+  daily_checkin_crit_multiplier?: number;
+  daily_checkin_crit_max_reward_usd?: number;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;
