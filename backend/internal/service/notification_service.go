@@ -178,7 +178,7 @@ func (s *NotificationService) Dispatch(ctx context.Context, event string, payloa
 	if !ok || !route.Enabled {
 		return
 	}
-	rateLimitKey := notificationRateLimitKey(event, payload.SourceType, payload.SourceID, payload.Event)
+	rateLimitKey := notificationRateLimitKey(event, payload.SourceType, payload.SourceID)
 	if s.isRateLimited(ctx, event, rateLimitKey, route) {
 		return
 	}
@@ -796,7 +796,7 @@ func (s *NotificationService) markRateLimited(ctx context.Context, event, key st
 	}
 }
 
-func notificationRateLimitKey(event, sourceType, sourceID, reminderKey string) string {
+func notificationRateLimitKey(event, sourceType, sourceID string) string {
 	if strings.TrimSpace(event) == "" || strings.TrimSpace(sourceType) == "" || strings.TrimSpace(sourceID) == "" {
 		return ""
 	}
@@ -804,7 +804,6 @@ func notificationRateLimitKey(event, sourceType, sourceID, reminderKey string) s
 		strings.TrimSpace(event),
 		strings.TrimSpace(sourceType),
 		strings.TrimSpace(sourceID),
-		strings.TrimSpace(reminderKey),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(strings.ToLower(identity)))
 	return "notification_delivery:v1:" + hex.EncodeToString(sum[:])

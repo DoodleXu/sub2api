@@ -498,6 +498,55 @@ func TestNotificationRateLimitKeySuppressesRepeatedDispatch(t *testing.T) {
 	require.Equal(t, 2, count)
 }
 
+func TestNotificationRateLimitIgnoresPayloadSubEvent(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	var count int
+	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(barkServer.Close)
+
+	svc := NewNotificationService(repo, nil, nil, nil)
+	now := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
+		Enabled: true,
+		Transports: NotificationTransportConfigs{
+			Bark: NotificationBarkTransportConfig{
+				Enabled:    true,
+				ServerURL:  barkServer.URL,
+				DeviceKeys: []string{"device"},
+				Level:      "active",
+			},
+		},
+		Routes: map[string]NotificationRoute{
+			NotificationEventChannelMonitorFailed: {
+				Enabled:            true,
+				Transports:         []string{NotificationTransportBark},
+				MinIntervalSeconds: 300,
+			},
+			NotificationEventChannelMonitorRecovered: {
+				Enabled: false,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	payload := NotificationPayload{
+		Title:      "title",
+		Content:    "content",
+		Event:      "channel_monitor.failed:failed",
+		SourceType: "channel_monitor",
+		SourceID:   "1:gpt",
+	}
+	svc.Dispatch(ctx, NotificationEventChannelMonitorFailed, payload)
+	payload.Event = "channel_monitor.failed:error"
+	svc.Dispatch(ctx, NotificationEventChannelMonitorFailed, payload)
+	require.Equal(t, 1, count)
+}
+
 func TestNotificationDispatchDoesNotRateLimitFailedDelivery(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()
