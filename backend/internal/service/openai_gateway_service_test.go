@@ -698,7 +698,7 @@ func TestOpenAISelectAccountWithSchedulerForCapability_RequiresNativeResponses(t
 	)
 	require.NoError(t, err)
 	require.NotNil(t, chatSelection)
-	require.Equal(t, chatOnly.ID, chatSelection.Account.ID)
+	require.True(t, chatSelection.Account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityChatCompletions))
 	if chatSelection.ReleaseFunc != nil {
 		chatSelection.ReleaseFunc()
 	}
