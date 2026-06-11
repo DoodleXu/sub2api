@@ -6757,6 +6757,57 @@
               </div>
 
               <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+                <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.notifications.quietHours") }}
+                    </h3>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.notifications.quietHoursHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="notificationConfig.quiet_hours.enabled"
+                    data-testid="notification-quiet-hours-enabled"
+                  />
+                </div>
+                <div class="mt-4 grid gap-4 md:grid-cols-3">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.notifications.quietHoursStart") }}
+                    </label>
+                    <input
+                      v-model="notificationConfig.quiet_hours.start_time"
+                      type="time"
+                      class="input"
+                      data-testid="notification-quiet-hours-start"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.notifications.quietHoursEnd") }}
+                    </label>
+                    <input
+                      v-model="notificationConfig.quiet_hours.end_time"
+                      type="time"
+                      class="input"
+                      data-testid="notification-quiet-hours-end"
+                    />
+                  </div>
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.notifications.quietHoursTimezone") }}
+                    </label>
+                    <Select
+                      v-model="notificationConfig.quiet_hours.timezone"
+                      :options="notificationTimezoneOptions"
+                      data-testid="notification-quiet-hours-timezone"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
                 <h3 class="mb-4 font-medium text-gray-900 dark:text-white">
                   {{ t("admin.settings.notifications.routes") }}
                 </h3>
@@ -7377,6 +7428,20 @@ const notificationTransports: NotificationTransport[] = [
   "telegram",
 ];
 
+const notificationCommonTimezones = [
+  "Asia/Shanghai",
+  "UTC",
+  "Asia/Hong_Kong",
+  "Asia/Taipei",
+  "Asia/Tokyo",
+  "Asia/Seoul",
+  "Asia/Singapore",
+  "America/Los_Angeles",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Paris",
+];
+
 function defaultNotificationConfig(): NotificationConfig {
   return {
     enabled: false,
@@ -7413,6 +7478,12 @@ function defaultNotificationConfig(): NotificationConfig {
         min_interval_seconds: 300,
       },
     },
+    quiet_hours: {
+      enabled: false,
+      start_time: "22:00",
+      end_time: "08:00",
+      timezone: "Asia/Shanghai",
+    },
   };
 }
 
@@ -7438,6 +7509,7 @@ function formatNotificationInput(values?: string[] | null): string {
 
 function normalizeNotificationConfig(raw?: Partial<NotificationConfig> | null): NotificationConfig {
   const defaults = defaultNotificationConfig();
+  const rawQuietHours = raw?.quiet_hours;
   const routes = { ...defaults.routes, ...(raw?.routes || {}) } as Record<
     NotificationEvent,
     NotificationConfig["routes"][NotificationEvent]
@@ -7484,6 +7556,13 @@ function normalizeNotificationConfig(raw?: Partial<NotificationConfig> | null): 
       },
     },
     routes,
+    quiet_hours: {
+      ...defaults.quiet_hours,
+      ...(rawQuietHours || {}),
+      start_time: rawQuietHours?.start_time || defaults.quiet_hours.start_time,
+      end_time: rawQuietHours?.end_time || defaults.quiet_hours.end_time,
+      timezone: rawQuietHours?.timezone || defaults.quiet_hours.timezone,
+    },
   };
 }
 
@@ -7898,6 +7977,17 @@ const notificationBarkLevelOptions = computed(() => [
     label: t("admin.settings.notifications.barkLevels.critical"),
   },
 ]);
+
+const notificationTimezoneOptions = computed(() => {
+  const current = notificationConfig.quiet_hours.timezone?.trim();
+  const values = current && !notificationCommonTimezones.includes(current)
+    ? [current, ...notificationCommonTimezones]
+    : notificationCommonTimezones;
+  return values.map((timezone) => ({
+    value: timezone,
+    label: timezone,
+  }));
+});
 
 function setNotificationBarkLevel(value: string | number | boolean | null): void {
   if (

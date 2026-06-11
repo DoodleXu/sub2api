@@ -148,6 +148,64 @@ func TestNotificationConfigDefaultsDisabled(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, cfg.Enabled)
+	require.False(t, cfg.QuietHours.Enabled)
+	require.Equal(t, "22:00", cfg.QuietHours.StartTime)
+	require.Equal(t, "08:00", cfg.QuietHours.EndTime)
+	require.NotEmpty(t, cfg.QuietHours.Timezone)
+}
+
+func TestNotificationConfigRejectsInvalidQuietHours(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		quiet     NotificationQuietHoursConfig
+		wantError string
+	}{
+		{
+			name: "bad-start-time",
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "8:00",
+				EndTime:   "08:00",
+				Timezone:  "UTC",
+			},
+			wantError: "invalid quiet hours start_time",
+		},
+		{
+			name: "bad-end-time",
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "22:00",
+				EndTime:   "24:00",
+				Timezone:  "UTC",
+			},
+			wantError: "invalid quiet hours end_time",
+		},
+		{
+			name: "bad-timezone",
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "22:00",
+				EndTime:   "08:00",
+				Timezone:  "Not/AZone",
+			},
+			wantError: "invalid quiet hours timezone",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewNotificationService(newNotificationEmailMemorySettingRepo(), nil, nil, nil)
+
+			_, err := svc.UpdateConfig(ctx, &NotificationConfig{
+				Enabled:    false,
+				QuietHours: tc.quiet,
+			})
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantError)
+		})
+	}
 }
 
 func TestNotificationConfigRejectsEnabledWithoutRecipient(t *testing.T) {
@@ -385,6 +443,169 @@ func TestNotificationDispatchSendsBarkAndTelegram(t *testing.T) {
 	require.Equal(t, "chat-1", telegramPayload["chat_id"])
 	require.Contains(t, telegramPayload["text"], "Monitor failed")
 	require.Contains(t, telegramPayload["text"], "model failed")
+}
+
+func TestNotificationDispatchRespectsQuietHours(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		now       time.Time
+		quiet     NotificationQuietHoursConfig
+		wantCount int
+	}{
+		{
+			name: "cross-midnight-suppresses-at-night",
+			now:  time.Date(2026, 6, 7, 15, 0, 0, 0, time.UTC), // 23:00 Asia/Shanghai
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "22:00",
+				EndTime:   "08:00",
+				Timezone:  "Asia/Shanghai",
+			},
+			wantCount: 0,
+		},
+		{
+			name: "cross-midnight-allows-after-window",
+			now:  time.Date(2026, 6, 7, 1, 0, 0, 0, time.UTC), // 09:00 Asia/Shanghai
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "22:00",
+				EndTime:   "08:00",
+				Timezone:  "Asia/Shanghai",
+			},
+			wantCount: 1,
+		},
+		{
+			name: "same-day-suppresses-inside-window",
+			now:  time.Date(2026, 6, 7, 5, 0, 0, 0, time.UTC), // 13:00 Asia/Shanghai
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "12:00",
+				EndTime:   "14:00",
+				Timezone:  "Asia/Shanghai",
+			},
+			wantCount: 0,
+		},
+		{
+			name: "same-start-end-suppresses-all-day",
+			now:  time.Date(2026, 6, 7, 1, 0, 0, 0, time.UTC),
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "08:00",
+				EndTime:   "08:00",
+				Timezone:  "UTC",
+			},
+			wantCount: 0,
+		},
+		{
+			name: "timezone-controls-window",
+			now:  time.Date(2026, 6, 7, 15, 30, 0, 0, time.UTC), // 23:30 Shanghai, 11:30 New York
+			quiet: NotificationQuietHoursConfig{
+				Enabled:   true,
+				StartTime: "22:00",
+				EndTime:   "08:00",
+				Timezone:  "America/New_York",
+			},
+			wantCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newNotificationEmailMemorySettingRepo()
+			var count int
+			barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				count++
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(barkServer.Close)
+
+			svc := NewNotificationService(repo, nil, nil, nil)
+			svc.now = func() time.Time { return tc.now }
+			_, err := svc.UpdateConfig(ctx, &NotificationConfig{
+				Enabled: true,
+				Transports: NotificationTransportConfigs{
+					Bark: NotificationBarkTransportConfig{
+						Enabled:    true,
+						ServerURL:  barkServer.URL,
+						DeviceKeys: []string{"device"},
+						Level:      "active",
+					},
+				},
+				Routes: map[string]NotificationRoute{
+					NotificationEventChannelMonitorFailed: {
+						Enabled:            true,
+						Transports:         []string{NotificationTransportBark},
+						MinIntervalSeconds: 0,
+					},
+					NotificationEventChannelMonitorRecovered: {
+						Enabled: false,
+					},
+				},
+				QuietHours: tc.quiet,
+			})
+			require.NoError(t, err)
+
+			svc.Dispatch(ctx, NotificationEventChannelMonitorFailed, NotificationPayload{
+				Title:      "title",
+				Content:    "content",
+				Event:      "failed",
+				SourceType: "channel_monitor",
+				SourceID:   "1:gpt",
+			})
+
+			require.Equal(t, tc.wantCount, count)
+		})
+	}
+}
+
+func TestNotificationTestBypassesQuietHours(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	var count int
+	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(barkServer.Close)
+
+	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.now = func() time.Time {
+		return time.Date(2026, 6, 7, 15, 0, 0, 0, time.UTC) // 23:00 Asia/Shanghai
+	}
+	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
+		Enabled: true,
+		Transports: NotificationTransportConfigs{
+			Bark: NotificationBarkTransportConfig{
+				Enabled:    true,
+				ServerURL:  barkServer.URL,
+				DeviceKeys: []string{"device"},
+				Level:      "active",
+			},
+		},
+		Routes: map[string]NotificationRoute{
+			NotificationEventChannelMonitorFailed: {
+				Enabled: false,
+			},
+			NotificationEventChannelMonitorRecovered: {
+				Enabled:            true,
+				Transports:         []string{NotificationTransportBark},
+				MinIntervalSeconds: 0,
+			},
+		},
+		QuietHours: NotificationQuietHoursConfig{
+			Enabled:   true,
+			StartTime: "22:00",
+			EndTime:   "08:00",
+			Timezone:  "Asia/Shanghai",
+		},
+	})
+	require.NoError(t, err)
+
+	err = svc.Test(ctx, NotificationTransportBark)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
 }
 
 func TestNotificationDispatchAsyncReturnsBeforeTransportCompletes(t *testing.T) {

@@ -17,6 +17,9 @@ const {
   getStreamTimeoutSettings,
   getRectifierSettings,
   getBetaPolicySettings,
+  getNotificationConfig,
+  updateNotificationConfig,
+  testNotificationTransport,
   getGroups,
   listProxies,
   getProviders,
@@ -40,6 +43,9 @@ const {
   getStreamTimeoutSettings: vi.fn(),
   getRectifierSettings: vi.fn(),
   getBetaPolicySettings: vi.fn(),
+  getNotificationConfig: vi.fn(),
+  updateNotificationConfig: vi.fn(),
+  testNotificationTransport: vi.fn(),
   getGroups: vi.fn(),
   listProxies: vi.fn(),
   getProviders: vi.fn(),
@@ -69,6 +75,9 @@ vi.mock("@/api", () => ({
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
+      getNotificationConfig,
+      updateNotificationConfig,
+      testNotificationTransport,
     },
     groups: {
       getAll: getGroups,
@@ -227,7 +236,7 @@ const SelectStub = defineComponent({
     },
   },
   emits: ["update:modelValue", "change"],
-  setup(props, { emit }) {
+  setup(props, { attrs, emit }) {
     const onChange = (event: Event) => {
       const target = event.target as HTMLSelectElement;
       emit("update:modelValue", target.value);
@@ -242,6 +251,7 @@ const SelectStub = defineComponent({
       h(
         "select",
         {
+          ...attrs,
           class: "select-stub",
           value: props.modelValue ?? "",
           "data-placeholder": props.placeholder,
@@ -429,6 +439,49 @@ const baseSettingsResponse = {
   },
 };
 
+const baseNotificationConfig = {
+  enabled: false,
+  transports: {
+    email: {
+      enabled: true,
+      recipients: [],
+    },
+    bark: {
+      enabled: false,
+      server_url: "https://api.day.app",
+      device_keys: [],
+      device_keys_configured: false,
+      clear_device_keys: false,
+      level: "active",
+    },
+    telegram: {
+      enabled: false,
+      bot_token: "",
+      bot_token_configured: false,
+      clear_bot_token: false,
+      chat_ids: [],
+    },
+  },
+  routes: {
+    "channel_monitor.failed": {
+      enabled: true,
+      transports: ["email"],
+      min_interval_seconds: 1800,
+    },
+    "channel_monitor.recovered": {
+      enabled: true,
+      transports: ["email"],
+      min_interval_seconds: 300,
+    },
+  },
+  quiet_hours: {
+    enabled: false,
+    start_time: "22:00",
+    end_time: "08:00",
+    timezone: "Asia/Shanghai",
+  },
+};
+
 function mountView() {
   return mount(SettingsView, {
     global: {
@@ -495,6 +548,9 @@ describe("admin SettingsView payment visible method controls", () => {
     getStreamTimeoutSettings.mockReset();
     getRectifierSettings.mockReset();
     getBetaPolicySettings.mockReset();
+    getNotificationConfig.mockReset();
+    updateNotificationConfig.mockReset();
+    testNotificationTransport.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -569,6 +625,9 @@ describe("admin SettingsView payment visible method controls", () => {
     getBetaPolicySettings.mockResolvedValue({
       rules: [],
     });
+    getNotificationConfig.mockResolvedValue({ ...baseNotificationConfig });
+    updateNotificationConfig.mockImplementation(async (payload) => payload);
+    testNotificationTransport.mockResolvedValue({ ok: true });
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({
       items: [],
@@ -783,6 +842,95 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(paymentHelpImageUpload?.attributes("data-upload-label")).toBe("上传图片");
     expect(paymentHelpImageUpload?.attributes("data-remove-label")).toBe("移除");
   });
+
+  it("fills quiet hours defaults when notification config omits the field", async () => {
+    const legacyNotificationConfig = { ...baseNotificationConfig } as Record<string, unknown>;
+    delete legacyNotificationConfig.quiet_hours;
+    getNotificationConfig.mockResolvedValueOnce(legacyNotificationConfig);
+
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    expect(
+      (
+        wrapper.get('[data-testid="notification-quiet-hours-enabled"]')
+          .element as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(
+      (
+        wrapper.get('[data-testid="notification-quiet-hours-start"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("22:00");
+    expect(
+      (
+        wrapper.get('[data-testid="notification-quiet-hours-end"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("08:00");
+    expect(
+      (
+        wrapper.get('[data-testid="notification-quiet-hours-timezone"]')
+          .element as HTMLSelectElement
+      ).value,
+    ).toBe("Asia/Shanghai");
+  });
+
+  it("saves quiet hours settings in notification config payload", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    await wrapper
+      .get('[data-testid="notification-quiet-hours-enabled"]')
+      .setValue(true);
+    await wrapper
+      .get('[data-testid="notification-quiet-hours-start"]')
+      .setValue("21:30");
+    await wrapper
+      .get('[data-testid="notification-quiet-hours-end"]')
+      .setValue("07:15");
+    await wrapper
+      .get('[data-testid="notification-quiet-hours-timezone"]')
+      .setValue("America/New_York");
+
+    const saveButton = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("admin.settings.notifications.save"));
+    expect(saveButton).toBeDefined();
+    await saveButton?.trigger("click");
+    await flushPromises();
+
+    expect(updateNotificationConfig).toHaveBeenCalledTimes(1);
+    expect(updateNotificationConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quiet_hours: {
+          enabled: true,
+          start_time: "21:30",
+          end_time: "07:15",
+          timezone: "America/New_York",
+        },
+      }),
+    );
+  });
+
+  it("shows the existing error path when quiet hours notification save fails", async () => {
+    updateNotificationConfig.mockRejectedValueOnce(new Error("boom"));
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    const saveButton = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("admin.settings.notifications.save"));
+    expect(saveButton).toBeDefined();
+    await saveButton?.trigger("click");
+    await flushPromises();
+
+    expect(showError).toHaveBeenCalledWith("error");
+  });
 });
 
 describe("admin SettingsView wechat connect controls", () => {
@@ -798,6 +946,9 @@ describe("admin SettingsView wechat connect controls", () => {
     getStreamTimeoutSettings.mockReset();
     getRectifierSettings.mockReset();
     getBetaPolicySettings.mockReset();
+    getNotificationConfig.mockReset();
+    updateNotificationConfig.mockReset();
+    testNotificationTransport.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -856,6 +1007,9 @@ describe("admin SettingsView wechat connect controls", () => {
     getBetaPolicySettings.mockResolvedValue({
       rules: [],
     });
+    getNotificationConfig.mockResolvedValue({ ...baseNotificationConfig });
+    updateNotificationConfig.mockImplementation(async (payload) => payload);
+    testNotificationTransport.mockResolvedValue({ ok: true });
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({
       items: [],
@@ -1044,6 +1198,9 @@ describe("admin SettingsView platform quota matrix", () => {
     getStreamTimeoutSettings.mockReset();
     getRectifierSettings.mockReset();
     getBetaPolicySettings.mockReset();
+    getNotificationConfig.mockReset();
+    updateNotificationConfig.mockReset();
+    testNotificationTransport.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -1070,6 +1227,9 @@ describe("admin SettingsView platform quota matrix", () => {
     getStreamTimeoutSettings.mockResolvedValue({});
     getRectifierSettings.mockResolvedValue({});
     getBetaPolicySettings.mockResolvedValue({});
+    getNotificationConfig.mockResolvedValue({ ...baseNotificationConfig });
+    updateNotificationConfig.mockImplementation(async (payload) => payload);
+    testNotificationTransport.mockResolvedValue({ ok: true });
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({ items: [] });
     getProviders.mockResolvedValue({ data: [] });

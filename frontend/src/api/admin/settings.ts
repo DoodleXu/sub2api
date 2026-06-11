@@ -1081,6 +1081,13 @@ export interface NotificationRoute {
   min_interval_seconds: number;
 }
 
+export interface NotificationQuietHoursConfig {
+  enabled: boolean;
+  start_time: string;
+  end_time: string;
+  timezone: string;
+}
+
 export interface NotificationConfig {
   enabled: boolean;
   transports: {
@@ -1105,6 +1112,7 @@ export interface NotificationConfig {
     };
   };
   routes: Record<NotificationEvent, NotificationRoute>;
+  quiet_hours: NotificationQuietHoursConfig;
 }
 
 export interface TestNotificationRequest {

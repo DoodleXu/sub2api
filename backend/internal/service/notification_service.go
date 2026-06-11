@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
 const (
@@ -35,6 +37,7 @@ type NotificationConfig struct {
 	Enabled    bool                         `json:"enabled"`
 	Transports NotificationTransportConfigs `json:"transports"`
 	Routes     map[string]NotificationRoute `json:"routes"`
+	QuietHours NotificationQuietHoursConfig `json:"quiet_hours"`
 }
 
 type NotificationTransportConfigs struct {
@@ -69,6 +72,13 @@ type NotificationRoute struct {
 	Enabled            bool     `json:"enabled"`
 	Transports         []string `json:"transports"`
 	MinIntervalSeconds int      `json:"min_interval_seconds"`
+}
+
+type NotificationQuietHoursConfig struct {
+	Enabled   bool   `json:"enabled"`
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+	Timezone  string `json:"timezone"`
 }
 
 type NotificationPayload struct {
@@ -172,6 +182,10 @@ func (s *NotificationService) Dispatch(ctx context.Context, event string, payloa
 		return
 	}
 	if !cfg.Enabled {
+		return
+	}
+	if s.isInQuietHours(cfg.QuietHours) {
+		slog.Debug("notification: suppressed by quiet hours", "event", event, "timezone", cfg.QuietHours.Timezone)
 		return
 	}
 	route, ok := cfg.Routes[event]
@@ -322,11 +336,23 @@ func defaultNotificationConfig() NotificationConfig {
 				MinIntervalSeconds: 300,
 			},
 		},
+		QuietHours: NotificationQuietHoursConfig{
+			Enabled:   false,
+			StartTime: "22:00",
+			EndTime:   "08:00",
+			Timezone:  timezone.Name(),
+		},
 	}
 }
 
 func validateNotificationConfigForSave(cfg *NotificationConfig) error {
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
+		return nil
+	}
+	if err := validateNotificationQuietHours(cfg.QuietHours); err != nil {
+		return err
+	}
+	if !cfg.Enabled {
 		return nil
 	}
 	if err := validateNotificationEnabledTransports(cfg); err != nil {
@@ -417,6 +443,9 @@ func mergeNotificationConfig(current, next *NotificationConfig) NotificationConf
 	if next.Routes != nil {
 		cfg.Routes = next.Routes
 	}
+	if next.QuietHours.Enabled || next.QuietHours.StartTime != "" || next.QuietHours.EndTime != "" || next.QuietHours.Timezone != "" {
+		cfg.QuietHours = next.QuietHours
+	}
 	return cfg
 }
 
@@ -458,6 +487,7 @@ func normalizeNotificationConfig(cfg *NotificationConfig) {
 	if cfg.Routes == nil {
 		cfg.Routes = map[string]NotificationRoute{}
 	}
+	cfg.QuietHours = normalizeNotificationQuietHours(cfg.QuietHours)
 	defaults := defaultNotificationConfig()
 	for event, route := range defaults.Routes {
 		if _, ok := cfg.Routes[event]; !ok {
@@ -489,6 +519,90 @@ func normalizeNotificationStrings(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func normalizeNotificationQuietHours(cfg NotificationQuietHoursConfig) NotificationQuietHoursConfig {
+	if strings.TrimSpace(cfg.StartTime) == "" {
+		cfg.StartTime = "22:00"
+	} else {
+		cfg.StartTime = strings.TrimSpace(cfg.StartTime)
+	}
+	if strings.TrimSpace(cfg.EndTime) == "" {
+		cfg.EndTime = "08:00"
+	} else {
+		cfg.EndTime = strings.TrimSpace(cfg.EndTime)
+	}
+	if strings.TrimSpace(cfg.Timezone) == "" {
+		cfg.Timezone = timezone.Name()
+	} else {
+		cfg.Timezone = strings.TrimSpace(cfg.Timezone)
+	}
+	return cfg
+}
+
+func validateNotificationQuietHours(cfg NotificationQuietHoursConfig) error {
+	if _, err := parseNotificationQuietTime(cfg.StartTime); err != nil {
+		return fmt.Errorf("invalid quiet hours start_time: %w", err)
+	}
+	if _, err := parseNotificationQuietTime(cfg.EndTime); err != nil {
+		return fmt.Errorf("invalid quiet hours end_time: %w", err)
+	}
+	if _, err := time.LoadLocation(strings.TrimSpace(cfg.Timezone)); err != nil {
+		return fmt.Errorf("invalid quiet hours timezone: %w", err)
+	}
+	return nil
+}
+
+func parseNotificationQuietTime(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) != len("15:04") || raw[2] != ':' {
+		return 0, errors.New("must use HH:mm format")
+	}
+	for _, idx := range []int{0, 1, 3, 4} {
+		if raw[idx] < '0' || raw[idx] > '9' {
+			return 0, errors.New("must use HH:mm format")
+		}
+	}
+	hour, _ := strconv.Atoi(raw[:2])
+	minute, _ := strconv.Atoi(raw[3:])
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, errors.New("must be a valid 24-hour time")
+	}
+	return hour*60 + minute, nil
+}
+
+func (s *NotificationService) isInQuietHours(cfg NotificationQuietHoursConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	cfg = normalizeNotificationQuietHours(cfg)
+	startMinute, err := parseNotificationQuietTime(cfg.StartTime)
+	if err != nil {
+		slog.Warn("notification: invalid quiet hours start_time", "start_time", cfg.StartTime, "error", err)
+		return false
+	}
+	endMinute, err := parseNotificationQuietTime(cfg.EndTime)
+	if err != nil {
+		slog.Warn("notification: invalid quiet hours end_time", "end_time", cfg.EndTime, "error", err)
+		return false
+	}
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		slog.Warn("notification: invalid quiet hours timezone", "timezone", cfg.Timezone, "error", err)
+		return false
+	}
+	now := time.Now().In(loc)
+	if s != nil && s.now != nil {
+		now = s.now().In(loc)
+	}
+	currentMinute := now.Hour()*60 + now.Minute()
+	if startMinute == endMinute {
+		return true
+	}
+	if startMinute < endMinute {
+		return currentMinute >= startMinute && currentMinute < endMinute
+	}
+	return currentMinute >= startMinute || currentMinute < endMinute
 }
 
 func normalizeNotificationTransports(values []string) []string {
