@@ -34,7 +34,7 @@ const authStore = useAuthStore()
 const loading = ref(false)
 const submitting = ref(false)
 const status = ref<DailyCheckinStatus | null>(null)
-const visible = computed(() => status.value !== null && status.value.enabled !== false)
+const visible = computed(() => status.value?.enabled !== false)
 
 const buttonClass = computed(() => {
   if (status.value?.checked_in) {

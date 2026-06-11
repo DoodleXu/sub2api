@@ -68,7 +68,7 @@
         </div>
 
         <!-- Sign-in -->
-        <DailyCheckinButton v-if="showUserAccountWidgets" />
+        <DailyCheckinButton v-if="showDailyCheckinButton" />
 
         <!-- User Dropdown -->
         <div v-if="user" class="relative" ref="dropdownRef">
@@ -238,6 +238,7 @@ const onboardingStore = useOnboardingStore()
 
 const user = computed(() => authStore.user)
 const showUserAccountWidgets = computed(() => !!user.value && !route.path.startsWith('/admin'))
+const showDailyCheckinButton = computed(() => !!user.value)
 const showAnnouncementBell = computed(() => !!user.value)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
