@@ -71,7 +71,7 @@
             <input v-model.number="recordFilters.reward_max" class="input" type="number" min="0" step="0.01" :placeholder="t('admin.operations.rewardMax')" />
             <Select v-model="recordFilters.crit_hit" :options="critFilterOptions" />
             <input v-model.number="recordFilters.streak_days" class="input md:col-span-1" type="number" min="1" step="1" :placeholder="t('admin.operations.minStreakDays')" />
-            <button type="button" class="btn btn-secondary md:w-fit" @click="loadRecords">{{ t('admin.operations.filters') }}</button>
+            <button type="button" class="btn btn-secondary md:w-fit" @click="applyRecordFilters">{{ t('admin.operations.filters') }}</button>
           </div>
         </div>
 
@@ -111,10 +111,10 @@
             </table>
           </div>
           <div class="flex items-center justify-between border-t border-gray-100 px-4 py-3 text-sm dark:border-dark-700">
-            <span class="text-gray-500">{{ totalRecords }} total</span>
+            <span class="text-gray-500">{{ t('admin.operations.totalRecords', { count: totalRecords }) }}</span>
             <div class="flex gap-2">
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage <= 1" @click="recordPage--; loadRecords()">Prev</button>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage * recordPageSize >= totalRecords" @click="recordPage++; loadRecords()">Next</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage <= 1" @click="recordPage--; loadRecords()">{{ t('admin.operations.prevPage') }}</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage * recordPageSize >= totalRecords" @click="recordPage++; loadRecords()">{{ t('admin.operations.nextPage') }}</button>
             </div>
           </div>
         </div>
@@ -418,6 +418,11 @@ async function loadRecords() {
   })
   records.value = result.items
   totalRecords.value = result.total
+}
+
+async function applyRecordFilters() {
+  recordPage.value = 1
+  await loadRecords()
 }
 
 function addRewardTier() {
