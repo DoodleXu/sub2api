@@ -306,6 +306,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
 	requireCompact := isOpenAIRemoteCompactPath(c)
+	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
+	requiresNativeResponses := service.RequiresNativeOpenAIResponses(forwardBody)
+	if requiresNativeResponses {
+		requiredCapability = service.OpenAIEndpointCapabilityResponsesNative
+	}
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -329,7 +334,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				reqModel,
 				failedAccountIDs,
 				service.OpenAIUpstreamTransportAny,
-				service.OpenAIEndpointCapabilityChatCompletions,
+				requiredCapability,
 				requireCompact,
 			)
 		} else {
@@ -341,7 +346,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				reqModel,
 				failedAccountIDs,
 				service.OpenAIUpstreamTransportAny,
-				service.OpenAIEndpointCapabilityChatCompletions,
+				requiredCapability,
 				requireCompact,
 			)
 		}
@@ -353,6 +358,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available OpenAI accounts support /responses/compact", streamStarted)
+					return
+				}
+				if requiresNativeResponses {
+					h.handleStreamingAwareError(c, http.StatusFailedDependency, service.OpenAIResponsesRequiredErrorCode, service.OpenAIResponsesRequiredErrorMessage, streamStarted)
 					return
 				}
 				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)

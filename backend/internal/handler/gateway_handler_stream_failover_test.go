@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // partialMessageStartSSE 模拟 handleStreamingResponse 已写入的首批 SSE 事件。
@@ -66,6 +67,23 @@ func TestStreamWrittenGuard_MessagesPath_AbortFailoverOnSSEContentWritten(t *tes
 	lastIdx := strings.LastIndex(body, "event: message_start")
 	assert.Equal(t, firstIdx, lastIdx,
 		"响应体中 'event: message_start' 必须只出现一次，不得因 failover 拼接导致两次")
+}
+
+func TestResponsesFailoverExhausted_SurfaceResponsesRequiredError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	h := &GatewayHandler{}
+	h.handleResponsesFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusFailedDependency,
+		ResponseBody: []byte(`{"error":{"code":"responses_required","message":"This request uses Responses-only built-in tools and requires an upstream account that supports /v1/responses.","type":"invalid_request_error"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusFailedDependency, w.Code)
+	require.Equal(t, "responses_required", gjson.Get(w.Body.String(), "error.code").String())
+	require.Contains(t, gjson.Get(w.Body.String(), "error.message").String(), "Responses-only built-in tools")
 }
 
 // TestStreamWrittenGuard_GeminiPath_AbortFailoverOnSSEContentWritten 与上述测试相同，

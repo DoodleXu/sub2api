@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -331,6 +332,17 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 		service.SetOpsUpstreamError(c, statusCode, service.OpenAISilentRefusalClientMessage(), "")
 		h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage())
 		return
+	}
+	if lastErr != nil && lastErr.StatusCode == http.StatusFailedDependency {
+		message := strings.TrimSpace(gjson.GetBytes(lastErr.ResponseBody, "error.message").String())
+		code := strings.TrimSpace(gjson.GetBytes(lastErr.ResponseBody, "error.code").String())
+		if message != "" {
+			if code == "" {
+				code = "server_error"
+			}
+			h.responsesErrorResponse(c, statusCode, code, message)
+			return
+		}
 	}
 	h.responsesErrorResponse(c, statusCode, "server_error", "All available accounts exhausted")
 }

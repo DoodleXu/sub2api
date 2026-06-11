@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -53,6 +54,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	clientStream := responsesReq.Stream
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
+
+	if RequiresNativeOpenAIResponses(body) {
+		return nil, newResponsesOnlyBuiltInToolFailoverError()
+	}
 
 	chatReq, err := apicompat.ResponsesToChatCompletionsRequest(&responsesReq)
 	if err != nil {
@@ -189,6 +194,49 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return s.streamChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+}
+
+const (
+	OpenAIResponsesRequiredErrorCode    = "responses_required"
+	OpenAIResponsesRequiredErrorMessage = "This request uses Responses-only built-in tools and requires an upstream account that supports /v1/responses."
+)
+
+func RequiresNativeOpenAIResponses(body []byte) bool {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		for _, tool := range tools.Array() {
+			if isResponsesOnlyBuiltInTool(tool.Get("type").String()) {
+				return true
+			}
+		}
+	}
+
+	choice := gjson.GetBytes(body, "tool_choice")
+	if choice.Type == gjson.String {
+		return isResponsesOnlyBuiltInTool(choice.String())
+	}
+	if choice.IsObject() {
+		return isResponsesOnlyBuiltInTool(choice.Get("type").String()) ||
+			isResponsesOnlyBuiltInTool(choice.Get("tool.type").String()) ||
+			isResponsesOnlyBuiltInTool(choice.Get("function.name").String())
+	}
+	return false
+}
+
+func isResponsesOnlyBuiltInTool(toolType string) bool {
+	switch strings.TrimSpace(toolType) {
+	case "image_generation", "web_search", "web_search_preview", "web_search_20250305", "file_search", "computer_use_preview", "code_interpreter":
+		return true
+	default:
+		return false
+	}
+}
+
+func newResponsesOnlyBuiltInToolFailoverError() *UpstreamFailoverError {
+	return &UpstreamFailoverError{
+		StatusCode:   http.StatusFailedDependency,
+		ResponseBody: []byte(`{"error":{"code":"` + OpenAIResponsesRequiredErrorCode + `","message":"` + OpenAIResponsesRequiredErrorMessage + `","type":"invalid_request_error"}}`),
+	}
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
