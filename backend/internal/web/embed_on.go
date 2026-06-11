@@ -298,7 +298,7 @@ func injectSiteSEO(doc, settingsJSON []byte) []byte {
 	result = replaceMetaContent(result, `property`, `og:image`, image)
 	result = replaceMetaContent(result, `name`, `twitter:title`, title)
 	result = replaceMetaContent(result, `name`, `twitter:description`, description)
-	return result
+	return replaceFavicon(result, image)
 }
 
 func siteSEOTitle(siteName string) string {
@@ -344,6 +344,84 @@ func replaceMetaContent(doc []byte, attrName, attrValue, content string) []byte 
 	buf.WriteString(html.EscapeString(content))
 	buf.Write(doc[valueEnd:])
 	return buf.Bytes()
+}
+
+func replaceFavicon(doc []byte, href string) []byte {
+	marker := []byte(`<link rel="icon"`)
+	start := bytes.Index(doc, marker)
+	if start == -1 {
+		return doc
+	}
+	tagEndRel := bytes.IndexByte(doc[start:], '>')
+	if tagEndRel == -1 {
+		return doc
+	}
+	tagEnd := start + tagEndRel
+	result := replaceTagAttrValue(doc, start, tagEnd, "href", href)
+	start = bytes.Index(result, marker)
+	if start == -1 {
+		return result
+	}
+	tagEndRel = bytes.IndexByte(result[start:], '>')
+	if tagEndRel == -1 {
+		return result
+	}
+	tagEnd = start + tagEndRel
+	return replaceTagAttrValue(result, start, tagEnd, "type", faviconMimeType(href))
+}
+
+func replaceTagAttrValue(doc []byte, tagStart, tagEnd int, attrName, value string) []byte {
+	attrMarker := []byte(attrName + `="`)
+	attrStartRel := bytes.Index(doc[tagStart:tagEnd], attrMarker)
+	if attrStartRel == -1 {
+		return doc
+	}
+	valueStart := tagStart + attrStartRel + len(attrMarker)
+	valueEndRel := bytes.IndexByte(doc[valueStart:tagEnd], '"')
+	if valueEndRel == -1 {
+		return doc
+	}
+	valueEnd := valueStart + valueEndRel
+
+	var buf bytes.Buffer
+	buf.Write(doc[:valueStart])
+	buf.WriteString(html.EscapeString(value))
+	buf.Write(doc[valueEnd:])
+	return buf.Bytes()
+}
+
+func faviconMimeType(href string) string {
+	normalized := strings.ToLower(strings.TrimSpace(href))
+	if strings.HasPrefix(normalized, "data:image/svg+xml") {
+		return "image/svg+xml"
+	}
+	if strings.HasPrefix(normalized, "data:image/jpeg") || strings.HasPrefix(normalized, "data:image/jpg") {
+		return "image/jpeg"
+	}
+	if strings.HasPrefix(normalized, "data:image/webp") {
+		return "image/webp"
+	}
+	if strings.HasPrefix(normalized, "data:image/x-icon") || strings.HasPrefix(normalized, "data:image/vnd.microsoft.icon") {
+		return "image/x-icon"
+	}
+
+	path := normalized
+	if index := strings.IndexAny(path, "?#"); index >= 0 {
+		path = path[:index]
+	}
+	if strings.HasSuffix(path, ".svg") {
+		return "image/svg+xml"
+	}
+	if strings.HasSuffix(path, ".jpg") || strings.HasSuffix(path, ".jpeg") {
+		return "image/jpeg"
+	}
+	if strings.HasSuffix(path, ".webp") {
+		return "image/webp"
+	}
+	if strings.HasSuffix(path, ".ico") {
+		return "image/x-icon"
+	}
+	return "image/png"
 }
 
 func replaceCanonicalHref(doc []byte, href string) []byte {

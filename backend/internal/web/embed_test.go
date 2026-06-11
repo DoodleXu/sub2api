@@ -94,7 +94,7 @@ func TestInjectSiteTitle(t *testing.T) {
 
 func TestInjectSiteSEO(t *testing.T) {
 	t.Run("injects_public_site_metadata", func(t *testing.T) {
-		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title><meta name="description" content="old"><meta property="og:site_name" content="old"><meta property="og:title" content="old"><meta property="og:description" content="old"><meta property="og:image" content="/logo.png"><meta name="twitter:title" content="old"><meta name="twitter:description" content="old"></head><body></body></html>`)
+		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title><link rel="icon" type="image/png" href="/logo.png"><meta name="description" content="old"><meta property="og:site_name" content="old"><meta property="og:title" content="old"><meta property="og:description" content="old"><meta property="og:image" content="/logo.png"><meta name="twitter:title" content="old"><meta name="twitter:description" content="old"></head><body></body></html>`)
 		settingsJSON := []byte(`{"site_name":"My Site","site_subtitle":"Unified AI access","site_logo":"https://cdn.example.com/logo.png"}`)
 
 		result := string(injectSiteSEO(html, settingsJSON))
@@ -104,6 +104,7 @@ func TestInjectSiteSEO(t *testing.T) {
 		assert.Contains(t, result, `property="og:site_name" content="My Site"`)
 		assert.Contains(t, result, `property="og:image" content="https://cdn.example.com/logo.png"`)
 		assert.Contains(t, result, `name="twitter:title" content="My Site - AI API Gateway"`)
+		assert.Contains(t, result, `<link rel="icon" type="image/png" href="https://cdn.example.com/logo.png">`)
 	})
 
 	t.Run("falls_back_to_defaults", func(t *testing.T) {
@@ -115,6 +116,46 @@ func TestInjectSiteSEO(t *testing.T) {
 		assert.Contains(t, result, `name="description" content="Sub2API is an AI API gateway`)
 		assert.Contains(t, result, `property="og:image" content="/logo.png"`)
 	})
+}
+
+func TestReplaceFavicon(t *testing.T) {
+	t.Run("updates_href_and_type", func(t *testing.T) {
+		html := []byte(`<html><head><link rel="icon" type="image/png" href="/logo.png"></head></html>`)
+
+		result := string(replaceFavicon(html, "https://cdn.example.com/brand.svg?v=2"))
+
+		assert.Contains(t, result, `<link rel="icon" type="image/svg+xml" href="https://cdn.example.com/brand.svg?v=2">`)
+	})
+
+	t.Run("keeps_html_when_icon_link_missing", func(t *testing.T) {
+		html := []byte(`<html><head></head></html>`)
+
+		result := replaceFavicon(html, "/brand.png")
+
+		assert.Equal(t, string(html), string(result))
+	})
+}
+
+func TestFaviconMimeType(t *testing.T) {
+	tests := []struct {
+		name string
+		href string
+		want string
+	}{
+		{name: "png fallback", href: "/logo.png", want: "image/png"},
+		{name: "svg with query", href: "https://cdn.example.com/logo.svg?v=2", want: "image/svg+xml"},
+		{name: "jpg with hash", href: "/logo.JPG#cache", want: "image/jpeg"},
+		{name: "webp", href: "/logo.webp", want: "image/webp"},
+		{name: "ico", href: "/favicon.ico", want: "image/x-icon"},
+		{name: "data svg", href: "data:image/svg+xml;base64,PHN2Zy8+", want: "image/svg+xml"},
+		{name: "data jpeg", href: "data:image/jpeg;base64,/9j/4AAQ", want: "image/jpeg"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, faviconMimeType(tt.href))
+		})
+	}
 }
 
 func TestInjectRequestSEO(t *testing.T) {
