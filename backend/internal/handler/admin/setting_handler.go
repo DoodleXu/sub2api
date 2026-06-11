@@ -521,6 +521,12 @@ func (h *SettingHandler) UpdateDailyCheckinSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	updatedSettings, err := h.settingService.GetAllSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.auditSettingsUpdate(c, previousSettings, updatedSettings, nil, nil, req)
 	h.GetSettings(c)
 }
 
