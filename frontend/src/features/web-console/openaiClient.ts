@@ -156,10 +156,11 @@ function imageFromValue(value: string, alt: string): WebConsoleImage {
 }
 
 function normalizedImageOptions(options?: WebConsoleImageOptions): WebConsoleImageOptions {
+  const background = options?.background?.trim() || ''
   return {
     size: options?.size?.trim() || '',
     quality: options?.quality?.trim() || '',
-    background: options?.background?.trim() || '',
+    background: background === 'transparent' ? '' : background,
     outputFormat: options?.outputFormat?.trim() || 'png',
     count: Math.min(Math.max(Math.trunc(Number(options?.count) || 1), 1), 4),
   }
@@ -218,6 +219,11 @@ export async function generateWebConsoleImage(ctx: WebConsoleRequestContext): Pr
 }
 
 export function webConsoleErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
+  if (error instanceof Error && error.message) {
+    if (/quota (has been )?exceeded|quota exceeded|insufficient_quota/i.test(error.message)) {
+      return '当前额度已用尽，请切换 API Key 或稍后再试。'
+    }
+    return error.message
+  }
   return '请求失败，请稍后重试。'
 }

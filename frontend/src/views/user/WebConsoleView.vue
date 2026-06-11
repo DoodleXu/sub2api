@@ -167,16 +167,23 @@
           >
             <div
               class="max-w-[88%] rounded-lg px-4 py-3 shadow-sm"
-              :class="message.role === 'user'
-                ? 'bg-primary-600 text-white'
-                : 'border border-gray-200 bg-white text-gray-900 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100'"
+              :class="[
+                message.role === 'user'
+                  ? 'bg-primary-600 text-white'
+                  : 'border border-gray-200 bg-white text-gray-900 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100',
+                message.images?.length ? 'w-fit' : '',
+              ]"
             >
               <p v-if="message.content" class="whitespace-pre-wrap text-sm leading-6">{{ message.content }}</p>
-              <div v-if="message.images?.length" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div
+                v-if="message.images?.length"
+                class="mt-3 grid grid-cols-1 gap-3"
+                :class="message.images.length > 1 ? 'sm:grid-cols-2' : 'sm:grid-cols-1'"
+              >
                 <figure
                   v-for="(image, imageIndex) in message.images"
                   :key="`${message.id}-${imageIndex}-${image.url}`"
-                  class="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-800"
+                  class="w-full max-w-[20rem] overflow-hidden rounded-lg border border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-800"
                 >
                   <a :href="image.url" target="_blank" rel="noopener noreferrer">
                     <img :src="image.url" :alt="image.alt || message.content" class="aspect-square w-full object-cover" />
@@ -398,7 +405,6 @@ const imageQualityOptions: SelectOption[] = [
 const imageBackgroundOptions: SelectOption[] = [
   { value: '', label: '默认' },
   { value: 'auto', label: '自动' },
-  { value: 'transparent', label: '透明' },
   { value: 'opaque', label: '不透明' },
 ]
 const imageOutputFormatOptions: SelectOption[] = [
@@ -512,6 +518,11 @@ async function scrollToBottom(): Promise<void> {
 
 function assistantImageContent(result: { images: WebConsoleImage[]; text?: string }): string {
   return result.text || `已生成 ${result.images.length} 张图片。`
+}
+
+function clearSubmitState(): void {
+  prompt.value = ''
+  errorMessage.value = ''
 }
 
 function imageLabel(message: WebConsoleMessage, index: number): string {
@@ -658,6 +669,7 @@ async function submit(): Promise<void> {
         created_at: new Date().toISOString(),
       })
     }
+    clearSubmitState()
     touchSession(session)
     await scrollToBottom()
   } catch (error) {

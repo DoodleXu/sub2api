@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateWebConsoleImage, sendWebConsoleChat } from '../openaiClient'
+import { generateWebConsoleImage, sendWebConsoleChat, webConsoleErrorMessage } from '../openaiClient'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -170,12 +170,16 @@ describe('web console openai client', () => {
         model: 'gpt-image-2',
         size: '1024x1024',
         quality: 'high',
-        background: 'transparent',
         output_format: 'webp',
       }],
       tool_choice: { type: 'image_generation' },
     }
     expect(JSON.parse(String(firstResponsesInit.body))).toEqual(expectedResponsesBody)
     expect(JSON.parse(String(secondResponsesInit.body))).toEqual(expectedResponsesBody)
+  })
+
+  it('将额度耗尽错误转成中文提示', () => {
+    expect(webConsoleErrorMessage(new Error('The quota has been exceeded.'))).toBe('当前额度已用尽，请切换 API Key 或稍后再试。')
+    expect(webConsoleErrorMessage(new Error('insufficient_quota'))).toBe('当前额度已用尽，请切换 API Key 或稍后再试。')
   })
 })
