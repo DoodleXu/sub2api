@@ -20,6 +20,10 @@ export const apiClient: AxiosInstance = axios.create({
   }
 })
 
+export function isOpsMonitoringPath(pathname: string): boolean {
+  return pathname === '/admin/ops' || pathname.startsWith('/admin/ops/')
+}
+
 // ==================== Token Refresh State ====================
 
 // Track if a token refresh is in progress to prevent multiple simultaneous refresh requests
@@ -136,7 +140,7 @@ apiClient.interceptors.response.use(
           // ignore event failures
         }
 
-        if (window.location.pathname.startsWith('/admin/ops')) {
+        if (isOpsMonitoringPath(window.location.pathname)) {
           window.location.href = '/admin/settings'
         }
 

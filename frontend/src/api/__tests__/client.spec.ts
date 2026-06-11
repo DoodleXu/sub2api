@@ -145,6 +145,17 @@ describe('API Client', () => {
     })
   })
 
+  describe('运维监控路径识别', () => {
+    it('只匹配运维监控路由，不误伤运营中心', async () => {
+      const { isOpsMonitoringPath } = await import('@/api/client')
+
+      expect(isOpsMonitoringPath('/admin/ops')).toBe(true)
+      expect(isOpsMonitoringPath('/admin/ops/dashboard')).toBe(true)
+      expect(isOpsMonitoringPath('/admin/operations')).toBe(false)
+      expect(isOpsMonitoringPath('/admin/operations/daily-checkin')).toBe(false)
+    })
+  })
+
   // --- 401 Token 刷新 ---
 
   describe('401 Token 刷新', () => {
