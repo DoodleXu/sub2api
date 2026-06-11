@@ -100,12 +100,7 @@ describe('admin DashboardView', () => {
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
       trend: [],
-      models: [],
-      users_trend: [],
-      ranking: [],
-      ranking_total_actual_cost: 0,
-      ranking_total_requests: 0,
-      ranking_total_tokens: 0
+      models: []
     })
     getUserUsageTrend.mockResolvedValue({
       trend: [],
@@ -154,18 +149,26 @@ describe('admin DashboardView', () => {
       start_date: formatLocalDate(yesterday),
       end_date: formatLocalDate(now),
       granularity: 'hour',
-      include_users_trend: true,
-      include_user_ranking: true,
-      users_trend_limit: 12,
-      user_ranking_limit: 12
+      include_users_trend: false
     }))
-    expect(getUserUsageTrend).not.toHaveBeenCalled()
-    expect(getUserSpendingRanking).not.toHaveBeenCalled()
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
+    expect(getUserUsageTrend).toHaveBeenCalledWith(expect.objectContaining({
+      start_date: formatLocalDate(yesterday),
+      end_date: formatLocalDate(now),
+      granularity: 'hour',
+      limit: 12
+    }))
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledWith(expect.objectContaining({
+      start_date: formatLocalDate(yesterday),
+      end_date: formatLocalDate(now),
+      limit: 12
+    }))
 
     wrapper.unmount()
   })
 
-  it('loads recent user trend and ranking through the initial snapshot', async () => {
+  it('loads recent user trend and ranking separately from the initial snapshot', async () => {
     const wrapper = mount(DashboardView, {
       global: {
         stubs: {
@@ -184,20 +187,19 @@ describe('admin DashboardView', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
-    expect(getUserUsageTrend).not.toHaveBeenCalled()
-    expect(getUserSpendingRanking).not.toHaveBeenCalled()
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
       include_stats: true,
       include_trend: true,
       include_model_stats: true,
-      include_users_trend: true,
-      include_user_ranking: true
+      include_users_trend: false
     }))
 
     wrapper.unmount()
   })
 
-  it('refreshes dashboard data with a single snapshot request', async () => {
+  it('refreshes dashboard data with the upstream split loading flow', async () => {
     const wrapper = mount(DashboardView, {
       global: {
         stubs: {
@@ -219,12 +221,11 @@ describe('admin DashboardView', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(2)
-    expect(getUserUsageTrend).not.toHaveBeenCalled()
-    expect(getUserSpendingRanking).not.toHaveBeenCalled()
+    expect(getUserUsageTrend).toHaveBeenCalledTimes(2)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(2)
     expect(getSnapshotV2).toHaveBeenLastCalledWith(expect.objectContaining({
       include_stats: true,
-      include_users_trend: true,
-      include_user_ranking: true
+      include_users_trend: false
     }))
 
     wrapper.unmount()
