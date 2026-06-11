@@ -219,6 +219,7 @@ func registerOperationsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		checkin := operations.Group("/daily-checkin")
 		{
 			checkin.GET("/stats", h.Admin.Setting.GetDailyCheckinStats)
+			checkin.PUT("/settings", h.Admin.Setting.UpdateDailyCheckinSettings)
 			checkin.GET("/records", h.Admin.Setting.ListDailyCheckinRecords)
 		}
 	}

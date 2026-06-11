@@ -84,6 +84,55 @@ func (s *settingAntigravityUARepoStub) Delete(ctx context.Context, key string) e
 	panic("unexpected Delete call")
 }
 
+func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateDailyCheckinSettings(context.Background(), DailyCheckinSettings{
+		Enabled:             true,
+		RequiredUsageUSD:    1.5,
+		UsageScope:          DailyCheckinUsageScopeBalanceOnly,
+		RewardMinUSD:        0.5,
+		RewardMaxUSD:        2.25,
+		DailyBudgetUSD:      10,
+		MonthlyBudgetUSD:    100,
+		UserMonthlyLimitUSD: 5,
+		RewardTiers: []DailyCheckinRewardTier{
+			{MinUSD: 0.5, MaxUSD: 1, ProbabilityPercent: 40},
+			{MinUSD: 1.01, MaxUSD: 2.25, ProbabilityPercent: 60},
+		},
+		StreakEnabled:     true,
+		StreakScope:       DailyCheckinStreakScopeMonthly,
+		StreakMultipliers: []DailyCheckinStreakMultiplier{{Days: 7, Multiplier: 1.2}},
+		CritEnabled:       true,
+		CritProbability:   0.5,
+		CritMultiplier:    2,
+		CritMaxRewardUSD:  8,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, repo.updates, SettingKeySiteName)
+	require.NotContains(t, repo.updates, SettingKeySiteLogo)
+	require.NotContains(t, repo.updates, SettingKeySiteSubtitle)
+	require.Equal(t, map[string]string{
+		SettingKeyDailyCheckinEnabled:             "true",
+		SettingKeyDailyCheckinRequiredUsageUSD:    "1.50000000",
+		SettingKeyDailyCheckinUsageScope:          DailyCheckinUsageScopeBalanceOnly,
+		SettingKeyDailyCheckinRewardMinUSD:        "1.00000000",
+		SettingKeyDailyCheckinRewardMaxUSD:        "2.25000000",
+		SettingKeyDailyCheckinDailyBudgetUSD:      "10.00000000",
+		SettingKeyDailyCheckinMonthlyBudgetUSD:    "100.00000000",
+		SettingKeyDailyCheckinUserMonthlyLimitUSD: "5.00000000",
+		SettingKeyDailyCheckinRewardTiers:         `[{"min_usd":1,"max_usd":1,"probability_percent":40},{"min_usd":1.01,"max_usd":2.25,"probability_percent":60}]`,
+		SettingKeyDailyCheckinStreakEnabled:       "true",
+		SettingKeyDailyCheckinStreakScope:         DailyCheckinStreakScopeMonthly,
+		SettingKeyDailyCheckinStreakMultipliers:   `[{"days":7,"multiplier":1.2}]`,
+		SettingKeyDailyCheckinCritEnabled:         "true",
+		SettingKeyDailyCheckinCritProbability:     "0.50000000",
+		SettingKeyDailyCheckinCritMultiplier:      "2.00000000",
+		SettingKeyDailyCheckinCritMaxRewardUSD:    "8.00000000",
+	}, repo.updates)
+}
+
 type defaultSubGroupReaderStub struct {
 	byID  map[int64]*Group
 	errBy map[int64]error

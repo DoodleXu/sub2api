@@ -929,8 +929,8 @@ const (
 )
 
 type DailyCheckinRewardTier struct {
-	MinUSD             int     `json:"min_usd"`
-	MaxUSD             int     `json:"max_usd"`
+	MinUSD             float64 `json:"min_usd"`
+	MaxUSD             float64 `json:"max_usd"`
 	ProbabilityPercent float64 `json:"probability_percent"`
 }
 
@@ -949,16 +949,16 @@ func parseChannelMonitorInterval(raw string) int {
 	return clampChannelMonitorInterval(v)
 }
 
-func parseDailyCheckinRewardRange(minRaw, maxRaw string) (int, int) {
-	minValue := DailyCheckinRewardMinDefault
-	maxValue := DailyCheckinRewardMaxDefault
+func parseDailyCheckinRewardRange(minRaw, maxRaw string) (float64, float64) {
+	minValue := float64(DailyCheckinRewardMinDefault)
+	maxValue := float64(DailyCheckinRewardMaxDefault)
 	if raw := strings.TrimSpace(minRaw); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
 			minValue = v
 		}
 	}
 	if raw := strings.TrimSpace(maxRaw); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
 			maxValue = v
 		}
 	}
@@ -1001,19 +1001,21 @@ func normalizeDailyCheckinStreakScope(raw string) string {
 	}
 }
 
-func normalizeDailyCheckinRewardRange(minValue, maxValue int) (int, int) {
-	if minValue < DailyCheckinRewardMinDefault {
+func normalizeDailyCheckinRewardRange(minValue, maxValue float64) (float64, float64) {
+	if math.IsNaN(minValue) || math.IsInf(minValue, 0) || minValue < DailyCheckinRewardMinDefault {
 		minValue = DailyCheckinRewardMinDefault
 	}
 	if minValue > DailyCheckinRewardMaxLimit {
 		minValue = DailyCheckinRewardMaxLimit
 	}
-	if maxValue < DailyCheckinRewardMinDefault {
+	if math.IsNaN(maxValue) || math.IsInf(maxValue, 0) || maxValue < DailyCheckinRewardMinDefault {
 		maxValue = DailyCheckinRewardMinDefault
 	}
 	if maxValue > DailyCheckinRewardMaxLimit {
 		maxValue = DailyCheckinRewardMaxLimit
 	}
+	minValue = roundDailyCheckinAmount(minValue)
+	maxValue = roundDailyCheckinAmount(maxValue)
 	if maxValue < minValue {
 		maxValue = minValue
 	}
@@ -1037,7 +1039,7 @@ func normalizeDailyCheckinPercent(value float64) float64 {
 	return value
 }
 
-func normalizeDailyCheckinRewardTiers(tiers []DailyCheckinRewardTier, fallbackMin, fallbackMax int, requireFullProbability bool) ([]DailyCheckinRewardTier, error) {
+func normalizeDailyCheckinRewardTiers(tiers []DailyCheckinRewardTier, fallbackMin, fallbackMax float64, requireFullProbability bool) ([]DailyCheckinRewardTier, error) {
 	if len(tiers) == 0 {
 		minValue, maxValue := normalizeDailyCheckinRewardRange(fallbackMin, fallbackMax)
 		return []DailyCheckinRewardTier{{MinUSD: minValue, MaxUSD: maxValue, ProbabilityPercent: 100}}, nil
@@ -1066,7 +1068,7 @@ func normalizeDailyCheckinRewardTiers(tiers []DailyCheckinRewardTier, fallbackMi
 	return out, nil
 }
 
-func parseDailyCheckinRewardTiers(raw string, fallbackMin, fallbackMax int) []DailyCheckinRewardTier {
+func parseDailyCheckinRewardTiers(raw string, fallbackMin, fallbackMax float64) []DailyCheckinRewardTier {
 	var tiers []DailyCheckinRewardTier
 	if strings.TrimSpace(raw) != "" {
 		_ = json.Unmarshal([]byte(raw), &tiers)
@@ -1787,6 +1789,15 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	return err
 }
 
+// UpdateDailyCheckinSettings persists only daily check-in operation rules.
+func (s *SettingService) UpdateDailyCheckinSettings(ctx context.Context, settings DailyCheckinSettings) error {
+	updates, err := buildDailyCheckinSettingsUpdates(settings)
+	if err != nil {
+		return err
+	}
+	return s.settingRepo.SetMultiple(ctx, updates)
+}
+
 func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, bool, error) {
 	rawSettings, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyOIDCConnectUsePKCE,
@@ -2114,27 +2125,30 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
 	updates[SettingKeyWebConsoleEnabled] = strconv.FormatBool(settings.WebConsoleEnabled)
 	updates[SettingKeyWebConsoleDefaultEndpoint] = strings.TrimSpace(settings.WebConsoleDefaultEndpoint)
-	updates[SettingKeyDailyCheckinEnabled] = strconv.FormatBool(settings.DailyCheckinEnabled)
-	updates[SettingKeyDailyCheckinRequiredUsageUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinRequiredUsageUSD, DailyCheckinRequiredUsageDefault), 'f', 8, 64)
-	updates[SettingKeyDailyCheckinUsageScope] = normalizeDailyCheckinUsageScope(settings.DailyCheckinUsageScope)
-	checkinMin, checkinMax := normalizeDailyCheckinRewardRange(settings.DailyCheckinRewardMinUSD, settings.DailyCheckinRewardMaxUSD)
-	updates[SettingKeyDailyCheckinRewardMinUSD] = strconv.Itoa(checkinMin)
-	updates[SettingKeyDailyCheckinRewardMaxUSD] = strconv.Itoa(checkinMax)
-	updates[SettingKeyDailyCheckinDailyBudgetUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinDailyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
-	updates[SettingKeyDailyCheckinMonthlyBudgetUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinMonthlyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
-	updates[SettingKeyDailyCheckinUserMonthlyLimitUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinUserMonthlyLimitUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
-	rewardTiers, err := normalizeDailyCheckinRewardTiers(settings.DailyCheckinRewardTiers, checkinMin, checkinMax, true)
+	dailyCheckinUpdates, err := buildDailyCheckinSettingsUpdates(DailyCheckinSettings{
+		Enabled:             settings.DailyCheckinEnabled,
+		RequiredUsageUSD:    settings.DailyCheckinRequiredUsageUSD,
+		UsageScope:          settings.DailyCheckinUsageScope,
+		RewardMinUSD:        settings.DailyCheckinRewardMinUSD,
+		RewardMaxUSD:        settings.DailyCheckinRewardMaxUSD,
+		DailyBudgetUSD:      settings.DailyCheckinDailyBudgetUSD,
+		MonthlyBudgetUSD:    settings.DailyCheckinMonthlyBudgetUSD,
+		UserMonthlyLimitUSD: settings.DailyCheckinUserMonthlyLimitUSD,
+		RewardTiers:         settings.DailyCheckinRewardTiers,
+		StreakEnabled:       settings.DailyCheckinStreakEnabled,
+		StreakScope:         settings.DailyCheckinStreakScope,
+		StreakMultipliers:   settings.DailyCheckinStreakMultipliers,
+		CritEnabled:         settings.DailyCheckinCritEnabled,
+		CritProbability:     settings.DailyCheckinCritProbability,
+		CritMultiplier:      settings.DailyCheckinCritMultiplier,
+		CritMaxRewardUSD:    settings.DailyCheckinCritMaxRewardUSD,
+	})
 	if err != nil {
 		return nil, err
 	}
-	updates[SettingKeyDailyCheckinRewardTiers] = mustJSONSetting(rewardTiers)
-	updates[SettingKeyDailyCheckinStreakEnabled] = strconv.FormatBool(settings.DailyCheckinStreakEnabled)
-	updates[SettingKeyDailyCheckinStreakScope] = normalizeDailyCheckinStreakScope(settings.DailyCheckinStreakScope)
-	updates[SettingKeyDailyCheckinStreakMultipliers] = mustJSONSetting(normalizeDailyCheckinStreakMultipliers(settings.DailyCheckinStreakMultipliers))
-	updates[SettingKeyDailyCheckinCritEnabled] = strconv.FormatBool(settings.DailyCheckinCritEnabled)
-	updates[SettingKeyDailyCheckinCritProbability] = strconv.FormatFloat(normalizeDailyCheckinPercent(settings.DailyCheckinCritProbability), 'f', 8, 64)
-	updates[SettingKeyDailyCheckinCritMultiplier] = strconv.FormatFloat(normalizeDailyCheckinMultiplier(settings.DailyCheckinCritMultiplier), 'f', 8, 64)
-	updates[SettingKeyDailyCheckinCritMaxRewardUSD] = strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyCheckinCritMaxRewardUSD, DailyCheckinBudgetDefault), 'f', 8, 64)
+	for key, value := range dailyCheckinUpdates {
+		updates[key] = value
+	}
 
 	// Affiliate (邀请返利) feature switch
 	updates[SettingKeyAffiliateEnabled] = strconv.FormatBool(settings.AffiliateEnabled)
@@ -3930,8 +3944,8 @@ type DailyCheckinSettings struct {
 	Enabled             bool
 	RequiredUsageUSD    float64
 	UsageScope          string
-	RewardMinUSD        int
-	RewardMaxUSD        int
+	RewardMinUSD        float64
+	RewardMaxUSD        float64
 	DailyBudgetUSD      float64
 	MonthlyBudgetUSD    float64
 	UserMonthlyLimitUSD float64
@@ -3943,6 +3957,32 @@ type DailyCheckinSettings struct {
 	CritProbability     float64
 	CritMultiplier      float64
 	CritMaxRewardUSD    float64
+}
+
+func buildDailyCheckinSettingsUpdates(settings DailyCheckinSettings) (map[string]string, error) {
+	checkinMin, checkinMax := normalizeDailyCheckinRewardRange(settings.RewardMinUSD, settings.RewardMaxUSD)
+	rewardTiers, err := normalizeDailyCheckinRewardTiers(settings.RewardTiers, checkinMin, checkinMax, true)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		SettingKeyDailyCheckinEnabled:             strconv.FormatBool(settings.Enabled),
+		SettingKeyDailyCheckinRequiredUsageUSD:    strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.RequiredUsageUSD, DailyCheckinRequiredUsageDefault), 'f', 8, 64),
+		SettingKeyDailyCheckinUsageScope:          normalizeDailyCheckinUsageScope(settings.UsageScope),
+		SettingKeyDailyCheckinRewardMinUSD:        strconv.FormatFloat(checkinMin, 'f', 8, 64),
+		SettingKeyDailyCheckinRewardMaxUSD:        strconv.FormatFloat(checkinMax, 'f', 8, 64),
+		SettingKeyDailyCheckinDailyBudgetUSD:      strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
+		SettingKeyDailyCheckinMonthlyBudgetUSD:    strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.MonthlyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
+		SettingKeyDailyCheckinUserMonthlyLimitUSD: strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.UserMonthlyLimitUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
+		SettingKeyDailyCheckinRewardTiers:         mustJSONSetting(rewardTiers),
+		SettingKeyDailyCheckinStreakEnabled:       strconv.FormatBool(settings.StreakEnabled),
+		SettingKeyDailyCheckinStreakScope:         normalizeDailyCheckinStreakScope(settings.StreakScope),
+		SettingKeyDailyCheckinStreakMultipliers:   mustJSONSetting(normalizeDailyCheckinStreakMultipliers(settings.StreakMultipliers)),
+		SettingKeyDailyCheckinCritEnabled:         strconv.FormatBool(settings.CritEnabled),
+		SettingKeyDailyCheckinCritProbability:     strconv.FormatFloat(normalizeDailyCheckinPercent(settings.CritProbability), 'f', 8, 64),
+		SettingKeyDailyCheckinCritMultiplier:      strconv.FormatFloat(normalizeDailyCheckinMultiplier(settings.CritMultiplier), 'f', 8, 64),
+		SettingKeyDailyCheckinCritMaxRewardUSD:    strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.CritMaxRewardUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
+	}, nil
 }
 
 func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyCheckinSettings, error) {
@@ -4003,7 +4043,7 @@ func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyChe
 	}, nil
 }
 
-func (s *SettingService) GetDailyCheckinRewardRange(ctx context.Context) (int, int, error) {
+func (s *SettingService) GetDailyCheckinRewardRange(ctx context.Context) (float64, float64, error) {
 	settings, err := s.GetDailyCheckinSettings(ctx)
 	if err != nil {
 		return 0, 0, err

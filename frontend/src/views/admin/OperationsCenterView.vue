@@ -162,11 +162,11 @@
             <div v-for="(tier, index) in form.daily_checkin_reward_tiers" :key="index" class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.minReward') }}</span>
-                <input v-model.number="tier.min_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.minReward')" />
+                <input v-model.number="tier.min_usd" class="input" type="number" min="1" max="100" step="0.01" :placeholder="t('admin.operations.minReward')" />
               </label>
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.maxReward') }}</span>
-                <input v-model.number="tier.max_usd" class="input" type="number" min="1" max="100" step="1" :placeholder="t('admin.operations.maxReward')" />
+                <input v-model.number="tier.max_usd" class="input" type="number" min="1" max="100" step="0.01" :placeholder="t('admin.operations.maxReward')" />
               </label>
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.probability') }}</span>
@@ -249,8 +249,8 @@ import Icon from '@/components/icons/Icon.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import { useAppStore } from '@/stores'
-import settingsAPI, { type DailyCheckinAdminStats, type DailyCheckinRewardTier, type DailyCheckinStreakMultiplier, type UpdateSettingsRequest } from '@/api/admin/settings'
-import operationsAPI, { type DailyCheckinAdminRecord } from '@/api/admin/operations'
+import settingsAPI, { type DailyCheckinAdminStats, type DailyCheckinRewardTier, type DailyCheckinStreakMultiplier } from '@/api/admin/settings'
+import operationsAPI, { type DailyCheckinAdminRecord, type DailyCheckinSettingsUpdateRequest } from '@/api/admin/operations'
 
 type TabKey = 'overview' | 'records' | 'rules'
 
@@ -442,10 +442,10 @@ function removeStreakRule(index: number) {
   form.daily_checkin_streak_multipliers.splice(index, 1)
 }
 
-function normalizedRules(): UpdateSettingsRequest {
+function normalizedRules(): DailyCheckinSettingsUpdateRequest {
   const tiers = form.daily_checkin_reward_tiers.map((tier) => {
-    const min = Math.max(1, Math.min(100, Math.floor(Number(tier.min_usd) || 1)))
-    const max = Math.max(min, Math.min(100, Math.floor(Number(tier.max_usd) || min)))
+    const min = normalizeRewardAmount(tier.min_usd, 1)
+    const max = Math.max(min, normalizeRewardAmount(tier.max_usd, min))
     return {
       min_usd: min,
       max_usd: max,
@@ -479,6 +479,14 @@ function normalizedRules(): UpdateSettingsRequest {
   }
 }
 
+function normalizeRewardAmount(value: number, fallback: number): number {
+  const normalized = Number(value)
+  if (!Number.isFinite(normalized) || normalized < 1) {
+    return fallback
+  }
+  return Math.round(Math.min(100, normalized) * 100) / 100
+}
+
 async function saveRules() {
   if (Math.abs(rewardProbabilityTotal.value - 100) >= 0.000001) {
     appStore.showError(`${t('admin.operations.probabilityTotal')}: ${rewardProbabilityTotal.value.toFixed(4)}%`)
@@ -486,7 +494,7 @@ async function saveRules() {
   }
   saving.value = true
   try {
-    const updated = await settingsAPI.updateSettings(normalizedRules())
+    const updated = await operationsAPI.updateDailyCheckinSettings(normalizedRules())
     assignSettings(updated)
     stats.value = await operationsAPI.getDailyCheckinStats()
     appStore.showSuccess(t('admin.operations.saved'))

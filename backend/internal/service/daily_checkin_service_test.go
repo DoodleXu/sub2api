@@ -304,6 +304,39 @@ func TestDailyCheckinRewardsBalanceAndPreventsDuplicate(t *testing.T) {
 	require.Equal(t, "DAILY_CHECKIN_ALREADY_CHECKED_IN", apperrors.Reason(err))
 }
 
+func TestDailyCheckinSupportsDecimalRewardTierAmounts(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardMinUSD: "1.25",
+		SettingKeyDailyCheckinRewardMaxUSD: "1.25",
+		SettingKeyDailyCheckinRewardTiers:  `[{"min_usd":1.25,"max_usd":1.25,"probability_percent":100}]`,
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 1.25, ?)`, now)
+	require.NoError(t, err)
+
+	status, err := svc.GetStatus(ctx, 1)
+	require.NoError(t, err)
+	require.InDelta(t, 1.25, status.RewardMinUSD, 0.0001)
+	require.InDelta(t, 1.25, status.RewardMaxUSD, 0.0001)
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.InDelta(t, 1.25, result.RewardAmount, 0.0001)
+	require.InDelta(t, 1.25, result.BaseRewardAmount, 0.0001)
+	require.InDelta(t, 6.25, result.Balance, 0.0001)
+
+	var storedReward float64
+	var metadataRaw string
+	require.NoError(t, db.QueryRow(`SELECT reward_amount, reward_metadata FROM user_checkins WHERE user_id = 1`).Scan(&storedReward, &metadataRaw))
+	require.InDelta(t, 1.25, storedReward, 0.0001)
+	require.Contains(t, metadataRaw, `"min_usd":1.25`)
+	require.Contains(t, metadataRaw, `"max_usd":1.25`)
+}
+
 func TestDailyCheckinAppliesRewardTierStreakAndCrit(t *testing.T) {
 	svc, db := newDailyCheckinTestService(t, map[string]string{
 		SettingKeyDailyCheckinRewardTiers:       `[{"min_usd":2,"max_usd":2,"probability_percent":100}]`,
@@ -405,8 +438,8 @@ func TestDailyCheckinZeroRewardConfigIsRaisedToMinimumReward(t *testing.T) {
 	result, err := svc.CheckIn(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1.0, result.RewardAmount)
-	require.Equal(t, 1, result.RewardMinUSD)
-	require.Equal(t, 1, result.RewardMaxUSD)
+	require.InDelta(t, 1, result.RewardMinUSD, 0.0001)
+	require.InDelta(t, 1, result.RewardMaxUSD, 0.0001)
 }
 
 func TestDailyCheckinRewardRangeIsClampedToMaxLimit(t *testing.T) {
@@ -426,8 +459,8 @@ func TestDailyCheckinRewardRangeIsClampedToMaxLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(DailyCheckinRewardMaxLimit), result.RewardAmount)
 	require.Equal(t, 105.0, result.Balance)
-	require.Equal(t, DailyCheckinRewardMaxLimit, result.RewardMinUSD)
-	require.Equal(t, DailyCheckinRewardMaxLimit, result.RewardMaxUSD)
+	require.InDelta(t, DailyCheckinRewardMaxLimit, result.RewardMinUSD, 0.0001)
+	require.InDelta(t, DailyCheckinRewardMaxLimit, result.RewardMaxUSD, 0.0001)
 }
 
 func TestDailyCheckinDailyBudgetBlocksReward(t *testing.T) {

@@ -45,8 +45,8 @@ type DailyCheckinStatus struct {
 	TodayUsageUSD        float64              `json:"today_usage_usd"`
 	RequiredUsageUSD     float64              `json:"required_usage_usd"`
 	UsageScope           string               `json:"-"`
-	RewardMinUSD         int                  `json:"reward_min_usd"`
-	RewardMaxUSD         int                  `json:"reward_max_usd"`
+	RewardMinUSD         float64              `json:"reward_min_usd"`
+	RewardMaxUSD         float64              `json:"reward_max_usd"`
 	DailyBudgetUSD       float64              `json:"-"`
 	DailyRewardUSD       float64              `json:"-"`
 	MonthlyBudgetUSD     float64              `json:"-"`
@@ -86,8 +86,8 @@ type DailyCheckinAdminStats struct {
 	Enabled             bool    `json:"enabled"`
 	RequiredUsageUSD    float64 `json:"required_usage_usd"`
 	UsageScope          string  `json:"usage_scope"`
-	RewardMinUSD        int     `json:"reward_min_usd"`
-	RewardMaxUSD        int     `json:"reward_max_usd"`
+	RewardMinUSD        float64 `json:"reward_min_usd"`
+	RewardMaxUSD        float64 `json:"reward_max_usd"`
 	TodayCheckins       int64   `json:"today_checkins"`
 	TodayUsers          int64   `json:"today_users"`
 	TodayRewardUSD      float64 `json:"today_reward_usd"`
@@ -428,7 +428,7 @@ func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQueri
 			return nil, err
 		}
 	}
-	budgetExhausted := isDailyCheckinBudgetExhausted(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
+	budgetExhausted := isDailyCheckinBudgetExhausted(settings.RewardMinUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
 
 	return &DailyCheckinStatus{
 		Enabled:              settings.Enabled,
@@ -640,7 +640,7 @@ func chooseDailyCheckinReward(ctx context.Context, tx *sql.Tx, userID int64, tod
 		return nil, err
 	}
 	streakMultiplier := dailyCheckinStreakMultiplier(streakDays, settings)
-	preCritReward := roundDailyCheckinAmount(float64(baseReward) * streakMultiplier)
+	preCritReward := roundDailyCheckinAmount(baseReward * streakMultiplier)
 	critEligible := settings.CritEnabled && (settings.CritMaxRewardUSD <= 0 || preCritReward <= settings.CritMaxRewardUSD)
 	critHit := false
 	critMultiplier := 1.0
@@ -657,18 +657,18 @@ func chooseDailyCheckinReward(ctx context.Context, tx *sql.Tx, userID int64, tod
 	}
 
 	maxAllowed := maxDailyCheckinRewardByBudget(finalReward, dailyReward, monthlyReward, userMonthlyReward, settings)
-	if maxAllowed < float64(settings.RewardMinUSD) {
-		return nil, dailyCheckinBudgetExhaustedError(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
+	if maxAllowed < settings.RewardMinUSD {
+		return nil, dailyCheckinBudgetExhaustedError(settings.RewardMinUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
 	}
 	if finalReward > maxAllowed {
 		finalReward = roundDailyCheckinAmount(maxAllowed)
 	}
 	if finalReward <= 0 {
-		return nil, dailyCheckinBudgetExhaustedError(float64(settings.RewardMinUSD), dailyReward, monthlyReward, userMonthlyReward, settings)
+		return nil, dailyCheckinBudgetExhaustedError(settings.RewardMinUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
 	}
 
 	return &dailyCheckinRewardChoice{Metadata: DailyCheckinRewardMetadata{
-		BaseRewardAmount:    float64(baseReward),
+		BaseRewardAmount:    baseReward,
 		RewardTier:          tier,
 		StreakDays:          streakDays,
 		StreakMultiplier:    streakMultiplier,
@@ -883,19 +883,21 @@ func dailyCheckinUsageNotEnoughError(todayUsage, requiredUsage float64) error {
 	})
 }
 
-func randomIntInclusive(minValue, maxValue int) (int, error) {
+func randomCentAmountInclusive(minValue, maxValue float64) (float64, error) {
 	minValue, maxValue = normalizeDailyCheckinRewardRange(minValue, maxValue)
-	if minValue == maxValue {
-		return minValue, nil
+	minCents := int64(math.Round(minValue * 100))
+	maxCents := int64(math.Round(maxValue * 100))
+	if minCents == maxCents {
+		return float64(minCents) / 100, nil
 	}
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(maxValue-minValue+1)))
+	n, err := rand.Int(rand.Reader, big.NewInt(maxCents-minCents+1))
 	if err != nil {
 		return 0, err
 	}
-	return int(n.Int64()) + minValue, nil
+	return float64(n.Int64()+minCents) / 100, nil
 }
 
-func randomDailyCheckinRewardFromTiers(settings *DailyCheckinSettings) (int, *DailyCheckinRewardTier, error) {
+func randomDailyCheckinRewardFromTiers(settings *DailyCheckinSettings) (float64, *DailyCheckinRewardTier, error) {
 	tiers := settings.RewardTiers
 	if len(tiers) == 0 {
 		tiers = []DailyCheckinRewardTier{{MinUSD: settings.RewardMinUSD, MaxUSD: settings.RewardMaxUSD, ProbabilityPercent: 100}}
@@ -959,8 +961,8 @@ func roundDailyCheckinAmount(value float64) float64 {
 	return math.Round(value*100) / 100
 }
 
-func randomDailyCheckinReward(minValue, maxValue int) (int, error) {
-	reward, err := randomIntInclusive(minValue, maxValue)
+func randomDailyCheckinReward(minValue, maxValue float64) (float64, error) {
+	reward, err := randomCentAmountInclusive(minValue, maxValue)
 	if err != nil {
 		return 0, infraerrors.InternalServer("DAILY_CHECKIN_REWARD_RANDOM_FAILED", "failed to generate daily check-in reward").WithCause(err)
 	}

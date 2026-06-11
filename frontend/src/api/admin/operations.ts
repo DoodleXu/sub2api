@@ -1,5 +1,25 @@
 import { apiClient } from '../client'
-import type { DailyCheckinAdminStats } from './settings'
+import type { DailyCheckinAdminStats, SystemSettings, UpdateSettingsRequest } from './settings'
+
+export type DailyCheckinSettingsUpdateRequest = Pick<
+  UpdateSettingsRequest,
+  | 'daily_checkin_enabled'
+  | 'daily_checkin_required_usage_usd'
+  | 'daily_checkin_usage_scope'
+  | 'daily_checkin_reward_min_usd'
+  | 'daily_checkin_reward_max_usd'
+  | 'daily_checkin_daily_budget_usd'
+  | 'daily_checkin_monthly_budget_usd'
+  | 'daily_checkin_user_monthly_limit_usd'
+  | 'daily_checkin_reward_tiers'
+  | 'daily_checkin_streak_multiplier_enabled'
+  | 'daily_checkin_streak_multiplier_scope'
+  | 'daily_checkin_streak_multipliers'
+  | 'daily_checkin_crit_enabled'
+  | 'daily_checkin_crit_probability_percent'
+  | 'daily_checkin_crit_multiplier'
+  | 'daily_checkin_crit_max_reward_usd'
+>
 
 export interface DailyCheckinRewardMetadata {
   base_reward_amount: number
@@ -53,6 +73,11 @@ export async function getDailyCheckinStats(): Promise<DailyCheckinAdminStats> {
   return data
 }
 
+export async function updateDailyCheckinSettings(settings: DailyCheckinSettingsUpdateRequest): Promise<SystemSettings> {
+  const { data } = await apiClient.put<SystemSettings>('/admin/operations/daily-checkin/settings', settings)
+  return data
+}
+
 export async function listDailyCheckinRecords(query: DailyCheckinRecordQuery = {}): Promise<DailyCheckinRecordListResponse> {
   const params = Object.fromEntries(
     Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -63,5 +88,6 @@ export async function listDailyCheckinRecords(query: DailyCheckinRecordQuery = {
 
 export default {
   getDailyCheckinStats,
+  updateDailyCheckinSettings,
   listDailyCheckinRecords,
 }

@@ -406,6 +406,124 @@ func (h *SettingHandler) ListDailyCheckinRecords(c *gin.Context) {
 	response.Success(c, result)
 }
 
+// UpdateDailyCheckinSettings updates only daily check-in operation rules.
+// PUT /api/v1/admin/operations/daily-checkin/settings
+func (h *SettingHandler) UpdateDailyCheckinSettings(c *gin.Context) {
+	var req UpdateSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	settings := service.DailyCheckinSettings{
+		Enabled: func() bool {
+			if req.DailyCheckinEnabled != nil {
+				return *req.DailyCheckinEnabled
+			}
+			return previousSettings.DailyCheckinEnabled
+		}(),
+		RequiredUsageUSD: func() float64 {
+			if req.DailyCheckinRequiredUsageUSD != nil {
+				return *req.DailyCheckinRequiredUsageUSD
+			}
+			return previousSettings.DailyCheckinRequiredUsageUSD
+		}(),
+		UsageScope: func() string {
+			if req.DailyCheckinUsageScope != nil {
+				return strings.TrimSpace(*req.DailyCheckinUsageScope)
+			}
+			return previousSettings.DailyCheckinUsageScope
+		}(),
+		RewardMinUSD: func() float64 {
+			if req.DailyCheckinRewardMinUSD != nil {
+				return *req.DailyCheckinRewardMinUSD
+			}
+			return previousSettings.DailyCheckinRewardMinUSD
+		}(),
+		RewardMaxUSD: func() float64 {
+			if req.DailyCheckinRewardMaxUSD != nil {
+				return *req.DailyCheckinRewardMaxUSD
+			}
+			return previousSettings.DailyCheckinRewardMaxUSD
+		}(),
+		DailyBudgetUSD: func() float64 {
+			if req.DailyCheckinDailyBudgetUSD != nil {
+				return *req.DailyCheckinDailyBudgetUSD
+			}
+			return previousSettings.DailyCheckinDailyBudgetUSD
+		}(),
+		MonthlyBudgetUSD: func() float64 {
+			if req.DailyCheckinMonthlyBudgetUSD != nil {
+				return *req.DailyCheckinMonthlyBudgetUSD
+			}
+			return previousSettings.DailyCheckinMonthlyBudgetUSD
+		}(),
+		UserMonthlyLimitUSD: func() float64 {
+			if req.DailyCheckinUserMonthlyLimitUSD != nil {
+				return *req.DailyCheckinUserMonthlyLimitUSD
+			}
+			return previousSettings.DailyCheckinUserMonthlyLimitUSD
+		}(),
+		RewardTiers: func() []service.DailyCheckinRewardTier {
+			if req.DailyCheckinRewardTiers != nil {
+				return *req.DailyCheckinRewardTiers
+			}
+			return previousSettings.DailyCheckinRewardTiers
+		}(),
+		StreakEnabled: func() bool {
+			if req.DailyCheckinStreakEnabled != nil {
+				return *req.DailyCheckinStreakEnabled
+			}
+			return previousSettings.DailyCheckinStreakEnabled
+		}(),
+		StreakScope: func() string {
+			if req.DailyCheckinStreakScope != nil {
+				return strings.TrimSpace(*req.DailyCheckinStreakScope)
+			}
+			return previousSettings.DailyCheckinStreakScope
+		}(),
+		StreakMultipliers: func() []service.DailyCheckinStreakMultiplier {
+			if req.DailyCheckinStreakMultipliers != nil {
+				return *req.DailyCheckinStreakMultipliers
+			}
+			return previousSettings.DailyCheckinStreakMultipliers
+		}(),
+		CritEnabled: func() bool {
+			if req.DailyCheckinCritEnabled != nil {
+				return *req.DailyCheckinCritEnabled
+			}
+			return previousSettings.DailyCheckinCritEnabled
+		}(),
+		CritProbability: func() float64 {
+			if req.DailyCheckinCritProbability != nil {
+				return *req.DailyCheckinCritProbability
+			}
+			return previousSettings.DailyCheckinCritProbability
+		}(),
+		CritMultiplier: func() float64 {
+			if req.DailyCheckinCritMultiplier != nil {
+				return *req.DailyCheckinCritMultiplier
+			}
+			return previousSettings.DailyCheckinCritMultiplier
+		}(),
+		CritMaxRewardUSD: func() float64 {
+			if req.DailyCheckinCritMaxRewardUSD != nil {
+				return *req.DailyCheckinCritMaxRewardUSD
+			}
+			return previousSettings.DailyCheckinCritMaxRewardUSD
+		}(),
+	}
+	if err := h.settingService.UpdateDailyCheckinSettings(c.Request.Context(), settings); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.GetSettings(c)
+}
+
 func parsePositiveIntQuery(c *gin.Context, key string, fallback int) int {
 	raw := strings.TrimSpace(c.Query(key))
 	if raw == "" {
@@ -764,8 +882,8 @@ type UpdateSettingsRequest struct {
 	DailyCheckinEnabled             *bool                                   `json:"daily_checkin_enabled"`
 	DailyCheckinRequiredUsageUSD    *float64                                `json:"daily_checkin_required_usage_usd"`
 	DailyCheckinUsageScope          *string                                 `json:"daily_checkin_usage_scope"`
-	DailyCheckinRewardMinUSD        *int                                    `json:"daily_checkin_reward_min_usd"`
-	DailyCheckinRewardMaxUSD        *int                                    `json:"daily_checkin_reward_max_usd"`
+	DailyCheckinRewardMinUSD        *float64                                `json:"daily_checkin_reward_min_usd"`
+	DailyCheckinRewardMaxUSD        *float64                                `json:"daily_checkin_reward_max_usd"`
 	DailyCheckinDailyBudgetUSD      *float64                                `json:"daily_checkin_daily_budget_usd"`
 	DailyCheckinMonthlyBudgetUSD    *float64                                `json:"daily_checkin_monthly_budget_usd"`
 	DailyCheckinUserMonthlyLimitUSD *float64                                `json:"daily_checkin_user_monthly_limit_usd"`
@@ -1944,13 +2062,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.DailyCheckinUsageScope
 		}(),
-		DailyCheckinRewardMinUSD: func() int {
+		DailyCheckinRewardMinUSD: func() float64 {
 			if req.DailyCheckinRewardMinUSD != nil {
 				return *req.DailyCheckinRewardMinUSD
 			}
 			return previousSettings.DailyCheckinRewardMinUSD
 		}(),
-		DailyCheckinRewardMaxUSD: func() int {
+		DailyCheckinRewardMaxUSD: func() float64 {
 			if req.DailyCheckinRewardMaxUSD != nil {
 				return *req.DailyCheckinRewardMaxUSD
 			}
