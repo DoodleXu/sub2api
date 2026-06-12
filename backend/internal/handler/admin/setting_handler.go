@@ -322,6 +322,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DailyCheckinDailyBudgetUSD:      settings.DailyCheckinDailyBudgetUSD,
 		DailyCheckinMonthlyBudgetUSD:    settings.DailyCheckinMonthlyBudgetUSD,
 		DailyCheckinUserMonthlyLimitUSD: settings.DailyCheckinUserMonthlyLimitUSD,
+		DailyCheckinBudgetFallbackUSD:   settings.DailyCheckinBudgetFallbackUSD,
+		DailyCheckinBudgetFallbackText:  settings.DailyCheckinBudgetFallbackText,
 		DailyCheckinRewardTiers:         settings.DailyCheckinRewardTiers,
 		DailyCheckinStreakEnabled:       settings.DailyCheckinStreakEnabled,
 		DailyCheckinStreakScope:         settings.DailyCheckinStreakScope,
@@ -467,6 +469,18 @@ func (h *SettingHandler) UpdateDailyCheckinSettings(c *gin.Context) {
 				return *req.DailyCheckinUserMonthlyLimitUSD
 			}
 			return previousSettings.DailyCheckinUserMonthlyLimitUSD
+		}(),
+		BudgetFallbackUSD: func() float64 {
+			if req.DailyCheckinBudgetFallbackUSD != nil {
+				return *req.DailyCheckinBudgetFallbackUSD
+			}
+			return previousSettings.DailyCheckinBudgetFallbackUSD
+		}(),
+		BudgetFallbackText: func() string {
+			if req.DailyCheckinBudgetFallbackText != nil {
+				return strings.TrimSpace(*req.DailyCheckinBudgetFallbackText)
+			}
+			return previousSettings.DailyCheckinBudgetFallbackText
 		}(),
 		RewardTiers: func() []service.DailyCheckinRewardTier {
 			if req.DailyCheckinRewardTiers != nil {
@@ -893,6 +907,8 @@ type UpdateSettingsRequest struct {
 	DailyCheckinDailyBudgetUSD      *float64                                `json:"daily_checkin_daily_budget_usd"`
 	DailyCheckinMonthlyBudgetUSD    *float64                                `json:"daily_checkin_monthly_budget_usd"`
 	DailyCheckinUserMonthlyLimitUSD *float64                                `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinBudgetFallbackUSD   *float64                                `json:"daily_checkin_budget_fallback_reward_usd"`
+	DailyCheckinBudgetFallbackText  *string                                 `json:"daily_checkin_budget_fallback_message"`
 	DailyCheckinRewardTiers         *[]service.DailyCheckinRewardTier       `json:"daily_checkin_reward_tiers"`
 	DailyCheckinStreakEnabled       *bool                                   `json:"daily_checkin_streak_multiplier_enabled"`
 	DailyCheckinStreakScope         *string                                 `json:"daily_checkin_streak_multiplier_scope"`
@@ -2098,6 +2114,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.DailyCheckinUserMonthlyLimitUSD
 		}(),
+		DailyCheckinBudgetFallbackUSD: func() float64 {
+			if req.DailyCheckinBudgetFallbackUSD != nil {
+				return *req.DailyCheckinBudgetFallbackUSD
+			}
+			return previousSettings.DailyCheckinBudgetFallbackUSD
+		}(),
+		DailyCheckinBudgetFallbackText: func() string {
+			if req.DailyCheckinBudgetFallbackText != nil {
+				return strings.TrimSpace(*req.DailyCheckinBudgetFallbackText)
+			}
+			return previousSettings.DailyCheckinBudgetFallbackText
+		}(),
 		DailyCheckinRewardTiers: func() []service.DailyCheckinRewardTier {
 			if req.DailyCheckinRewardTiers != nil {
 				return *req.DailyCheckinRewardTiers
@@ -2490,6 +2518,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DailyCheckinDailyBudgetUSD:      updatedSettings.DailyCheckinDailyBudgetUSD,
 		DailyCheckinMonthlyBudgetUSD:    updatedSettings.DailyCheckinMonthlyBudgetUSD,
 		DailyCheckinUserMonthlyLimitUSD: updatedSettings.DailyCheckinUserMonthlyLimitUSD,
+		DailyCheckinBudgetFallbackUSD:   updatedSettings.DailyCheckinBudgetFallbackUSD,
+		DailyCheckinBudgetFallbackText:  updatedSettings.DailyCheckinBudgetFallbackText,
 		DailyCheckinRewardTiers:         updatedSettings.DailyCheckinRewardTiers,
 		DailyCheckinStreakEnabled:       updatedSettings.DailyCheckinStreakEnabled,
 		DailyCheckinStreakScope:         updatedSettings.DailyCheckinStreakScope,
@@ -3018,6 +3048,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.DailyCheckinUserMonthlyLimitUSD != after.DailyCheckinUserMonthlyLimitUSD {
 		changed = append(changed, "daily_checkin_user_monthly_limit_usd")
+	}
+	if before.DailyCheckinBudgetFallbackUSD != after.DailyCheckinBudgetFallbackUSD {
+		changed = append(changed, "daily_checkin_budget_fallback_reward_usd")
+	}
+	if before.DailyCheckinBudgetFallbackText != after.DailyCheckinBudgetFallbackText {
+		changed = append(changed, "daily_checkin_budget_fallback_message")
 	}
 	if !equalJSONComparable(before.DailyCheckinRewardTiers, after.DailyCheckinRewardTiers) {
 		changed = append(changed, "daily_checkin_reward_tiers")

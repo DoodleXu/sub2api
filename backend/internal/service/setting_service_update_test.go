@@ -97,6 +97,8 @@ func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *te
 		DailyBudgetUSD:      10,
 		MonthlyBudgetUSD:    100,
 		UserMonthlyLimitUSD: 5,
+		BudgetFallbackUSD:   0.01,
+		BudgetFallbackText:  "今日签到预算已用完哦～奖励0.01",
 		RewardTiers: []DailyCheckinRewardTier{
 			{MinUSD: 0.5, MaxUSD: 1, ProbabilityPercent: 40},
 			{MinUSD: 1.01, MaxUSD: 2.25, ProbabilityPercent: 60},
@@ -122,6 +124,8 @@ func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *te
 		SettingKeyDailyCheckinDailyBudgetUSD:      "10.00000000",
 		SettingKeyDailyCheckinMonthlyBudgetUSD:    "100.00000000",
 		SettingKeyDailyCheckinUserMonthlyLimitUSD: "5.00000000",
+		SettingKeyDailyCheckinBudgetFallbackUSD:   "0.01000000",
+		SettingKeyDailyCheckinBudgetFallbackText:  "今日签到预算已用完哦～奖励0.01",
 		SettingKeyDailyCheckinRewardTiers:         `[{"min_usd":0.5,"max_usd":1,"probability_percent":40},{"min_usd":1.01,"max_usd":2.25,"probability_percent":60}]`,
 		SettingKeyDailyCheckinStreakEnabled:       "true",
 		SettingKeyDailyCheckinStreakScope:         DailyCheckinStreakScopeMonthly,

@@ -140,7 +140,10 @@ function formatMultiplier(value: number | undefined): string {
   return `${n.toFixed(2).replace(/\.?0+$/, '')}倍`
 }
 
-function checkinSuccessMessage(result: { reward_amount: number; streak_days?: number; streak_multiplier?: number; crit_hit?: boolean; crit_multiplier?: number }): string {
+function checkinSuccessMessage(result: { reward_amount: number; message?: string; streak_days?: number; streak_multiplier?: number; crit_hit?: boolean; crit_multiplier?: number }): string {
+  if (result.message) {
+    return result.message
+  }
   const hasStreakBonus = (result.streak_multiplier || 1) > 1 || (result.streak_days || 1) > 1
   if (result.crit_hit) {
     if (!hasStreakBonus) {

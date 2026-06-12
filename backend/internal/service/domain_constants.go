@@ -387,6 +387,8 @@ const (
 	SettingKeyDailyCheckinDailyBudgetUSD      = "daily_checkin_daily_budget_usd"
 	SettingKeyDailyCheckinMonthlyBudgetUSD    = "daily_checkin_monthly_budget_usd"
 	SettingKeyDailyCheckinUserMonthlyLimitUSD = "daily_checkin_user_monthly_limit_usd"
+	SettingKeyDailyCheckinBudgetFallbackUSD   = "daily_checkin_budget_fallback_reward_usd"
+	SettingKeyDailyCheckinBudgetFallbackText  = "daily_checkin_budget_fallback_message"
 	SettingKeyDailyCheckinRewardTiers         = "daily_checkin_reward_tiers"
 	SettingKeyDailyCheckinStreakEnabled       = "daily_checkin_streak_multiplier_enabled"
 	SettingKeyDailyCheckinStreakScope         = "daily_checkin_streak_multiplier_scope"

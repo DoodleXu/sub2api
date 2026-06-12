@@ -920,6 +920,8 @@ const (
 	DailyCheckinRewardMaxDefault      = 3
 	DailyCheckinRewardMaxLimit        = 100
 	DailyCheckinBudgetDefault         = 0.0
+	DailyCheckinBudgetFallbackDefault = 0.01
+	DailyCheckinBudgetFallbackText    = "今日签到预算已用完哦～奖励0.01"
 	DailyCheckinStreakScopeCrossMonth = "cross_month"
 	DailyCheckinStreakScopeMonthly    = "monthly"
 )
@@ -1021,6 +1023,24 @@ func normalizeDailyCheckinRewardRange(minValue, maxValue float64) (float64, floa
 		maxValue = minValue
 	}
 	return minValue, maxValue
+}
+
+func normalizeDailyCheckinFallbackReward(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < DailyCheckinRewardMinLimit {
+		value = DailyCheckinBudgetFallbackDefault
+	}
+	if value > DailyCheckinRewardMaxLimit {
+		value = DailyCheckinRewardMaxLimit
+	}
+	return roundDailyCheckinAmount(value)
+}
+
+func normalizeDailyCheckinFallbackText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return DailyCheckinBudgetFallbackText
+	}
+	return value
 }
 
 func normalizeDailyCheckinMultiplier(value float64) float64 {
@@ -2135,6 +2155,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		DailyBudgetUSD:      settings.DailyCheckinDailyBudgetUSD,
 		MonthlyBudgetUSD:    settings.DailyCheckinMonthlyBudgetUSD,
 		UserMonthlyLimitUSD: settings.DailyCheckinUserMonthlyLimitUSD,
+		BudgetFallbackUSD:   settings.DailyCheckinBudgetFallbackUSD,
+		BudgetFallbackText:  settings.DailyCheckinBudgetFallbackText,
 		RewardTiers:         settings.DailyCheckinRewardTiers,
 		StreakEnabled:       settings.DailyCheckinStreakEnabled,
 		StreakScope:         settings.DailyCheckinStreakScope,
@@ -3097,6 +3119,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyDailyCheckinDailyBudgetUSD:      strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
 		SettingKeyDailyCheckinMonthlyBudgetUSD:    strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
 		SettingKeyDailyCheckinUserMonthlyLimitUSD: strconv.FormatFloat(DailyCheckinBudgetDefault, 'f', 8, 64),
+		SettingKeyDailyCheckinBudgetFallbackUSD:   strconv.FormatFloat(DailyCheckinBudgetFallbackDefault, 'f', 8, 64),
+		SettingKeyDailyCheckinBudgetFallbackText:  DailyCheckinBudgetFallbackText,
 		SettingKeyDailyCheckinRewardTiers:         "",
 		SettingKeyDailyCheckinStreakEnabled:       "false",
 		SettingKeyDailyCheckinStreakScope:         DailyCheckinStreakScopeCrossMonth,
@@ -3639,6 +3663,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		settings[SettingKeyDailyCheckinUserMonthlyLimitUSD],
 		DailyCheckinBudgetDefault,
 	)
+	result.DailyCheckinBudgetFallbackUSD = normalizeDailyCheckinFallbackReward(parseDailyCheckinPositiveFloat(
+		settings[SettingKeyDailyCheckinBudgetFallbackUSD],
+		DailyCheckinBudgetFallbackDefault,
+	))
+	result.DailyCheckinBudgetFallbackText = normalizeDailyCheckinFallbackText(settings[SettingKeyDailyCheckinBudgetFallbackText])
 	result.DailyCheckinRewardTiers = parseDailyCheckinRewardTiers(
 		settings[SettingKeyDailyCheckinRewardTiers],
 		result.DailyCheckinRewardMinUSD,
@@ -3950,6 +3979,8 @@ type DailyCheckinSettings struct {
 	DailyBudgetUSD      float64
 	MonthlyBudgetUSD    float64
 	UserMonthlyLimitUSD float64
+	BudgetFallbackUSD   float64
+	BudgetFallbackText  string
 	RewardTiers         []DailyCheckinRewardTier
 	StreakEnabled       bool
 	StreakScope         string
@@ -3975,6 +4006,8 @@ func buildDailyCheckinSettingsUpdates(settings DailyCheckinSettings) (map[string
 		SettingKeyDailyCheckinDailyBudgetUSD:      strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.DailyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
 		SettingKeyDailyCheckinMonthlyBudgetUSD:    strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.MonthlyBudgetUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
 		SettingKeyDailyCheckinUserMonthlyLimitUSD: strconv.FormatFloat(normalizeDailyCheckinNonNegativeFloat(settings.UserMonthlyLimitUSD, DailyCheckinBudgetDefault), 'f', 8, 64),
+		SettingKeyDailyCheckinBudgetFallbackUSD:   strconv.FormatFloat(normalizeDailyCheckinFallbackReward(settings.BudgetFallbackUSD), 'f', 8, 64),
+		SettingKeyDailyCheckinBudgetFallbackText:  normalizeDailyCheckinFallbackText(settings.BudgetFallbackText),
 		SettingKeyDailyCheckinRewardTiers:         mustJSONSetting(rewardTiers),
 		SettingKeyDailyCheckinStreakEnabled:       strconv.FormatBool(settings.StreakEnabled),
 		SettingKeyDailyCheckinStreakScope:         normalizeDailyCheckinStreakScope(settings.StreakScope),
@@ -3989,14 +4022,16 @@ func buildDailyCheckinSettingsUpdates(settings DailyCheckinSettings) (map[string
 func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyCheckinSettings, error) {
 	if s == nil || s.settingRepo == nil {
 		return &DailyCheckinSettings{
-			Enabled:          true,
-			RequiredUsageUSD: DailyCheckinRequiredUsageDefault,
-			UsageScope:       DailyCheckinUsageScopeActualCost,
-			RewardMinUSD:     DailyCheckinRewardMinDefault,
-			RewardMaxUSD:     DailyCheckinRewardMaxDefault,
-			RewardTiers:      []DailyCheckinRewardTier{{MinUSD: DailyCheckinRewardMinDefault, MaxUSD: DailyCheckinRewardMaxDefault, ProbabilityPercent: 100}},
-			StreakScope:      DailyCheckinStreakScopeCrossMonth,
-			CritMultiplier:   1,
+			Enabled:            true,
+			RequiredUsageUSD:   DailyCheckinRequiredUsageDefault,
+			UsageScope:         DailyCheckinUsageScopeActualCost,
+			RewardMinUSD:       DailyCheckinRewardMinDefault,
+			RewardMaxUSD:       DailyCheckinRewardMaxDefault,
+			BudgetFallbackUSD:  DailyCheckinBudgetFallbackDefault,
+			BudgetFallbackText: DailyCheckinBudgetFallbackText,
+			RewardTiers:        []DailyCheckinRewardTier{{MinUSD: DailyCheckinRewardMinDefault, MaxUSD: DailyCheckinRewardMaxDefault, ProbabilityPercent: 100}},
+			StreakScope:        DailyCheckinStreakScopeCrossMonth,
+			CritMultiplier:     1,
 		}, nil
 	}
 	settings, err := s.settingRepo.GetMultiple(ctx, []string{
@@ -4008,6 +4043,8 @@ func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyChe
 		SettingKeyDailyCheckinDailyBudgetUSD,
 		SettingKeyDailyCheckinMonthlyBudgetUSD,
 		SettingKeyDailyCheckinUserMonthlyLimitUSD,
+		SettingKeyDailyCheckinBudgetFallbackUSD,
+		SettingKeyDailyCheckinBudgetFallbackText,
 		SettingKeyDailyCheckinRewardTiers,
 		SettingKeyDailyCheckinStreakEnabled,
 		SettingKeyDailyCheckinStreakScope,
@@ -4033,6 +4070,8 @@ func (s *SettingService) GetDailyCheckinSettings(ctx context.Context) (*DailyChe
 		DailyBudgetUSD:      parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinDailyBudgetUSD], DailyCheckinBudgetDefault),
 		MonthlyBudgetUSD:    parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinMonthlyBudgetUSD], DailyCheckinBudgetDefault),
 		UserMonthlyLimitUSD: parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinUserMonthlyLimitUSD], DailyCheckinBudgetDefault),
+		BudgetFallbackUSD:   normalizeDailyCheckinFallbackReward(parseDailyCheckinPositiveFloat(settings[SettingKeyDailyCheckinBudgetFallbackUSD], DailyCheckinBudgetFallbackDefault)),
+		BudgetFallbackText:  normalizeDailyCheckinFallbackText(settings[SettingKeyDailyCheckinBudgetFallbackText]),
 		RewardTiers:         parseDailyCheckinRewardTiers(settings[SettingKeyDailyCheckinRewardTiers], minValue, maxValue),
 		StreakEnabled:       settings[SettingKeyDailyCheckinStreakEnabled] == "true",
 		StreakScope:         normalizeDailyCheckinStreakScope(settings[SettingKeyDailyCheckinStreakScope]),

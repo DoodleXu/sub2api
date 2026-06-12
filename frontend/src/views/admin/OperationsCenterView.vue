@@ -150,6 +150,15 @@
               <span class="input-label">{{ t('admin.operations.monthlyBudget') }}</span>
               <input v-model.number="form.daily_checkin_monthly_budget_usd" class="input" type="number" min="0" step="0.01" />
             </label>
+            <label class="space-y-1">
+              <span class="input-label">{{ t('admin.operations.budgetFallbackReward') }}</span>
+              <input v-model.number="form.daily_checkin_budget_fallback_reward_usd" class="input" type="number" min="0.01" max="100" step="0.01" />
+            </label>
+            <label class="space-y-1 md:col-span-2">
+              <span class="input-label">{{ t('admin.operations.budgetFallbackMessage') }}</span>
+              <input v-model="form.daily_checkin_budget_fallback_message" class="input" type="text" maxlength="120" />
+              <span class="input-hint">{{ t('admin.operations.budgetFallbackHint') }}</span>
+            </label>
           </div>
         </div>
 
@@ -263,6 +272,8 @@ interface CheckinRuleForm {
   daily_checkin_daily_budget_usd: number
   daily_checkin_monthly_budget_usd: number
   daily_checkin_user_monthly_limit_usd: number
+  daily_checkin_budget_fallback_reward_usd: number
+  daily_checkin_budget_fallback_message: string
   daily_checkin_reward_tiers: DailyCheckinRewardTier[]
   daily_checkin_streak_multiplier_enabled: boolean
   daily_checkin_streak_multiplier_scope: 'cross_month' | 'monthly'
@@ -294,6 +305,8 @@ const form = reactive<CheckinRuleForm>({
   daily_checkin_daily_budget_usd: 0,
   daily_checkin_monthly_budget_usd: 0,
   daily_checkin_user_monthly_limit_usd: 0,
+  daily_checkin_budget_fallback_reward_usd: 0.01,
+  daily_checkin_budget_fallback_message: '今日签到预算已用完哦～奖励0.01',
   daily_checkin_reward_tiers: [{ min_usd: 1, max_usd: 3, probability_percent: 100 }],
   daily_checkin_streak_multiplier_enabled: false,
   daily_checkin_streak_multiplier_scope: 'cross_month',
@@ -378,6 +391,8 @@ function assignSettings(settings: Awaited<ReturnType<typeof settingsAPI.getSetti
   form.daily_checkin_daily_budget_usd = settings.daily_checkin_daily_budget_usd
   form.daily_checkin_monthly_budget_usd = settings.daily_checkin_monthly_budget_usd
   form.daily_checkin_user_monthly_limit_usd = settings.daily_checkin_user_monthly_limit_usd
+  form.daily_checkin_budget_fallback_reward_usd = settings.daily_checkin_budget_fallback_reward_usd ?? 0.01
+  form.daily_checkin_budget_fallback_message = settings.daily_checkin_budget_fallback_message || '今日签到预算已用完哦～奖励0.01'
   form.daily_checkin_reward_tiers = (settings.daily_checkin_reward_tiers?.length ? settings.daily_checkin_reward_tiers : [{
     min_usd: settings.daily_checkin_reward_min_usd,
     max_usd: settings.daily_checkin_reward_max_usd,
@@ -463,6 +478,8 @@ function normalizedRules(): DailyCheckinSettingsUpdateRequest {
     daily_checkin_daily_budget_usd: Math.max(0, Number(form.daily_checkin_daily_budget_usd) || 0),
     daily_checkin_monthly_budget_usd: Math.max(0, Number(form.daily_checkin_monthly_budget_usd) || 0),
     daily_checkin_user_monthly_limit_usd: Math.max(0, Number(form.daily_checkin_user_monthly_limit_usd) || 0),
+    daily_checkin_budget_fallback_reward_usd: normalizeRewardAmount(form.daily_checkin_budget_fallback_reward_usd, 0.01),
+    daily_checkin_budget_fallback_message: form.daily_checkin_budget_fallback_message.trim() || '今日签到预算已用完哦～奖励0.01',
     daily_checkin_reward_tiers: tiers,
     daily_checkin_streak_multiplier_enabled: form.daily_checkin_streak_multiplier_enabled,
     daily_checkin_streak_multiplier_scope: form.daily_checkin_streak_multiplier_scope === 'monthly' ? 'monthly' : 'cross_month',

@@ -107,6 +107,8 @@ const baseSettingsResponse = {
   daily_checkin_daily_budget_usd: 0,
   daily_checkin_monthly_budget_usd: 0,
   daily_checkin_user_monthly_limit_usd: 0,
+  daily_checkin_budget_fallback_reward_usd: 0.01,
+  daily_checkin_budget_fallback_message: '今日签到预算已用完哦～奖励0.01',
   daily_checkin_reward_tiers: [{ min_usd: 1, max_usd: 3, probability_percent: 100 }],
   daily_checkin_streak_multiplier_enabled: false,
   daily_checkin_streak_multiplier_scope: 'cross_month',
@@ -167,6 +169,8 @@ describe('OperationsCenterView', () => {
       expect.objectContaining({
         daily_checkin_reward_min_usd: 0.5,
         daily_checkin_reward_max_usd: 0.75,
+        daily_checkin_budget_fallback_reward_usd: 0.01,
+        daily_checkin_budget_fallback_message: '今日签到预算已用完哦～奖励0.01',
         daily_checkin_reward_tiers: [{ min_usd: 0.5, max_usd: 0.75, probability_percent: 100 }],
       }),
     )

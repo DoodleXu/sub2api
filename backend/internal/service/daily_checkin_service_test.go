@@ -463,11 +463,13 @@ func TestDailyCheckinRewardRangeIsClampedToMaxLimit(t *testing.T) {
 	require.InDelta(t, DailyCheckinRewardMaxLimit, result.RewardMaxUSD, 0.0001)
 }
 
-func TestDailyCheckinDailyBudgetBlocksReward(t *testing.T) {
+func TestDailyCheckinDailyBudgetFallbackGrantsMinimumReward(t *testing.T) {
 	svc, db := newDailyCheckinTestService(t, map[string]string{
-		SettingKeyDailyCheckinRewardMinUSD:   "2",
-		SettingKeyDailyCheckinRewardMaxUSD:   "2",
-		SettingKeyDailyCheckinDailyBudgetUSD: "3",
+		SettingKeyDailyCheckinRewardMinUSD:       "2",
+		SettingKeyDailyCheckinRewardMaxUSD:       "2",
+		SettingKeyDailyCheckinDailyBudgetUSD:     "3",
+		SettingKeyDailyCheckinBudgetFallbackUSD:  "0.01",
+		SettingKeyDailyCheckinBudgetFallbackText: "今日签到预算已用完哦～奖励0.01",
 	})
 	ctx := context.Background()
 	now := timezone.Now()
@@ -480,14 +482,13 @@ func TestDailyCheckinDailyBudgetBlocksReward(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at) VALUES (2, ?, 2, 2, ?)`, today, now)
 	require.NoError(t, err)
 
-	_, err = svc.CheckIn(ctx, 1)
-	require.Error(t, err)
-	require.Equal(t, "DAILY_CHECKIN_BUDGET_EXHAUSTED", apperrors.Reason(err))
-	metadata := apperrors.FromError(err).Metadata
-	require.Equal(t, "daily", metadata["dimension"])
-	require.NotContains(t, metadata, "limit_usd")
-	require.NotContains(t, metadata, "used_usd")
-	require.NotContains(t, metadata, "pending_reward_usd")
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 0.01, result.RewardAmount)
+	require.True(t, result.BudgetFallback)
+	require.Equal(t, "今日签到预算已用完哦～奖励0.01", result.Message)
+	require.Equal(t, 0.01, result.BaseRewardAmount)
+	require.Equal(t, 5.01, result.Balance)
 }
 
 func TestDailyCheckinStatusReflectsGlobalBudgetExhaustion(t *testing.T) {
@@ -510,9 +511,35 @@ func TestDailyCheckinStatusReflectsGlobalBudgetExhaustion(t *testing.T) {
 	status, err := svc.GetStatus(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, status.Enabled)
-	require.False(t, status.Eligible)
+	require.True(t, status.Eligible)
 	require.True(t, status.BudgetExhausted)
 	require.Equal(t, 2.0, status.DailyRewardUSD)
+}
+
+func TestDailyCheckinBudgetFallbackIgnoresOtherBudgetLimits(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRewardMinUSD:        "2",
+		SettingKeyDailyCheckinRewardMaxUSD:        "2",
+		SettingKeyDailyCheckinDailyBudgetUSD:      "3",
+		SettingKeyDailyCheckinMonthlyBudgetUSD:    "2",
+		SettingKeyDailyCheckinUserMonthlyLimitUSD: "2",
+		SettingKeyDailyCheckinBudgetFallbackUSD:   "0.01",
+	})
+	ctx := context.Background()
+	now := timezone.Now()
+	today := timezone.StartOfDay(now).Format("2006-01-02")
+
+	_, err := db.Exec(`INSERT INTO users (id, balance, total_recharged, updated_at) VALUES (1, 5, 20, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 1.25, ?)`, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at) VALUES (2, ?, 2, 2, ?)`, today, now)
+	require.NoError(t, err)
+
+	result, err := svc.CheckIn(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, 0.01, result.RewardAmount)
+	require.True(t, result.BudgetFallback)
 }
 
 func TestDailyCheckinRewardClampsToRemainingBudget(t *testing.T) {

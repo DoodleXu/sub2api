@@ -624,6 +624,8 @@ export interface SystemSettings {
   daily_checkin_daily_budget_usd: number;
   daily_checkin_monthly_budget_usd: number;
   daily_checkin_user_monthly_limit_usd: number;
+  daily_checkin_budget_fallback_reward_usd: number;
+  daily_checkin_budget_fallback_message: string;
   daily_checkin_reward_tiers: DailyCheckinRewardTier[];
   daily_checkin_streak_multiplier_enabled: boolean;
   daily_checkin_streak_multiplier_scope: "cross_month" | "monthly";
@@ -894,6 +896,8 @@ export interface UpdateSettingsRequest {
   daily_checkin_daily_budget_usd?: number;
   daily_checkin_monthly_budget_usd?: number;
   daily_checkin_user_monthly_limit_usd?: number;
+  daily_checkin_budget_fallback_reward_usd?: number;
+  daily_checkin_budget_fallback_message?: string;
   daily_checkin_reward_tiers?: DailyCheckinRewardTier[];
   daily_checkin_streak_multiplier_enabled?: boolean;
   daily_checkin_streak_multiplier_scope?: "cross_month" | "monthly";

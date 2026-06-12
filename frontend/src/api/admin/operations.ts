@@ -11,6 +11,8 @@ export type DailyCheckinSettingsUpdateRequest = Pick<
   | 'daily_checkin_daily_budget_usd'
   | 'daily_checkin_monthly_budget_usd'
   | 'daily_checkin_user_monthly_limit_usd'
+  | 'daily_checkin_budget_fallback_reward_usd'
+  | 'daily_checkin_budget_fallback_message'
   | 'daily_checkin_reward_tiers'
   | 'daily_checkin_streak_multiplier_enabled'
   | 'daily_checkin_streak_multiplier_scope'
@@ -35,6 +37,8 @@ export interface DailyCheckinRewardMetadata {
   crit_multiplier: number
   pre_crit_reward_amount: number
   final_reward_amount: number
+  budget_fallback?: boolean
+  budget_fallback_message?: string
 }
 
 export interface DailyCheckinAdminRecord {

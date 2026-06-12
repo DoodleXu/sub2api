@@ -258,6 +258,8 @@ type SystemSettings struct {
 	DailyCheckinDailyBudgetUSD      float64                                `json:"daily_checkin_daily_budget_usd"`
 	DailyCheckinMonthlyBudgetUSD    float64                                `json:"daily_checkin_monthly_budget_usd"`
 	DailyCheckinUserMonthlyLimitUSD float64                                `json:"daily_checkin_user_monthly_limit_usd"`
+	DailyCheckinBudgetFallbackUSD   float64                                `json:"daily_checkin_budget_fallback_reward_usd"`
+	DailyCheckinBudgetFallbackText  string                                 `json:"daily_checkin_budget_fallback_message"`
 	DailyCheckinRewardTiers         []service.DailyCheckinRewardTier       `json:"daily_checkin_reward_tiers"`
 	DailyCheckinStreakEnabled       bool                                   `json:"daily_checkin_streak_multiplier_enabled"`
 	DailyCheckinStreakScope         string                                 `json:"daily_checkin_streak_multiplier_scope"`

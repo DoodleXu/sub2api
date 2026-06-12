@@ -42,6 +42,8 @@ export interface DailyCheckinStatus {
 export interface DailyCheckinResult extends DailyCheckinStatus {
   reward_amount: number
   base_reward_amount: number
+  message?: string
+  budget_fallback: boolean
   streak_days: number
   streak_multiplier: number
   crit_hit: boolean

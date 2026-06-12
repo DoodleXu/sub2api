@@ -61,6 +61,8 @@ type DailyCheckinResult struct {
 	DailyCheckinStatus
 	RewardAmount        float64   `json:"reward_amount"`
 	BaseRewardAmount    float64   `json:"base_reward_amount"`
+	Message             string    `json:"message,omitempty"`
+	BudgetFallback      bool      `json:"budget_fallback"`
 	StreakDays          int       `json:"streak_days"`
 	StreakMultiplier    float64   `json:"streak_multiplier"`
 	CritHit             bool      `json:"crit_hit"`
@@ -73,6 +75,8 @@ type DailyCheckinResult struct {
 type DailyCheckinRewardMetadata struct {
 	BaseRewardAmount    float64                 `json:"base_reward_amount"`
 	RewardTier          *DailyCheckinRewardTier `json:"reward_tier,omitempty"`
+	BudgetFallback      bool                    `json:"budget_fallback"`
+	BudgetFallbackText  string                  `json:"budget_fallback_message,omitempty"`
 	StreakDays          int                     `json:"streak_days"`
 	StreakMultiplier    float64                 `json:"streak_multiplier"`
 	CritEligible        bool                    `json:"crit_eligible"`
@@ -264,6 +268,8 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 		DailyCheckinStatus:  *status,
 		RewardAmount:        rewardAmount,
 		BaseRewardAmount:    reward.Metadata.BaseRewardAmount,
+		Message:             reward.Metadata.BudgetFallbackText,
+		BudgetFallback:      reward.Metadata.BudgetFallback,
 		StreakDays:          reward.Metadata.StreakDays,
 		StreakMultiplier:    reward.Metadata.StreakMultiplier,
 		CritHit:             reward.Metadata.CritHit,
@@ -429,13 +435,14 @@ func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQueri
 		}
 	}
 	budgetExhausted := isDailyCheckinBudgetExhausted(settings.RewardMinUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
+	fallbackAvailable := budgetExhausted && canUseDailyCheckinBudgetFallback(settings.BudgetFallbackUSD, dailyReward, settings)
 
 	return &DailyCheckinStatus{
 		Enabled:              settings.Enabled,
 		Today:                today,
 		Month:                month,
 		CheckedIn:            checkedIn,
-		Eligible:             settings.Enabled && todayUsage >= settings.RequiredUsageUSD && !checkedIn && !budgetExhausted,
+		Eligible:             settings.Enabled && todayUsage >= settings.RequiredUsageUSD && !checkedIn && (!budgetExhausted || fallbackAvailable),
 		TodayUsageUSD:        todayUsage,
 		RequiredUsageUSD:     settings.RequiredUsageUSD,
 		UsageScope:           settings.UsageScope,
@@ -455,11 +462,13 @@ func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQueri
 func (s *DailyCheckinService) settings(ctx context.Context) (*DailyCheckinSettings, error) {
 	if s == nil || s.settingService == nil {
 		return &DailyCheckinSettings{
-			Enabled:          true,
-			RequiredUsageUSD: DailyCheckinRequiredUsageDefault,
-			UsageScope:       DailyCheckinUsageScopeActualCost,
-			RewardMinUSD:     DailyCheckinRewardMinDefault,
-			RewardMaxUSD:     DailyCheckinRewardMaxDefault,
+			Enabled:            true,
+			RequiredUsageUSD:   DailyCheckinRequiredUsageDefault,
+			UsageScope:         DailyCheckinUsageScopeActualCost,
+			RewardMinUSD:       DailyCheckinRewardMinDefault,
+			RewardMaxUSD:       DailyCheckinRewardMaxDefault,
+			BudgetFallbackUSD:  DailyCheckinBudgetFallbackDefault,
+			BudgetFallbackText: DailyCheckinBudgetFallbackText,
 		}, nil
 	}
 	return s.settingService.GetDailyCheckinSettings(ctx)
@@ -658,6 +667,21 @@ func chooseDailyCheckinReward(ctx context.Context, tx *sql.Tx, userID int64, tod
 
 	maxAllowed := maxDailyCheckinRewardByBudget(finalReward, dailyReward, monthlyReward, userMonthlyReward, settings)
 	if maxAllowed < settings.RewardMinUSD {
+		if canUseDailyCheckinBudgetFallback(settings.BudgetFallbackUSD, dailyReward, settings) {
+			fallbackReward := normalizeDailyCheckinFallbackReward(settings.BudgetFallbackUSD)
+			return &dailyCheckinRewardChoice{Metadata: DailyCheckinRewardMetadata{
+				BaseRewardAmount:    fallbackReward,
+				BudgetFallback:      true,
+				BudgetFallbackText:  normalizeDailyCheckinFallbackText(settings.BudgetFallbackText),
+				StreakDays:          streakDays,
+				StreakMultiplier:    1,
+				CritEligible:        false,
+				CritHit:             false,
+				CritMultiplier:      1,
+				PreCritRewardAmount: fallbackReward,
+				FinalRewardAmount:   fallbackReward,
+			}}, nil
+		}
 		return nil, dailyCheckinBudgetExhaustedError(settings.RewardMinUSD, dailyReward, monthlyReward, userMonthlyReward, settings)
 	}
 	if finalReward > maxAllowed {
@@ -699,6 +723,17 @@ func maxDailyCheckinRewardByBudget(maxReward float64, dailyReward, monthlyReward
 		allowed = math.Min(allowed, settings.UserMonthlyLimitUSD-userMonthlyReward)
 	}
 	return allowed
+}
+
+func canUseDailyCheckinBudgetFallback(rewardAmount, dailyReward float64, settings *DailyCheckinSettings) bool {
+	if settings == nil || settings.DailyBudgetUSD <= 0 {
+		return false
+	}
+	fallbackReward := normalizeDailyCheckinFallbackReward(rewardAmount)
+	if fallbackReward <= 0 {
+		return false
+	}
+	return dailyReward+settings.RewardMinUSD > settings.DailyBudgetUSD
 }
 
 func dailyCheckinBudgetExhaustedError(rewardAmount, dailyReward, monthlyReward, userMonthlyReward float64, settings *DailyCheckinSettings) error {
