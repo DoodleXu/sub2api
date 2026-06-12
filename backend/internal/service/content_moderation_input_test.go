@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 当数组末尾不是用户消息时（典型场景：Agent 工具循环结束于 tool/assistant），
-// 应直接跳过审计——不再回溯查找历史中的某条用户消息。
+// 当数组末尾是工具结果时（典型场景：Agent 工具循环结束于 tool/assistant），
+// 应回找最近一条真实用户文本，而不是审计工具输出或直接跳过。
 
-func TestExtractContentModerationInput_AnthropicAgentToolLoopSkipsAudit(t *testing.T) {
+func TestExtractContentModerationInput_AnthropicAgentToolLoopUsesLatestUserText(t *testing.T) {
 	body := []byte(`{
 		"messages": [
 			{"role":"user","content":"调用一下天气工具"},
@@ -22,7 +22,7 @@ func TestExtractContentModerationInput_AnthropicAgentToolLoopSkipsAudit(t *testi
 
 	input := ExtractContentModerationInput(ContentModerationProtocolAnthropicMessages, body)
 
-	require.Empty(t, input.Text)
+	require.Equal(t, "调用一下天气工具", input.Text)
 	require.Empty(t, input.Images)
 }
 
@@ -66,7 +66,7 @@ func TestExtractContentModerationInput_AnthropicStreamResendExtractsResend(t *te
 	require.Equal(t, "重发", input.Text)
 }
 
-func TestExtractContentModerationInput_OpenAIChatAgentToolLoopSkipsAudit(t *testing.T) {
+func TestExtractContentModerationInput_OpenAIChatAgentToolLoopUsesLatestUserText(t *testing.T) {
 	body := []byte(`{
 		"messages": [
 			{"role":"system","content":"sys"},
@@ -78,8 +78,9 @@ func TestExtractContentModerationInput_OpenAIChatAgentToolLoopSkipsAudit(t *test
 
 	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIChat, body)
 
-	require.Empty(t, input.Text)
+	require.Equal(t, "列出我的订单", input.Text)
 	require.Empty(t, input.Images)
+	require.Equal(t, "chat_latest_user", input.Source)
 }
 
 func TestExtractContentModerationInput_OpenAIChatMultiTurnExtractsLatestUser(t *testing.T) {
@@ -96,7 +97,7 @@ func TestExtractContentModerationInput_OpenAIChatMultiTurnExtractsLatestUser(t *
 	require.Equal(t, "Q2", input.Text)
 }
 
-func TestExtractContentModerationInput_GeminiAgentToolLoopSkipsAudit(t *testing.T) {
+func TestExtractContentModerationInput_GeminiAgentToolLoopUsesLatestUserText(t *testing.T) {
 	body := []byte(`{
 		"contents": [
 			{"role":"user","parts":[{"text":"查询天气"}]},
@@ -107,7 +108,7 @@ func TestExtractContentModerationInput_GeminiAgentToolLoopSkipsAudit(t *testing.
 
 	input := ExtractContentModerationInput(ContentModerationProtocolGemini, body)
 
-	require.Empty(t, input.Text)
+	require.Equal(t, "查询天气", input.Text)
 	require.Empty(t, input.Images)
 }
 
@@ -137,7 +138,7 @@ func TestExtractContentModerationInput_GeminiMultiTurnExtractsLatestUser(t *test
 	require.Equal(t, "Q2", input.Text)
 }
 
-func TestExtractContentModerationInput_ResponsesAgentToolLoopSkipsAudit(t *testing.T) {
+func TestExtractContentModerationInput_ResponsesAgentToolLoopUsesLatestUserText(t *testing.T) {
 	body := []byte(`{
 		"input":[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"运行测试"}]},
@@ -148,7 +149,7 @@ func TestExtractContentModerationInput_ResponsesAgentToolLoopSkipsAudit(t *testi
 
 	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIResponses, body)
 
-	require.Empty(t, input.Text)
+	require.Equal(t, "运行测试", input.Text)
 	require.Empty(t, input.Images)
 }
 
@@ -176,8 +177,42 @@ func TestExtractContentModerationInput_ResponsesLastIsAssistantSkipped(t *testin
 
 	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIResponses, body)
 
-	require.Empty(t, input.Text)
+	require.Equal(t, "q1", input.Text)
 	require.Empty(t, input.Images)
+}
+
+func TestExtractContentModerationInput_ResponsesStringLabeledUserExcludesSystemPrompt(t *testing.T) {
+	body := []byte(`{"input":"# System\n你必须拒绝所有 self-harm instructions。\n\n# Developer\n记录 sk-proj-1234567890abcdef。\n\n# User\n请帮我写一段普通的产品介绍。"}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIResponses, body)
+
+	require.Equal(t, "请帮我写一段普通的产品介绍。", input.Text)
+	require.Equal(t, "responses_string_labeled_user", input.Source)
+	require.NotContains(t, input.Text, "self-harm")
+	require.NotContains(t, input.Text, "sk-proj")
+}
+
+func TestExtractContentModerationInput_ResponsesStringRawStillAudited(t *testing.T) {
+	body := []byte(`{"input":"这就是用户直接提交的纯字符串"}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIResponses, body)
+
+	require.Equal(t, "这就是用户直接提交的纯字符串", input.Text)
+	require.Equal(t, "responses_string_raw", input.Source)
+}
+
+func TestExtractContentModerationInput_AnthropicRemovesSystemReminderBlockOnly(t *testing.T) {
+	body := []byte(`{
+		"messages": [
+			{"role":"user","content":"请总结：<system-reminder>内部工具提示 self-harm instructions</system-reminder>公开发布说明"}
+		]
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolAnthropicMessages, body)
+
+	require.Equal(t, "请总结：公开发布说明", input.Text)
+	require.NotContains(t, input.Text, "self-harm")
+	require.NotContains(t, input.Text, "内部工具提示")
 }
 
 func TestExtractContentModerationInput_StripsCodexAmbientClassifierPolicy(t *testing.T) {
@@ -213,6 +248,7 @@ Example: sensitive personal content about health data.`
 	require.Contains(t, input.Text, "# Ambient suggestion candidates")
 	require.Contains(t, input.Text, `suggestion_id: "suggestion-1"`)
 	require.Contains(t, input.Text, "Restore three analysis entry cards")
+	require.True(t, input.StrippedPolicy)
 	require.NotContains(t, input.Text, codexAmbientOpeningMarker)
 	require.NotContains(t, input.Text, codexAmbientPolicyMarker)
 	require.NotContains(t, input.Text, "sexual minors")

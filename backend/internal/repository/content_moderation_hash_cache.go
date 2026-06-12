@@ -8,7 +8,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const contentModerationFlaggedHashSetKey = "content_moderation:flagged_hashes"
+const (
+	contentModerationFlaggedHashSetKey = "content_moderation:flagged_hashes"
+	contentModerationAllowedHashSetKey = "content_moderation:allowed_hashes"
+)
 
 type contentModerationHashCache struct {
 	rdb *redis.Client
@@ -68,4 +71,43 @@ func (c *contentModerationHashCache) CountFlaggedInputHashes(ctx context.Context
 		return 0, nil
 	}
 	return c.rdb.SCard(ctx, contentModerationFlaggedHashSetKey).Result()
+}
+
+func (c *contentModerationHashCache) RecordAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	inputHash = strings.TrimSpace(inputHash)
+	if c == nil || c.rdb == nil || inputHash == "" {
+		return false, nil
+	}
+	added, err := c.rdb.SAdd(ctx, contentModerationAllowedHashSetKey, inputHash).Result()
+	if err != nil {
+		return false, err
+	}
+	return added > 0, nil
+}
+
+func (c *contentModerationHashCache) HasAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	inputHash = strings.TrimSpace(inputHash)
+	if c == nil || c.rdb == nil || inputHash == "" {
+		return false, nil
+	}
+	return c.rdb.SIsMember(ctx, contentModerationAllowedHashSetKey, inputHash).Result()
+}
+
+func (c *contentModerationHashCache) DeleteAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	inputHash = strings.TrimSpace(inputHash)
+	if c == nil || c.rdb == nil || inputHash == "" {
+		return false, nil
+	}
+	deleted, err := c.rdb.SRem(ctx, contentModerationAllowedHashSetKey, inputHash).Result()
+	if err != nil {
+		return false, err
+	}
+	return deleted > 0, nil
+}
+
+func (c *contentModerationHashCache) CountAllowedInputHashes(ctx context.Context) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, nil
+	}
+	return c.rdb.SCard(ctx, contentModerationAllowedHashSetKey).Result()
 }

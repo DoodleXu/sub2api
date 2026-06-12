@@ -294,6 +294,34 @@ func (h *ContentModerationHandler) DeleteFlaggedHash(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *ContentModerationHandler) AllowHash(c *gin.Context) {
+	var req contentModerationHashRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.service.AllowInputHash(c.Request.Context(), req.InputHash)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ContentModerationHandler) DeleteAllowedHash(c *gin.Context) {
+	var req contentModerationHashRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.service.DeleteAllowedInputHash(c.Request.Context(), req.InputHash)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 func (h *ContentModerationHandler) ClearFlaggedHashes(c *gin.Context) {
 	result, err := h.service.ClearFlaggedInputHashes(c.Request.Context())
 	if err != nil {

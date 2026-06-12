@@ -15,6 +15,9 @@ const {
   getGroups,
   getUserById,
   listUsers,
+  allowHash,
+  deleteAllowedHash,
+  deleteFlaggedHash,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -26,6 +29,9 @@ const {
   getGroups: vi.fn(),
   getUserById: vi.fn(),
   listUsers: vi.fn(),
+  allowHash: vi.fn(),
+  deleteAllowedHash: vi.fn(),
+  deleteFlaggedHash: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -39,7 +45,9 @@ vi.mock('@/api/admin', () => ({
       listLogs,
       listUserPolicies,
       testAPIKeys: vi.fn(),
-      deleteFlaggedHash: vi.fn(),
+      allowHash,
+      deleteAllowedHash,
+      deleteFlaggedHash,
       clearFlaggedHashes: vi.fn(),
       unbanUser: vi.fn(),
     },
@@ -62,6 +70,12 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/utils/apiError', () => ({
   extractApiErrorMessage: (_err: unknown, fallback: string) => fallback,
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({
+    copyToClipboard: vi.fn().mockResolvedValue(true),
+  }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -147,6 +161,7 @@ const runtimeStatus = () => ({
   pre_block_api_key_loads: [],
   api_key_statuses: [],
   flagged_hash_count: 0,
+  allowed_hash_count: 0,
   last_cleanup_deleted_hit: 0,
   last_cleanup_deleted_non_hit: 0,
 })
@@ -218,6 +233,7 @@ const moderationLog = (overrides: Partial<ContentModerationLog> = {}): ContentMo
   block_status: 0,
   error_code: '',
   input_excerpt: 'normal summary',
+  input_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   matched_keyword: '',
   upstream_latency_ms: null,
   error: '',
@@ -264,6 +280,9 @@ describe('admin RiskControlView', () => {
     getGroups.mockReset()
     getUserById.mockReset()
     listUsers.mockReset()
+    allowHash.mockReset()
+    deleteAllowedHash.mockReset()
+    deleteFlaggedHash.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
 
@@ -280,6 +299,10 @@ describe('admin RiskControlView', () => {
       status: 'active',
     }))
     listUsers.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10, pages: 1 })
+    allowHash.mockResolvedValue({
+      input_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      added: true,
+    })
     updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => ({
       ...baseConfig(),
       ...payload,
@@ -344,6 +367,27 @@ describe('admin RiskControlView', () => {
     expect(wrapper.text()).toContain('admin.riskControl.inputDetailTitle')
     expect(wrapper.text()).toContain('admin.riskControl.inputDetailSummaryContent')
     expect(wrapper.text()).not.toContain('admin.riskControl.inputDetailFullTitle')
+  })
+
+  it('allows a log hash directly from the audit table', async () => {
+    const inputHash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    allowHash.mockResolvedValue({ input_hash: inputHash, added: true })
+    listLogs.mockResolvedValue({
+      items: [moderationLog({ input_hash: inputHash })],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    await findButtonByText(wrapper, 'admin.riskControl.allowHashShort').trigger('click')
+    await flushPromises()
+
+    expect(allowHash).toHaveBeenCalledWith(inputHash)
+    expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.allowedHashAdded')
   })
 
   it('saves the selected model filter mode and models', async () => {

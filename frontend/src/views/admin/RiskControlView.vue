@@ -285,16 +285,17 @@
                   <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.result') }}</th>
                   <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.highest') }}</th>
                   <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.actionMeta') }}</th>
+                  <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.hash') }}</th>
                   <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.latency') }}</th>
                   <th class="px-5 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.input') }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-800 dark:bg-dark-800">
                 <tr v-if="logsLoading">
-                  <td colspan="10" class="px-5 py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</td>
+                  <td colspan="11" class="px-5 py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</td>
                 </tr>
                 <tr v-else-if="logs.length === 0">
-                  <td colspan="10" class="px-5 py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.emptyLogs') }}</td>
+                  <td colspan="11" class="px-5 py-12 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.emptyLogs') }}</td>
                 </tr>
                 <template v-else>
                   <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
@@ -321,12 +322,12 @@
                         {{ t('admin.riskControl.matchedKeyword', { keyword: matchedKeywordText(row) }) }}
                       </div>
                     </td>
-	                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
-	                      <div>{{ violationCountText(row) }}</div>
-	                      <div v-if="row.policy_action" class="mt-1 text-xs font-medium text-red-600 dark:text-red-300">
-	                        {{ userPolicyActionLabel(row.policy_action) }} · {{ row.error_code || 'content_policy_violation' }}
-	                      </div>
-	                      <div class="text-xs text-gray-400">
+                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
+                      <div>{{ violationCountText(row) }}</div>
+                      <div v-if="row.policy_action" class="mt-1 text-xs font-medium text-red-600 dark:text-red-300">
+                        {{ userPolicyActionLabel(row.policy_action) }} · {{ row.error_code || 'content_policy_violation' }}
+                      </div>
+                      <div class="text-xs text-gray-400">
                         {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
                         <span v-if="row.auto_banned"> / {{ t('admin.riskControl.autoBanned') }}</span>
                       </div>
@@ -340,6 +341,30 @@
                         <Icon name="checkCircle" size="xs" :class="unbanningUserID === row.user_id ? 'animate-spin' : ''" />
                         {{ unbanningUserID === row.user_id ? t('common.processing') : t('admin.riskControl.unbanUser') }}
                       </button>
+                    </td>
+                    <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
+                      <div v-if="row.input_hash" class="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-600 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700 dark:border-dark-600 dark:bg-dark-900/40 dark:text-gray-300 dark:hover:border-primary-700 dark:hover:bg-primary-900/20"
+                          :title="row.input_hash"
+                          @click="copyInputHash(row.input_hash)"
+                        >
+                          <Icon name="copy" size="xs" />
+                          {{ shortHash(row.input_hash) }}
+                        </button>
+                        <button
+                          type="button"
+                          class="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                          :title="t('admin.riskControl.allowHash')"
+                          :disabled="hashActionLoading"
+                          @click="allowHash(row.input_hash)"
+                        >
+                          <Icon name="checkCircle" size="xs" />
+                          {{ t('admin.riskControl.allowHashShort') }}
+                        </button>
+                      </div>
+                      <span v-else>-</span>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ latencyText(row.upstream_latency_ms) }}</div>
@@ -937,12 +962,48 @@
                     {{ t('admin.riskControl.deleteFlaggedHash') }}
                   </button>
                 </div>
+                <div class="mt-4 border-t border-gray-200 pt-4 dark:border-dark-700">
+                  <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <p class="text-sm font-medium text-gray-900 dark:text-white">
+                        {{ t('admin.riskControl.allowedHashCount', { count: formatNumber(status?.allowed_hash_count ?? 0) }) }}
+                      </p>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashHint') }}</p>
+                    </div>
+                  </div>
+                  <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <input
+                      v-model.trim="allowedHashInput"
+                      type="text"
+                      class="input font-mono text-sm"
+                      :placeholder="t('admin.riskControl.allowedHashPlaceholder')"
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
+                      :disabled="hashActionLoading || !isAllowedHashInputValid"
+                      @click="allowHash()"
+                    >
+                      <Icon name="checkCircle" size="sm" />
+                      {{ t('admin.riskControl.allowHash') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
+                      :disabled="hashActionLoading || !isAllowedHashInputValid"
+                      @click="deleteAllowedHash"
+                    >
+                      <Icon name="trash" size="sm" />
+                      {{ t('admin.riskControl.deleteAllowedHash') }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-	          <div v-else-if="activeSettingsTab === 'response'" class="space-y-5">
-	            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <div v-else-if="activeSettingsTab === 'response'" class="space-y-5">
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div>
                 <label class="input-label">{{ t('admin.riskControl.blockStatus') }}</label>
                 <input v-model.number="configForm.block_status" type="number" min="400" max="599" class="input" />
@@ -1399,6 +1460,7 @@ import type {
 	} from '@/api/admin/riskControl'
 import type { AdminGroup, AdminUser, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
+import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
@@ -1454,6 +1516,7 @@ const riskThresholdCategories = Object.keys(riskThresholdDefaults)
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -1473,6 +1536,7 @@ const whitelistUserSearch = ref('')
 const whitelistUserSearchOpen = ref(false)
 const whitelistUserSearchLoading = ref(false)
 const flaggedHashInput = ref('')
+const allowedHashInput = ref('')
 const groups = ref<AdminGroup[]>([])
 const whitelistUsers = ref<Record<number, WhitelistUserSummary>>({})
 const userPolicies = ref<ContentModerationUserPolicy[]>([])
@@ -1783,6 +1847,7 @@ const hasModerationAuditInput = computed(() => {
 })
 
 const isFlaggedHashInputValid = computed(() => /^[a-fA-F0-9]{64}$/.test(flaggedHashInput.value.trim()))
+const isAllowedHashInputValid = computed(() => /^[a-fA-F0-9]{64}$/.test(allowedHashInput.value.trim()))
 
 const storedApiKeyTestButtonText = computed(() => {
   if (apiKeyTesting.value) return t('admin.riskControl.testingApiKeys')
@@ -2213,6 +2278,18 @@ function inputSummaryText(row: ContentModerationLog): string {
   return row.input_excerpt || row.error || '-'
 }
 
+function shortHash(hash: string): string {
+  const value = (hash || '').trim()
+  if (value.length <= 16) return value || '-'
+  return `${value.slice(0, 8)}...${value.slice(-6)}`
+}
+
+async function copyInputHash(hash: string) {
+  const value = (hash || '').trim()
+  if (!value) return
+  await copyToClipboard(value, t('admin.riskControl.hashCopied'))
+}
+
 function matchedKeywordText(row: ContentModerationLog): string {
   return row.action === 'keyword_block' ? (row.matched_keyword || '').trim() : ''
 }
@@ -2256,6 +2333,39 @@ async function deleteFlaggedHash() {
     appStore.showSuccess(result.deleted ? t('admin.riskControl.flaggedHashDeleted') : t('admin.riskControl.flaggedHashNotFound'))
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.flaggedHashDeleteFailed')))
+  } finally {
+    hashActionLoading.value = false
+  }
+}
+
+async function allowHash(inputHash?: string) {
+  const hash = (inputHash ?? allowedHashInput.value).trim()
+  if (!/^[a-fA-F0-9]{64}$/.test(hash) || hashActionLoading.value) return
+  hashActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.allowHash(hash)
+    if (!inputHash) {
+      allowedHashInput.value = ''
+    }
+    await loadStatus(true)
+    appStore.showSuccess(result.added ? t('admin.riskControl.allowedHashAdded') : t('admin.riskControl.allowedHashAlreadyExists'))
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashAddFailed')))
+  } finally {
+    hashActionLoading.value = false
+  }
+}
+
+async function deleteAllowedHash() {
+  if (!isAllowedHashInputValid.value || hashActionLoading.value) return
+  hashActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.deleteAllowedHash(allowedHashInput.value)
+    allowedHashInput.value = ''
+    await loadStatus(true)
+    appStore.showSuccess(result.deleted ? t('admin.riskControl.allowedHashDeleted') : t('admin.riskControl.allowedHashNotFound'))
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashDeleteFailed')))
   } finally {
     hashActionLoading.value = false
   }

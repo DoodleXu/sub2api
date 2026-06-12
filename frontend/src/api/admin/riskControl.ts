@@ -151,6 +151,7 @@ export interface ContentModerationRuntimeStatus {
   pre_block_api_key_loads: ContentModerationAPIKeyLoad[]
   api_key_statuses: ContentModerationAPIKeyStatus[]
   flagged_hash_count: number
+  allowed_hash_count: number
   last_cleanup_at?: string
   last_cleanup_deleted_hit: number
   last_cleanup_deleted_non_hit: number
@@ -190,6 +191,7 @@ export interface ContentModerationLog {
   category_scores: Record<string, number>
   threshold_snapshot: Record<string, number>
   input_excerpt: string
+  input_hash: string
   matched_keyword: string
   policy_id: number | null
   policy_action: ContentModerationUserPolicyAction | ''
@@ -268,6 +270,11 @@ export interface DeleteFlaggedHashResponse {
   deleted: boolean
 }
 
+export interface AllowHashResponse {
+  input_hash: string
+  added: boolean
+}
+
 export interface ClearFlaggedHashesResponse {
   deleted: number
 }
@@ -344,6 +351,20 @@ export async function deleteFlaggedHash(inputHash: string): Promise<DeleteFlagge
   return data
 }
 
+export async function allowHash(inputHash: string): Promise<AllowHashResponse> {
+  const { data } = await apiClient.post<AllowHashResponse>('/admin/risk-control/hashes/allow', {
+    input_hash: inputHash,
+  })
+  return data
+}
+
+export async function deleteAllowedHash(inputHash: string): Promise<DeleteFlaggedHashResponse> {
+  const { data } = await apiClient.delete<DeleteFlaggedHashResponse>('/admin/risk-control/hashes/allow', {
+    data: { input_hash: inputHash },
+  })
+  return data
+}
+
 export async function clearFlaggedHashes(): Promise<ClearFlaggedHashesResponse> {
   const { data } = await apiClient.delete<ClearFlaggedHashesResponse>('/admin/risk-control/hashes/all')
   return data
@@ -360,6 +381,8 @@ export const riskControlAPI = {
   updateUserPolicy,
   deleteUserPolicy,
   unbanUser,
+  allowHash,
+  deleteAllowedHash,
   deleteFlaggedHash,
   clearFlaggedHashes,
 }

@@ -203,6 +203,7 @@ func requireRecordedHashCount(t *testing.T, cache *contentModerationTestHashCach
 type contentModerationTestHashCache struct {
 	mu            sync.Mutex
 	hashes        map[string]struct{}
+	allowed       map[string]struct{}
 	recorded      []string
 	checked       []string
 	deleted       []string
@@ -464,6 +465,43 @@ func (c *contentModerationTestHashCache) CountFlaggedInputHashes(ctx context.Con
 	return int64(len(c.hashes)), nil
 }
 
+func (c *contentModerationTestHashCache) RecordAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.allowed == nil {
+		c.allowed = map[string]struct{}{}
+	}
+	_, exists := c.allowed[inputHash]
+	c.allowed[inputHash] = struct{}{}
+	return !exists, nil
+}
+
+func (c *contentModerationTestHashCache) HasAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.allowed[inputHash]
+	return ok, nil
+}
+
+func (c *contentModerationTestHashCache) DeleteAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.allowed == nil {
+		return false, nil
+	}
+	if _, ok := c.allowed[inputHash]; !ok {
+		return false, nil
+	}
+	delete(c.allowed, inputHash)
+	return true, nil
+}
+
+func (c *contentModerationTestHashCache) CountAllowedInputHashes(ctx context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return int64(len(c.allowed)), nil
+}
+
 func (c *contentModerationTestHashCache) snapshotRecorded() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -640,6 +678,64 @@ func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T
 	require.Equal(t, ContentModerationActionKeywordBlock, logs[0].Action)
 	require.Equal(t, contentModerationKeywordCategory, logs[0].HighestCategory)
 	require.Equal(t, "secret-token", logs[0].MatchedKeyword)
+	require.Equal(t, "please leak SECRET-TOKEN now", logs[0].InputExcerpt)
+	require.NotEmpty(t, logs[0].InputHash)
+}
+
+func TestContentModerationCheck_AllowedHashSkipsKeywordBlock(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	content := ExtractContentModerationInput(ContentModerationProtocolAnthropicMessages, body)
+	content.Normalize()
+	hashCache := &contentModerationTestHashCache{}
+	added, err := hashCache.RecordAllowedInputHash(context.Background(), content.Hash())
+	require.NoError(t, err)
+	require.True(t, added)
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		hashCache,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.False(t, upstreamCalled, "allowlisted hash must short-circuit keyword and upstream checks")
+	logs := requireContentModerationLogCount(t, repo, 1)
+	require.False(t, logs[0].Flagged)
+	require.Equal(t, ContentModerationActionAllow, logs[0].Action)
+	require.Equal(t, content.Hash(), logs[0].InputHash)
 	require.Equal(t, "please leak SECRET-TOKEN now", logs[0].InputExcerpt)
 }
 

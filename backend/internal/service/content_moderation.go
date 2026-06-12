@@ -321,8 +321,11 @@ type ContentModerationCheckInput struct {
 }
 
 type ContentModerationInput struct {
-	Text   string
-	Images []string
+	Text           string
+	Images         []string
+	Source         string
+	SegmentCount   int
+	StrippedPolicy bool
 }
 
 func (in *ContentModerationInput) Normalize() {
@@ -331,6 +334,12 @@ func (in *ContentModerationInput) Normalize() {
 	}
 	in.Text = trimRunes(normalizeContentModerationText(in.Text), maxModerationInputRunes)
 	in.Images = normalizeModerationImages(in.Images)
+	if in.SegmentCount <= 0 && !in.IsEmpty() {
+		if strings.TrimSpace(in.Text) != "" {
+			in.SegmentCount++
+		}
+		in.SegmentCount += len(in.Images)
+	}
 }
 
 func (in ContentModerationInput) IsEmpty() bool {
@@ -405,6 +414,7 @@ type ContentModerationLog struct {
 	CategoryScores    map[string]float64 `json:"category_scores"`
 	ThresholdSnapshot map[string]float64 `json:"threshold_snapshot"`
 	InputExcerpt      string             `json:"input_excerpt"`
+	InputHash         string             `json:"input_hash"`
 	MatchedKeyword    string             `json:"matched_keyword"`
 	PolicyID          *int64             `json:"policy_id,omitempty"`
 	PolicyAction      string             `json:"policy_action"`
@@ -464,6 +474,7 @@ type ContentModerationRuntimeStatus struct {
 	PreBlockAPIKeyLoads          []ContentModerationAPIKeyLoad   `json:"pre_block_api_key_loads"`
 	APIKeyStatuses               []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
 	FlaggedHashCount             int64                           `json:"flagged_hash_count"`
+	AllowedHashCount             int64                           `json:"allowed_hash_count"`
 	LastCleanupAt                *time.Time                      `json:"last_cleanup_at,omitempty"`
 	LastCleanupDeletedHit        int64                           `json:"last_cleanup_deleted_hit"`
 	LastCleanupDeletedNonHit     int64                           `json:"last_cleanup_deleted_non_hit"`
@@ -513,6 +524,11 @@ type ContentModerationDeleteHashResult struct {
 	Deleted   bool   `json:"deleted"`
 }
 
+type ContentModerationAllowHashResult struct {
+	InputHash string `json:"input_hash"`
+	Added     bool   `json:"added"`
+}
+
 type ContentModerationClearHashesResult struct {
 	Deleted int64 `json:"deleted"`
 }
@@ -534,6 +550,10 @@ type ContentModerationHashCache interface {
 	DeleteFlaggedInputHash(ctx context.Context, inputHash string) (bool, error)
 	ClearFlaggedInputHashes(ctx context.Context) (int64, error)
 	CountFlaggedInputHashes(ctx context.Context) (int64, error)
+	RecordAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
+	HasAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
+	DeleteAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
+	CountAllowedInputHashes(ctx context.Context) (int64, error)
 }
 
 type ContentModerationService struct {
@@ -949,10 +969,32 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"group_id", contentModerationLogGroupID(input.GroupID),
 		"endpoint", input.Endpoint,
 		"protocol", input.Protocol,
+		"source", content.Source,
+		"segment_count", content.SegmentCount,
+		"stripped_policy", content.StrippedPolicy,
 		"text_runes", len([]rune(content.Text)),
 		"image_count", len(content.Images))
 	hashText := content.Hash()
 	effectiveCfg := s.effectiveConfigForUserPolicy(ctx, cfg, input.UserID)
+	if s.hashCache != nil {
+		allowed, err := s.hashCache.HasAllowedInputHash(ctx, hashText)
+		if err != nil {
+			slog.Warn("content_moderation.allow_hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
+		} else if allowed {
+			if effectiveCfg.Mode == ContentModerationModePreBlock {
+				s.recordPreBlockSyncMetric(0, ContentModerationActionAllow)
+			}
+			slog.Info("content_moderation.allow_hash_matched",
+				"user_id", input.UserID,
+				"api_key_id", input.APIKeyID,
+				"group_id", contentModerationLogGroupID(input.GroupID),
+				"endpoint", input.Endpoint,
+				"protocol", input.Protocol,
+				"input_hash", hashText)
+			s.recordAllowedInputHashLog(ctx, input, effectiveCfg, content, hashText)
+			return allow, nil
+		}
+	}
 	if effectiveCfg.Mode == ContentModerationModePreBlock {
 		if effectiveCfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && len(effectiveCfg.BlockedKeywords) > 0 {
 			if keyword, hit := matchBlockedKeyword(content.Text, effectiveCfg.BlockedKeywords); hit {
@@ -967,6 +1009,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 					"keyword", keyword)
 				scores := map[string]float64{contentModerationKeywordCategory: 1.0}
 				log := s.buildLog(input, effectiveCfg, ContentModerationActionKeywordBlock, true, contentModerationKeywordCategory, 1.0, scores, content.ExcerptText(), nil, nil, "")
+				log.InputHash = hashText
 				log.MatchedKeyword = keyword
 				s.enqueueRecord(input, effectiveCfg, log, hashText, false, true)
 				return &ContentModerationDecision{
@@ -1016,6 +1059,7 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 			}
 			scores := map[string]float64{"hash": 1.0}
 			log := s.buildLog(input, effectiveCfg, ContentModerationActionHashBlock, true, "hash", 1.0, scores, content.ExcerptText(), nil, nil, "")
+			log.InputHash = hashText
 			applyHashSideEffects := effectiveCfg.UserPolicy != nil && effectiveCfg.UserPolicy.ApplyToHashBlock
 			s.enqueueRecord(input, effectiveCfg, log, hashText, false, applyHashSideEffects)
 			return &ContentModerationDecision{
@@ -1100,6 +1144,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		}
 		if cfg.RecordNonHits {
 			log := s.buildLog(input, cfg, ContentModerationActionError, false, "", 0, nil, content.ExcerptText(), &latency, queueDelay, err.Error())
+			log.InputHash = hashText
 			_ = s.repo.CreateLog(ctx, log)
 		}
 		return allow
@@ -1133,6 +1178,7 @@ func (s *ContentModerationService) checkSync(ctx context.Context, input ContentM
 		"queue_delay_ms", queueDelay)
 	if flagged || cfg.RecordNonHits {
 		log := s.buildLog(input, cfg, action, flagged, highestCategory, highestScore, result.CategoryScores, content.ExcerptText(), &latency, queueDelay, "")
+		log.InputHash = hashText
 		if queueDelay == nil && cfg.Mode == ContentModerationModePreBlock {
 			s.enqueueRecord(input, cfg, log, hashText, flagged, flagged)
 		} else {
@@ -1249,6 +1295,19 @@ func (s *ContentModerationService) enqueueRecord(input ContentModerationCheckInp
 			"action", log.Action)
 		s.asyncDropped.Add(1)
 	}
+}
+
+func (s *ContentModerationService) recordAllowedInputHashLog(ctx context.Context, input ContentModerationCheckInput, cfg *ContentModerationConfig, content ContentModerationInput, hashText string) {
+	if s == nil || cfg == nil || hashText == "" {
+		return
+	}
+	log := s.buildLog(input, cfg, ContentModerationActionAllow, false, "", 0, nil, content.ExcerptText(), nil, nil, "")
+	log.InputHash = hashText
+	if s.asyncQueue != nil {
+		s.enqueueRecord(input, cfg, log, hashText, false, false)
+		return
+	}
+	s.persistContentModerationLog(ctx, cfg, log, hashText, false, false)
 }
 
 func (s *ContentModerationService) worker(id int) {
@@ -1459,6 +1518,45 @@ func (s *ContentModerationService) DeleteFlaggedInputHash(ctx context.Context, i
 	}, nil
 }
 
+func (s *ContentModerationService) AllowInputHash(ctx context.Context, inputHash string) (*ContentModerationAllowHashResult, error) {
+	inputHash = normalizeContentModerationHash(inputHash)
+	if inputHash == "" {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_HASH", "风险输入哈希无效")
+	}
+	if s == nil || s.hashCache == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_HASH_CACHE_UNAVAILABLE", "内容审计哈希缓存不可用")
+	}
+	added, err := s.hashCache.RecordAllowedInputHash(ctx, inputHash)
+	if err != nil {
+		return nil, fmt.Errorf("allow content moderation hash: %w", err)
+	}
+	if _, err := s.hashCache.DeleteFlaggedInputHash(ctx, inputHash); err != nil {
+		slog.Warn("content_moderation.delete_flagged_hash_after_allow_failed", "input_hash", inputHash, "error", err)
+	}
+	return &ContentModerationAllowHashResult{
+		InputHash: inputHash,
+		Added:     added,
+	}, nil
+}
+
+func (s *ContentModerationService) DeleteAllowedInputHash(ctx context.Context, inputHash string) (*ContentModerationDeleteHashResult, error) {
+	inputHash = normalizeContentModerationHash(inputHash)
+	if inputHash == "" {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_HASH", "风险输入哈希无效")
+	}
+	if s == nil || s.hashCache == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_HASH_CACHE_UNAVAILABLE", "内容审计哈希缓存不可用")
+	}
+	deleted, err := s.hashCache.DeleteAllowedInputHash(ctx, inputHash)
+	if err != nil {
+		return nil, fmt.Errorf("delete content moderation allowed hash: %w", err)
+	}
+	return &ContentModerationDeleteHashResult{
+		InputHash: inputHash,
+		Deleted:   deleted,
+	}, nil
+}
+
 func (s *ContentModerationService) ClearFlaggedInputHashes(ctx context.Context) (*ContentModerationClearHashesResult, error) {
 	if s == nil || s.hashCache == nil {
 		return nil, infraerrors.InternalServer("CONTENT_MODERATION_HASH_CACHE_UNAVAILABLE", "内容审计哈希缓存不可用")
@@ -1511,6 +1609,14 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 			slog.Warn("content_moderation.hash_count_failed", "error", err)
 		}
 	}
+	var allowedHashCount int64
+	if s.hashCache != nil {
+		if n, err := s.hashCache.CountAllowedInputHashes(ctx); err == nil {
+			allowedHashCount = n
+		} else {
+			slog.Warn("content_moderation.allowed_hash_count_failed", "error", err)
+		}
+	}
 	var lastCleanupAt *time.Time
 	if unix := s.lastCleanupUnix.Load(); unix > 0 {
 		t := time.Unix(unix, 0)
@@ -1543,6 +1649,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		PreBlockAPIKeyLoads:          s.preBlockAPIKeyLoads(cfg.apiKeys()),
 		APIKeyStatuses:               s.apiKeyStatuses(cfg.apiKeys()),
 		FlaggedHashCount:             flaggedHashCount,
+		AllowedHashCount:             allowedHashCount,
 		LastCleanupAt:                lastCleanupAt,
 		LastCleanupDeletedHit:        s.lastCleanupDeletedHit.Load(),
 		LastCleanupDeletedNonHit:     s.lastCleanupDeletedNonHit.Load(),

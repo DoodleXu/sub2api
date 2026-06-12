@@ -62,21 +62,21 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	}
 	err = r.db.QueryRowContext(ctx, `
 	INSERT INTO content_moderation_logs (
-	    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
-	    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
-	    category_scores, threshold_snapshot, input_excerpt, matched_keyword, policy_id, policy_action,
-	    policy_snapshot, block_status, error_code, upstream_latency_ms, error,
-	    violation_count, auto_banned, email_sent, queue_delay_ms
-	) VALUES (
-	    $1, $2, $3, $4, $5, $6, $7,
-	    $8, $9, $10, $11, $12, $13, $14, $15,
-	    $16::jsonb, $17::jsonb, $18, $19, $20, $21,
-	    $22::jsonb, $23, $24, $25, $26,
-	    $27, $28, $29, $30
-	) RETURNING id, created_at`,
+		    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
+		    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
+		    category_scores, threshold_snapshot, input_excerpt, input_hash, matched_keyword, policy_id, policy_action,
+		    policy_snapshot, block_status, error_code, upstream_latency_ms, error,
+		    violation_count, auto_banned, email_sent, queue_delay_ms
+		) VALUES (
+		    $1, $2, $3, $4, $5, $6, $7,
+		    $8, $9, $10, $11, $12, $13, $14, $15,
+		    $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22,
+		    $23::jsonb, $24, $25, $26, $27,
+		    $28, $29, $30, $31
+		) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
-		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.MatchedKeyword, policyID, log.PolicyAction,
+		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.InputHash, log.MatchedKeyword, policyID, log.PolicyAction,
 		string(policySnapshot), log.BlockStatus, log.ErrorCode, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS),
 	).Scan(&log.ID, &log.CreatedAt)
@@ -109,11 +109,11 @@ func (r *contentModerationRepository) ListLogs(ctx context.Context, filter servi
 	queryArgs = append(queryArgs, params.Limit(), params.Offset())
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
-	    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
-	    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
-	    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.matched_keyword,
-	    l.policy_id, l.policy_action, l.policy_snapshot, l.block_status, l.error_code, l.upstream_latency_ms, l.error,
-	    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
+		    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+		    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
+		    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.input_hash, l.matched_keyword,
+		    l.policy_id, l.policy_action, l.policy_snapshot, l.block_status, l.error_code, l.upstream_latency_ms, l.error,
+		    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
 FROM content_moderation_logs l
 LEFT JOIN users u ON u.id = l.user_id `+whereSQL+`
 ORDER BY l.created_at DESC, l.id DESC
@@ -150,6 +150,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&scoresRaw,
 			&thresholdsRaw,
 			&item.InputExcerpt,
+			&item.InputHash,
 			&item.MatchedKeyword,
 			&policyID,
 			&item.PolicyAction,
@@ -422,9 +423,9 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		like := "%" + search + "%"
-		args = append(args, like, like, like, like, like, like)
-		idx := len(args) - 5
-		where = append(where, fmt.Sprintf("(l.request_id ILIKE $%d OR l.user_email ILIKE $%d OR l.api_key_name ILIKE $%d OR l.model ILIKE $%d OR l.input_excerpt ILIKE $%d OR l.matched_keyword ILIKE $%d)", idx, idx+1, idx+2, idx+3, idx+4, idx+5))
+		args = append(args, like, like, like, like, like, like, like)
+		idx := len(args) - 6
+		where = append(where, fmt.Sprintf("(l.request_id ILIKE $%d OR l.user_email ILIKE $%d OR l.api_key_name ILIKE $%d OR l.model ILIKE $%d OR l.input_excerpt ILIKE $%d OR l.input_hash ILIKE $%d OR l.matched_keyword ILIKE $%d)", idx, idx+1, idx+2, idx+3, idx+4, idx+5, idx+6))
 	}
 	if filter.From != nil && !filter.From.IsZero() {
 		add("l.created_at >= $%d", *filter.From)
