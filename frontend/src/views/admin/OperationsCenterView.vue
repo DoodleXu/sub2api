@@ -162,11 +162,11 @@
             <div v-for="(tier, index) in form.daily_checkin_reward_tiers" :key="index" class="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.minReward') }}</span>
-                <input v-model.number="tier.min_usd" class="input" type="number" min="1" max="100" step="0.01" :placeholder="t('admin.operations.minReward')" />
+                <input v-model.number="tier.min_usd" class="input" type="number" min="0.01" max="100" step="0.01" :placeholder="t('admin.operations.minReward')" />
               </label>
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.maxReward') }}</span>
-                <input v-model.number="tier.max_usd" class="input" type="number" min="1" max="100" step="0.01" :placeholder="t('admin.operations.maxReward')" />
+                <input v-model.number="tier.max_usd" class="input" type="number" min="0.01" max="100" step="0.01" :placeholder="t('admin.operations.maxReward')" />
               </label>
               <label class="space-y-1">
                 <span class="input-label">{{ t('admin.operations.probability') }}</span>
@@ -481,7 +481,7 @@ function normalizedRules(): DailyCheckinSettingsUpdateRequest {
 
 function normalizeRewardAmount(value: number, fallback: number): number {
   const normalized = Number(value)
-  if (!Number.isFinite(normalized) || normalized < 1) {
+  if (!Number.isFinite(normalized) || normalized < 0.01) {
     return fallback
   }
   return Math.round(Math.min(100, normalized) * 100) / 100

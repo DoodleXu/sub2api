@@ -916,6 +916,7 @@ const (
 const (
 	DailyCheckinRequiredUsageDefault  = 1.0
 	DailyCheckinRewardMinDefault      = 1
+	DailyCheckinRewardMinLimit        = 0.01
 	DailyCheckinRewardMaxDefault      = 3
 	DailyCheckinRewardMaxLimit        = 100
 	DailyCheckinBudgetDefault         = 0.0
@@ -1002,13 +1003,13 @@ func normalizeDailyCheckinStreakScope(raw string) string {
 }
 
 func normalizeDailyCheckinRewardRange(minValue, maxValue float64) (float64, float64) {
-	if math.IsNaN(minValue) || math.IsInf(minValue, 0) || minValue < DailyCheckinRewardMinDefault {
+	if math.IsNaN(minValue) || math.IsInf(minValue, 0) || minValue < DailyCheckinRewardMinLimit {
 		minValue = DailyCheckinRewardMinDefault
 	}
 	if minValue > DailyCheckinRewardMaxLimit {
 		minValue = DailyCheckinRewardMaxLimit
 	}
-	if math.IsNaN(maxValue) || math.IsInf(maxValue, 0) || maxValue < DailyCheckinRewardMinDefault {
+	if math.IsNaN(maxValue) || math.IsInf(maxValue, 0) || maxValue < DailyCheckinRewardMinLimit {
 		maxValue = DailyCheckinRewardMinDefault
 	}
 	if maxValue > DailyCheckinRewardMaxLimit {
