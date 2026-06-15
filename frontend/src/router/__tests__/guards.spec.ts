@@ -84,7 +84,7 @@ function simulateGuard(
       return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
     }
     if (authState.backendModeEnabled && !authState.isAuthenticated) {
-      const allowed = ['/login', '/key-usage', '/setup', '/payment/result']
+      const allowed = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
       const callbackPaths = [
         '/auth/callback',
         '/auth/linuxdo/callback',
@@ -133,7 +133,7 @@ function simulateGuard(
     if (authState.isAuthenticated && authState.isAdmin) {
       return null
     }
-    const allowed = ['/login', '/key-usage', '/setup', '/payment/result']
+    const allowed = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
     const callbackPaths = [
       '/auth/callback',
       '/auth/linuxdo/callback',
@@ -219,6 +219,19 @@ describe('路由守卫逻辑', () => {
 
     it('访问 /home 公开页面允许通过', () => {
       const redirect = simulateGuard('/home', { requiresAuth: false }, authState)
+      expect(redirect).toBeNull()
+    })
+
+    it('backend mode 下允许未登录用户访问地区限制页', () => {
+      const redirect = simulateGuard(
+        '/unsupported',
+        { requiresAuth: false },
+        {
+          ...authState,
+          backendModeEnabled: true,
+        },
+      )
+
       expect(redirect).toBeNull()
     })
   })
