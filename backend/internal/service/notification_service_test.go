@@ -152,6 +152,9 @@ func TestNotificationConfigDefaultsDisabled(t *testing.T) {
 	require.Equal(t, "22:00", cfg.QuietHours.StartTime)
 	require.Equal(t, "08:00", cfg.QuietHours.EndTime)
 	require.NotEmpty(t, cfg.QuietHours.Timezone)
+	require.Equal(t, "active", cfg.Transports.Bark.Level)
+	require.Contains(t, cfg.Transports.Bark.TitleTemplate, "Sub2API 渠道监控")
+	require.Contains(t, cfg.Transports.Bark.BodyTemplate, "监控：{monitor_name}")
 }
 
 func TestNotificationConfigRejectsInvalidQuietHours(t *testing.T) {
@@ -401,10 +404,12 @@ func TestNotificationDispatchSendsBarkAndTelegram(t *testing.T) {
 		Enabled: true,
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
-				Enabled:    true,
-				ServerURL:  barkServer.URL,
-				DeviceKeys: []string{"device/key"},
-				Level:      "critical",
+				Enabled:       true,
+				ServerURL:     barkServer.URL,
+				DeviceKeys:    []string{"device/key"},
+				Level:         "critical",
+				TitleTemplate: "中文提醒：{monitor_name} {new_status}",
+				BodyTemplate:  "模型 {model} 从 {old_status} 变为 {new_status}\n原因：{message}",
 			},
 			Telegram: NotificationTelegramTransportConfig{
 				Enabled:  true,
@@ -431,12 +436,19 @@ func TestNotificationDispatchSendsBarkAndTelegram(t *testing.T) {
 		Event:      "failed",
 		SourceType: "channel_monitor",
 		SourceID:   "1:gpt",
-		Variables:  map[string]string{"monitor_url": "https://example.com/monitor"},
+		Variables: map[string]string{
+			"monitor_name": "主监控",
+			"model":        "gpt-5.4",
+			"old_status":   "operational",
+			"new_status":   "failed",
+			"message":      "上游超时",
+			"monitor_url":  "https://example.com/monitor",
+		},
 	})
 
 	require.Equal(t, "/device%2Fkey", barkPath)
-	require.Equal(t, "Monitor failed", barkPayload["title"])
-	require.Equal(t, "model failed", barkPayload["body"])
+	require.Equal(t, "中文提醒：主监控 failed", barkPayload["title"])
+	require.Equal(t, "模型 gpt-5.4 从 operational 变为 failed\n原因：上游超时", barkPayload["body"])
 	require.Equal(t, "critical", barkPayload["level"])
 	require.Equal(t, "https://example.com/monitor", barkPayload["url"])
 	require.Equal(t, "/botbot-token/sendMessage", telegramPath)

@@ -391,6 +391,7 @@ func TestNotificationEmailBroadcastFreshRunningStatusKeepsLock(t *testing.T) {
 	repo := newNotificationEmailMemorySettingRepo()
 	svc := NewNotificationEmailService(repo, nil)
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
 
 	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
 		BatchID:     "broadcast_fresh",

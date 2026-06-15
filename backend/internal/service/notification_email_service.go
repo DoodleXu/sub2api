@@ -67,6 +67,7 @@ type NotificationEmailService struct {
 	settingRepo  SettingRepository
 	emailService *EmailService
 	userRepo     UserRepository
+	now          func() time.Time
 }
 
 type NotificationEmailEventInfo struct {
@@ -221,7 +222,11 @@ type notificationEmailUnsubscribeClaims struct {
 }
 
 func NewNotificationEmailService(settingRepo SettingRepository, emailService *EmailService) *NotificationEmailService {
-	svc := &NotificationEmailService{settingRepo: settingRepo, emailService: emailService}
+	svc := &NotificationEmailService{
+		settingRepo:  settingRepo,
+		emailService: emailService,
+		now:          func() time.Time { return time.Now().UTC() },
+	}
 	if emailService != nil {
 		emailService.SetNotificationEmailService(svc)
 	}
@@ -230,6 +235,13 @@ func NewNotificationEmailService(settingRepo SettingRepository, emailService *Em
 
 func (s *NotificationEmailService) SetUserRepository(userRepo UserRepository) {
 	s.userRepo = userRepo
+}
+
+func (s *NotificationEmailService) nowUTC() time.Time {
+	if s != nil && s.now != nil {
+		return s.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func notificationEmailTemplateErr(err error) error {
@@ -355,7 +367,7 @@ func (s *NotificationEmailService) UpdateTemplate(ctx context.Context, event, lo
 	stored := notificationEmailStoredTemplate{
 		Subject:   strings.TrimSpace(subject),
 		HTML:      htmlBody,
-		UpdatedAt: time.Now().UTC(),
+		UpdatedAt: s.nowUTC(),
 	}
 	payload, err := json.Marshal(stored)
 	if err != nil {
@@ -461,7 +473,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		return notificationEmailDeliveryErr(err)
 	}
 	if deliveryKey != "" {
-		if err := s.settingRepo.Set(ctx, deliveryKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		if err := s.settingRepo.Set(ctx, deliveryKey, s.nowUTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}
@@ -508,7 +520,7 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 	if len(recipients) == 0 {
 		return NotificationEmailBroadcastResult{}, errors.New("broadcast requires at least one recipient")
 	}
-	if err := s.releaseInterruptedActiveBroadcast(ctx, time.Now().UTC()); err != nil {
+	if err := s.releaseInterruptedActiveBroadcast(ctx, s.nowUTC()); err != nil {
 		return NotificationEmailBroadcastResult{}, err
 	}
 	batchID, err := notificationEmailBroadcastBatchID()
@@ -529,7 +541,7 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 			lockReleased = true
 		}
 	}
-	startedAt := time.Now().UTC()
+	startedAt := s.nowUTC()
 	result := NotificationEmailBroadcastResult{
 		BatchID:                  batchID,
 		TargetCount:              len(recipients),
@@ -572,7 +584,7 @@ func (s *NotificationEmailService) GetBroadcastStatus(ctx context.Context, batch
 	if err != nil {
 		return NotificationEmailBroadcastStatus{}, err
 	}
-	status = s.interruptBroadcastStatusIfStale(ctx, status, time.Now().UTC())
+	status = s.interruptBroadcastStatusIfStale(ctx, status, s.nowUTC())
 	return status, nil
 }
 
@@ -793,7 +805,7 @@ func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID str
 	status.SkippedCount = skippedCount
 	status.UnsubscribedCount = unsubscribedCount
 	status.FailureCount = failureCount
-	status.CompletedAt = time.Now().UTC().Format(time.RFC3339)
+	status.CompletedAt = s.nowUTC().Format(time.RFC3339)
 	s.saveBroadcastStatusBestEffort(ctx, status)
 	slog.Info("notification email broadcast completed", "batch_id", batchID, "target_count", len(recipients), "sent", successCount, "skipped", skippedCount, "unsubscribed", unsubscribedCount, "failed", failureCount, "rpm", input.RPM)
 }
@@ -802,7 +814,7 @@ func (s *NotificationEmailService) saveBroadcastStatus(ctx context.Context, stat
 	if s == nil || s.settingRepo == nil {
 		return errors.New("notification email service is not configured")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.nowUTC().Format(time.RFC3339)
 	if strings.TrimSpace(status.StartedAt) == "" {
 		status.StartedAt = now
 	}
@@ -1089,7 +1101,7 @@ func (s *NotificationEmailService) createUnsubscribeToken(ctx context.Context, e
 	if err != nil {
 		return "", err
 	}
-	claims := notificationEmailUnsubscribeClaims{Email: strings.TrimSpace(email), Event: event, Exp: time.Now().Add(notificationEmailUnsubscribeTTL).Unix()}
+	claims := notificationEmailUnsubscribeClaims{Email: strings.TrimSpace(email), Event: event, Exp: s.nowUTC().Add(notificationEmailUnsubscribeTTL).Unix()}
 	payload, err := json.Marshal(claims)
 	if err != nil {
 		return "", err
@@ -1123,7 +1135,7 @@ func (s *NotificationEmailService) parseUnsubscribeToken(ctx context.Context, to
 	if strings.TrimSpace(claims.Email) == "" || strings.TrimSpace(claims.Event) == "" {
 		return notificationEmailUnsubscribeClaims{}, errors.New("invalid unsubscribe token claims")
 	}
-	if claims.Exp <= time.Now().Unix() {
+	if claims.Exp <= s.nowUTC().Unix() {
 		return notificationEmailUnsubscribeClaims{}, errors.New("unsubscribe token expired")
 	}
 	return claims, nil

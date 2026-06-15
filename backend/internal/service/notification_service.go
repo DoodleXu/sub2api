@@ -58,6 +58,8 @@ type NotificationBarkTransportConfig struct {
 	DeviceKeysConfigured bool     `json:"device_keys_configured"`
 	ClearDeviceKeys      bool     `json:"clear_device_keys,omitempty"`
 	Level                string   `json:"level"`
+	TitleTemplate        string   `json:"title_template"`
+	BodyTemplate         string   `json:"body_template"`
 }
 
 type NotificationTelegramTransportConfig struct {
@@ -315,9 +317,20 @@ func defaultNotificationConfig() NotificationConfig {
 				Recipients: []string{},
 			},
 			Bark: NotificationBarkTransportConfig{
-				Enabled:   false,
-				ServerURL: "https://api.day.app",
-				Level:     "active",
+				Enabled:       false,
+				ServerURL:     "https://api.day.app",
+				Level:         "active",
+				TitleTemplate: "Sub2API 渠道监控：{monitor_name} {new_status}",
+				BodyTemplate: strings.Join([]string{
+					"监控：{monitor_name}",
+					"服务商：{provider}",
+					"分组：{group_name}",
+					"模型：{model}",
+					"状态：{old_status} -> {new_status}",
+					"延迟：{latency_ms} ms",
+					"信息：{message}",
+					"时间：{triggered_at}",
+				}, "\n"),
 			},
 			Telegram: NotificationTelegramTransportConfig{
 				Enabled: false,
@@ -428,6 +441,8 @@ func mergeNotificationConfig(current, next *NotificationConfig) NotificationConf
 	cfg.Transports.Bark.Enabled = next.Transports.Bark.Enabled
 	cfg.Transports.Bark.ServerURL = next.Transports.Bark.ServerURL
 	cfg.Transports.Bark.Level = next.Transports.Bark.Level
+	cfg.Transports.Bark.TitleTemplate = next.Transports.Bark.TitleTemplate
+	cfg.Transports.Bark.BodyTemplate = next.Transports.Bark.BodyTemplate
 	if next.Transports.Bark.ClearDeviceKeys {
 		cfg.Transports.Bark.DeviceKeys = nil
 	} else if len(next.Transports.Bark.DeviceKeys) > 0 {
@@ -478,6 +493,15 @@ func normalizeNotificationConfig(cfg *NotificationConfig) {
 		cfg.Transports.Bark.ServerURL = "https://api.day.app"
 	}
 	cfg.Transports.Bark.Level = normalizeBarkLevel(cfg.Transports.Bark.Level)
+	defaults := defaultNotificationConfig()
+	cfg.Transports.Bark.TitleTemplate = strings.TrimSpace(cfg.Transports.Bark.TitleTemplate)
+	if cfg.Transports.Bark.TitleTemplate == "" {
+		cfg.Transports.Bark.TitleTemplate = defaults.Transports.Bark.TitleTemplate
+	}
+	cfg.Transports.Bark.BodyTemplate = strings.TrimSpace(cfg.Transports.Bark.BodyTemplate)
+	if cfg.Transports.Bark.BodyTemplate == "" {
+		cfg.Transports.Bark.BodyTemplate = defaults.Transports.Bark.BodyTemplate
+	}
 	cfg.Transports.Bark.DeviceKeysConfigured = len(cfg.Transports.Bark.DeviceKeys) > 0
 	cfg.Transports.Bark.ClearDeviceKeys = false
 	cfg.Transports.Telegram.BotToken = strings.TrimSpace(cfg.Transports.Telegram.BotToken)
@@ -488,7 +512,6 @@ func normalizeNotificationConfig(cfg *NotificationConfig) {
 		cfg.Routes = map[string]NotificationRoute{}
 	}
 	cfg.QuietHours = normalizeNotificationQuietHours(cfg.QuietHours)
-	defaults := defaultNotificationConfig()
 	for event, route := range defaults.Routes {
 		if _, ok := cfg.Routes[event]; !ok {
 			cfg.Routes[event] = route
@@ -764,13 +787,15 @@ func (s *NotificationService) sendBark(ctx context.Context, payload Notification
 	if client == nil {
 		client = http.DefaultClient
 	}
+	title := renderNotificationTextTemplate(cfg.TitleTemplate, payload, payload.Title)
+	content := renderNotificationTextTemplate(cfg.BodyTemplate, payload, payload.Content)
 	successCount := 0
 	var failures []error
 	for _, deviceKey := range deviceKeys {
 		endpoint := strings.TrimRight(cfg.ServerURL, "/") + "/" + url.PathEscape(deviceKey)
 		body := map[string]string{
-			"title": payload.Title,
-			"body":  payload.Content,
+			"title": title,
+			"body":  content,
 			"level": cfg.Level,
 		}
 		if monitorURL := strings.TrimSpace(payload.Variables["monitor_url"]); monitorURL != "" {
@@ -790,6 +815,30 @@ func (s *NotificationService) sendBark(ctx context.Context, payload Notification
 		successCount++
 	}
 	return notificationDeliveryResult(successCount, len(failures), failures)
+}
+
+func renderNotificationTextTemplate(template string, payload NotificationPayload, fallback string) string {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		return fallback
+	}
+	variables := make(map[string]string, len(payload.Variables)+4)
+	for key, value := range payload.Variables {
+		variables[key] = value
+	}
+	variables["title"] = payload.Title
+	variables["content"] = payload.Content
+	variables["event"] = payload.Event
+	variables["source_id"] = payload.SourceID
+	replacerArgs := make([]string, 0, len(variables)*2)
+	for key, value := range variables {
+		replacerArgs = append(replacerArgs, "{"+key+"}", value)
+	}
+	rendered := strings.TrimSpace(strings.NewReplacer(replacerArgs...).Replace(template))
+	if rendered == "" {
+		return fallback
+	}
+	return rendered
 }
 
 func (s *NotificationService) sendTelegram(ctx context.Context, payload NotificationPayload, cfg NotificationTelegramTransportConfig) error {

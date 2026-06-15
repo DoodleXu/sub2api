@@ -1106,6 +1106,8 @@ export interface NotificationConfig {
       device_keys_configured: boolean;
       clear_device_keys?: boolean;
       level: "active" | "timeSensitive" | "passive" | "critical";
+      title_template: string;
+      body_template: string;
     };
     telegram: {
       enabled: boolean;

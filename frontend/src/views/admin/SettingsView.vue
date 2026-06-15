@@ -6691,6 +6691,31 @@
                         :options="notificationBarkLevelOptions"
                       />
                     </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.barkTitleTemplate") }}
+                      </label>
+                      <input
+                        v-model="notificationConfig.transports.bark.title_template"
+                        type="text"
+                        class="input"
+                        :placeholder="t('admin.settings.notifications.barkTitleTemplatePlaceholder')"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.notifications.barkBodyTemplate") }}
+                      </label>
+                      <textarea
+                        v-model="notificationConfig.transports.bark.body_template"
+                        rows="5"
+                        class="input min-h-[132px]"
+                        :placeholder="t('admin.settings.notifications.barkBodyTemplatePlaceholder')"
+                      ></textarea>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.notifications.barkTemplateHint") }}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -7711,6 +7736,17 @@ function defaultNotificationConfig(): NotificationConfig {
         device_keys_configured: false,
         clear_device_keys: false,
         level: "active",
+        title_template: "Sub2API 渠道监控：{monitor_name} {new_status}",
+        body_template: [
+          "监控：{monitor_name}",
+          "服务商：{provider}",
+          "分组：{group_name}",
+          "模型：{model}",
+          "状态：{old_status} -> {new_status}",
+          "延迟：{latency_ms} ms",
+          "信息：{message}",
+          "时间：{triggered_at}",
+        ].join("\n"),
       },
       telegram: {
         enabled: false,
