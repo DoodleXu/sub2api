@@ -194,6 +194,27 @@ func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsf
 	return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}
 }
 
+// ResolveTokenTLSProfileByID 解析独立后台请求使用的 TLS 模板。
+// 这类请求可能需要和账号主链路解耦，因此不依赖账号平台或 enable_tls_fingerprint 开关。
+func (s *TLSFingerprintProfileService) ResolveTokenTLSProfileByID(id int64) (*tlsfingerprint.Profile, bool) {
+	if s == nil {
+		return nil, false
+	}
+	if id > 0 {
+		if p := s.GetProfileByID(id); p != nil {
+			return p, true
+		}
+		return nil, false
+	}
+	if id == -1 {
+		if p := s.getRandomProfile(); p != nil {
+			return p, true
+		}
+		return nil, false
+	}
+	return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}, true
+}
+
 // --- 缓存管理 ---
 
 func (s *TLSFingerprintProfileService) refreshLocalCache(ctx context.Context) error {

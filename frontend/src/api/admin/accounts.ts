@@ -22,6 +22,43 @@ import type {
   CheckMixedChannelResponse
 } from '@/types'
 
+export interface CodexInviteResetCredit {
+  id: string
+  status?: string
+  title?: string
+  description?: string
+  profile_user_id?: string
+  profile_image_url?: string
+  raw?: Record<string, unknown>
+}
+
+export interface CodexInviteResetStatus {
+  referral_key: string
+  invite_eligibility?: Record<string, unknown>
+  eligibility_rules?: string[]
+  requires_consent: boolean
+  available_count: number
+  credits: CodexInviteResetCredit[]
+  raw_eligibility_rules?: Record<string, unknown>
+  raw_credits?: Record<string, unknown>
+}
+
+export interface CodexInviteResetInviteResult {
+  invites?: Record<string, unknown>[]
+  failed_emails?: string[]
+  message?: string
+  raw?: Record<string, unknown>
+}
+
+export interface CodexInviteResetConsumeResult {
+  code?: string
+  credit_id: string
+  redeem_request_id: string
+  available_count?: number
+  remaining_credits?: Record<string, unknown>[]
+  raw?: Record<string, unknown>
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -716,6 +753,35 @@ export async function setPrivacy(id: number): Promise<Account> {
   return data
 }
 
+export async function getCodexInviteResetStatus(id: number): Promise<CodexInviteResetStatus> {
+  const { data } = await apiClient.get<CodexInviteResetStatus>(
+    `/admin/accounts/${id}/codex/invite-reset/status`
+  )
+  return data
+}
+
+export async function sendCodexInviteResetInvite(
+  id: number,
+  emails: string[]
+): Promise<CodexInviteResetInviteResult> {
+  const { data } = await apiClient.post<CodexInviteResetInviteResult>(
+    `/admin/accounts/${id}/codex/invite-reset/invite`,
+    { emails }
+  )
+  return data
+}
+
+export async function consumeCodexInviteReset(
+  id: number,
+  creditId: string
+): Promise<CodexInviteResetConsumeResult> {
+  const { data } = await apiClient.post<CodexInviteResetConsumeResult>(
+    `/admin/accounts/${id}/codex/invite-reset/consume`,
+    { credit_id: creditId }
+  )
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -758,6 +824,9 @@ export const accountsAPI = {
   batchClearError,
   batchRefresh,
   setPrivacy,
+  getCodexInviteResetStatus,
+  sendCodexInviteResetInvite,
+  consumeCodexInviteReset,
   revertProxyFallback
 }
 

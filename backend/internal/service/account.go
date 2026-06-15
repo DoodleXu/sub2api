@@ -1637,6 +1637,47 @@ func (a *Account) GetTLSFingerprintProfileID() int64 {
 	return 0
 }
 
+// GetCodexInviteResetUserAgent 获取 Codex 官方额度重置请求专用 User-Agent。
+func (a *Account) GetCodexInviteResetUserAgent() string {
+	if a == nil || a.Extra == nil {
+		return ""
+	}
+	if v, ok := a.Extra["codex_invite_reset_user_agent"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+// GetCodexInviteResetTLSFingerprintProfileID 获取 Codex 官方额度重置请求专用 TLS 模板 ID。
+// nil 表示未配置，调用方应回退账号自身 TLS 配置；0/-1/正数分别表示内置默认/随机/指定模板。
+func (a *Account) GetCodexInviteResetTLSFingerprintProfileID() *int64 {
+	if a == nil || a.Extra == nil {
+		return nil
+	}
+	v, ok := a.Extra["codex_invite_reset_tls_fingerprint_profile_id"]
+	if !ok || v == nil {
+		return nil
+	}
+	var result int64
+	switch id := v.(type) {
+	case float64:
+		result = int64(id)
+	case int64:
+		result = id
+	case int:
+		result = int64(id)
+	case json.Number:
+		i, err := id.Int64()
+		if err != nil {
+			return nil
+		}
+		result = i
+	default:
+		return nil
+	}
+	return &result
+}
+
 // GetUserMsgQueueMode 获取用户消息队列模式
 // "serialize" = 串行队列, "throttle" = 软性限速, "" = 未设置（使用全局配置）
 func (a *Account) GetUserMsgQueueMode() string {

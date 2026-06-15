@@ -1712,6 +1712,40 @@
       </div>
 
       <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.codexInviteResetSettings') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.codexInviteResetSettingsDesc') }}
+          </p>
+          <div class="mt-4 space-y-3">
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codexInviteResetUserAgent') }}</label>
+              <input
+                v-model="codexInviteResetUserAgent"
+                type="text"
+                class="input"
+                :placeholder="t('admin.accounts.openai.codexInviteResetUserAgentPlaceholder')"
+              />
+              <p class="input-hint">{{ t('admin.accounts.openai.codexInviteResetUserAgentHint') }}</p>
+            </div>
+            <div>
+              <label class="input-label text-xs">{{ t('admin.accounts.openai.codexInviteResetTLSProfile') }}</label>
+              <select v-model="codexInviteResetTLSProfileId" class="input">
+                <option :value="null">{{ t('admin.accounts.openai.codexInviteResetTLSProfileAccount') }}</option>
+                <option :value="0">{{ t('admin.accounts.openai.codexInviteResetTLSProfileDefault') }}</option>
+                <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.openai.codexInviteResetTLSProfileRandom') }}</option>
+                <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+              <p class="input-hint">{{ t('admin.accounts.openai.codexInviteResetTLSProfileHint') }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
@@ -2553,6 +2587,14 @@ const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMappi
 const getAntigravityModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-antigravity-model-mapping')
 const getTempUnschedRuleKey = createStableObjectKeyResolver<TempUnschedRuleForm>('edit-temp-unsched-rule')
 
+const normalizeCodexInviteResetTLSProfileId = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.trunc(numeric) : null
+}
+
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningDetails = ref<{ groupName: string; currentPlatform: string; otherPlatform: string } | null>(
   null
@@ -2596,6 +2638,8 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAllowClaudeCodeEnabled = ref(false)
+const codexInviteResetUserAgent = ref('')
+const codexInviteResetTLSProfileId = ref<number | null>(null)
 type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled'
 const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inherit')
 const anthropicPassthroughEnabled = ref(false)
@@ -2976,6 +3020,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAllowClaudeCodeEnabled.value = false
+  codexInviteResetUserAgent.value = ''
+  codexInviteResetTLSProfileId.value = null
   codexImageGenerationBridgeMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
@@ -3016,6 +3062,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAllowClaudeCodeEnabled.value =
         Array.isArray(extra?.codex_cli_only_allowed_clients) &&
         (extra.codex_cli_only_allowed_clients as unknown[]).includes('claude_code')
+      codexInviteResetUserAgent.value = typeof extra?.codex_invite_reset_user_agent === 'string'
+        ? extra.codex_invite_reset_user_agent
+        : ''
+      codexInviteResetTLSProfileId.value = normalizeCodexInviteResetTLSProfileId(
+        extra?.codex_invite_reset_tls_fingerprint_profile_id
+      )
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -4166,6 +4218,18 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only_allowed_clients = ['claude_code']
         } else {
           delete newExtra.codex_cli_only_allowed_clients
+        }
+        const inviteResetUserAgent = codexInviteResetUserAgent.value.trim()
+        if (inviteResetUserAgent) {
+          newExtra.codex_invite_reset_user_agent = inviteResetUserAgent
+        } else {
+          delete newExtra.codex_invite_reset_user_agent
+        }
+        const inviteResetTLSProfileId = normalizeCodexInviteResetTLSProfileId(codexInviteResetTLSProfileId.value)
+        if (inviteResetTLSProfileId !== null) {
+          newExtra.codex_invite_reset_tls_fingerprint_profile_id = inviteResetTLSProfileId
+        } else {
+          delete newExtra.codex_invite_reset_tls_fingerprint_profile_id
         }
       }
 
