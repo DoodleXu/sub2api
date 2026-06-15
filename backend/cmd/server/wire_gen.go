@@ -134,7 +134,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelRepository := repository.NewChannelRepository(db)
 	channelService := service.NewChannelService(channelRepository, groupRepository, apiKeyAuthCacheInvalidator, pricingService)
 	modelPricingResolver := service.NewModelPricingResolver(channelService, billingService)
-	notificationEmailService := service.NewNotificationEmailService(settingRepository, emailService)
+	notificationEmailService := service.ProvideNotificationEmailService(settingRepository, emailService, userRepository)
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository, notificationEmailService)
 	gatewayService := service.NewGatewayService(accountRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, balanceNotifyService, serviceUserPlatformQuotaRepository)
 	openAIOAuthClient := repository.NewOpenAIOAuthClient()

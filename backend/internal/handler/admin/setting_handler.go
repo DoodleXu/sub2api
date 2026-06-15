@@ -4100,6 +4100,41 @@ func (h *SettingHandler) PreviewEmailTemplate(c *gin.Context) {
 	response.Success(c, dto.EmailTemplatePreviewResponse{Subject: preview.Subject, HTML: preview.HTML})
 }
 
+// SendEmailBroadcast starts a low-RPM admin email broadcast.
+// POST /api/v1/admin/settings/email-broadcasts
+func (h *SettingHandler) SendEmailBroadcast(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	var req dto.SendEmailBroadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.notificationEmailService.StartBroadcast(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.SendEmailBroadcastResponse(result))
+}
+
+// GetEmailBroadcastStatus returns the latest status for an admin email broadcast.
+// GET /api/v1/admin/settings/email-broadcasts/:batch_id
+func (h *SettingHandler) GetEmailBroadcastStatus(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	status, err := h.notificationEmailService.GetBroadcastStatus(c.Request.Context(), c.Param("batch_id"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastStatusResponse(status))
+}
+
 // GetNotificationConfig returns the lightweight global notification config.
 // GET /api/v1/admin/settings/notifications
 func (h *SettingHandler) GetNotificationConfig(c *gin.Context) {

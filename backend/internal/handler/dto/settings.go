@@ -481,6 +481,15 @@ type EmailTemplatePreviewResponse struct {
 	HTML    string `json:"html"`
 }
 
+// SendEmailBroadcastRequest starts a low-RPM admin email broadcast.
+type SendEmailBroadcastRequest = service.NotificationEmailBroadcastInput
+
+// SendEmailBroadcastResponse describes the accepted broadcast job.
+type SendEmailBroadcastResponse = service.NotificationEmailBroadcastResult
+
+// EmailBroadcastStatusResponse describes a broadcast job's latest counters.
+type EmailBroadcastStatusResponse = service.NotificationEmailBroadcastStatus
+
 // NotificationConfig is the lightweight global notification dispatcher config.
 type NotificationConfig = service.NotificationConfig
 

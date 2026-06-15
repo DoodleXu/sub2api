@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -51,6 +52,23 @@ func (r *settingRepository) Set(ctx context.Context, key, value string) error {
 		OnConflictColumns(setting.FieldKey).
 		UpdateNewValues().
 		Exec(ctx)
+}
+
+func (r *settingRepository) SetIfAbsent(ctx context.Context, key, value string) (bool, error) {
+	now := time.Now()
+	err := r.client.Setting.
+		Create().
+		SetKey(key).
+		SetValue(value).
+		SetUpdatedAt(now).
+		Exec(ctx)
+	if err == nil {
+		return true, nil
+	}
+	if ent.IsConstraintError(err) || strings.Contains(strings.ToLower(err.Error()), "constraint") {
+		return false, nil
+	}
+	return false, err
 }
 
 func (r *settingRepository) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {

@@ -1123,6 +1123,49 @@ export interface TestNotificationRequest {
   transport: NotificationTransport;
 }
 
+export type EmailBroadcastScope =
+  | "active_users"
+  | "all_users"
+  | "admins"
+  | "custom";
+
+export interface SendEmailBroadcastRequest {
+  scope: EmailBroadcastScope;
+  locale: string;
+  message_title: string;
+  message_html: string;
+  action_label?: string;
+  action_url?: string;
+  user_ids?: number[];
+  emails?: string[];
+  rpm: number;
+}
+
+export interface SendEmailBroadcastResponse {
+  batch_id: string;
+  target_count: number;
+  rpm: number;
+  estimated_duration_seconds: number;
+  started_at: string;
+}
+
+export interface EmailBroadcastStatusResponse {
+  batch_id: string;
+  status: "running" | "completed" | "canceled" | "interrupted" | string;
+  scope: EmailBroadcastScope;
+  locale: string;
+  target_count: number;
+  sent_count: number;
+  skipped_count: number;
+  unsubscribed_count: number;
+  failure_count: number;
+  rpm: number;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string;
+  last_error?: string;
+}
+
 export async function getEmailTemplates(): Promise<EmailTemplateListResponse> {
   const { data } = await apiClient.get<EmailTemplateListResponse>(
     "/admin/settings/email-templates",
@@ -1195,6 +1238,25 @@ export async function testNotificationTransport(
   const { data } = await apiClient.post<{ ok: boolean }>(
     "/admin/settings/notifications/test",
     request,
+  );
+  return data;
+}
+
+export async function sendEmailBroadcast(
+  request: SendEmailBroadcastRequest,
+): Promise<SendEmailBroadcastResponse> {
+  const { data } = await apiClient.post<SendEmailBroadcastResponse>(
+    "/admin/settings/email-broadcasts",
+    request,
+  );
+  return data;
+}
+
+export async function getEmailBroadcastStatus(
+  batchId: string,
+): Promise<EmailBroadcastStatusResponse> {
+  const { data } = await apiClient.get<EmailBroadcastStatusResponse>(
+    `/admin/settings/email-broadcasts/${encodeURIComponent(batchId)}`,
   );
   return data;
 }
@@ -1514,6 +1576,8 @@ export const settingsAPI = {
   getNotificationConfig,
   updateNotificationConfig,
   testNotificationTransport,
+  sendEmailBroadcast,
+  getEmailBroadcastStatus,
   getAdminApiKey,
   regenerateAdminApiKey,
   deleteAdminApiKey,

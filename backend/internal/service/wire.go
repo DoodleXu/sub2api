@@ -40,6 +40,14 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
 }
 
+// ProvideNotificationEmailService creates NotificationEmailService with user lookup
+// support for admin broadcast recipient ranges.
+func ProvideNotificationEmailService(settingRepo SettingRepository, emailService *EmailService, userRepo UserRepository) *NotificationEmailService {
+	svc := NewNotificationEmailService(settingRepo, emailService)
+	svc.SetUserRepository(userRepo)
+	return svc
+}
+
 // ProvideOAuthRefreshAPI creates OAuthRefreshAPI with the default lock TTL.
 func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache) *OAuthRefreshAPI {
 	return NewOAuthRefreshAPI(accountRepo, tokenCache)
@@ -552,7 +560,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsCleanupService,
 	ProvideOpsScheduledReportService,
 	NewEmailService,
-	NewNotificationEmailService,
+	ProvideNotificationEmailService,
 	NewNotificationService,
 	ProvideEmailQueueService,
 	NewTurnstileService,

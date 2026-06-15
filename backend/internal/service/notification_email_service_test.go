@@ -3,13 +3,16 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
 
@@ -142,12 +145,17 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 		{NotificationEmailEventContentModerationDisabled, "violation_count"},
 		{NotificationEmailEventOpsAlert, "rule_name"},
 		{NotificationEmailEventOpsScheduledReport, "report_html"},
+		{NotificationEmailEventAdminBroadcast, "message_html"},
 	}
 
 	for _, check := range checks {
 		info, ok := events[check.event]
 		require.Truef(t, ok, "expected %s to be listed", check.event)
-		require.False(t, info.Optional)
+		if check.event == NotificationEmailEventAdminBroadcast {
+			require.True(t, info.Optional)
+		} else {
+			require.False(t, info.Optional)
+		}
 		require.Contains(t, info.Placeholders, check.placeholder)
 
 		preview, err := svc.PreviewTemplate(ctx, NotificationEmailPreviewInput{Event: check.event, Locale: "zh"})
@@ -159,7 +167,10 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 
 func TestNotificationEmailRawHTMLVariablesAreTrustedOnlyForHTMLPlaceholders(t *testing.T) {
 	require.True(t, notificationEmailRawHTMLAllowed(NotificationEmailEventOpsScheduledReport, "report_html"))
+	require.True(t, notificationEmailRawHTMLAllowed(NotificationEmailEventAdminBroadcast, "message_html"))
+	require.True(t, notificationEmailRawHTMLAllowed(NotificationEmailEventAdminBroadcast, "action_html"))
 	require.False(t, notificationEmailRawHTMLAllowed(NotificationEmailEventOpsScheduledReport, "recipient_name"))
+	require.False(t, notificationEmailRawHTMLAllowed(NotificationEmailEventAdminBroadcast, "recipient_name"))
 	require.False(t, notificationEmailRawHTMLAllowed(NotificationEmailEventOpsAlert, "report_html"))
 
 	preview, err := renderNotificationEmail(
@@ -190,6 +201,217 @@ func TestNotificationEmailRawHTMLVariablesAreTrustedOnlyForHTMLPlaceholders(t *t
 	require.NoError(t, err)
 	require.Contains(t, preview.HTML, `&lt;em&gt;escaped&lt;/em&gt;`)
 	require.NotContains(t, preview.HTML, `<strong>raw</strong>`)
+}
+
+func TestNotificationEmailBroadcastResolvesRecipientsByScopeAndDeduplicates(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	svc.SetUserRepository(&notificationEmailBroadcastUserRepoStub{
+		users: []User{
+			{ID: 1, Email: "User@One.test", Username: "One", Role: RoleUser, Status: StatusActive},
+			{ID: 2, Email: "two@example.test", Username: "Two", Role: RoleUser, Status: StatusDisabled},
+			{ID: 3, Email: "admin@example.test", Username: "Admin", Role: RoleAdmin, Status: StatusActive},
+		},
+	})
+
+	recipients, err := svc.resolveBroadcastRecipients(ctx, NotificationEmailBroadcastInput{Scope: "active_users"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"User@One.test"}, notificationEmailBroadcastRecipientEmails(recipients))
+
+	recipients, err = svc.resolveBroadcastRecipients(ctx, NotificationEmailBroadcastInput{
+		Scope:   "custom",
+		UserIDs: []int64{1, 3},
+		Emails:  []string{"user@one.test", "extra@example.test", "EXTRA@example.test"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"User@One.test", "admin@example.test", "extra@example.test"}, notificationEmailBroadcastRecipientEmails(recipients))
+}
+
+func TestNotificationEmailBroadcastPreflightsEmailConfig(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, NewEmailService(repo, nil))
+
+	_, err := svc.StartBroadcast(ctx, NotificationEmailBroadcastInput{
+		Scope:        "custom",
+		MessageTitle: "Notice",
+		MessageHTML:  "<p>Hello</p>",
+		Emails:       []string{"user@example.test"},
+		RPM:          6,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "email service is not configured")
+}
+
+func TestNotificationEmailBroadcastActionHTMLIsOptionalAndEscaped(t *testing.T) {
+	require.Empty(t, notificationEmailBroadcastActionHTML("", "https://example.com/notice"))
+	require.Empty(t, notificationEmailBroadcastActionHTML("Open", "javascript:alert(1)"))
+
+	html := notificationEmailBroadcastActionHTML(`View <details>`, `https://example.com/notice?a=1&b=2`)
+	require.Contains(t, html, `class="button"`)
+	require.Contains(t, html, `href="https://example.com/notice?a=1&amp;b=2"`)
+	require.Contains(t, html, `View &lt;details&gt;`)
+	require.NotContains(t, html, `View <details>`)
+}
+
+func TestNotificationEmailBroadcastStatusIsPersistedAndReadable(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	err := svc.saveBroadcastStatus(ctx, NotificationEmailBroadcastStatus{
+		BatchID:     "broadcast_test",
+		Status:      "running",
+		Scope:       "custom",
+		Locale:      "zh",
+		TargetCount: 2,
+		RPM:         6,
+	})
+	require.NoError(t, err)
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_test")
+	require.NoError(t, err)
+	require.Equal(t, "broadcast_test", status.BatchID)
+	require.Equal(t, "running", status.Status)
+	require.Equal(t, 2, status.TargetCount)
+	require.NotEmpty(t, status.StartedAt)
+	require.NotEmpty(t, status.UpdatedAt)
+}
+
+func TestNotificationEmailBroadcastRunUpdatesFailureStatus(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	startedAt := time.Date(2026, 6, 15, 1, 2, 3, 0, time.UTC)
+	svc.runBroadcast(ctx, "broadcast_failures", NotificationEmailBroadcastInput{
+		Scope:        "custom",
+		Locale:       "zh",
+		MessageTitle: "Notice",
+		MessageHTML:  "<p>Hello</p>",
+		RPM:          60000,
+	}, []notificationEmailBroadcastRecipient{
+		{Email: "one@example.test", Name: "One"},
+		{Email: "two@example.test", Name: "Two"},
+	}, startedAt)
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_failures")
+	require.NoError(t, err)
+	require.Equal(t, "completed", status.Status)
+	require.Equal(t, 0, status.SentCount)
+	require.Equal(t, 2, status.FailureCount)
+	require.Equal(t, 2, status.TargetCount)
+	require.Equal(t, startedAt.Format(time.RFC3339), status.StartedAt)
+	require.NotEmpty(t, status.CompletedAt)
+	require.Contains(t, status.LastError, "email service is not configured")
+}
+
+func TestNotificationEmailBroadcastTracksUnsubscribedRecipientsAsSkipped(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, repo.Set(ctx, notificationEmailPreferenceKey(NotificationEmailEventAdminBroadcast, "skip@example.test"), "unsubscribed"))
+	svc := NewNotificationEmailService(repo, nil)
+
+	startedAt := time.Date(2026, 6, 15, 4, 5, 6, 0, time.UTC)
+	svc.runBroadcast(ctx, "broadcast_skipped", NotificationEmailBroadcastInput{
+		Scope:        "custom",
+		Locale:       "zh",
+		MessageTitle: "Notice",
+		MessageHTML:  "<p>Hello</p>",
+		RPM:          60000,
+	}, []notificationEmailBroadcastRecipient{
+		{Email: "skip@example.test", Name: "Skip"},
+	}, startedAt)
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_skipped")
+	require.NoError(t, err)
+	require.Equal(t, "completed", status.Status)
+	require.Equal(t, 0, status.SentCount)
+	require.Equal(t, 1, status.SkippedCount)
+	require.Equal(t, 1, status.UnsubscribedCount)
+	require.Equal(t, 0, status.FailureCount)
+	require.Equal(t, startedAt.Format(time.RFC3339), status.StartedAt)
+	require.Empty(t, status.LastError)
+}
+
+func TestNotificationEmailBroadcastLockRejectsConcurrentRunningBatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+
+	locked, err := svc.acquireBroadcastLock(ctx, "broadcast_first")
+	require.NoError(t, err)
+	require.True(t, locked)
+
+	locked, err = svc.acquireBroadcastLock(ctx, "broadcast_second")
+	require.NoError(t, err)
+	require.False(t, locked)
+
+	svc.releaseBroadcastLockBestEffort(ctx, "broadcast_second")
+	active, err := repo.GetValue(ctx, notificationEmailBroadcastActiveKey)
+	require.NoError(t, err)
+	require.Equal(t, "broadcast_first", active)
+
+	svc.releaseBroadcastLockBestEffort(ctx, "broadcast_first")
+	_, err = repo.GetValue(ctx, notificationEmailBroadcastActiveKey)
+	require.ErrorIs(t, err, ErrSettingNotFound)
+}
+
+func TestNotificationEmailBroadcastStaleRunningStatusIsInterrupted(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-30 * time.Minute).Format(time.RFC3339)
+
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:     "broadcast_stale",
+		Status:      "running",
+		Scope:       "custom",
+		Locale:      "zh",
+		TargetCount: 5,
+		RPM:         6,
+		StartedAt:   startedAt,
+		UpdatedAt:   now.Add(-20 * time.Minute).Format(time.RFC3339),
+	})
+	require.NoError(t, repo.Set(ctx, notificationEmailBroadcastActiveKey, "broadcast_stale"))
+
+	require.NoError(t, svc.releaseInterruptedActiveBroadcast(ctx, now))
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_stale")
+	require.NoError(t, err)
+	require.Equal(t, "interrupted", status.Status)
+	require.Equal(t, startedAt, status.StartedAt)
+	require.Equal(t, now.Format(time.RFC3339), status.CompletedAt)
+	require.Contains(t, status.LastError, "interrupted")
+	_, err = repo.GetValue(ctx, notificationEmailBroadcastActiveKey)
+	require.ErrorIs(t, err, ErrSettingNotFound)
+}
+
+func TestNotificationEmailBroadcastFreshRunningStatusKeepsLock(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:     "broadcast_fresh",
+		Status:      "running",
+		Scope:       "custom",
+		Locale:      "zh",
+		TargetCount: 5,
+		RPM:         6,
+		StartedAt:   now.Add(-5 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:   now.Add(-1 * time.Minute).Format(time.RFC3339),
+	})
+	require.NoError(t, repo.Set(ctx, notificationEmailBroadcastActiveKey, "broadcast_fresh"))
+
+	require.NoError(t, svc.releaseInterruptedActiveBroadcast(ctx, now))
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_fresh")
+	require.NoError(t, err)
+	require.Equal(t, "running", status.Status)
+	active, err := repo.GetValue(ctx, notificationEmailBroadcastActiveKey)
+	require.NoError(t, err)
+	require.Equal(t, "broadcast_fresh", active)
 }
 
 func TestNotificationEmailFallbackClassification(t *testing.T) {
@@ -373,6 +595,64 @@ func TestNotificationEmailSendRespectsLegacyDeliveryKey(t *testing.T) {
 	require.NoError(t, svc.Send(ctx, input))
 }
 
+func notificationEmailBroadcastRecipientEmails(recipients []notificationEmailBroadcastRecipient) []string {
+	emails := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		emails = append(emails, recipient.Email)
+	}
+	return emails
+}
+
+func setNotificationEmailBroadcastStatusForTest(t *testing.T, repo *notificationEmailMemorySettingRepo, status NotificationEmailBroadcastStatus) {
+	t.Helper()
+	raw, err := json.Marshal(status)
+	require.NoError(t, err)
+	require.NoError(t, repo.Set(context.Background(), notificationEmailBroadcastKey(status.BatchID), string(raw)))
+}
+
+type notificationEmailBroadcastUserRepoStub struct {
+	UserRepository
+	users []User
+}
+
+func (r *notificationEmailBroadcastUserRepoStub) GetByID(_ context.Context, id int64) (*User, error) {
+	for i := range r.users {
+		if r.users[i].ID == id {
+			user := r.users[i]
+			return &user, nil
+		}
+	}
+	return nil, ErrUserNotFound
+}
+
+func (r *notificationEmailBroadcastUserRepoStub) ListWithFilters(_ context.Context, params pagination.PaginationParams, filters UserListFilters) ([]User, *pagination.PaginationResult, error) {
+	matches := make([]User, 0, len(r.users))
+	for _, user := range r.users {
+		if filters.Role != "" && user.Role != filters.Role {
+			continue
+		}
+		if filters.Status != "" && user.Status != filters.Status {
+			continue
+		}
+		matches = append(matches, user)
+	}
+	offset := params.Offset()
+	limit := params.Limit()
+	if offset > len(matches) {
+		offset = len(matches)
+	}
+	end := offset + limit
+	if end > len(matches) {
+		end = len(matches)
+	}
+	return matches[offset:end], &pagination.PaginationResult{
+		Total:    int64(len(matches)),
+		Page:     params.Page,
+		PageSize: params.PageSize,
+		Pages:    1,
+	}, nil
+}
+
 type notificationEmailMemorySettingRepo struct {
 	mu     sync.RWMutex
 	values map[string]string
@@ -405,6 +685,16 @@ func (r *notificationEmailMemorySettingRepo) Set(_ context.Context, key, value s
 	defer r.mu.Unlock()
 	r.values[key] = value
 	return nil
+}
+
+func (r *notificationEmailMemorySettingRepo) SetIfAbsent(_ context.Context, key, value string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.values[key]; ok {
+		return false, nil
+	}
+	r.values[key] = value
+	return true, nil
 }
 
 func (r *notificationEmailMemorySettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {

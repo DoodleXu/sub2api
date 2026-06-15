@@ -377,6 +377,11 @@ const eventDisplayMeta: Record<string, EventDisplayMeta> = {
     timing: "运维日报、周报、错误摘要或账号健康报表到达配置的发送时间时发送。",
     categoryLabel: "运维",
   },
+  "admin.broadcast_email": {
+    label: "邮件通知",
+    timing: "管理员在系统设置中向选定用户范围群发重要邮件通知时发送。",
+    categoryLabel: "管理通知",
+  },
 };
 
 const eventDisplayMetaEn: Record<string, EventDisplayMeta> = {
@@ -439,6 +444,11 @@ const eventDisplayMetaEn: Record<string, EventDisplayMeta> = {
     label: "Ops Scheduled Report",
     timing: "Sent when a configured daily, weekly, error digest, or account health report reaches its scheduled send time.",
     categoryLabel: "Ops",
+  },
+  "admin.broadcast_email": {
+    label: "Email Broadcast",
+    timing: "Sent when an administrator broadcasts an important email notice to a selected user range from system settings.",
+    categoryLabel: "Admin",
   },
 };
 
