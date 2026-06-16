@@ -429,6 +429,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import type { Account, AccountPlatform, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
@@ -1710,8 +1711,10 @@ const handleRefresh = async (a: Account) => {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
     markLocalAccountMutation()
+    appStore.showSuccess(t('common.success'))
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.failedToRefresh')))
   }
 }
 const handleRecoverState = async (a: Account) => {
@@ -1733,6 +1736,7 @@ const handleResetQuota = async (a: Account) => {
     appStore.showSuccess(t('common.success'))
   } catch (error) {
     console.error('Failed to reset quota:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.failedToResetQuota')))
   }
 }
 const handleSetPrivacy = async (a: Account) => {
