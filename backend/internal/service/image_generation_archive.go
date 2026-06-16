@@ -383,8 +383,11 @@ func DefaultImageArchiveStorageConfig(cfg *config.Config) ImageArchiveStorageCon
 }
 
 func (s *ImageGenerationArchiveService) GetStorageConfig(ctx context.Context) (ImageArchiveStorageConfig, error) {
+	if s == nil {
+		return DefaultImageArchiveStorageConfig(nil), nil
+	}
 	cfg := DefaultImageArchiveStorageConfig(s.cfg)
-	if s == nil || s.settingRepo == nil {
+	if s.settingRepo == nil {
 		return cfg, nil
 	}
 	raw, err := s.settingRepo.GetValue(ctx, imageArchiveStorageSettingKey)
@@ -455,9 +458,7 @@ func (s *ImageGenerationArchiveService) storageFromConfig(ctx context.Context, c
 			opts = append(opts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.S3AccessKey, cfg.S3SecretKey, "")))
 		}
 		if endpoint := strings.TrimSpace(cfg.S3Endpoint); endpoint != "" {
-			opts = append(opts, awsconfig.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...any) (aws.Endpoint, error) {
-				return aws.Endpoint{URL: endpoint, SigningRegion: region}, nil
-			})))
+			opts = append(opts, awsconfig.WithBaseEndpoint(endpoint))
 		}
 		awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 		if err != nil {

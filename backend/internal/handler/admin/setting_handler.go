@@ -440,7 +440,10 @@ func (h *SettingHandler) ExportOperationsData(c *gin.Context) {
 
 	filename := fmt.Sprintf("operations_%s_%s_to_%s.csv", dataset, start.Format("2006-01-02"), end.AddDate(0, 0, -1).Format("2006-01-02"))
 	var buf bytes.Buffer
-	buf.Write([]byte{0xEF, 0xBB, 0xBF})
+	if _, err := buf.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		response.InternalError(c, "Failed to export operations data: "+err.Error())
+		return
+	}
 	writer := csv.NewWriter(&buf)
 
 	switch dataset {
@@ -483,12 +486,12 @@ func (h *SettingHandler) streamDailyCheckinRecordsCSV(c *gin.Context, start, end
 	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 	writer := csv.NewWriter(c.Writer)
 	if err := h.writeDailyCheckinRecordsCSV(writer, iter); err != nil {
-		c.Error(err)
+		_ = c.Error(err)
 		return
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		c.Error(err)
+		_ = c.Error(err)
 	}
 }
 
