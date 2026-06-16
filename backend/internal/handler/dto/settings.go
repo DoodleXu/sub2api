@@ -490,6 +490,12 @@ type SendEmailBroadcastResponse = service.NotificationEmailBroadcastResult
 // EmailBroadcastStatusResponse describes a broadcast job's latest counters.
 type EmailBroadcastStatusResponse = service.NotificationEmailBroadcastStatus
 
+// EmailBroadcastListResponse describes recent broadcast jobs.
+type EmailBroadcastListResponse = service.NotificationEmailBroadcastList
+
+// ResumeEmailBroadcastRequest selects which recipients to send when resuming a job.
+type ResumeEmailBroadcastRequest = service.NotificationEmailBroadcastResumeInput
+
 // NotificationConfig is the lightweight global notification dispatcher config.
 type NotificationConfig = service.NotificationConfig
 

@@ -158,6 +158,15 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/email-unsubscribe',
+    name: 'EmailUnsubscribe',
+    component: () => import('@/views/public/EmailUnsubscribeView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Email Unsubscribe'
+    }
+  },
+  {
     path: '/key-usage',
     name: 'KeyUsage',
     component: () => import('@/views/KeyUsageView.vue'),
@@ -537,6 +546,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/email-broadcasts',
+    name: 'AdminEmailBroadcasts',
+    component: () => import('@/views/admin/EmailBroadcastsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Email Broadcasts',
+      titleKey: 'admin.settings.emailBroadcast.title',
+      descriptionKey: 'admin.settings.emailBroadcast.pageDescription'
+    }
+  },
+  {
     path: '/admin/proxies',
     name: 'AdminProxies',
     component: () => import('@/views/admin/ProxiesView.vue'),
@@ -725,7 +746,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/email-unsubscribe', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',
@@ -754,7 +775,7 @@ export async function ensurePublicSettingsForRoute(
   }
 }
 
-function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: boolean): boolean {
+export function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: boolean): boolean {
   if (BACKEND_MODE_ALLOWED_PATHS.some((allowedPath) => path === allowedPath || path.startsWith(allowedPath))) {
     return true
   }

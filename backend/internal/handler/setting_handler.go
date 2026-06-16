@@ -107,24 +107,54 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 }
 
 // UnsubscribeNotificationEmail handles optional notification email opt-outs.
-// GET /api/v1/settings/email-unsubscribe?token=...
+// GET/POST /api/v1/settings/email-unsubscribe?token=...
 func (h *SettingHandler) UnsubscribeNotificationEmail(c *gin.Context) {
+	wantsJSON := notificationEmailUnsubscribeWantsJSON(c)
 	if h.notificationEmailService == nil {
-		response.InternalError(c, "notification email service is not configured")
+		notificationEmailUnsubscribeError(c, wantsJSON, http.StatusInternalServerError, "notification email service is not configured")
 		return
 	}
 	token := strings.TrimSpace(c.Query("token"))
 	if token == "" {
-		response.BadRequest(c, "token is required")
+		notificationEmailUnsubscribeError(c, wantsJSON, http.StatusBadRequest, "token is required")
 		return
 	}
 	result, err := h.notificationEmailService.Unsubscribe(c.Request.Context(), token)
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		notificationEmailUnsubscribeError(c, wantsJSON, http.StatusBadRequest, err.Error())
 		return
 	}
-	body := "<!doctype html><html><head><meta charset=\"utf-8\"><title>Unsubscribed</title></head><body style=\"font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;\"><h1>Unsubscribed</h1><p>You have unsubscribed <strong>" + html.EscapeString(result.Email) + "</strong> from <strong>" + html.EscapeString(result.Event) + "</strong> emails.</p></body></html>"
-	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(body))
+	if wantsJSON {
+		response.Success(c, result)
+		return
+	}
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(notificationEmailUnsubscribeHTML("Unsubscribed", "退订成功 / Unsubscribed", "已为 "+result.Email+" 退订 "+result.Event+" 可选邮件通知。")))
+}
+
+func notificationEmailUnsubscribeWantsJSON(c *gin.Context) bool {
+	if strings.Contains(strings.ToLower(c.GetHeader("Accept")), "application/json") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "application/json") {
+		return true
+	}
+	return strings.EqualFold(c.Query("format"), "json")
+}
+
+func notificationEmailUnsubscribeError(c *gin.Context, wantsJSON bool, status int, message string) {
+	if wantsJSON {
+		if status >= http.StatusInternalServerError {
+			response.InternalError(c, message)
+			return
+		}
+		response.BadRequest(c, message)
+		return
+	}
+	c.Data(status, "text/html; charset=utf-8", []byte(notificationEmailUnsubscribeHTML("Unsubscribe failed", "退订失败 / Unsubscribe failed", message)))
+}
+
+func notificationEmailUnsubscribeHTML(title, heading, message string) string {
+	return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + html.EscapeString(title) + "</title></head><body style=\"margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f8fafc;color:#111827;\"><main style=\"max-width:560px;margin:12vh auto;padding:32px;background:white;border:1px solid #e5e7eb;border-radius:14px;box-shadow:0 20px 60px rgba(15,23,42,.08);\"><h1 style=\"margin:0 0 12px;font-size:24px;line-height:1.3;\">" + html.EscapeString(heading) + "</h1><p style=\"margin:0;color:#4b5563;line-height:1.7;\">" + html.EscapeString(message) + "</p></main></body></html>"
 }
 
 func publicLoginAgreementDocumentsToDTO(items []service.LoginAgreementDocument) []dto.LoginAgreementDocument {

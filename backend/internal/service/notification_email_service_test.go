@@ -165,6 +165,26 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 	}
 }
 
+func TestNotificationEmailPreviewUsesConfiguredURLsAndTrustedBroadcastHTML(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, repo.Set(ctx, SettingKeyFrontendURL, "https://app.example.test"))
+	require.NoError(t, repo.Set(ctx, SettingKeyAPIBaseURL, "https://api.example.test"))
+	svc := NewNotificationEmailService(repo, nil)
+
+	preview, err := svc.PreviewTemplate(ctx, NotificationEmailPreviewInput{
+		Event:  NotificationEmailEventAdminBroadcast,
+		Locale: "zh",
+	})
+	require.NoError(t, err)
+	require.Contains(t, preview.HTML, `<p>这是一封由管理员发送给用户的重要邮件通知。</p>`)
+	require.NotContains(t, preview.HTML, `&lt;p&gt;这是一封`)
+	require.Contains(t, preview.HTML, `https://app.example.test/email-unsubscribe?token=preview`)
+	require.Contains(t, preview.HTML, `https://app.example.test/notice`)
+	require.NotContains(t, preview.HTML, `https://example.com/unsubscribe`)
+	require.NotContains(t, preview.HTML, `https://example.com/notice`)
+}
+
 func TestNotificationEmailRawHTMLVariablesAreTrustedOnlyForHTMLPlaceholders(t *testing.T) {
 	require.True(t, notificationEmailRawHTMLAllowed(NotificationEmailEventOpsScheduledReport, "report_html"))
 	require.True(t, notificationEmailRawHTMLAllowed(NotificationEmailEventAdminBroadcast, "message_html"))
@@ -415,6 +435,131 @@ func TestNotificationEmailBroadcastFreshRunningStatusKeepsLock(t *testing.T) {
 	require.Equal(t, "broadcast_fresh", active)
 }
 
+func TestNotificationEmailBroadcastFreshCancelingStatusKeepsLock(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:     "broadcast_canceling",
+		Status:      "canceling",
+		Scope:       "custom",
+		Locale:      "zh",
+		TargetCount: 5,
+		RPM:         6,
+		StartedAt:   now.Add(-5 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:   now.Add(-1 * time.Minute).Format(time.RFC3339),
+	})
+	require.NoError(t, repo.Set(ctx, notificationEmailBroadcastActiveKey, "broadcast_canceling"))
+
+	require.NoError(t, svc.releaseInterruptedActiveBroadcast(ctx, now))
+
+	status, err := svc.GetBroadcastStatus(ctx, "broadcast_canceling")
+	require.NoError(t, err)
+	require.Equal(t, "canceling", status.Status)
+	active, err := repo.GetValue(ctx, notificationEmailBroadcastActiveKey)
+	require.NoError(t, err)
+	require.Equal(t, "broadcast_canceling", active)
+}
+
+func TestNotificationEmailBroadcastListUsesIndexAndStoredStatuses(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:      "broadcast_old",
+		Status:       "completed",
+		MessageTitle: "Old",
+		StartedAt:    now.Add(-2 * time.Hour).Format(time.RFC3339),
+		UpdatedAt:    now.Add(-2 * time.Hour).Format(time.RFC3339),
+	})
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:      "broadcast_new",
+		Status:       "completed",
+		MessageTitle: "New",
+		StartedAt:    now.Add(-1 * time.Hour).Format(time.RFC3339),
+		UpdatedAt:    now.Add(-1 * time.Hour).Format(time.RFC3339),
+	})
+	require.NoError(t, svc.addBroadcastToIndex(ctx, "broadcast_old"))
+	require.NoError(t, svc.addBroadcastToIndex(ctx, "broadcast_new"))
+
+	list, err := svc.ListBroadcasts(ctx)
+	require.NoError(t, err)
+	require.Len(t, list.Jobs, 2)
+	require.Equal(t, "broadcast_new", list.Jobs[0].BatchID)
+	require.Equal(t, "New", list.Jobs[0].MessageTitle)
+	require.Equal(t, "broadcast_old", list.Jobs[1].BatchID)
+}
+
+func TestNotificationEmailBroadcastCancelMarksRunningJobAsCanceling(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:   "broadcast_cancel",
+		Status:    "running",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	status, err := svc.CancelBroadcast(ctx, "broadcast_cancel")
+	require.NoError(t, err)
+	require.Equal(t, "canceling", status.Status)
+	_, err = repo.GetValue(ctx, notificationEmailBroadcastCancelKey("broadcast_cancel"))
+	require.NoError(t, err)
+}
+
+func TestNotificationEmailBroadcastResumeTargetsRemainingOrFailedRecipients(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	batchID := "broadcast_resume"
+	require.NoError(t, svc.saveBroadcastPayload(ctx, batchID, NotificationEmailBroadcastInput{
+		Scope:        "custom",
+		Locale:       "zh",
+		MessageTitle: "Notice",
+		MessageHTML:  "<p>Hello</p>",
+		RPM:          60000,
+	}))
+	require.NoError(t, svc.saveBroadcastRecipients(ctx, batchID, []notificationEmailBroadcastRecipientState{
+		{Email: "sent@example.test", Status: "sent"},
+		{Email: "failed@example.test", Status: "failed", Error: "smtp"},
+		{Email: "pending@example.test", Status: "pending"},
+		{Email: "skip@example.test", Status: "skipped", Error: "unsubscribed"},
+	}))
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:     batchID,
+		Status:      "interrupted",
+		Scope:       "custom",
+		Locale:      "zh",
+		TargetCount: 4,
+		RPM:         60000,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+	})
+
+	result, err := svc.ResumeBroadcast(ctx, batchID, NotificationEmailBroadcastResumeInput{Mode: "failed"})
+	require.NoError(t, err)
+	require.Equal(t, batchID, result.BatchID)
+	require.Equal(t, 1, result.TargetCount)
+	for {
+		status, err := svc.GetBroadcastStatus(ctx, batchID)
+		require.NoError(t, err)
+		if status.Status == "completed" {
+			require.Equal(t, 1, status.SentCount)
+			require.Equal(t, 1, status.FailureCount)
+			require.Equal(t, 1, status.SkippedCount)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestNotificationEmailFallbackClassification(t *testing.T) {
 	templateErr := notificationEmailTemplateErr(errors.New("bad template"))
 	configErr := notificationEmailConfigErr(errors.New("missing email service"))
@@ -462,6 +607,7 @@ func TestNotificationEmailUnsubscribeOnlyAllowsOptionalEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Done)
 	require.Equal(t, NotificationEmailEventBalanceLow, result.Event)
+	require.Equal(t, "Low balance alert", result.EventLabel)
 	unsubscribed, err := svc.IsUnsubscribed(ctx, "user@example.com", NotificationEmailEventBalanceLow)
 	require.NoError(t, err)
 	require.True(t, unsubscribed)
@@ -477,6 +623,55 @@ func TestNotificationEmailUnsubscribeOnlyAllowsOptionalEvents(t *testing.T) {
 	_, err = svc.Unsubscribe(ctx, authToken)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "transactional")
+}
+
+func TestNotificationEmailUnsubscribeTokenExpires(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	token, err := svc.createUnsubscribeToken(ctx, "user@example.com", NotificationEmailEventBalanceLow)
+	require.NoError(t, err)
+
+	svc.now = func() time.Time { return now.Add(notificationEmailUnsubscribeTTL + time.Second) }
+	_, err = svc.Unsubscribe(ctx, token)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expired")
+}
+
+func TestNotificationEmailUnsubscribeURLsPreferFrontendForBodyAndAPIForHeaders(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, repo.Set(ctx, SettingKeyFrontendURL, "https://app.example.test"))
+	require.NoError(t, repo.Set(ctx, SettingKeyAPIBaseURL, "https://api.example.test"))
+	svc := NewNotificationEmailService(repo, nil)
+
+	variables, headers, err := svc.runtimeVariables(ctx, NotificationEmailEventBalanceLow, "en", NotificationEmailSendInput{
+		RecipientEmail: "user@example.com",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, variables["unsubscribe_url"], "https://app.example.test/email-unsubscribe?token=")
+	require.Contains(t, headers["List-Unsubscribe"], "<https://api.example.test/api/v1/settings/email-unsubscribe?token=")
+	require.Contains(t, headers["List-Unsubscribe"], ">")
+	require.Equal(t, "List-Unsubscribe=One-Click", headers["List-Unsubscribe-Post"])
+}
+
+func TestNotificationEmailUnsubscribeHeadersDoNotFallbackToFrontendURL(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, repo.Set(ctx, SettingKeyFrontendURL, "https://app.example.test"))
+	svc := NewNotificationEmailService(repo, nil)
+
+	variables, headers, err := svc.runtimeVariables(ctx, NotificationEmailEventBalanceLow, "en", NotificationEmailSendInput{
+		RecipientEmail: "user@example.com",
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, variables["unsubscribe_url"], "https://app.example.test/email-unsubscribe?token=")
+	require.Contains(t, headers["List-Unsubscribe"], "</api/v1/settings/email-unsubscribe?token=")
+	require.NotContains(t, headers["List-Unsubscribe"], "https://app.example.test/api/v1/settings/email-unsubscribe")
+	require.Equal(t, "List-Unsubscribe=One-Click", headers["List-Unsubscribe-Post"])
 }
 
 func TestNotificationEmailLocaleMemoryNormalizesAcceptLanguage(t *testing.T) {
@@ -569,6 +764,8 @@ func TestNotificationEmailSendDeduplicatesSubscriptionExpiryReminder(t *testing.
 
 	require.NoError(t, svc.Send(ctx, input))
 	require.Equal(t, int64(1), smtpServer.messageCount())
+	require.Contains(t, smtpServer.lastMessage(), "List-Unsubscribe: </api/v1/settings/email-unsubscribe?token=")
+	require.Contains(t, smtpServer.lastMessage(), "List-Unsubscribe-Post: List-Unsubscribe=One-Click")
 
 	key := notificationEmailDeliveryKey(input.Event, input.SourceType, input.SourceID, input.RecipientEmail, input.ReminderKey)
 	require.LessOrEqual(t, len(key), 100)
@@ -577,6 +774,63 @@ func TestNotificationEmailSendDeduplicatesSubscriptionExpiryReminder(t *testing.
 
 	require.NoError(t, svc.Send(ctx, input))
 	require.Equal(t, int64(1), smtpServer.messageCount())
+}
+
+func TestNotificationEmailSendOnlyAddsUnsubscribeHeadersToOptionalEvents(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
+	emailSvc := NewEmailService(repo, nil)
+	svc := NewNotificationEmailService(repo, emailSvc)
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventBalanceLow,
+		RecipientEmail: "optional@example.com",
+		Variables: map[string]string{
+			"current_balance": "1.00",
+			"threshold":       "5.00",
+		},
+	}))
+	require.Contains(t, smtpServer.lastMessage(), "List-Unsubscribe:")
+
+	require.NoError(t, svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventBalanceRechargeSuccess,
+		RecipientEmail: "transactional@example.com",
+		Variables: map[string]string{
+			"recharge_amount": "10.00",
+			"current_balance": "11.00",
+			"order_id":        "1024",
+		},
+	}))
+	require.NotContains(t, smtpServer.lastMessage(), "List-Unsubscribe:")
+	require.NotContains(t, smtpServer.lastMessage(), "List-Unsubscribe-Post:")
+}
+
+func TestNotificationEmailSendFailsWhenOptionalUnsubscribeTokenCannotBeGenerated(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, baseRepo.SetMultiple(ctx, smtpServer.settings()))
+	repo := &notificationEmailFailingSetRepo{
+		notificationEmailMemorySettingRepo: baseRepo,
+		failKey:                            notificationEmailUnsubscribeSecretKey,
+	}
+	emailSvc := NewEmailService(repo, nil)
+	svc := NewNotificationEmailService(repo, emailSvc)
+
+	err := svc.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventBalanceLow,
+		RecipientEmail: "user@example.com",
+		Variables: map[string]string{
+			"current_balance": "1.00",
+			"threshold":       "5.00",
+		},
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "generate unsubscribe token")
+	require.Equal(t, int64(0), smtpServer.messageCount())
 }
 
 func TestNotificationEmailSendRespectsLegacyDeliveryKey(t *testing.T) {
@@ -657,6 +911,18 @@ func (r *notificationEmailBroadcastUserRepoStub) ListWithFilters(_ context.Conte
 type notificationEmailMemorySettingRepo struct {
 	mu     sync.RWMutex
 	values map[string]string
+}
+
+type notificationEmailFailingSetRepo struct {
+	*notificationEmailMemorySettingRepo
+	failKey string
+}
+
+func (r *notificationEmailFailingSetRepo) Set(ctx context.Context, key, value string) error {
+	if key == r.failKey {
+		return errors.New("setting write failed")
+	}
+	return r.notificationEmailMemorySettingRepo.Set(ctx, key, value)
 }
 
 func newNotificationEmailMemorySettingRepo() *notificationEmailMemorySettingRepo {
@@ -748,6 +1014,8 @@ type notificationEmailTestSMTPServer struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 	messages atomic.Int64
+	mu       sync.Mutex
+	last     string
 }
 
 func startNotificationEmailTestSMTPServer(t *testing.T) *notificationEmailTestSMTPServer {
@@ -777,6 +1045,12 @@ func (s *notificationEmailTestSMTPServer) settings() map[string]string {
 
 func (s *notificationEmailTestSMTPServer) messageCount() int64 {
 	return s.messages.Load()
+}
+
+func (s *notificationEmailTestSMTPServer) lastMessage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
 }
 
 func (s *notificationEmailTestSMTPServer) close() {
@@ -837,6 +1111,7 @@ func (s *notificationEmailTestSMTPServer) handleConn(conn net.Conn) {
 			if !writeLine("354 End data with <CR><LF>.<CR><LF>") {
 				return
 			}
+			var message strings.Builder
 			for {
 				dataLine, err := rw.ReadString('\n')
 				if err != nil {
@@ -845,7 +1120,11 @@ func (s *notificationEmailTestSMTPServer) handleConn(conn net.Conn) {
 				if strings.TrimRight(dataLine, "\r\n") == "." {
 					break
 				}
+				message.WriteString(dataLine)
 			}
+			s.mu.Lock()
+			s.last = message.String()
+			s.mu.Unlock()
 			s.messages.Add(1)
 			if !writeLine("250 2.0.0 OK") {
 				return

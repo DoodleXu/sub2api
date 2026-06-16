@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ const (
 	notificationEmailPreferenceKeyPrefix  = "notification_email_preference:"
 	notificationEmailDeliveryKeyPrefix    = "notification_email_delivery:"
 	notificationEmailBroadcastKeyPrefix   = "notification_email_broadcast:"
+	notificationEmailBroadcastIndexKey    = notificationEmailBroadcastKeyPrefix + "index"
 	notificationEmailLocaleUserKeyPrefix  = "notification_email_locale:user:"
 	notificationEmailLocaleEmailKeyPrefix = "notification_email_locale:email:"
 	notificationEmailUnsubscribeSecretKey = "notification_email_unsubscribe_secret"
@@ -55,6 +57,9 @@ const (
 	notificationEmailBroadcastPageSize    = 500
 	notificationEmailBroadcastStaleAfter  = 15 * time.Minute
 	notificationEmailBroadcastActiveKey   = notificationEmailBroadcastKeyPrefix + "active"
+	notificationEmailBroadcastMaxListed   = 50
+	notificationEmailUnsubscribeAPIPath   = "/api/v1/settings/email-unsubscribe"
+	notificationEmailUnsubscribePagePath  = "/email-unsubscribe"
 )
 
 var (
@@ -140,6 +145,7 @@ type NotificationEmailBroadcastStatus struct {
 	Status            string `json:"status"`
 	Scope             string `json:"scope"`
 	Locale            string `json:"locale"`
+	MessageTitle      string `json:"message_title,omitempty"`
 	TargetCount       int    `json:"target_count"`
 	SentCount         int    `json:"sent_count"`
 	SkippedCount      int    `json:"skipped_count"`
@@ -152,10 +158,28 @@ type NotificationEmailBroadcastStatus struct {
 	LastError         string `json:"last_error,omitempty"`
 }
 
+type NotificationEmailBroadcastList struct {
+	Jobs          []NotificationEmailBroadcastStatus `json:"jobs"`
+	ActiveBatchID string                             `json:"active_batch_id,omitempty"`
+}
+
+type NotificationEmailBroadcastResumeInput struct {
+	Mode string `json:"mode,omitempty"`
+}
+
 type notificationEmailBroadcastRecipient struct {
 	UserID int64
 	Email  string
 	Name   string
+}
+
+type notificationEmailBroadcastRecipientState struct {
+	UserID    int64  `json:"user_id,omitempty"`
+	Email     string `json:"email"`
+	Name      string `json:"name,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 type notificationEmailAtomicSettingRepository interface {
@@ -163,9 +187,10 @@ type notificationEmailAtomicSettingRepository interface {
 }
 
 type NotificationEmailUnsubscribeResult struct {
-	Event string `json:"event"`
-	Email string `json:"email"`
-	Done  bool   `json:"done"`
+	Event      string `json:"event"`
+	EventLabel string `json:"event_label,omitempty"`
+	Email      string `json:"email"`
+	Done       bool   `json:"done"`
 }
 
 type notificationEmailStoredTemplate struct {
@@ -418,7 +443,7 @@ func (s *NotificationEmailService) PreviewTemplate(ctx context.Context, input No
 	for key, value := range input.Variables {
 		variables[key] = value
 	}
-	return renderNotificationEmail(normalizedEvent, subject, htmlBody, variables, nil)
+	return renderNotificationEmail(normalizedEvent, subject, htmlBody, variables, previewRawHTMLVariables(normalizedEvent, variables))
 }
 
 func (s *NotificationEmailService) Send(ctx context.Context, input NotificationEmailSendInput) error {
@@ -449,7 +474,10 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	if err != nil {
 		return notificationEmailTemplateErr(err)
 	}
-	variables := s.runtimeVariables(ctx, normalizedEvent, locale, input)
+	variables, headers, err := s.runtimeVariables(ctx, normalizedEvent, locale, input)
+	if err != nil {
+		return notificationEmailConfigErr(err)
+	}
 	rendered, err := renderNotificationEmail(normalizedEvent, tmpl.Subject, tmpl.HTML, variables, input.RawHTMLVariables)
 	if err != nil {
 		return notificationEmailTemplateErr(err)
@@ -469,7 +497,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	if s.emailService == nil {
 		return notificationEmailConfigErr(errors.New("email service is not configured"))
 	}
-	if err := s.emailService.SendEmail(ctx, recipient, rendered.Subject, rendered.HTML); err != nil {
+	if err := s.emailService.SendEmailWithHeaders(ctx, recipient, rendered.Subject, rendered.HTML, headers); err != nil {
 		return notificationEmailDeliveryErr(err)
 	}
 	if deliveryKey != "" {
@@ -550,16 +578,29 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 		StartedAt:                startedAt.Format(time.RFC3339),
 	}
 	status := NotificationEmailBroadcastStatus{
-		BatchID:     batchID,
-		Status:      "running",
-		Scope:       input.Scope,
-		Locale:      input.Locale,
-		TargetCount: len(recipients),
-		RPM:         input.RPM,
-		StartedAt:   result.StartedAt,
-		UpdatedAt:   result.StartedAt,
+		BatchID:      batchID,
+		Status:       "running",
+		Scope:        input.Scope,
+		Locale:       input.Locale,
+		MessageTitle: input.MessageTitle,
+		TargetCount:  len(recipients),
+		RPM:          input.RPM,
+		StartedAt:    result.StartedAt,
+		UpdatedAt:    result.StartedAt,
+	}
+	if err := s.saveBroadcastPayload(ctx, batchID, input); err != nil {
+		releaseLock()
+		return NotificationEmailBroadcastResult{}, err
+	}
+	if err := s.saveBroadcastRecipients(ctx, batchID, notificationEmailBroadcastInitialRecipientStates(recipients)); err != nil {
+		releaseLock()
+		return NotificationEmailBroadcastResult{}, err
 	}
 	if err := s.saveBroadcastStatus(ctx, status); err != nil {
+		releaseLock()
+		return NotificationEmailBroadcastResult{}, err
+	}
+	if err := s.addBroadcastToIndex(ctx, batchID); err != nil {
 		releaseLock()
 		return NotificationEmailBroadcastResult{}, err
 	}
@@ -586,6 +627,124 @@ func (s *NotificationEmailService) GetBroadcastStatus(ctx context.Context, batch
 	}
 	status = s.interruptBroadcastStatusIfStale(ctx, status, s.nowUTC())
 	return status, nil
+}
+
+func (s *NotificationEmailService) ListBroadcasts(ctx context.Context) (NotificationEmailBroadcastList, error) {
+	if s == nil || s.settingRepo == nil {
+		return NotificationEmailBroadcastList{}, errors.New("notification email service is not configured")
+	}
+	now := s.nowUTC()
+	statuses, err := s.listBroadcastStatuses(ctx, now)
+	if err != nil {
+		return NotificationEmailBroadcastList{}, err
+	}
+	activeBatchID := ""
+	if active, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastActiveKey); err == nil {
+		activeBatchID = strings.TrimSpace(active)
+	} else if !errors.Is(err, ErrSettingNotFound) {
+		return NotificationEmailBroadcastList{}, err
+	}
+	return NotificationEmailBroadcastList{Jobs: statuses, ActiveBatchID: activeBatchID}, nil
+}
+
+func (s *NotificationEmailService) CancelBroadcast(ctx context.Context, batchID string) (NotificationEmailBroadcastStatus, error) {
+	if s == nil || s.settingRepo == nil {
+		return NotificationEmailBroadcastStatus{}, errors.New("notification email service is not configured")
+	}
+	batchID = strings.TrimSpace(batchID)
+	if batchID == "" {
+		return NotificationEmailBroadcastStatus{}, errors.New("broadcast batch id is required")
+	}
+	status, err := s.GetBroadcastStatus(ctx, batchID)
+	if err != nil {
+		return NotificationEmailBroadcastStatus{}, err
+	}
+	if status.Status != "running" && status.Status != "canceling" {
+		return status, nil
+	}
+	if err := s.settingRepo.Set(ctx, notificationEmailBroadcastCancelKey(batchID), s.nowUTC().Format(time.RFC3339)); err != nil {
+		return NotificationEmailBroadcastStatus{}, err
+	}
+	status.Status = "canceling"
+	status.LastError = "broadcast cancellation requested"
+	if err := s.saveBroadcastStatus(ctx, status); err != nil {
+		return NotificationEmailBroadcastStatus{}, err
+	}
+	return status, nil
+}
+
+func (s *NotificationEmailService) ResumeBroadcast(ctx context.Context, batchID string, input NotificationEmailBroadcastResumeInput) (NotificationEmailBroadcastResult, error) {
+	if s == nil || s.settingRepo == nil {
+		return NotificationEmailBroadcastResult{}, errors.New("notification email service is not configured")
+	}
+	batchID = strings.TrimSpace(batchID)
+	if batchID == "" {
+		return NotificationEmailBroadcastResult{}, errors.New("broadcast batch id is required")
+	}
+	mode := strings.ToLower(strings.TrimSpace(input.Mode))
+	if mode == "" {
+		mode = "remaining"
+	}
+	if mode != "remaining" && mode != "failed" {
+		return NotificationEmailBroadcastResult{}, fmt.Errorf("unsupported broadcast resume mode: %s", input.Mode)
+	}
+	if err := s.releaseInterruptedActiveBroadcast(ctx, s.nowUTC()); err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	status, err := s.GetBroadcastStatus(ctx, batchID)
+	if err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	if status.Status == "running" || status.Status == "canceling" {
+		return NotificationEmailBroadcastResult{}, errors.New("broadcast is already running")
+	}
+	payload, err := s.getBroadcastPayload(ctx, batchID)
+	if err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	states, err := s.getBroadcastRecipients(ctx, batchID)
+	if err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	targets := notificationEmailBroadcastRetryRecipients(states, mode)
+	if len(targets) == 0 {
+		return NotificationEmailBroadcastResult{}, errors.New("broadcast has no recipients to send")
+	}
+	locked, err := s.acquireBroadcastLock(ctx, batchID)
+	if err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	if !locked {
+		return NotificationEmailBroadcastResult{}, errors.New("another email broadcast is already running")
+	}
+	if err := s.settingRepo.Delete(ctx, notificationEmailBroadcastCancelKey(batchID)); err != nil && !errors.Is(err, ErrSettingNotFound) {
+		s.releaseBroadcastLockBestEffort(ctx, batchID)
+		return NotificationEmailBroadcastResult{}, err
+	}
+
+	startedAt := s.nowUTC()
+	status.Status = "running"
+	status.MessageTitle = payload.MessageTitle
+	status.CompletedAt = ""
+	status.LastError = ""
+	notificationEmailBroadcastApplyCounts(&status, states)
+	if err := s.saveBroadcastStatus(ctx, status); err != nil {
+		s.releaseBroadcastLockBestEffort(ctx, batchID)
+		return NotificationEmailBroadcastResult{}, err
+	}
+	result := NotificationEmailBroadcastResult{
+		BatchID:                  batchID,
+		TargetCount:              len(targets),
+		RPM:                      payload.RPM,
+		EstimatedDurationSeconds: notificationEmailBroadcastEstimateSeconds(len(targets), payload.RPM),
+		StartedAt:                startedAt.Format(time.RFC3339),
+	}
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	go s.runBroadcast(base, batchID, payload, targets, startedAt)
+	return result, nil
 }
 
 func (s *NotificationEmailService) RememberRecipientLocale(ctx context.Context, userID int64, email, acceptLanguage string) {
@@ -715,57 +874,108 @@ func (s *NotificationEmailService) collectBroadcastUsers(ctx context.Context, fi
 func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID string, input NotificationEmailBroadcastInput, recipients []notificationEmailBroadcastRecipient, startedAt time.Time) {
 	defer s.releaseBroadcastLockBestEffort(ctx, batchID)
 	delay := time.Minute / time.Duration(input.RPM)
-	var successCount int
-	var skippedCount int
-	var unsubscribedCount int
-	var failureCount int
 	status := NotificationEmailBroadcastStatus{
-		BatchID:     batchID,
-		Status:      "running",
-		Scope:       input.Scope,
-		Locale:      input.Locale,
-		TargetCount: len(recipients),
-		RPM:         input.RPM,
-		StartedAt:   startedAt.UTC().Format(time.RFC3339),
+		BatchID:      batchID,
+		Status:       "running",
+		Scope:        input.Scope,
+		Locale:       input.Locale,
+		MessageTitle: input.MessageTitle,
+		RPM:          input.RPM,
+		StartedAt:    startedAt.UTC().Format(time.RFC3339),
 	}
-	for idx, recipient := range recipients {
+	if existingStatus, err := s.getBroadcastStatusRaw(ctx, batchID); err == nil {
+		status = existingStatus
+		status.Status = "running"
+		status.Scope = input.Scope
+		status.Locale = input.Locale
+		status.MessageTitle = input.MessageTitle
+		status.RPM = input.RPM
+		if strings.TrimSpace(status.StartedAt) == "" {
+			status.StartedAt = startedAt.UTC().Format(time.RFC3339)
+		}
+	}
+
+	states, err := s.getBroadcastRecipients(ctx, batchID)
+	if err != nil {
+		states = notificationEmailBroadcastInitialRecipientStates(recipients)
+		s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
+	}
+	if len(states) == 0 {
+		states = notificationEmailBroadcastInitialRecipientStates(recipients)
+		s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
+	}
+	stateByEmail := notificationEmailBroadcastStateByEmail(states)
+	targets := make([]*notificationEmailBroadcastRecipientState, 0, len(recipients))
+	for _, recipient := range recipients {
+		key := strings.ToLower(strings.TrimSpace(recipient.Email))
+		if key == "" {
+			continue
+		}
+		state, ok := stateByEmail[key]
+		if !ok {
+			states = append(states, notificationEmailBroadcastRecipientState{
+				UserID: recipient.UserID,
+				Email:  strings.TrimSpace(recipient.Email),
+				Name:   recipient.Name,
+				Status: "pending",
+			})
+			stateByEmail = notificationEmailBroadcastStateByEmail(states)
+			state = stateByEmail[key]
+		}
+		if state.Status == "sent" || state.Status == "skipped" {
+			continue
+		}
+		targets = append(targets, state)
+	}
+	status.TargetCount = len(states)
+	notificationEmailBroadcastApplyCounts(&status, states)
+	s.saveBroadcastStatusBestEffort(ctx, status)
+
+	for idx, state := range targets {
+		if s.isBroadcastCancelRequested(ctx, batchID) {
+			s.completeBroadcastAsCanceled(ctx, batchID, status, states)
+			return
+		}
 		if idx > 0 && delay > 0 {
 			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				slog.Warn("notification email broadcast canceled", "batch_id", batchID, "sent", successCount, "failed", failureCount, "error", ctx.Err())
-				status.Status = "canceled"
-				status.SentCount = successCount
-				status.SkippedCount = skippedCount
-				status.UnsubscribedCount = unsubscribedCount
-				status.FailureCount = failureCount
+				slog.Warn("notification email broadcast canceled", "batch_id", batchID, "error", ctx.Err())
 				status.LastError = ctx.Err().Error()
-				s.saveBroadcastStatusBestEffort(ctx, status)
+				s.completeBroadcastAsCanceled(ctx, batchID, status, states)
 				return
 			case <-timer.C:
 			}
 		}
+		if s.isBroadcastCancelRequested(ctx, batchID) {
+			s.completeBroadcastAsCanceled(ctx, batchID, status, states)
+			return
+		}
+		recipient := notificationEmailBroadcastRecipient{
+			UserID: state.UserID,
+			Email:  state.Email,
+			Name:   state.Name,
+		}
 		unsubscribed, err := s.IsUnsubscribed(ctx, recipient.Email, NotificationEmailEventAdminBroadcast)
 		if err != nil {
-			failureCount++
+			state.Status = "failed"
+			state.Error = err.Error()
+			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 			status.LastError = err.Error()
 			slog.Warn("notification email broadcast unsubscribe check failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
-			status.SentCount = successCount
-			status.SkippedCount = skippedCount
-			status.UnsubscribedCount = unsubscribedCount
-			status.FailureCount = failureCount
+			notificationEmailBroadcastApplyCounts(&status, states)
+			s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
 			s.saveBroadcastStatusBestEffort(ctx, status)
 			continue
 		}
 		if unsubscribed {
-			skippedCount++
-			unsubscribedCount++
+			state.Status = "skipped"
+			state.Error = "unsubscribed"
+			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 			slog.Info("notification email broadcast recipient skipped by unsubscribe preference", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email))
-			status.SentCount = successCount
-			status.SkippedCount = skippedCount
-			status.UnsubscribedCount = unsubscribedCount
-			status.FailureCount = failureCount
+			notificationEmailBroadcastApplyCounts(&status, states)
+			s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
 			s.saveBroadcastStatusBestEffort(ctx, status)
 			continue
 		}
@@ -788,26 +998,199 @@ func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID str
 			},
 		})
 		if err != nil {
-			failureCount++
+			state.Status = "failed"
+			state.Error = err.Error()
+			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 			status.LastError = err.Error()
 			slog.Warn("notification email broadcast recipient failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
 		} else {
-			successCount++
+			state.Status = "sent"
+			state.Error = ""
+			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
 		}
-		status.SentCount = successCount
-		status.SkippedCount = skippedCount
-		status.UnsubscribedCount = unsubscribedCount
-		status.FailureCount = failureCount
+		notificationEmailBroadcastApplyCounts(&status, states)
+		s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
 		s.saveBroadcastStatusBestEffort(ctx, status)
 	}
 	status.Status = "completed"
-	status.SentCount = successCount
-	status.SkippedCount = skippedCount
-	status.UnsubscribedCount = unsubscribedCount
-	status.FailureCount = failureCount
+	notificationEmailBroadcastApplyCounts(&status, states)
 	status.CompletedAt = s.nowUTC().Format(time.RFC3339)
+	s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
 	s.saveBroadcastStatusBestEffort(ctx, status)
-	slog.Info("notification email broadcast completed", "batch_id", batchID, "target_count", len(recipients), "sent", successCount, "skipped", skippedCount, "unsubscribed", unsubscribedCount, "failed", failureCount, "rpm", input.RPM)
+	slog.Info("notification email broadcast completed", "batch_id", batchID, "target_count", len(states), "sent", status.SentCount, "skipped", status.SkippedCount, "unsubscribed", status.UnsubscribedCount, "failed", status.FailureCount, "rpm", input.RPM)
+}
+
+func (s *NotificationEmailService) listBroadcastStatuses(ctx context.Context, now time.Time) ([]NotificationEmailBroadcastStatus, error) {
+	all, err := s.settingRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	batchIDs := make([]string, 0)
+	appendBatch := func(batchID string) {
+		batchID = strings.TrimSpace(batchID)
+		if batchID == "" {
+			return
+		}
+		if _, ok := seen[batchID]; ok {
+			return
+		}
+		seen[batchID] = struct{}{}
+		batchIDs = append(batchIDs, batchID)
+	}
+	for _, batchID := range s.getBroadcastIndex(ctx) {
+		appendBatch(batchID)
+	}
+	for key := range all {
+		if !strings.HasPrefix(key, notificationEmailBroadcastKeyPrefix+"broadcast_") {
+			continue
+		}
+		batchID := strings.TrimPrefix(key, notificationEmailBroadcastKeyPrefix)
+		if strings.Contains(batchID, ":") {
+			continue
+		}
+		appendBatch(batchID)
+	}
+	statuses := make([]NotificationEmailBroadcastStatus, 0, len(batchIDs))
+	for _, batchID := range batchIDs {
+		status, err := s.getBroadcastStatusRaw(ctx, batchID)
+		if err != nil {
+			if errors.Is(err, ErrSettingNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		status = s.interruptBroadcastStatusIfStale(ctx, status, now)
+		statuses = append(statuses, status)
+	}
+	sort.SliceStable(statuses, func(i, j int) bool {
+		return notificationEmailBroadcastSortTime(statuses[i]).After(notificationEmailBroadcastSortTime(statuses[j]))
+	})
+	if len(statuses) > notificationEmailBroadcastMaxListed {
+		statuses = statuses[:notificationEmailBroadcastMaxListed]
+	}
+	return statuses, nil
+}
+
+func (s *NotificationEmailService) getBroadcastIndex(ctx context.Context) []string {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastIndexKey)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (s *NotificationEmailService) addBroadcastToIndex(ctx context.Context, batchID string) error {
+	ids := append([]string{strings.TrimSpace(batchID)}, s.getBroadcastIndex(ctx)...)
+	out := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+		if len(out) >= notificationEmailBroadcastMaxListed {
+			break
+		}
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return s.settingRepo.Set(ctx, notificationEmailBroadcastIndexKey, string(raw))
+}
+
+func (s *NotificationEmailService) saveBroadcastPayload(ctx context.Context, batchID string, input NotificationEmailBroadcastInput) error {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	return s.settingRepo.Set(ctx, notificationEmailBroadcastPayloadKey(batchID), string(raw))
+}
+
+func (s *NotificationEmailService) getBroadcastPayload(ctx context.Context, batchID string) (NotificationEmailBroadcastInput, error) {
+	raw, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastPayloadKey(batchID))
+	if err != nil {
+		return NotificationEmailBroadcastInput{}, err
+	}
+	var input NotificationEmailBroadcastInput
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		return NotificationEmailBroadcastInput{}, err
+	}
+	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
+	input.Locale = normalizeNotificationLocale(input.Locale)
+	return input, nil
+}
+
+func (s *NotificationEmailService) getBroadcastRecipients(ctx context.Context, batchID string) ([]notificationEmailBroadcastRecipientState, error) {
+	raw, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastRecipientsKey(batchID))
+	if err != nil {
+		return nil, err
+	}
+	var states []notificationEmailBroadcastRecipientState
+	if err := json.Unmarshal([]byte(raw), &states); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+func (s *NotificationEmailService) saveBroadcastRecipients(ctx context.Context, batchID string, states []notificationEmailBroadcastRecipientState) error {
+	raw, err := json.Marshal(states)
+	if err != nil {
+		return err
+	}
+	return s.settingRepo.Set(ctx, notificationEmailBroadcastRecipientsKey(batchID), string(raw))
+}
+
+func (s *NotificationEmailService) saveBroadcastRecipientsBestEffort(ctx context.Context, batchID string, states []notificationEmailBroadcastRecipientState) {
+	if err := s.saveBroadcastRecipients(ctx, batchID, states); err != nil {
+		slog.Warn("notification email broadcast recipient state update failed", "batch_id", batchID, "error", err)
+	}
+}
+
+func (s *NotificationEmailService) isBroadcastCancelRequested(ctx context.Context, batchID string) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	_, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastCancelKey(batchID))
+	return err == nil
+}
+
+func (s *NotificationEmailService) completeBroadcastAsCanceled(ctx context.Context, batchID string, status NotificationEmailBroadcastStatus, states []notificationEmailBroadcastRecipientState) {
+	status.Status = "canceled"
+	status.LastError = "broadcast canceled by admin"
+	status.CompletedAt = s.nowUTC().Format(time.RFC3339)
+	notificationEmailBroadcastApplyCounts(&status, states)
+	s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
+	s.saveBroadcastStatusBestEffort(ctx, status)
+	if err := s.settingRepo.Delete(ctx, notificationEmailBroadcastCancelKey(batchID)); err != nil && !errors.Is(err, ErrSettingNotFound) {
+		slog.Warn("notification email broadcast cancel flag cleanup failed", "batch_id", batchID, "error", err)
+	}
 }
 
 func (s *NotificationEmailService) saveBroadcastStatus(ctx context.Context, status NotificationEmailBroadcastStatus) error {
@@ -896,14 +1279,14 @@ func (s *NotificationEmailService) releaseInterruptedActiveBroadcast(ctx context
 		return err
 	}
 	status = s.interruptBroadcastStatusIfStale(ctx, status, now)
-	if status.Status != "running" {
+	if status.Status != "running" && status.Status != "canceling" {
 		s.releaseBroadcastLockBestEffort(ctx, activeBatchID)
 	}
 	return nil
 }
 
 func (s *NotificationEmailService) interruptBroadcastStatusIfStale(ctx context.Context, status NotificationEmailBroadcastStatus, now time.Time) NotificationEmailBroadcastStatus {
-	if status.Status != "running" {
+	if status.Status != "running" && status.Status != "canceling" {
 		return status
 	}
 	updatedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(status.UpdatedAt))
@@ -957,6 +1340,98 @@ func notificationEmailBroadcastEstimateSeconds(count, rpm int) int {
 	return int((time.Minute / time.Duration(rpm) * time.Duration(count-1)).Seconds())
 }
 
+func notificationEmailBroadcastInitialRecipientStates(recipients []notificationEmailBroadcastRecipient) []notificationEmailBroadcastRecipientState {
+	states := make([]notificationEmailBroadcastRecipientState, 0, len(recipients))
+	for _, recipient := range recipients {
+		email := strings.TrimSpace(recipient.Email)
+		if email == "" {
+			continue
+		}
+		name := strings.TrimSpace(recipient.Name)
+		if name == "" {
+			name = emailRecipientName(email)
+		}
+		states = append(states, notificationEmailBroadcastRecipientState{
+			UserID: recipient.UserID,
+			Email:  email,
+			Name:   name,
+			Status: "pending",
+		})
+	}
+	return states
+}
+
+func notificationEmailBroadcastStateByEmail(states []notificationEmailBroadcastRecipientState) map[string]*notificationEmailBroadcastRecipientState {
+	out := make(map[string]*notificationEmailBroadcastRecipientState, len(states))
+	for i := range states {
+		key := strings.ToLower(strings.TrimSpace(states[i].Email))
+		if key == "" {
+			continue
+		}
+		out[key] = &states[i]
+	}
+	return out
+}
+
+func notificationEmailBroadcastRetryRecipients(states []notificationEmailBroadcastRecipientState, mode string) []notificationEmailBroadcastRecipient {
+	recipients := make([]notificationEmailBroadcastRecipient, 0, len(states))
+	for _, state := range states {
+		status := strings.ToLower(strings.TrimSpace(state.Status))
+		switch mode {
+		case "failed":
+			if status != "failed" {
+				continue
+			}
+		default:
+			if status == "sent" || status == "skipped" {
+				continue
+			}
+		}
+		recipients = append(recipients, notificationEmailBroadcastRecipient{
+			UserID: state.UserID,
+			Email:  state.Email,
+			Name:   state.Name,
+		})
+	}
+	return recipients
+}
+
+func notificationEmailBroadcastApplyCounts(status *NotificationEmailBroadcastStatus, states []notificationEmailBroadcastRecipientState) {
+	if status == nil {
+		return
+	}
+	status.TargetCount = len(states)
+	status.SentCount = 0
+	status.SkippedCount = 0
+	status.UnsubscribedCount = 0
+	status.FailureCount = 0
+	for _, state := range states {
+		switch strings.ToLower(strings.TrimSpace(state.Status)) {
+		case "sent":
+			status.SentCount++
+		case "skipped":
+			status.SkippedCount++
+			if strings.EqualFold(strings.TrimSpace(state.Error), "unsubscribed") {
+				status.UnsubscribedCount++
+			}
+		case "failed":
+			status.FailureCount++
+		}
+	}
+}
+
+func notificationEmailBroadcastSortTime(status NotificationEmailBroadcastStatus) time.Time {
+	for _, raw := range []string{status.UpdatedAt, status.StartedAt, status.CompletedAt} {
+		if ts, err := time.Parse(time.RFC3339, strings.TrimSpace(raw)); err == nil {
+			return ts
+		}
+		if ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw)); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
 func notificationEmailBroadcastBatchID() (string, error) {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
@@ -967,6 +1442,18 @@ func notificationEmailBroadcastBatchID() (string, error) {
 
 func notificationEmailBroadcastKey(batchID string) string {
 	return notificationEmailBroadcastKeyPrefix + safeNotificationEmailKeyPart(batchID)
+}
+
+func notificationEmailBroadcastPayloadKey(batchID string) string {
+	return notificationEmailBroadcastKeyPrefix + "payload:" + safeNotificationEmailKeyPart(batchID)
+}
+
+func notificationEmailBroadcastRecipientsKey(batchID string) string {
+	return notificationEmailBroadcastKeyPrefix + "recipients:" + safeNotificationEmailKeyPart(batchID)
+}
+
+func notificationEmailBroadcastCancelKey(batchID string) string {
+	return notificationEmailBroadcastKeyPrefix + "cancel:" + safeNotificationEmailKeyPart(batchID)
 }
 
 func notificationEmailBroadcastActionHTML(label, rawURL string) string {
@@ -1016,7 +1503,7 @@ func (s *NotificationEmailService) Unsubscribe(ctx context.Context, token string
 	if err := s.settingRepo.Set(ctx, notificationEmailPreferenceKey(normalizedEvent, claims.Email), "unsubscribed"); err != nil {
 		return NotificationEmailUnsubscribeResult{}, err
 	}
-	return NotificationEmailUnsubscribeResult{Event: normalizedEvent, Email: claims.Email, Done: true}, nil
+	return NotificationEmailUnsubscribeResult{Event: normalizedEvent, EventLabel: info.Label, Email: claims.Email, Done: true}, nil
 }
 
 func (s *NotificationEmailService) eventInfo(event string) (NotificationEmailEventInfo, string, error) {
@@ -1035,13 +1522,19 @@ func (s *NotificationEmailService) sampleVariables(ctx context.Context, event, l
 		variables[key] = value
 	}
 	variables["site_name"] = s.siteName(ctx)
-	if variables["unsubscribe_url"] == "" && info.Optional {
-		variables["unsubscribe_url"] = "https://example.com/unsubscribe"
+	baseURL := s.unsubscribePageBaseURL(ctx)
+	variables["reset_url"] = joinNotificationEmailURL(baseURL, "/reset-password?token=preview")
+	variables["recharge_url"] = joinNotificationEmailURL(baseURL, "/payment")
+	variables["action_url"] = joinNotificationEmailURL(baseURL, "/notice")
+	variables["action_html"] = notificationEmailBroadcastActionHTML(variables["action_label"], variables["action_url"])
+	variables["monitor_url"] = joinNotificationEmailURL(baseURL, "/admin/channels/monitor")
+	if info.Optional {
+		variables["unsubscribe_url"] = joinNotificationEmailURL(baseURL, notificationEmailUnsubscribePagePath+"?token=preview")
 	}
 	return variables
 }
 
-func (s *NotificationEmailService) runtimeVariables(ctx context.Context, event, locale string, input NotificationEmailSendInput) map[string]string {
+func (s *NotificationEmailService) runtimeVariables(ctx context.Context, event, locale string, input NotificationEmailSendInput) (map[string]string, map[string]string, error) {
 	variables := s.sampleVariables(ctx, event, locale)
 	for key, value := range input.Variables {
 		variables[key] = value
@@ -1051,12 +1544,16 @@ func (s *NotificationEmailService) runtimeVariables(ctx context.Context, event, 
 	if strings.TrimSpace(input.RecipientName) != "" {
 		variables["recipient_name"] = input.RecipientName
 	}
+	headers := map[string]string(nil)
 	if notificationEmailEventDefinitions[event].Optional {
-		if unsubscribeURL, err := s.buildUnsubscribeURL(ctx, input.RecipientEmail, event); err == nil {
-			variables["unsubscribe_url"] = unsubscribeURL
+		token, err := s.createUnsubscribeToken(ctx, input.RecipientEmail, event)
+		if err != nil {
+			return nil, nil, fmt.Errorf("generate unsubscribe token: %w", err)
 		}
+		variables["unsubscribe_url"] = s.buildUnsubscribePageURL(ctx, token)
+		headers = s.buildUnsubscribeHeaders(ctx, token)
 	}
-	return variables
+	return variables, headers, nil
 }
 
 func (s *NotificationEmailService) siteName(ctx context.Context) string {
@@ -1071,16 +1568,32 @@ func (s *NotificationEmailService) siteName(ctx context.Context) string {
 }
 
 func (s *NotificationEmailService) baseURL(ctx context.Context) string {
+	return s.configuredBaseURL(ctx, SettingKeyAPIBaseURL, SettingKeyFrontendURL)
+}
+
+func (s *NotificationEmailService) configuredBaseURL(ctx context.Context, keys ...string) string {
 	if s == nil || s.settingRepo == nil {
 		return ""
 	}
-	for _, key := range []string{SettingKeyAPIBaseURL, SettingKeyFrontendURL} {
+	for _, key := range keys {
 		value, err := s.settingRepo.GetValue(ctx, key)
-		if err == nil && strings.TrimSpace(value) != "" {
-			return strings.TrimRight(strings.TrimSpace(value), "/")
+		if err != nil {
+			continue
+		}
+		trimmed := strings.TrimRight(strings.TrimSpace(value), "/")
+		if isHTTPNotificationEmailURL(trimmed) {
+			return trimmed
 		}
 	}
 	return ""
+}
+
+func (s *NotificationEmailService) unsubscribePageBaseURL(ctx context.Context) string {
+	return s.configuredBaseURL(ctx, SettingKeyFrontendURL, SettingKeyAPIBaseURL)
+}
+
+func (s *NotificationEmailService) unsubscribeAPIBaseURL(ctx context.Context) string {
+	return s.configuredBaseURL(ctx, SettingKeyAPIBaseURL)
 }
 
 func (s *NotificationEmailService) buildUnsubscribeURL(ctx context.Context, email, event string) (string, error) {
@@ -1088,12 +1601,26 @@ func (s *NotificationEmailService) buildUnsubscribeURL(ctx context.Context, emai
 	if err != nil {
 		return "", err
 	}
-	path := "/api/v1/settings/email-unsubscribe?token=" + url.QueryEscape(token)
-	baseURL := s.baseURL(ctx)
-	if baseURL == "" {
-		return path, nil
+	return s.buildUnsubscribeAPIURL(ctx, token), nil
+}
+
+func (s *NotificationEmailService) buildUnsubscribePageURL(ctx context.Context, token string) string {
+	return joinNotificationEmailURL(s.unsubscribePageBaseURL(ctx), notificationEmailUnsubscribePagePath+"?token="+url.QueryEscape(token))
+}
+
+func (s *NotificationEmailService) buildUnsubscribeAPIURL(ctx context.Context, token string) string {
+	return joinNotificationEmailURL(s.unsubscribeAPIBaseURL(ctx), notificationEmailUnsubscribeAPIPath+"?token="+url.QueryEscape(token))
+}
+
+func (s *NotificationEmailService) buildUnsubscribeHeaders(ctx context.Context, token string) map[string]string {
+	apiURL := s.buildUnsubscribeAPIURL(ctx, token)
+	if strings.TrimSpace(apiURL) == "" {
+		return nil
 	}
-	return baseURL + path, nil
+	return map[string]string{
+		"List-Unsubscribe":      "<" + apiURL + ">",
+		"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+	}
 }
 
 func (s *NotificationEmailService) createUnsubscribeToken(ctx context.Context, email, event string) (string, error) {
@@ -1257,6 +1784,20 @@ func notificationEmailRawHTMLAllowed(event, placeholder string) bool {
 		(event == NotificationEmailEventAdminBroadcast && (placeholder == "message_html" || placeholder == "action_html"))
 }
 
+func previewRawHTMLVariables(event string, variables map[string]string) map[string]string {
+	switch event {
+	case NotificationEmailEventAdminBroadcast:
+		return map[string]string{
+			"message_html": variables["message_html"],
+			"action_html":  notificationEmailBroadcastActionHTML(variables["action_label"], variables["action_url"]),
+		}
+	case NotificationEmailEventOpsScheduledReport:
+		return map[string]string{"report_html": variables["report_html"]}
+	default:
+		return nil
+	}
+}
+
 func notificationEmailAllowedPlaceholderSet(event string) map[string]struct{} {
 	info := notificationEmailEventDefinitions[event]
 	allowed := make(map[string]struct{}, len(info.Placeholders))
@@ -1385,6 +1926,35 @@ func isSafeNotificationEmailURL(raw string) bool {
 	return strings.HasPrefix(trimmed, "/")
 }
 
+func isHTTPNotificationEmailURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https"
+}
+
+func joinNotificationEmailURL(baseURL, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	}
+	if parsed, err := url.Parse(path); err == nil && parsed.IsAbs() {
+		return path
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		if strings.HasPrefix(path, "/") {
+			return path
+		}
+		return "/" + path
+	}
+	if strings.HasPrefix(path, "/") {
+		return baseURL + path
+	}
+	return baseURL + "/" + path
+}
+
 func notificationEmailSampleVariables(locale string) map[string]string {
 	if normalizeNotificationLocale(locale) == notificationEmailLocaleChinese {
 		return map[string]string{
@@ -1393,17 +1963,17 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"recipient_email":     "user@example.com",
 			"verification_code":   "123456",
 			"expires_in_minutes":  "15",
-			"reset_url":           "https://example.com/reset-password?token=preview",
+			"reset_url":           "/reset-password?token=preview",
 			"subscription_group":  "Claude Pro",
 			"subscription_days":   "30",
 			"expiry_time":         "2026-06-18 12:00",
 			"days_remaining":      "3",
 			"current_balance":     "12.34",
 			"threshold":           "20.00",
-			"recharge_url":        "https://example.com/recharge",
+			"recharge_url":        "/payment",
 			"recharge_amount":     "50.00",
 			"order_id":            "1024",
-			"unsubscribe_url":     "https://example.com/unsubscribe",
+			"unsubscribe_url":     "/email-unsubscribe?token=preview",
 			"account_id":          "1001",
 			"account_name":        "openai-main",
 			"platform":            "openai",
@@ -1434,8 +2004,8 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"message_title":       "重要服务通知",
 			"message_html":        "<p>这是一封由管理员发送给用户的重要邮件通知。</p>",
 			"action_label":        "查看详情",
-			"action_url":          "https://example.com/notice",
-			"action_html":         `<p><a class="button" href="https://example.com/notice">查看详情</a></p>`,
+			"action_url":          "/notice",
+			"action_html":         `<p><a class="button" href="/notice">查看详情</a></p>`,
 			"monitor_name":        "主线路",
 			"provider":            "openai",
 			"model":               "gpt-5.4",
@@ -1443,7 +2013,7 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 			"new_status":          "operational",
 			"latency_ms":          "123",
 			"message":             "检测恢复正常",
-			"monitor_url":         "https://example.com/admin/channels/monitor",
+			"monitor_url":         "/admin/channels/monitor",
 		}
 	}
 	return map[string]string{
@@ -1452,17 +2022,17 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"recipient_email":     "user@example.com",
 		"verification_code":   "123456",
 		"expires_in_minutes":  "15",
-		"reset_url":           "https://example.com/reset-password?token=preview",
+		"reset_url":           "/reset-password?token=preview",
 		"subscription_group":  "Claude Pro",
 		"subscription_days":   "30",
 		"expiry_time":         "2026-06-18 12:00",
 		"days_remaining":      "3",
 		"current_balance":     "12.34",
 		"threshold":           "20.00",
-		"recharge_url":        "https://example.com/recharge",
+		"recharge_url":        "/payment",
 		"recharge_amount":     "50.00",
 		"order_id":            "1024",
-		"unsubscribe_url":     "https://example.com/unsubscribe",
+		"unsubscribe_url":     "/email-unsubscribe?token=preview",
 		"account_id":          "1001",
 		"account_name":        "openai-main",
 		"platform":            "openai",
@@ -1493,8 +2063,8 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"message_title":       "Important service notice",
 		"message_html":        "<p>This is an important email notification sent by an administrator.</p>",
 		"action_label":        "View details",
-		"action_url":          "https://example.com/notice",
-		"action_html":         `<p><a class="button" href="https://example.com/notice">View details</a></p>`,
+		"action_url":          "/notice",
+		"action_html":         `<p><a class="button" href="/notice">View details</a></p>`,
 		"monitor_name":        "Primary route",
 		"provider":            "openai",
 		"model":               "gpt-5.4",
@@ -1502,7 +2072,7 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"new_status":          "operational",
 		"latency_ms":          "123",
 		"message":             "Monitor recovered",
-		"monitor_url":         "https://example.com/admin/channels/monitor",
+		"monitor_url":         "/admin/channels/monitor",
 	}
 }
 

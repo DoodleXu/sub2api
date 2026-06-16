@@ -4120,6 +4120,21 @@ func (h *SettingHandler) SendEmailBroadcast(c *gin.Context) {
 	response.Success(c, dto.SendEmailBroadcastResponse(result))
 }
 
+// ListEmailBroadcasts returns recent admin email broadcast jobs.
+// GET /api/v1/admin/settings/email-broadcasts
+func (h *SettingHandler) ListEmailBroadcasts(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	result, err := h.notificationEmailService.ListBroadcasts(c.Request.Context())
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastListResponse(result))
+}
+
 // GetEmailBroadcastStatus returns the latest status for an admin email broadcast.
 // GET /api/v1/admin/settings/email-broadcasts/:batch_id
 func (h *SettingHandler) GetEmailBroadcastStatus(c *gin.Context) {
@@ -4133,6 +4148,41 @@ func (h *SettingHandler) GetEmailBroadcastStatus(c *gin.Context) {
 		return
 	}
 	response.Success(c, dto.EmailBroadcastStatusResponse(status))
+}
+
+// CancelEmailBroadcast requests a running admin email broadcast to stop.
+// POST /api/v1/admin/settings/email-broadcasts/:batch_id/cancel
+func (h *SettingHandler) CancelEmailBroadcast(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	status, err := h.notificationEmailService.CancelBroadcast(c.Request.Context(), c.Param("batch_id"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastStatusResponse(status))
+}
+
+// ResumeEmailBroadcast resumes a stopped/interrupted broadcast job.
+// POST /api/v1/admin/settings/email-broadcasts/:batch_id/resume
+func (h *SettingHandler) ResumeEmailBroadcast(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	var req dto.ResumeEmailBroadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.notificationEmailService.ResumeBroadcast(c.Request.Context(), c.Param("batch_id"), service.NotificationEmailBroadcastResumeInput(req))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.SendEmailBroadcastResponse(result))
 }
 
 // GetNotificationConfig returns the lightweight global notification config.

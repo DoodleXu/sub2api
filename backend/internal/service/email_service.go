@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/smtp"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -180,11 +181,23 @@ func (s *EmailService) SendEmail(ctx context.Context, to, subject, body string) 
 	return s.SendEmailWithConfig(config, to, subject, body)
 }
 
+func (s *EmailService) SendEmailWithHeaders(ctx context.Context, to, subject, body string, headers map[string]string) error {
+	config, err := s.GetSMTPConfig(ctx)
+	if err != nil {
+		return err
+	}
+	return s.SendEmailWithConfigAndHeaders(config, to, subject, body, headers)
+}
+
 const smtpDialTimeout = 10 * time.Second
 const smtpIOTimeout = 20 * time.Second
 
 // SendEmailWithConfig 使用指定配置发送邮件
 func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body string) error {
+	return s.SendEmailWithConfigAndHeaders(config, to, subject, body, nil)
+}
+
+func (s *EmailService) SendEmailWithConfigAndHeaders(config *SMTPConfig, to, subject, body string, headers map[string]string) error {
 	// Sanitize all SMTP header fields to prevent header injection (CR/LF removal).
 	to = sanitizeEmailHeader(to)
 	subject = sanitizeEmailHeader(subject)
@@ -194,8 +207,9 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 		from = fmt.Sprintf("%s <%s>", sanitizeEmailHeader(config.FromName), sanitizeEmailHeader(config.From))
 	}
 
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		from, to, subject, body)
+	extraHeaders := formatEmailHeaders(headers)
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n%sMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
+		from, to, subject, extraHeaders, body)
 
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	auth := smtp.PlainAuth("", config.Username, config.Password, config.Host)
@@ -205,6 +219,41 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 	}
 
 	return s.sendMailPlain(addr, auth, config.From, to, []byte(msg), config.Host)
+}
+
+func formatEmailHeaders(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		if isSafeEmailHeaderName(key) && strings.TrimSpace(headers[key]) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var builder strings.Builder
+	for _, key := range keys {
+		builder.WriteString(key)
+		builder.WriteString(": ")
+		builder.WriteString(sanitizeEmailHeader(headers[key]))
+		builder.WriteString("\r\n")
+	}
+	return builder.String()
+}
+
+func isSafeEmailHeaderName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // sendMailPlain sends mail without TLS using a dialer with timeout.

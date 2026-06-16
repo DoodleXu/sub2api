@@ -1153,9 +1153,10 @@ export interface SendEmailBroadcastResponse {
 
 export interface EmailBroadcastStatusResponse {
   batch_id: string;
-  status: "running" | "completed" | "canceled" | "interrupted" | string;
+  status: "running" | "canceling" | "completed" | "canceled" | "interrupted" | string;
   scope: EmailBroadcastScope;
   locale: string;
+  message_title?: string;
   target_count: number;
   sent_count: number;
   skipped_count: number;
@@ -1166,6 +1167,15 @@ export interface EmailBroadcastStatusResponse {
   updated_at: string;
   completed_at?: string;
   last_error?: string;
+}
+
+export interface EmailBroadcastListResponse {
+  jobs: EmailBroadcastStatusResponse[];
+  active_batch_id?: string;
+}
+
+export interface ResumeEmailBroadcastRequest {
+  mode?: "remaining" | "failed";
 }
 
 export async function getEmailTemplates(): Promise<EmailTemplateListResponse> {
@@ -1259,6 +1269,33 @@ export async function getEmailBroadcastStatus(
 ): Promise<EmailBroadcastStatusResponse> {
   const { data } = await apiClient.get<EmailBroadcastStatusResponse>(
     `/admin/settings/email-broadcasts/${encodeURIComponent(batchId)}`,
+  );
+  return data;
+}
+
+export async function listEmailBroadcasts(): Promise<EmailBroadcastListResponse> {
+  const { data } = await apiClient.get<EmailBroadcastListResponse>(
+    "/admin/settings/email-broadcasts",
+  );
+  return data;
+}
+
+export async function cancelEmailBroadcast(
+  batchId: string,
+): Promise<EmailBroadcastStatusResponse> {
+  const { data } = await apiClient.post<EmailBroadcastStatusResponse>(
+    `/admin/settings/email-broadcasts/${encodeURIComponent(batchId)}/cancel`,
+  );
+  return data;
+}
+
+export async function resumeEmailBroadcast(
+  batchId: string,
+  request: ResumeEmailBroadcastRequest,
+): Promise<SendEmailBroadcastResponse> {
+  const { data } = await apiClient.post<SendEmailBroadcastResponse>(
+    `/admin/settings/email-broadcasts/${encodeURIComponent(batchId)}/resume`,
+    request,
   );
   return data;
 }
@@ -1580,6 +1617,9 @@ export const settingsAPI = {
   testNotificationTransport,
   sendEmailBroadcast,
   getEmailBroadcastStatus,
+  listEmailBroadcasts,
+  cancelEmailBroadcast,
+  resumeEmailBroadcast,
   getAdminApiKey,
   regenerateAdminApiKey,
   deleteAdminApiKey,

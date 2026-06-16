@@ -215,6 +215,7 @@ func RegisterAuthRoutes(
 	{
 		settings.GET("/public", h.Setting.GetPublicSettings)
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
+		settings.POST("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
 	// 需要认证的当前用户信息

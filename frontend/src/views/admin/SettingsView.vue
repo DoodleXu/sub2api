@@ -6942,199 +6942,6 @@
             </div>
           </div>
 
-          <!-- Email Broadcast -->
-          <div class="card">
-            <div
-              class="flex flex-col gap-3 border-b border-gray-100 px-6 py-4 dark:border-dark-700 md:flex-row md:items-center md:justify-between"
-            >
-              <div>
-                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                  {{ t("admin.settings.emailBroadcast.title") }}
-                </h2>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.emailBroadcast.description") }}
-                </p>
-              </div>
-              <div
-                class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300"
-              >
-                {{
-                  t("admin.settings.emailBroadcast.rateHint", {
-                    seconds: emailBroadcastEstimatedInterval,
-                  })
-                }}
-              </div>
-            </div>
-            <div class="space-y-5 px-6 py-6">
-              <div class="grid gap-4 md:grid-cols-3">
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.scope") }}
-                  </label>
-                  <Select
-                    v-model="emailBroadcastForm.scope"
-                    :options="emailBroadcastScopeOptions"
-                  />
-                </div>
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.locale") }}
-                  </label>
-                  <Select
-                    v-model="emailBroadcastForm.locale"
-                    :options="emailBroadcastLocaleOptions"
-                  />
-                </div>
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.rpm") }}
-                  </label>
-                  <input
-                    v-model.number="emailBroadcastForm.rpm"
-                    type="number"
-                    min="1"
-                    max="30"
-                    class="input"
-                  />
-                </div>
-              </div>
-
-              <div
-                v-if="emailBroadcastForm.scope === 'custom'"
-                class="grid gap-4 md:grid-cols-2"
-              >
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.customUserIds") }}
-                  </label>
-                  <textarea
-                    v-model="emailBroadcastCustomUserIDsInput"
-                    rows="3"
-                    class="input min-h-[84px]"
-                    :placeholder="t('admin.settings.emailBroadcast.customUserIdsPlaceholder')"
-                  ></textarea>
-                </div>
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.customEmails") }}
-                  </label>
-                  <textarea
-                    v-model="emailBroadcastCustomEmailsInput"
-                    rows="3"
-                    class="input min-h-[84px]"
-                    :placeholder="t('admin.settings.emailBroadcast.customEmailsPlaceholder')"
-                  ></textarea>
-                </div>
-              </div>
-
-              <div>
-                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t("admin.settings.emailBroadcast.messageTitle") }}
-                </label>
-                <input
-                  v-model="emailBroadcastForm.message_title"
-                  type="text"
-                  maxlength="200"
-                  class="input"
-                  :placeholder="t('admin.settings.emailBroadcast.messageTitlePlaceholder')"
-                />
-              </div>
-
-              <div>
-                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t("admin.settings.emailBroadcast.messageHtml") }}
-                </label>
-                <textarea
-                  v-model="emailBroadcastForm.message_html"
-                  rows="7"
-                  class="input min-h-[180px] font-mono text-sm"
-                  :placeholder="t('admin.settings.emailBroadcast.messageHtmlPlaceholder')"
-                ></textarea>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.actionLabel") }}
-                  </label>
-                  <input
-                    v-model="emailBroadcastForm.action_label"
-                    type="text"
-                    class="input"
-                    :placeholder="t('admin.settings.emailBroadcast.actionLabelPlaceholder')"
-                  />
-                </div>
-                <div>
-                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.emailBroadcast.actionUrl") }}
-                  </label>
-                  <input
-                    v-model="emailBroadcastForm.action_url"
-                    type="url"
-                    class="input"
-                    placeholder="https://example.com/notice"
-                  />
-                </div>
-              </div>
-
-              <div
-                v-if="emailBroadcastLastResult"
-                class="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 dark:border-green-900/50 dark:bg-green-950/30 dark:text-green-300"
-              >
-                {{
-                  t("admin.settings.emailBroadcast.lastResult", {
-                    batch: emailBroadcastLastResult.batch_id,
-                    count: emailBroadcastLastResult.target_count,
-                    rpm: emailBroadcastLastResult.rpm,
-                    seconds: emailBroadcastLastResult.estimated_duration_seconds,
-                  })
-                }}
-              </div>
-              <div
-                v-if="emailBroadcastLastStatus"
-                class="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 dark:border-dark-700 dark:bg-dark-800/60 dark:text-gray-300"
-              >
-                {{
-                  t("admin.settings.emailBroadcast.statusSummary", {
-                    status: t(
-                      `admin.settings.emailBroadcast.statuses.${emailBroadcastLastStatus.status}`,
-                    ),
-                    sent: emailBroadcastLastStatus.sent_count,
-                    skipped: emailBroadcastLastStatus.skipped_count,
-                    unsubscribed: emailBroadcastLastStatus.unsubscribed_count,
-                    failed: emailBroadcastLastStatus.failure_count,
-                    total: emailBroadcastLastStatus.target_count,
-                  })
-                }}
-                <div
-                  v-if="emailBroadcastLastStatus.last_error"
-                  class="mt-1 text-xs text-red-600 dark:text-red-300"
-                >
-                  {{ emailBroadcastLastStatus.last_error }}
-                </div>
-              </div>
-
-              <div class="flex justify-end">
-                <button
-                  type="button"
-                  class="btn btn-primary"
-                  :disabled="!canSendEmailBroadcast"
-                  @click="requestEmailBroadcastConfirmation"
-                >
-                  <span
-                    v-if="emailBroadcastSending"
-                    class="h-4 w-4 animate-spin rounded-full border-b-2 border-current"
-                  ></span>
-                  {{
-                    emailBroadcastSending
-                      ? t("admin.settings.emailBroadcast.sending")
-                      : t("admin.settings.emailBroadcast.send")
-                  }}
-                </button>
-              </div>
-            </div>
-          </div>
-
           <!-- 订阅到期提醒 -->
           <div class="card">
             <div
@@ -7376,36 +7183,12 @@
         @confirm="handleAffiliateConfirm"
         @cancel="cancelAffiliateConfirm"
       />
-      <ConfirmDialog
-        :show="emailBroadcastConfirmDialog.show"
-        :title="t('admin.settings.emailBroadcast.confirmTitle')"
-        :message="emailBroadcastConfirmDialog.message"
-        :confirm-text="t('admin.settings.emailBroadcast.confirmSend')"
-        danger
-        @confirm="handleEmailBroadcastConfirm"
-        @cancel="cancelEmailBroadcastConfirm"
-      >
-        <div class="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-          <div>{{ emailBroadcastConfirmDialog.summary }}</div>
-          <div v-if="emailBroadcastConfirmDialog.requiresPhrase">
-            <label class="mb-1 block text-xs font-medium">
-              {{ t("admin.settings.emailBroadcast.confirmPhraseLabel") }}
-            </label>
-            <input
-              v-model="emailBroadcastConfirmDialog.phrase"
-              type="text"
-              class="input"
-              :placeholder="emailBroadcastConfirmPhrase"
-            />
-          </div>
-        </div>
-      </ConfirmDialog>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
 import {
@@ -7433,10 +7216,6 @@ import type {
   NotificationConfig,
   NotificationEvent,
   NotificationTransport,
-  EmailBroadcastStatusResponse,
-  EmailBroadcastScope,
-  SendEmailBroadcastResponse,
-  SendEmailBroadcastRequest,
 } from "@/api/admin/settings";
 import type {
   AdminGroup,
@@ -7586,12 +7365,6 @@ const notificationBarkDeviceKeysInput = ref("");
 const notificationTelegramChatIDsInput = ref("");
 const notificationClearBarkDeviceKeys = ref(false);
 const notificationClearTelegramBotToken = ref(false);
-const emailBroadcastSending = ref(false);
-const emailBroadcastLastResult = ref<SendEmailBroadcastResponse | null>(null);
-const emailBroadcastLastStatus = ref<EmailBroadcastStatusResponse | null>(null);
-const emailBroadcastCustomEmailsInput = ref("");
-const emailBroadcastCustomUserIDsInput = ref("");
-let emailBroadcastStatusTimer: number | null = null;
 const registrationEmailSuffixWhitelistTags = ref<string[]>([]);
 const registrationEmailSuffixWhitelistDraft = ref("");
 const tablePageSizeOptionsInput = ref("10, 20, 50, 100");
@@ -7679,33 +7452,6 @@ const notificationTransports: NotificationTransport[] = [
   "bark",
   "telegram",
 ];
-
-const emailBroadcastForm = reactive({
-  scope: "active_users" as EmailBroadcastScope,
-  locale: "zh",
-  message_title: "",
-  message_html: "",
-  action_label: "",
-  action_url: "",
-  rpm: 6,
-});
-
-const emailBroadcastConfirmPhrase = "SEND";
-const emailBroadcastConfirmDialog = reactive<{
-  show: boolean;
-  message: string;
-  summary: string;
-  phrase: string;
-  requiresPhrase: boolean;
-  payload: SendEmailBroadcastRequest | null;
-}>({
-  show: false,
-  message: "",
-  summary: "",
-  phrase: "",
-  requiresPhrase: false,
-  payload: null,
-});
 
 const notificationCommonTimezones = [
   "Asia/Shanghai",
@@ -8280,43 +8026,6 @@ const notificationTimezoneOptions = computed(() => {
     label: timezone,
   }));
 });
-
-const emailBroadcastScopeOptions = computed(() => [
-  {
-    value: "active_users",
-    label: t("admin.settings.emailBroadcast.scopes.activeUsers"),
-  },
-  {
-    value: "all_users",
-    label: t("admin.settings.emailBroadcast.scopes.allUsers"),
-  },
-  {
-    value: "admins",
-    label: t("admin.settings.emailBroadcast.scopes.admins"),
-  },
-  {
-    value: "custom",
-    label: t("admin.settings.emailBroadcast.scopes.custom"),
-  },
-]);
-
-const emailBroadcastLocaleOptions = computed(() => [
-  { value: "zh", label: t("admin.settings.emailBroadcast.locales.zh") },
-  { value: "en", label: t("admin.settings.emailBroadcast.locales.en") },
-]);
-
-const emailBroadcastEstimatedInterval = computed(() => {
-  const rpm = Math.max(1, Number(emailBroadcastForm.rpm) || 6);
-  return Math.ceil(60 / rpm);
-});
-
-const canSendEmailBroadcast = computed(
-  () =>
-    emailBroadcastForm.message_title.trim() !== "" &&
-    emailBroadcastForm.message_html.trim() !== "" &&
-    !emailBroadcastSending.value &&
-    !loadFailed.value,
-);
 
 function setNotificationBarkLevel(value: string | number | boolean | null): void {
   if (
@@ -9186,146 +8895,6 @@ async function testNotificationTransport(transport: NotificationTransport) {
   } finally {
     testingNotificationTransport.value = null;
   }
-}
-
-function splitEmailBroadcastUserIDs(value: string): number[] {
-  const seen = new Set<number>();
-  return value
-    .split(/[\n,]+/)
-    .map((item) => Number.parseInt(item.trim(), 10))
-    .filter((item) => {
-      if (!Number.isFinite(item) || item <= 0 || seen.has(item)) {
-        return false;
-      }
-      seen.add(item);
-      return true;
-    });
-}
-
-function buildEmailBroadcastPayload(): SendEmailBroadcastRequest {
-  return {
-    scope: emailBroadcastForm.scope,
-    locale: emailBroadcastForm.locale,
-    message_title: emailBroadcastForm.message_title.trim(),
-    message_html: emailBroadcastForm.message_html.trim(),
-    action_label: emailBroadcastForm.action_label.trim() || undefined,
-    action_url: emailBroadcastForm.action_url.trim() || undefined,
-    user_ids:
-      emailBroadcastForm.scope === "custom"
-        ? splitEmailBroadcastUserIDs(emailBroadcastCustomUserIDsInput.value)
-        : undefined,
-    emails:
-      emailBroadcastForm.scope === "custom"
-        ? splitNotificationInput(emailBroadcastCustomEmailsInput.value)
-        : undefined,
-    rpm: Math.max(1, Math.min(30, Number(emailBroadcastForm.rpm) || 6)),
-  };
-}
-
-function emailBroadcastScopeLabel(scope: EmailBroadcastScope): string {
-  const option = emailBroadcastScopeOptions.value.find((item) => item.value === scope);
-  return option?.label || scope;
-}
-
-function requestEmailBroadcastConfirmation() {
-  const payload = buildEmailBroadcastPayload();
-  if (!payload.message_title || !payload.message_html) {
-    appStore.showError(t("admin.settings.emailBroadcast.required"));
-    return;
-  }
-  if (
-    payload.scope === "custom" &&
-    (payload.user_ids?.length || 0) === 0 &&
-    (payload.emails?.length || 0) === 0
-  ) {
-    appStore.showError(t("admin.settings.emailBroadcast.customRequired"));
-    return;
-  }
-  const requiresPhrase = payload.scope !== "custom";
-  emailBroadcastConfirmDialog.payload = payload;
-  emailBroadcastConfirmDialog.requiresPhrase = requiresPhrase;
-  emailBroadcastConfirmDialog.phrase = "";
-  emailBroadcastConfirmDialog.message = t("admin.settings.emailBroadcast.confirmMessage");
-  emailBroadcastConfirmDialog.summary = t("admin.settings.emailBroadcast.confirmSummary", {
-    scope: emailBroadcastScopeLabel(payload.scope),
-    rpm: payload.rpm,
-    seconds: Math.ceil(60 / payload.rpm),
-  });
-  emailBroadcastConfirmDialog.show = true;
-}
-
-async function handleEmailBroadcastConfirm() {
-  if (
-    emailBroadcastConfirmDialog.requiresPhrase &&
-    emailBroadcastConfirmDialog.phrase.trim() !== emailBroadcastConfirmPhrase
-  ) {
-    appStore.showError(
-      t("admin.settings.emailBroadcast.confirmPhraseRequired", {
-        phrase: emailBroadcastConfirmPhrase,
-      }),
-    );
-    return;
-  }
-  const payload = emailBroadcastConfirmDialog.payload;
-  emailBroadcastConfirmDialog.show = false;
-  emailBroadcastConfirmDialog.payload = null;
-  if (!payload) return;
-  await sendEmailBroadcast(payload);
-}
-
-function cancelEmailBroadcastConfirm() {
-  emailBroadcastConfirmDialog.show = false;
-  emailBroadcastConfirmDialog.payload = null;
-}
-
-async function sendEmailBroadcast(payload: SendEmailBroadcastRequest) {
-  emailBroadcastSending.value = true;
-  try {
-    const result = await adminAPI.settings.sendEmailBroadcast(payload);
-    emailBroadcastLastResult.value = result;
-    await refreshEmailBroadcastStatus(result.batch_id);
-    scheduleEmailBroadcastStatusRefresh(result.batch_id);
-    appStore.showSuccess(
-      t("admin.settings.emailBroadcast.started", {
-        count: result.target_count,
-        batch: result.batch_id,
-      }),
-    );
-  } catch (error: unknown) {
-    appStore.showError(
-      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.failed")),
-    );
-  } finally {
-    emailBroadcastSending.value = false;
-  }
-}
-
-async function refreshEmailBroadcastStatus(batchId: string) {
-  try {
-    emailBroadcastLastStatus.value =
-      await adminAPI.settings.getEmailBroadcastStatus(batchId);
-  } catch (error: unknown) {
-    appStore.showError(
-      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.statusFailed")),
-    );
-  }
-}
-
-function clearEmailBroadcastStatusTimer() {
-  if (emailBroadcastStatusTimer != null) {
-    window.clearTimeout(emailBroadcastStatusTimer);
-    emailBroadcastStatusTimer = null;
-  }
-}
-
-function scheduleEmailBroadcastStatusRefresh(batchId: string) {
-  clearEmailBroadcastStatusTimer();
-  emailBroadcastStatusTimer = window.setTimeout(async () => {
-    await refreshEmailBroadcastStatus(batchId);
-    if (emailBroadcastLastStatus.value?.status === "running") {
-      scheduleEmailBroadcastStatusRefresh(batchId);
-    }
-  }, 5000);
 }
 
 async function loadSubscriptionGroups() {
@@ -10678,10 +10247,6 @@ onMounted(() => {
   loadRectifierSettings();
   loadBetaPolicySettings();
   loadProviders();
-});
-
-onUnmounted(() => {
-  clearEmailBroadcastStatusTimer();
 });
 
 // =========================

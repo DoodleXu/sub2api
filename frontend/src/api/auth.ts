@@ -336,6 +336,22 @@ export async function getPublicSettings(): Promise<PublicSettings> {
   return data
 }
 
+export interface NotificationEmailUnsubscribeResponse {
+  event: string
+  event_label?: string
+  email: string
+  done: boolean
+}
+
+export async function unsubscribeNotificationEmail(token: string): Promise<NotificationEmailUnsubscribeResponse> {
+  const { data } = await apiClient.post<NotificationEmailUnsubscribeResponse>(
+    '/settings/email-unsubscribe',
+    null,
+    { params: { token } }
+  )
+  return data
+}
+
 export type WeChatOAuthMode = 'open' | 'mp'
 export type WeChatOAuthUnavailableReason =
   | 'not_configured'
@@ -673,6 +689,7 @@ export const authAPI = {
   getTokenExpiresAt,
   clearAuthToken,
   getPublicSettings,
+  unsubscribeNotificationEmail,
   sendVerifyCode,
   sendPendingOAuthVerifyCode,
   validatePromoCode,

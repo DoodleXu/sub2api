@@ -189,6 +189,13 @@ describe('路由守卫逻辑', () => {
 
       expect(fetchPublicSettings).not.toHaveBeenCalled()
     })
+
+    it('backend mode 允许未登录用户访问邮件退订页', async () => {
+      const { isBackendModePublicRouteAllowed } = await import('@/router')
+
+      expect(isBackendModePublicRouteAllowed('/email-unsubscribe', false)).toBe(true)
+      expect(isBackendModePublicRouteAllowed('/email-unsubscribe?token=abc', false)).toBe(true)
+    })
   })
 
   // --- 未认证用户 ---
