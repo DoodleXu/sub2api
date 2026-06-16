@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,10 +14,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -370,18 +374,229 @@ func (h *SettingHandler) GetDailyCheckinStats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
-// ListDailyCheckinRecords returns admin-facing check-in records for operations center.
-// GET /api/v1/admin/operations/daily-checkin/records
-func (h *SettingHandler) ListDailyCheckinRecords(c *gin.Context) {
+// GetOperationsOverview returns compact daily operations metrics.
+// GET /api/v1/admin/operations/overview
+func (h *SettingHandler) GetOperationsOverview(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Operations service is unavailable")
+		return
+	}
+	start, end, err := parseOperationsDateRange(c, 30)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	data, err := h.dailyCheckinService.GetOperationsOverview(c.Request.Context(), start, end)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, data)
+}
+
+// GetDailyCheckinAnalytics returns check-in activity quality metrics.
+// GET /api/v1/admin/operations/daily-checkin/analytics
+func (h *SettingHandler) GetDailyCheckinAnalytics(c *gin.Context) {
 	if h.dailyCheckinService == nil {
 		response.InternalError(c, "Daily check-in service is unavailable")
 		return
 	}
+	start, end, err := parseOperationsDateRange(c, 30)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	data, err := h.dailyCheckinService.GetDailyCheckinAnalytics(c.Request.Context(), start, end)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, data)
+}
+
+// ExportOperationsData exports operations datasets to CSV.
+// GET /api/v1/admin/operations/export
+func (h *SettingHandler) ExportOperationsData(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Operations service is unavailable")
+		return
+	}
+	dataset := strings.TrimSpace(c.Query("dataset"))
+	start, end, err := parseOperationsDateRange(c, 30)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if dataset == "daily_checkin_records" {
+		h.streamDailyCheckinRecordsCSV(c, start, end)
+		return
+	}
+
+	filename := fmt.Sprintf("operations_%s_%s_to_%s.csv", dataset, start.Format("2006-01-02"), end.AddDate(0, 0, -1).Format("2006-01-02"))
+	var buf bytes.Buffer
+	buf.Write([]byte{0xEF, 0xBB, 0xBF})
+	writer := csv.NewWriter(&buf)
+
+	switch dataset {
+	case "overview_daily":
+		err = h.writeOperationsOverviewCSV(c, writer, start, end)
+	case "daily_checkin_summary":
+		err = h.writeDailyCheckinSummaryCSV(c, writer, start, end)
+	default:
+		response.BadRequest(c, "Invalid dataset")
+		return
+	}
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		response.InternalError(c, "Failed to export operations data: "+err.Error())
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+func (h *SettingHandler) streamDailyCheckinRecordsCSV(c *gin.Context, start, end time.Time) {
+	filter := dailyCheckinRecordFilterFromQuery(c)
+	applyDailyCheckinRecordExportDateDefaults(&filter, start, end)
+	filename := fmt.Sprintf("operations_daily_checkin_records_%s_to_%s.csv", filter.DateFrom, filter.DateTo)
+	iter, err := h.dailyCheckinService.OpenAdminRecordIterator(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	defer func() { _ = iter.Close() }()
+
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
+	writer := csv.NewWriter(c.Writer)
+	if err := h.writeDailyCheckinRecordsCSV(writer, iter); err != nil {
+		c.Error(err)
+		return
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		c.Error(err)
+	}
+}
+
+func (h *SettingHandler) writeOperationsOverviewCSV(c *gin.Context, writer *csv.Writer, start, end time.Time) error {
+	data, err := h.dailyCheckinService.GetOperationsOverview(c.Request.Context(), start, end)
+	if err != nil {
+		return err
+	}
+	if err := writer.Write([]string{"date", "dau", "new_users", "request_users", "requests", "actual_cost"}); err != nil {
+		return err
+	}
+	for _, point := range data.Points {
+		if err := writer.Write([]string{
+			point.Date,
+			strconv.FormatInt(point.DAU, 10),
+			strconv.FormatInt(point.NewUsers, 10),
+			strconv.FormatInt(point.RequestUsers, 10),
+			strconv.FormatInt(point.Requests, 10),
+			formatCSVFloat(point.ActualCost),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *SettingHandler) writeDailyCheckinSummaryCSV(c *gin.Context, writer *csv.Writer, start, end time.Time) error {
+	data, err := h.dailyCheckinService.GetDailyCheckinAnalytics(c.Request.Context(), start, end)
+	if err != nil {
+		return err
+	}
+	if err := writer.Write([]string{"date", "qualified_users", "checkin_users", "checkin_rate", "reward_usd", "avg_reward_usd", "fallback_count", "crit_count", "streak_user_count"}); err != nil {
+		return err
+	}
+	for _, point := range data.Points {
+		if err := writer.Write([]string{
+			point.Date,
+			strconv.FormatInt(point.QualifiedUsers, 10),
+			strconv.FormatInt(point.CheckinUsers, 10),
+			formatCSVFloat(point.CheckinRate),
+			formatCSVFloat(point.RewardUSD),
+			formatCSVFloat(point.AverageRewardUSD),
+			strconv.FormatInt(point.FallbackCount, 10),
+			strconv.FormatInt(point.CritCount, 10),
+			strconv.FormatInt(point.StreakUserCount, 10),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *SettingHandler) writeDailyCheckinRecordsCSV(writer *csv.Writer, iter *service.DailyCheckinAdminRecordIterator) error {
+	if err := writer.Write([]string{"id", "user_id", "username", "email", "date", "reward_amount", "qualified_usage_usd", "base_reward_amount", "streak_days", "streak_multiplier", "crit_hit", "crit_multiplier", "budget_fallback", "created_at"}); err != nil {
+		return err
+	}
+	for {
+		record, err := iter.Next()
+		if err != nil {
+			return err
+		}
+		if record == nil {
+			return nil
+		}
+		baseReward := record.RewardAmount
+		streakDays := 0
+		streakMultiplier := 1.0
+		critHit := false
+		critMultiplier := 1.0
+		budgetFallback := false
+		if record.RewardMetadata != nil {
+			baseReward = record.RewardMetadata.BaseRewardAmount
+			streakDays = record.RewardMetadata.StreakDays
+			streakMultiplier = record.RewardMetadata.StreakMultiplier
+			critHit = record.RewardMetadata.CritHit
+			critMultiplier = record.RewardMetadata.CritMultiplier
+			budgetFallback = record.RewardMetadata.BudgetFallback
+		}
+		if err := writer.Write([]string{
+			strconv.FormatInt(record.ID, 10),
+			strconv.FormatInt(record.UserID, 10),
+			record.Username,
+			record.Email,
+			record.Date,
+			formatCSVFloat(record.RewardAmount),
+			formatCSVFloat(record.QualifiedUsageUSD),
+			formatCSVFloat(baseReward),
+			strconv.Itoa(streakDays),
+			formatCSVFloat(streakMultiplier),
+			strconv.FormatBool(critHit),
+			formatCSVFloat(critMultiplier),
+			strconv.FormatBool(budgetFallback),
+			record.CreatedAt.Format("2006-01-02 15:04:05"),
+		}); err != nil {
+			return err
+		}
+	}
+}
+
+func dailyCheckinRecordFilterFromQuery(c *gin.Context) service.DailyCheckinAdminRecordFilter {
+	dateFrom := strings.TrimSpace(c.Query("date_from"))
+	if dateFrom == "" {
+		dateFrom = strings.TrimSpace(c.Query("start_date"))
+	}
+	dateTo := strings.TrimSpace(c.Query("date_to"))
+	if dateTo == "" {
+		dateTo = strings.TrimSpace(c.Query("end_date"))
+	}
 	filter := service.DailyCheckinAdminRecordFilter{
 		Page:      parsePositiveIntQuery(c, "page", 1),
 		PageSize:  parsePositiveIntQuery(c, "page_size", 20),
-		DateFrom:  strings.TrimSpace(c.Query("date_from")),
-		DateTo:    strings.TrimSpace(c.Query("date_to")),
+		DateFrom:  dateFrom,
+		DateTo:    dateTo,
 		UserQuery: strings.TrimSpace(c.Query("user")),
 	}
 	if v, ok := parseOptionalFloatQuery(c, "reward_min"); ok {
@@ -400,6 +615,69 @@ func (h *SettingHandler) ListDailyCheckinRecords(c *gin.Context) {
 			filter.StreakDays = &v
 		}
 	}
+	return filter
+}
+
+func applyDailyCheckinRecordExportDateDefaults(filter *service.DailyCheckinAdminRecordFilter, start, end time.Time) {
+	if filter == nil {
+		return
+	}
+	if strings.TrimSpace(filter.DateFrom) == "" {
+		filter.DateFrom = start.Format("2006-01-02")
+	}
+	if strings.TrimSpace(filter.DateTo) == "" {
+		filter.DateTo = end.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+}
+
+func parseOperationsDateRange(c *gin.Context, defaultDays int) (time.Time, time.Time, error) {
+	if defaultDays <= 0 {
+		defaultDays = 30
+	}
+	userTZ := strings.TrimSpace(c.Query("timezone"))
+	now := timezone.NowInUserLocation(userTZ)
+	startDate := strings.TrimSpace(c.Query("start_date"))
+	endDate := strings.TrimSpace(c.Query("end_date"))
+	var start, end time.Time
+	var err error
+	if startDate == "" {
+		start = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -defaultDays+1), userTZ)
+	} else {
+		start, err = timezone.ParseInUserLocation("2006-01-02", startDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid start_date")
+		}
+	}
+	if endDate == "" {
+		end = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+	} else {
+		parsed, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid end_date")
+		}
+		end = parsed.AddDate(0, 0, 1)
+	}
+	if !start.Before(end) {
+		return time.Time{}, time.Time{}, fmt.Errorf("start_date must be before end_date")
+	}
+	if end.Sub(start) > 370*24*time.Hour {
+		return time.Time{}, time.Time{}, fmt.Errorf("date range is too large")
+	}
+	return start, end, nil
+}
+
+func formatCSVFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', 6, 64)
+}
+
+// ListDailyCheckinRecords returns admin-facing check-in records for operations center.
+// GET /api/v1/admin/operations/daily-checkin/records
+func (h *SettingHandler) ListDailyCheckinRecords(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Daily check-in service is unavailable")
+		return
+	}
+	filter := dailyCheckinRecordFilterFromQuery(c)
 	result, err := h.dailyCheckinService.ListAdminRecords(c.Request.Context(), filter)
 	if err != nil {
 		response.ErrorFrom(c, err)

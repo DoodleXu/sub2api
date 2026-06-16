@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +136,101 @@ type DailyCheckinAdminRecordList struct {
 	Total    int64                     `json:"total"`
 	Page     int                       `json:"page"`
 	PageSize int                       `json:"page_size"`
+}
+
+type operationsDateBucket struct {
+	Date  string
+	Start time.Time
+	End   time.Time
+}
+
+type DailyCheckinAdminRecordIterator struct {
+	rows *sql.Rows
+}
+
+func (it *DailyCheckinAdminRecordIterator) Close() error {
+	if it == nil || it.rows == nil {
+		return nil
+	}
+	return it.rows.Close()
+}
+
+func (it *DailyCheckinAdminRecordIterator) Next() (*DailyCheckinAdminRecord, error) {
+	if it == nil || it.rows == nil {
+		return nil, nil
+	}
+	if !it.rows.Next() {
+		if err := it.rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate daily checkin export records: %w", err)
+		}
+		return nil, nil
+	}
+	var item DailyCheckinAdminRecord
+	if err := it.rows.Scan(&item.ID, &item.UserID, &item.Username, &item.Email, &item.Date, &item.RewardAmount, &item.QualifiedUsageUSD, newRewardMetadataScanner(&item.RewardMetadata), &item.CreatedAt); err != nil {
+		return nil, fmt.Errorf("scan daily checkin export record: %w", err)
+	}
+	return &item, nil
+}
+
+type OperationsOverviewPoint struct {
+	Date         string  `json:"date"`
+	DAU          int64   `json:"dau"`
+	NewUsers     int64   `json:"new_users"`
+	RequestUsers int64   `json:"request_users"`
+	Requests     int64   `json:"requests"`
+	ActualCost   float64 `json:"actual_cost"`
+}
+
+type OperationsOverviewSummary struct {
+	DAU          int64   `json:"dau"`
+	NewUsers     int64   `json:"new_users"`
+	RequestUsers int64   `json:"request_users"`
+	Requests     int64   `json:"requests"`
+	ActualCost   float64 `json:"actual_cost"`
+}
+
+type OperationsOverviewResponse struct {
+	Summary OperationsOverviewSummary `json:"summary"`
+	Points  []OperationsOverviewPoint `json:"points"`
+}
+
+type DailyCheckinAnalyticsPoint struct {
+	Date             string  `json:"date"`
+	QualifiedUsers   int64   `json:"qualified_users"`
+	CheckinUsers     int64   `json:"checkin_users"`
+	CheckinRate      float64 `json:"checkin_rate"`
+	RewardUSD        float64 `json:"reward_usd"`
+	AverageRewardUSD float64 `json:"avg_reward_usd"`
+	FallbackCount    int64   `json:"fallback_count"`
+	CritCount        int64   `json:"crit_count"`
+	StreakUserCount  int64   `json:"streak_user_count"`
+}
+
+type DailyCheckinRewardDistributionItem struct {
+	Label     string  `json:"label"`
+	Count     int64   `json:"count"`
+	RewardUSD float64 `json:"reward_usd"`
+}
+
+type DailyCheckinAnalyticsSummary struct {
+	QualifiedUsers      int64    `json:"qualified_users"`
+	CheckinUsers        int64    `json:"checkin_users"`
+	StreakUsers         int64    `json:"streak_users"`
+	CheckinRate         float64  `json:"checkin_rate"`
+	RewardUSD           float64  `json:"reward_usd"`
+	AverageRewardUSD    float64  `json:"avg_reward_usd"`
+	FallbackRate        float64  `json:"fallback_rate"`
+	CritRate            float64  `json:"crit_rate"`
+	StreakUserRate      float64  `json:"streak_user_rate"`
+	DailyRemainingUSD   float64  `json:"daily_remaining_usd"`
+	MonthlyRemainingUSD float64  `json:"monthly_remaining_usd"`
+	ProjectedBudgetDays *float64 `json:"projected_budget_days"`
+}
+
+type DailyCheckinAnalyticsResponse struct {
+	Summary            DailyCheckinAnalyticsSummary         `json:"summary"`
+	Points             []DailyCheckinAnalyticsPoint         `json:"points"`
+	RewardDistribution []DailyCheckinRewardDistributionItem `json:"reward_distribution"`
 }
 
 type DailyCheckinService struct {
@@ -382,6 +478,379 @@ func (s *DailyCheckinService) ListAdminRecords(ctx context.Context, filter Daily
 		Page:     filter.Page,
 		PageSize: filter.PageSize,
 	}, nil
+}
+
+func (s *DailyCheckinService) ExportAdminRecords(ctx context.Context, filter DailyCheckinAdminRecordFilter) ([]DailyCheckinAdminRecord, error) {
+	items := make([]DailyCheckinAdminRecord, 0)
+	err := s.ForEachAdminRecord(ctx, filter, func(item DailyCheckinAdminRecord) error {
+		items = append(items, item)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *DailyCheckinService) OpenAdminRecordIterator(ctx context.Context, filter DailyCheckinAdminRecordFilter) (*DailyCheckinAdminRecordIterator, error) {
+	if s == nil || s.db == nil {
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
+	}
+	where, args := buildDailyCheckinRecordWhere(filter)
+	query := fmt.Sprintf(`
+		SELECT c.id, c.user_id, COALESCE(u.username, ''), COALESCE(u.email, ''), c.checkin_date,
+		       c.reward_amount, c.qualified_usage_usd, c.reward_metadata, c.created_at
+		FROM user_checkins c
+		JOIN users u ON u.id = c.user_id
+		%s
+		ORDER BY c.checkin_date DESC, c.id DESC
+	`, where)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("export daily checkin records: %w", err)
+	}
+	return &DailyCheckinAdminRecordIterator{rows: rows}, nil
+}
+
+func (s *DailyCheckinService) ForEachAdminRecord(ctx context.Context, filter DailyCheckinAdminRecordFilter, consume func(DailyCheckinAdminRecord) error) error {
+	if consume == nil {
+		return infraerrors.InternalServer("DAILY_CHECKIN_EXPORT_CONSUMER_MISSING", "daily check-in export consumer is unavailable")
+	}
+	iter, err := s.OpenAdminRecordIterator(ctx, filter)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = iter.Close() }()
+	for {
+		item, err := iter.Next()
+		if err != nil {
+			return err
+		}
+		if item == nil {
+			return nil
+		}
+		if err := consume(*item); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *DailyCheckinService) GetOperationsOverview(ctx context.Context, start, end time.Time) (*OperationsOverviewResponse, error) {
+	if s == nil || s.db == nil {
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
+	}
+	points, dayIndex, buckets := newOperationsOverviewPoints(start, end)
+	dailyRequestUsers := make([]map[int64]struct{}, len(points))
+	dailyNewUsers := make([]map[int64]struct{}, len(points))
+	rangeRequestUsers := map[int64]struct{}{}
+	rangeNewUsers := map[int64]struct{}{}
+	summary := OperationsOverviewSummary{}
+
+	usageByDate, err := s.operationsOverviewUsageByDate(ctx, buckets)
+	if err != nil {
+		return nil, err
+	}
+	newUsersByDate, err := s.operationsOverviewNewUsersByDate(ctx, buckets)
+	if err != nil {
+		return nil, err
+	}
+	for _, bucket := range buckets {
+		idx, ok := dayIndex[bucket.Date]
+		if !ok {
+			continue
+		}
+		if dailyRequestUsers[idx] == nil {
+			dailyRequestUsers[idx] = map[int64]struct{}{}
+		}
+		if dailyNewUsers[idx] == nil {
+			dailyNewUsers[idx] = map[int64]struct{}{}
+		}
+		usage := usageByDate[bucket.Date]
+		for userID := range usage.Users {
+			dailyRequestUsers[idx][userID] = struct{}{}
+			rangeRequestUsers[userID] = struct{}{}
+		}
+		for userID := range newUsersByDate[bucket.Date] {
+			dailyNewUsers[idx][userID] = struct{}{}
+			rangeNewUsers[userID] = struct{}{}
+		}
+		points[idx].RequestUsers = int64(len(dailyRequestUsers[idx]))
+		points[idx].DAU = points[idx].RequestUsers
+		points[idx].NewUsers = int64(len(dailyNewUsers[idx]))
+		points[idx].Requests = usage.Requests
+		points[idx].ActualCost = usage.ActualCost
+		summary.Requests += usage.Requests
+		summary.ActualCost += usage.ActualCost
+	}
+	summary.RequestUsers = int64(len(rangeRequestUsers))
+	summary.NewUsers = int64(len(rangeNewUsers))
+	if len(points) > 0 {
+		summary.DAU = points[len(points)-1].DAU
+	}
+	return &OperationsOverviewResponse{Summary: summary, Points: points}, nil
+}
+
+type operationsUsageAggregate struct {
+	Users      map[int64]struct{}
+	Requests   int64
+	ActualCost float64
+}
+
+func (s *DailyCheckinService) operationsOverviewUsageByDate(ctx context.Context, buckets []operationsDateBucket) (map[string]operationsUsageAggregate, error) {
+	query, args := buildUsageBucketAggregateQuery(buckets, "")
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate operations overview usage: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	aggregates := map[string]operationsUsageAggregate{}
+	for rows.Next() {
+		var date string
+		var userID int64
+		var userRequests int64
+		var userActualCost float64
+		if err := rows.Scan(&date, &userID, &userRequests, &userActualCost); err != nil {
+			return nil, fmt.Errorf("scan operations overview usage aggregate: %w", err)
+		}
+		aggregate := aggregates[date]
+		if aggregate.Users == nil {
+			aggregate.Users = map[int64]struct{}{}
+		}
+		aggregate.Users[userID] = struct{}{}
+		aggregate.Requests += userRequests
+		aggregate.ActualCost += userActualCost
+		aggregates[date] = aggregate
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate operations overview usage aggregate: %w", err)
+	}
+	return aggregates, nil
+}
+
+func (s *DailyCheckinService) operationsOverviewNewUsersByDate(ctx context.Context, buckets []operationsDateBucket) (map[string]map[int64]struct{}, error) {
+	query, args := buildNewUsersBucketQuery(buckets)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list operations overview new users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make(map[string]map[int64]struct{}, len(buckets))
+	for _, bucket := range buckets {
+		items[bucket.Date] = map[int64]struct{}{}
+	}
+	for rows.Next() {
+		var date string
+		var userID int64
+		if err := rows.Scan(&date, &userID); err != nil {
+			return nil, fmt.Errorf("scan operations overview new user: %w", err)
+		}
+		if items[date] == nil {
+			items[date] = map[int64]struct{}{}
+		}
+		items[date][userID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate operations overview new users: %w", err)
+	}
+	return items, nil
+}
+
+func newOperationsOverviewPoints(start, end time.Time) ([]OperationsOverviewPoint, map[string]int, []operationsDateBucket) {
+	points := make([]OperationsOverviewPoint, 0)
+	index := map[string]int{}
+	buckets := make([]operationsDateBucket, 0)
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		next := day.AddDate(0, 0, 1)
+		date := day.Format("2006-01-02")
+		index[date] = len(points)
+		points = append(points, OperationsOverviewPoint{Date: date})
+		buckets = append(buckets, operationsDateBucket{Date: date, Start: day, End: next})
+	}
+	return points, index, buckets
+}
+
+func buildNewUsersBucketQuery(buckets []operationsDateBucket) (string, []any) {
+	if len(buckets) == 0 {
+		return `
+			SELECT '' AS bucket_date, id
+			FROM users
+			WHERE 1 = 0
+		`, nil
+	}
+	parts := make([]string, 0, len(buckets))
+	args := make([]any, 0, len(buckets)*3)
+	for _, bucket := range buckets {
+		dateArg := len(args) + 1
+		startArg := dateArg + 1
+		endArg := dateArg + 2
+		parts = append(parts, fmt.Sprintf(`
+			SELECT CAST($%d AS TEXT) AS bucket_date, id
+			FROM users
+			WHERE created_at >= $%d AND created_at < $%d AND deleted_at IS NULL
+		`, dateArg, startArg, endArg))
+		args = append(args, bucket.Date, bucket.Start, bucket.End)
+	}
+	return strings.Join(parts, "\nUNION ALL\n"), args
+}
+
+func buildUsageBucketAggregateQuery(buckets []operationsDateBucket, extraWhere string) (string, []any) {
+	if len(buckets) == 0 {
+		return `
+			SELECT '' AS bucket_date, user_id, COUNT(*), COALESCE(SUM(actual_cost), 0)
+			FROM usage_logs
+			WHERE 1 = 0
+			GROUP BY user_id
+		`, nil
+	}
+	parts := make([]string, 0, len(buckets))
+	args := make([]any, 0, len(buckets)*3)
+	for _, bucket := range buckets {
+		dateArg := len(args) + 1
+		startArg := dateArg + 1
+		endArg := dateArg + 2
+		parts = append(parts, fmt.Sprintf(`
+			SELECT CAST($%d AS TEXT) AS bucket_date, user_id, COUNT(*), COALESCE(SUM(actual_cost), 0)
+			FROM usage_logs
+			WHERE created_at >= $%d AND created_at < $%d%s
+			GROUP BY user_id
+		`, dateArg, startArg, endArg, extraWhere))
+		args = append(args, bucket.Date, bucket.Start, bucket.End)
+	}
+	return strings.Join(parts, "\nUNION ALL\n"), args
+}
+
+func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, start, end time.Time) (*DailyCheckinAnalyticsResponse, error) {
+	if s == nil || s.db == nil {
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
+	}
+	settings, err := s.settings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	checkins, err := s.listCheckinsForAnalytics(ctx, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	qualifiedByDate, err := s.qualifiedUsersByDate(ctx, start, end, settings)
+	if err != nil {
+		return nil, err
+	}
+	byDate := make(map[string][]DailyCheckinAdminRecord)
+	distribution := map[string]*DailyCheckinRewardDistributionItem{}
+	streakUserSet := map[int64]struct{}{}
+	var totalCheckins, fallbackCount, critCount int64
+	var rewardUSD float64
+	for _, item := range checkins {
+		byDate[item.Date] = append(byDate[item.Date], item)
+		totalCheckins++
+		rewardUSD += item.RewardAmount
+		label := rewardDistributionLabel(item.RewardAmount)
+		bucket := distribution[label]
+		if bucket == nil {
+			bucket = &DailyCheckinRewardDistributionItem{Label: label}
+			distribution[label] = bucket
+		}
+		bucket.Count++
+		bucket.RewardUSD += item.RewardAmount
+		if item.RewardMetadata != nil {
+			if item.RewardMetadata.BudgetFallback {
+				fallbackCount++
+			}
+			if item.RewardMetadata.CritHit {
+				critCount++
+			}
+			if item.RewardMetadata.StreakDays > 1 {
+				streakUserSet[item.UserID] = struct{}{}
+			}
+		}
+	}
+
+	points := make([]DailyCheckinAnalyticsPoint, 0)
+	qualifiedUserSet := map[int64]struct{}{}
+	checkinUserSet := map[int64]struct{}{}
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		date := day.Format("2006-01-02")
+		qualifiedIDs := qualifiedByDate[date]
+		qualifiedUsers := int64(len(qualifiedIDs))
+		for userID := range qualifiedIDs {
+			qualifiedUserSet[userID] = struct{}{}
+		}
+		records := byDate[date]
+		point := DailyCheckinAnalyticsPoint{
+			Date:           date,
+			QualifiedUsers: qualifiedUsers,
+			CheckinUsers:   int64(len(records)),
+		}
+		for _, item := range records {
+			checkinUserSet[item.UserID] = struct{}{}
+			point.RewardUSD += item.RewardAmount
+			if item.RewardMetadata != nil {
+				if item.RewardMetadata.BudgetFallback {
+					point.FallbackCount++
+				}
+				if item.RewardMetadata.CritHit {
+					point.CritCount++
+				}
+				if item.RewardMetadata.StreakDays > 1 {
+					point.StreakUserCount++
+				}
+			}
+		}
+		if point.CheckinUsers > 0 {
+			point.AverageRewardUSD = point.RewardUSD / float64(point.CheckinUsers)
+		}
+		if point.QualifiedUsers > 0 {
+			point.CheckinRate = float64(point.CheckinUsers) / float64(point.QualifiedUsers)
+		}
+		points = append(points, point)
+	}
+
+	now := timezone.Now()
+	todayStart := timezone.StartOfDay(now)
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	monthStart := timezone.StartOfMonth(now)
+	nextMonthStart := monthStart.AddDate(0, 1, 0)
+	_, _, todayReward, err := aggregateCheckinStats(ctx, s.db, todayStart.Format("2006-01-02"), tomorrowStart.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	_, _, monthReward, err := aggregateCheckinStats(ctx, s.db, monthStart.Format("2006-01-02"), nextMonthStart.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+
+	summary := DailyCheckinAnalyticsSummary{
+		QualifiedUsers:      int64(len(qualifiedUserSet)),
+		CheckinUsers:        int64(len(checkinUserSet)),
+		StreakUsers:         int64(len(streakUserSet)),
+		RewardUSD:           rewardUSD,
+		DailyRemainingUSD:   remainingBudget(settings.DailyBudgetUSD, todayReward),
+		MonthlyRemainingUSD: remainingBudget(settings.MonthlyBudgetUSD, monthReward),
+	}
+	if summary.QualifiedUsers > 0 {
+		summary.CheckinRate = float64(summary.CheckinUsers) / float64(summary.QualifiedUsers)
+	}
+	if totalCheckins > 0 {
+		summary.AverageRewardUSD = rewardUSD / float64(totalCheckins)
+		summary.FallbackRate = float64(fallbackCount) / float64(totalCheckins)
+		summary.CritRate = float64(critCount) / float64(totalCheckins)
+	}
+	if summary.CheckinUsers > 0 {
+		summary.StreakUserRate = float64(summary.StreakUsers) / float64(summary.CheckinUsers)
+	}
+	if projected := projectedBudgetDays(points, summary.DailyRemainingUSD, summary.MonthlyRemainingUSD); projected != nil {
+		summary.ProjectedBudgetDays = projected
+	}
+
+	dist := make([]DailyCheckinRewardDistributionItem, 0, len(distribution))
+	for _, item := range distribution {
+		dist = append(dist, *item)
+	}
+	sortRewardDistribution(dist)
+	return &DailyCheckinAnalyticsResponse{Summary: summary, Points: points, RewardDistribution: dist}, nil
 }
 
 func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQuerier, userID int64) (*DailyCheckinStatus, error) {
@@ -861,6 +1330,196 @@ func aggregateCheckinStats(ctx context.Context, q dailyCheckinQuerier, startDate
 		return 0, 0, 0, fmt.Errorf("aggregate daily checkin stats: %w", err)
 	}
 	return count, users, reward, nil
+}
+
+func queryInt64List(ctx context.Context, q dailyCheckinQuerier, query string, args ...any) ([]int64, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *DailyCheckinService) countQualifiedUsers(ctx context.Context, start, end time.Time, settings *DailyCheckinSettings) (int64, []int64, error) {
+	userSet, err := s.qualifiedUsersForDate(ctx, start, end, settings)
+	if err != nil {
+		return 0, nil, err
+	}
+	ids := make([]int64, 0, len(userSet))
+	for userID := range userSet {
+		ids = append(ids, userID)
+	}
+	return int64(len(ids)), ids, nil
+}
+
+func (s *DailyCheckinService) qualifiedUsersForDate(ctx context.Context, start, end time.Time, settings *DailyCheckinSettings) (map[int64]struct{}, error) {
+	required := DailyCheckinRequiredUsageDefault
+	usageScope := DailyCheckinUsageScopeActualCost
+	if settings != nil {
+		required = settings.RequiredUsageUSD
+		usageScope = settings.UsageScope
+	}
+	query := `
+		SELECT user_id
+		FROM usage_logs
+		WHERE created_at >= $1 AND created_at < $2
+	`
+	args := []any{start, end}
+	if normalizeDailyCheckinUsageScope(usageScope) == DailyCheckinUsageScopeBalanceOnly {
+		query += ` AND subscription_id IS NULL`
+	}
+	query += `
+		GROUP BY user_id
+		HAVING COALESCE(SUM(actual_cost), 0) >= $3
+	`
+	args = append(args, required)
+	ids, err := queryInt64List(ctx, s.db, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("count qualified daily checkin users: %w", err)
+	}
+	users := make(map[int64]struct{}, len(ids))
+	for _, userID := range ids {
+		users[userID] = struct{}{}
+	}
+	return users, nil
+}
+
+func (s *DailyCheckinService) qualifiedUsersByDate(ctx context.Context, start, end time.Time, settings *DailyCheckinSettings) (map[string]map[int64]struct{}, error) {
+	required := DailyCheckinRequiredUsageDefault
+	usageScope := DailyCheckinUsageScopeActualCost
+	if settings != nil {
+		required = settings.RequiredUsageUSD
+		usageScope = settings.UsageScope
+	}
+	_, _, buckets := newOperationsOverviewPoints(start, end)
+	extraWhere := ""
+	if normalizeDailyCheckinUsageScope(usageScope) == DailyCheckinUsageScopeBalanceOnly {
+		extraWhere = " AND subscription_id IS NULL"
+	}
+	query, args := buildUsageBucketAggregateQuery(buckets, extraWhere)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate qualified daily checkin users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	qualified := make(map[string]map[int64]struct{}, len(buckets))
+	for _, bucket := range buckets {
+		qualified[bucket.Date] = map[int64]struct{}{}
+	}
+	for rows.Next() {
+		var date string
+		var userID int64
+		var requestCount int64
+		var actualCost float64
+		if err := rows.Scan(&date, &userID, &requestCount, &actualCost); err != nil {
+			return nil, fmt.Errorf("scan qualified daily checkin users: %w", err)
+		}
+		if actualCost >= required {
+			if qualified[date] == nil {
+				qualified[date] = map[int64]struct{}{}
+			}
+			qualified[date][userID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate qualified daily checkin users: %w", err)
+	}
+	return qualified, nil
+}
+
+func (s *DailyCheckinService) listCheckinsForAnalytics(ctx context.Context, startDate, endDate string) ([]DailyCheckinAdminRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.user_id, COALESCE(u.username, ''), COALESCE(u.email, ''), c.checkin_date,
+		       c.reward_amount, c.qualified_usage_usd, c.reward_metadata, c.created_at
+		FROM user_checkins c
+		JOIN users u ON u.id = c.user_id
+		WHERE u.deleted_at IS NULL AND c.checkin_date >= $1 AND c.checkin_date < $2
+		ORDER BY c.checkin_date ASC, c.id ASC
+	`, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("list daily checkin analytics records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]DailyCheckinAdminRecord, 0)
+	for rows.Next() {
+		var item DailyCheckinAdminRecord
+		if err := rows.Scan(&item.ID, &item.UserID, &item.Username, &item.Email, &item.Date, &item.RewardAmount, &item.QualifiedUsageUSD, newRewardMetadataScanner(&item.RewardMetadata), &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan daily checkin analytics record: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daily checkin analytics records: %w", err)
+	}
+	return items, nil
+}
+
+func rewardDistributionLabel(amount float64) string {
+	switch {
+	case amount < 1:
+		return "<$1"
+	case amount < 3:
+		return "$1-$2.99"
+	case amount < 5:
+		return "$3-$4.99"
+	default:
+		return "$5+"
+	}
+}
+
+func projectedBudgetDays(points []DailyCheckinAnalyticsPoint, dailyRemaining, monthlyRemaining float64) *float64 {
+	if monthlyRemaining <= 0 && dailyRemaining <= 0 {
+		return nil
+	}
+	start := len(points) - 7
+	if start < 0 {
+		start = 0
+	}
+	var total float64
+	var days int
+	for _, point := range points[start:] {
+		total += point.RewardUSD
+		days++
+	}
+	if days == 0 || total <= 0 {
+		return nil
+	}
+	avgDaily := total / float64(days)
+	remaining := monthlyRemaining
+	if remaining <= 0 {
+		remaining = dailyRemaining
+	}
+	if remaining <= 0 {
+		return nil
+	}
+	value := math.Round((remaining/avgDaily)*10) / 10
+	return &value
+}
+
+func sortRewardDistribution(items []DailyCheckinRewardDistributionItem) {
+	order := map[string]int{"<$1": 0, "$1-$2.99": 1, "$3-$4.99": 2, "$5+": 3}
+	sort.Slice(items, func(i, j int) bool {
+		left, okLeft := order[items[i].Label]
+		right, okRight := order[items[j].Label]
+		if okLeft && okRight {
+			return left < right
+		}
+		return items[i].Label < items[j].Label
+	})
 }
 
 func remainingBudget(limit, used float64) float64 {

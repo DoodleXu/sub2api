@@ -6,16 +6,22 @@ import OperationsCenterView from '../OperationsCenterView.vue'
 
 const {
   getSettings,
+  getOperationsOverview,
+  getDailyCheckinAnalytics,
   getDailyCheckinStats,
   listDailyCheckinRecords,
   updateDailyCheckinSettings,
+  exportOperationsData,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
   getSettings: vi.fn(),
+  getOperationsOverview: vi.fn(),
+  getDailyCheckinAnalytics: vi.fn(),
   getDailyCheckinStats: vi.fn(),
   listDailyCheckinRecords: vi.fn(),
   updateDailyCheckinSettings: vi.fn(),
+  exportOperationsData: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -28,9 +34,12 @@ vi.mock('@/api/admin/settings', () => ({
 
 vi.mock('@/api/admin/operations', () => ({
   default: {
+    getOperationsOverview,
+    getDailyCheckinAnalytics,
     getDailyCheckinStats,
     listDailyCheckinRecords,
     updateDailyCheckinSettings,
+    exportOperationsData,
   },
 }))
 
@@ -132,6 +141,50 @@ const baseStatsResponse = {
   user_monthly_limit_usd: 0,
 }
 
+const baseOverviewResponse = {
+  summary: {
+    dau: 2,
+    new_users: 1,
+    request_users: 2,
+    requests: 8,
+    actual_cost: 3.5,
+  },
+  points: [
+    { date: '2026-06-15', dau: 2, new_users: 1, request_users: 2, requests: 8, actual_cost: 3.5 },
+  ],
+}
+
+const baseAnalyticsResponse = {
+  summary: {
+    qualified_users: 2,
+    checkin_users: 1,
+    streak_users: 0,
+    checkin_rate: 0.5,
+    reward_usd: 1,
+    avg_reward_usd: 1,
+    fallback_rate: 0,
+    crit_rate: 0,
+    streak_user_rate: 0,
+    daily_remaining_usd: 0,
+    monthly_remaining_usd: 0,
+    projected_budget_days: null,
+  },
+  points: [
+    {
+      date: '2026-06-15',
+      qualified_users: 2,
+      checkin_users: 1,
+      checkin_rate: 0.5,
+      reward_usd: 1,
+      avg_reward_usd: 1,
+      fallback_count: 0,
+      crit_count: 0,
+      streak_user_count: 0,
+    },
+  ],
+  reward_distribution: [],
+}
+
 function mountView() {
   return mount(OperationsCenterView, {
     global: {
@@ -140,6 +193,8 @@ function mountView() {
         Toggle: ToggleStub,
         Select: SelectStub,
         Icon: true,
+        OperationsOverviewTrendChart: true,
+        DailyCheckinTrendChart: true,
       },
     },
   })
@@ -149,9 +204,12 @@ describe('OperationsCenterView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getSettings.mockResolvedValue({ ...baseSettingsResponse })
+    getOperationsOverview.mockResolvedValue({ ...baseOverviewResponse })
+    getDailyCheckinAnalytics.mockResolvedValue({ ...baseAnalyticsResponse })
     getDailyCheckinStats.mockResolvedValue({ ...baseStatsResponse })
     listDailyCheckinRecords.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
     updateDailyCheckinSettings.mockResolvedValue({ ...baseSettingsResponse })
+    exportOperationsData.mockResolvedValue(new Blob(['date,dau\n2026-06-15,2\n'], { type: 'text/csv' }))
   })
 
   it('preserves decimal reward tier amounts when saving', async () => {
@@ -174,5 +232,83 @@ describe('OperationsCenterView', () => {
         daily_checkin_reward_tiers: [{ min_usd: 0.5, max_usd: 0.75, probability_percent: 100 }],
       }),
     )
+  })
+
+  it('reloads overview, analytics, and records when the date range changes', async () => {
+    const wrapper = mountView()
+
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last7Days')?.trigger('click')
+    await flushPromises()
+
+    expect(getOperationsOverview).toHaveBeenCalledTimes(2)
+    expect(getDailyCheckinAnalytics).toHaveBeenCalledTimes(2)
+    expect(listDailyCheckinRecords).toHaveBeenCalledTimes(2)
+    expect(getOperationsOverview).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: expect.any(String), end_date: expect.any(String), timezone: expect.any(String) }))
+    expect(listDailyCheckinRecords).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: expect.any(String), end_date: expect.any(String), timezone: expect.any(String) }))
+  })
+
+  it('uses the same record query for listing and exporting check-in records', async () => {
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:records')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    let downloadedFilename = ''
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedFilename = this.download
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.records')?.trigger('click')
+    await wrapper.get('input[aria-label="admin.operations.dateFrom"]').setValue('2026-06-10')
+    await wrapper.get('input[aria-label="admin.operations.dateTo"]').setValue('2026-06-12')
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.filters')?.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.exportRecords')?.trigger('click')
+    await flushPromises()
+
+    expect(listDailyCheckinRecords).toHaveBeenLastCalledWith(expect.objectContaining({
+      date_from: '2026-06-10',
+      date_to: '2026-06-12',
+      start_date: expect.any(String),
+      end_date: expect.any(String),
+      timezone: expect.any(String),
+    }))
+    expect(exportOperationsData).toHaveBeenCalledWith(expect.objectContaining({
+      dataset: 'daily_checkin_records',
+      date_from: '2026-06-10',
+      date_to: '2026-06-12',
+      start_date: expect.any(String),
+      end_date: expect.any(String),
+      timezone: expect.any(String),
+    }))
+    expect(click).toHaveBeenCalled()
+    expect(downloadedFilename).toBe('daily_checkin_records_2026-06-10_to_2026-06-12.csv')
+
+    click.mockRestore()
+    createObjectURL.mockRestore()
+    revokeObjectURL.mockRestore()
+  })
+
+  it('exports the current overview dataset', async () => {
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:operations')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.exportOverview')?.trigger('click')
+    await flushPromises()
+
+    expect(exportOperationsData).toHaveBeenCalledWith(expect.objectContaining({ dataset: 'overview_daily' }))
+    expect(click).toHaveBeenCalled()
+    expect(showSuccess).toHaveBeenCalledWith('admin.operations.exportSuccess')
+
+    click.mockRestore()
+    createObjectURL.mockRestore()
+    revokeObjectURL.mockRestore()
   })
 })

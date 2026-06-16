@@ -72,6 +72,89 @@ export interface DailyCheckinRecordQuery {
   streak_days?: number
 }
 
+export interface OperationsDateRangeQuery {
+  start_date?: string
+  end_date?: string
+  timezone?: string
+}
+
+export interface OperationsOverviewPoint {
+  date: string
+  dau: number
+  new_users: number
+  request_users: number
+  requests: number
+  actual_cost: number
+}
+
+export interface OperationsOverviewSummary {
+  dau: number
+  new_users: number
+  request_users: number
+  requests: number
+  actual_cost: number
+}
+
+export interface OperationsOverviewResponse {
+  summary: OperationsOverviewSummary
+  points: OperationsOverviewPoint[]
+}
+
+export interface DailyCheckinAnalyticsPoint {
+  date: string
+  qualified_users: number
+  checkin_users: number
+  checkin_rate: number
+  reward_usd: number
+  avg_reward_usd: number
+  fallback_count: number
+  crit_count: number
+  streak_user_count: number
+}
+
+export interface DailyCheckinRewardDistributionItem {
+  label: string
+  count: number
+  reward_usd: number
+}
+
+export interface DailyCheckinAnalyticsSummary {
+  qualified_users: number
+  checkin_users: number
+  streak_users: number
+  checkin_rate: number
+  reward_usd: number
+  avg_reward_usd: number
+  fallback_rate: number
+  crit_rate: number
+  streak_user_rate: number
+  daily_remaining_usd: number
+  monthly_remaining_usd: number
+  projected_budget_days?: number | null
+}
+
+export interface DailyCheckinAnalyticsResponse {
+  summary: DailyCheckinAnalyticsSummary
+  points: DailyCheckinAnalyticsPoint[]
+  reward_distribution: DailyCheckinRewardDistributionItem[]
+}
+
+export type OperationsExportDataset = 'overview_daily' | 'daily_checkin_summary' | 'daily_checkin_records'
+
+export type OperationsExportQuery = OperationsDateRangeQuery & DailyCheckinRecordQuery & {
+  dataset: OperationsExportDataset
+}
+
+export async function getOperationsOverview(query: OperationsDateRangeQuery = {}): Promise<OperationsOverviewResponse> {
+  const { data } = await apiClient.get<OperationsOverviewResponse>('/admin/operations/overview', { params: cleanParams(query) })
+  return data
+}
+
+export async function getDailyCheckinAnalytics(query: OperationsDateRangeQuery = {}): Promise<DailyCheckinAnalyticsResponse> {
+  const { data } = await apiClient.get<DailyCheckinAnalyticsResponse>('/admin/operations/daily-checkin/analytics', { params: cleanParams(query) })
+  return data
+}
+
 export async function getDailyCheckinStats(): Promise<DailyCheckinAdminStats> {
   const { data } = await apiClient.get<DailyCheckinAdminStats>('/admin/operations/daily-checkin/stats')
   return data
@@ -83,15 +166,29 @@ export async function updateDailyCheckinSettings(settings: DailyCheckinSettingsU
 }
 
 export async function listDailyCheckinRecords(query: DailyCheckinRecordQuery = {}): Promise<DailyCheckinRecordListResponse> {
-  const params = Object.fromEntries(
-    Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== '')
-  )
-  const { data } = await apiClient.get<DailyCheckinRecordListResponse>('/admin/operations/daily-checkin/records', { params })
+  const { data } = await apiClient.get<DailyCheckinRecordListResponse>('/admin/operations/daily-checkin/records', { params: cleanParams(query) })
   return data
 }
 
+export async function exportOperationsData(query: OperationsExportQuery): Promise<Blob> {
+  const { data } = await apiClient.get<Blob>('/admin/operations/export', {
+    params: cleanParams(query),
+    responseType: 'blob',
+  })
+  return data
+}
+
+function cleanParams(query: object): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  )
+}
+
 export default {
+  getOperationsOverview,
+  getDailyCheckinAnalytics,
   getDailyCheckinStats,
   updateDailyCheckinSettings,
   listDailyCheckinRecords,
+  exportOperationsData,
 }

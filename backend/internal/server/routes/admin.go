@@ -74,6 +74,9 @@ func RegisterAdminRoutes(
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
 
+		// 生图管理
+		registerImageGenerationRoutes(admin, h)
+
 		// 用户属性管理
 		registerUserAttributeRoutes(admin, h)
 
@@ -130,6 +133,18 @@ func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
 	}
+}
+
+func registerImageGenerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	images := admin.Group("/image-generations")
+	{
+		images.GET("", h.Admin.ImageGeneration.List)
+		images.GET("/stats/daily", h.Admin.ImageGeneration.DailyStats)
+		images.GET("/assets/:asset_id", h.Admin.ImageGeneration.GetAsset)
+		images.GET("/:id", h.Admin.ImageGeneration.Get)
+	}
+	admin.GET("/settings/image-archive-storage", h.Admin.ImageGeneration.GetStorageConfig)
+	admin.PUT("/settings/image-archive-storage", h.Admin.ImageGeneration.UpdateStorageConfig)
 }
 
 func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
@@ -220,8 +235,11 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 func registerOperationsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	operations := admin.Group("/operations")
 	{
+		operations.GET("/overview", h.Admin.Setting.GetOperationsOverview)
+		operations.GET("/export", h.Admin.Setting.ExportOperationsData)
 		checkin := operations.Group("/daily-checkin")
 		{
+			checkin.GET("/analytics", h.Admin.Setting.GetDailyCheckinAnalytics)
 			checkin.GET("/stats", h.Admin.Setting.GetDailyCheckinStats)
 			checkin.PUT("/settings", h.Admin.Setting.UpdateDailyCheckinSettings)
 			checkin.GET("/records", h.Admin.Setting.ListDailyCheckinRecords)

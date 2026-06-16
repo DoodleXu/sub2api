@@ -76,8 +76,11 @@ func newDailyCheckinTestService(t *testing.T, values map[string]string) (*DailyC
 	_, err = db.Exec(`
 		CREATE TABLE users (
 			id INTEGER PRIMARY KEY,
+			username TEXT,
+			email TEXT,
 			balance REAL NOT NULL DEFAULT 0,
 			total_recharged REAL NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP,
 			deleted_at TIMESTAMP
 		);
@@ -140,6 +143,101 @@ func TestDailyCheckinRequiresOneDollarUsage(t *testing.T) {
 	require.False(t, status.Eligible)
 	require.False(t, status.CheckedIn)
 	require.InDelta(t, 0.99, status.TodayUsageUSD, 0.0001)
+}
+
+func TestOperationsOverviewAggregatesDailyActivity(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	ctx := context.Background()
+	start := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 3)
+
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, balance, total_recharged, created_at, updated_at)
+		VALUES
+			(1, 'alpha', 'alpha@example.com', 0, 0, ?, ?),
+			(2, 'beta', 'beta@example.com', 0, 0, ?, ?)
+	`, start.Add(2*time.Hour), start, start.AddDate(0, 0, -2), start)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO usage_logs (user_id, actual_cost, created_at)
+		VALUES
+			(1, 1.25, ?),
+			(1, 0.75, ?),
+			(2, 2.00, ?),
+			(2, 3.00, ?)
+	`, start.Add(3*time.Hour), start.Add(4*time.Hour), start.Add(6*time.Hour), start.AddDate(0, 0, 1).Add(1*time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetOperationsOverview(ctx, start, end)
+	require.NoError(t, err)
+	require.Len(t, res.Points, 3)
+	require.Equal(t, int64(2), res.Points[0].DAU)
+	require.Equal(t, int64(1), res.Points[0].NewUsers)
+	require.Equal(t, int64(3), res.Points[0].Requests)
+	require.InDelta(t, 4.0, res.Points[0].ActualCost, 0.0001)
+	require.Equal(t, int64(0), res.Summary.DAU)
+	require.Equal(t, int64(2), res.Summary.RequestUsers)
+	require.Equal(t, int64(1), res.Summary.NewUsers)
+	require.Equal(t, int64(4), res.Summary.Requests)
+	require.InDelta(t, 7.0, res.Summary.ActualCost, 0.0001)
+}
+
+func TestDailyCheckinAnalyticsSummarizesQualityAndRules(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD:  "1",
+		SettingKeyDailyCheckinRewardMinUSD:      "1",
+		SettingKeyDailyCheckinRewardMaxUSD:      "3",
+		SettingKeyDailyCheckinMonthlyBudgetUSD:  "10",
+		SettingKeyDailyCheckinDailyBudgetUSD:    "5",
+		SettingKeyDailyCheckinBudgetFallbackUSD: "0.01",
+	})
+	ctx := context.Background()
+	start := time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 3)
+
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, balance, total_recharged, created_at, updated_at)
+		VALUES
+			(1, 'alpha', 'alpha@example.com', 0, 0, ?, ?),
+			(2, 'beta', 'beta@example.com', 0, 0, ?, ?),
+			(3, 'gamma', 'gamma@example.com', 0, 0, ?, ?)
+	`, start, start, start, start, start, start)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO usage_logs (user_id, actual_cost, created_at)
+		VALUES
+			(1, 1.50, ?),
+			(2, 0.50, ?),
+			(3, 2.00, ?)
+	`, start.Add(1*time.Hour), start.Add(2*time.Hour), start.AddDate(0, 0, 1).Add(1*time.Hour))
+	require.NoError(t, err)
+	metaCrit := `{"base_reward_amount":1,"streak_days":2,"streak_multiplier":1.5,"crit_hit":true,"crit_multiplier":2,"final_reward_amount":1}`
+	metaFallback := `{"base_reward_amount":0.01,"budget_fallback":true,"streak_days":1,"streak_multiplier":1,"crit_hit":false,"crit_multiplier":1,"final_reward_amount":0.01}`
+	_, err = db.Exec(`
+		INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, reward_metadata, created_at)
+		VALUES
+			(1, ?, 1.00, 1.50, ?, ?),
+			(3, ?, 0.01, 2.00, ?, ?)
+	`, start.Format("2006-01-02"), metaCrit, start.Add(3*time.Hour), start.AddDate(0, 0, 1).Format("2006-01-02"), metaFallback, start.AddDate(0, 0, 1).Add(3*time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetDailyCheckinAnalytics(ctx, start, end)
+	require.NoError(t, err)
+	require.Len(t, res.Points, 3)
+	require.Equal(t, int64(1), res.Points[0].QualifiedUsers)
+	require.Equal(t, int64(1), res.Points[0].CheckinUsers)
+	require.Equal(t, int64(1), res.Points[0].CritCount)
+	require.Equal(t, int64(1), res.Points[0].StreakUserCount)
+	require.Equal(t, int64(1), res.Points[1].FallbackCount)
+	require.Equal(t, int64(2), res.Summary.QualifiedUsers)
+	require.Equal(t, int64(2), res.Summary.CheckinUsers)
+	require.Equal(t, int64(1), res.Summary.StreakUsers)
+	require.InDelta(t, 1.0, res.Summary.CheckinRate, 0.0001)
+	require.InDelta(t, 1.01, res.Summary.RewardUSD, 0.0001)
+	require.InDelta(t, 0.5, res.Summary.FallbackRate, 0.0001)
+	require.InDelta(t, 0.5, res.Summary.CritRate, 0.0001)
+	require.InDelta(t, 0.5, res.Summary.StreakUserRate, 0.0001)
+	require.NotEmpty(t, res.RewardDistribution)
 }
 
 func TestDailyCheckinCanBeDisabled(t *testing.T) {

@@ -6,16 +6,29 @@
           <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ t('admin.operations.title') }}</h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.operations.description') }}</p>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
-          <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
-          {{ t('admin.operations.refresh') }}
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            v-for="option in rangeOptions"
+            :key="option.days"
+            type="button"
+            class="btn btn-secondary btn-sm"
+            :class="rangeDays === option.days ? 'border-blue-500 text-blue-600 dark:text-blue-400' : ''"
+            @click="setRange(option.days)"
+          >
+            {{ option.label }}
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
+            <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
+            {{ t('admin.operations.refresh') }}
+          </button>
+        </div>
       </div>
 
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <div v-for="metric in metrics" :key="metric.label" class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ metric.label }}</p>
           <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ metric.value }}</p>
+          <p v-if="metric.hint" class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ metric.hint }}</p>
         </div>
       </div>
 
@@ -34,44 +47,130 @@
         </nav>
       </div>
 
-      <section v-if="activeTab === 'overview'" class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
-          <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.overview') }}</h2>
-          <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.todayCheckins') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(stats?.today_checkins) }}</div>
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.todayReward') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.today_reward_usd) }}</div>
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthReward') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.month_reward_usd) }}</div>
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.averageReward') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.average_reward_usd) }}</div>
+      <section v-if="activeTab === 'overview'" class="space-y-4">
+        <OperationsOverviewTrendChart :points="overview?.points || []" :loading="loadingOverview" />
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.activitySummary') }}</h2>
+            <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.apiDau') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(overview?.summary.dau) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.newUsers') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(overview?.summary.new_users) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.requests') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(overview?.summary.requests) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.actualCost') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(overview?.summary.actual_cost) }}</div>
+            </div>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.exportData') }}</h2>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="exporting" @click="exportDataset('overview_daily')">
+                {{ exporting ? t('admin.operations.exporting') : t('admin.operations.exportOverview') }}
+              </button>
+            </div>
+            <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.operations.exportOverviewHint') }}</p>
           </div>
         </div>
+      </section>
+
+      <section v-else-if="activeTab === 'checkin'" class="space-y-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.qualifiedUsers') }}</p>
+            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(checkinAnalytics?.summary.qualified_users) }}</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.checkinUsers') }}</p>
+            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatCount(checkinAnalytics?.summary.checkin_users) }}</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.checkinRate') }}</p>
+            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.checkin_rate) }}</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.projectedBudgetDays') }}</p>
+            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatDays(checkinAnalytics?.summary.projected_budget_days) }}</p>
+          </div>
+        </div>
+
+        <DailyCheckinTrendChart :points="checkinAnalytics?.points || []" :loading="loadingAnalytics" />
+
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.checkinFunnel') }}</h2>
+            <div class="mt-4 space-y-3">
+              <div v-for="item in funnelItems" :key="item.label">
+                <div class="mb-1 flex justify-between text-sm">
+                  <span class="text-gray-500 dark:text-gray-400">{{ item.label }}</span>
+                  <span class="font-medium text-gray-900 dark:text-white">{{ item.value }}</span>
+                </div>
+                <div class="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                  <div class="h-full rounded-full bg-blue-500" :style="{ width: item.width }"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.rewardBudget') }}</h2>
+            <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.todayReward') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.today_reward_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.dailyRemaining') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.daily_budget_usd, stats?.daily_remaining_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthReward') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.month_reward_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthlyRemaining') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.monthly_budget_usd, stats?.monthly_remaining_usd) }}</div>
+            </div>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.ruleEffect') }}</h2>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="exporting" @click="exportDataset('daily_checkin_summary')">
+                {{ t('admin.operations.exportSummary') }}
+              </button>
+            </div>
+            <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.averageReward') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(checkinAnalytics?.summary.avg_reward_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.fallbackRate') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.fallback_rate) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.critRate') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.crit_rate) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.streakUserRate') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.streak_user_rate) }}</div>
+            </div>
+          </div>
+        </div>
+
         <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
-          <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.rules') }}</h2>
-          <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.dailyRemaining') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.daily_budget_usd, stats?.daily_remaining_usd) }}</div>
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthlyRemaining') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.monthly_budget_usd, stats?.monthly_remaining_usd) }}</div>
-            <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.userMonthlyLimit') }}</div>
-            <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.user_monthly_limit_usd) }}</div>
+          <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.rewardDistribution') }}</h2>
+          <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div v-for="item in checkinAnalytics?.reward_distribution || []" :key="item.label" class="border-l-2 border-blue-500 pl-3">
+              <p class="text-xs text-gray-500 dark:text-gray-400">{{ item.label }}</p>
+              <p class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ formatCount(item.count) }} / {{ formatUSD(item.reward_usd) }}</p>
+            </div>
+            <p v-if="!(checkinAnalytics?.reward_distribution || []).length" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.operations.noTrendData') }}</p>
           </div>
         </div>
       </section>
 
       <section v-else-if="activeTab === 'records'" class="space-y-4">
         <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-7">
             <input v-model="recordFilters.user" class="input" :placeholder="t('admin.operations.userSearch')" />
             <input v-model="recordFilters.date_from" class="input" type="date" :aria-label="t('admin.operations.dateFrom')" />
             <input v-model="recordFilters.date_to" class="input" type="date" :aria-label="t('admin.operations.dateTo')" />
             <input v-model.number="recordFilters.reward_min" class="input" type="number" min="0" step="0.01" :placeholder="t('admin.operations.rewardMin')" />
             <input v-model.number="recordFilters.reward_max" class="input" type="number" min="0" step="0.01" :placeholder="t('admin.operations.rewardMax')" />
             <Select v-model="recordFilters.crit_hit" :options="critFilterOptions" />
-            <input v-model.number="recordFilters.streak_days" class="input md:col-span-1" type="number" min="1" step="1" :placeholder="t('admin.operations.minStreakDays')" />
+            <input v-model.number="recordFilters.streak_days" class="input" type="number" min="1" step="1" :placeholder="t('admin.operations.minStreakDays')" />
             <button type="button" class="btn btn-secondary md:w-fit" @click="applyRecordFilters">{{ t('admin.operations.filters') }}</button>
+            <button type="button" class="btn btn-secondary md:w-fit" :disabled="exporting" @click="exportDataset('daily_checkin_records')">
+              {{ exporting ? t('admin.operations.exporting') : t('admin.operations.exportRecords') }}
+            </button>
           </div>
         </div>
 
@@ -259,9 +358,17 @@ import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import { useAppStore } from '@/stores'
 import settingsAPI, { type DailyCheckinAdminStats, type DailyCheckinRewardTier, type DailyCheckinStreakMultiplier } from '@/api/admin/settings'
-import operationsAPI, { type DailyCheckinAdminRecord, type DailyCheckinSettingsUpdateRequest } from '@/api/admin/operations'
+import operationsAPI, {
+  type DailyCheckinAdminRecord,
+  type DailyCheckinAnalyticsResponse,
+  type DailyCheckinSettingsUpdateRequest,
+  type OperationsExportDataset,
+  type OperationsOverviewResponse,
+} from '@/api/admin/operations'
+import OperationsOverviewTrendChart from './operations/OperationsOverviewTrendChart.vue'
+import DailyCheckinTrendChart from './operations/DailyCheckinTrendChart.vue'
 
-type TabKey = 'overview' | 'records' | 'rules'
+type TabKey = 'overview' | 'checkin' | 'records' | 'rules'
 
 interface CheckinRuleForm {
   daily_checkin_enabled: boolean
@@ -289,7 +396,13 @@ const appStore = useAppStore()
 
 const activeTab = ref<TabKey>('overview')
 const loading = ref(false)
+const loadingOverview = ref(false)
+const loadingAnalytics = ref(false)
+const exporting = ref(false)
 const saving = ref(false)
+const rangeDays = ref(30)
+const overview = ref<OperationsOverviewResponse | null>(null)
+const checkinAnalytics = ref<DailyCheckinAnalyticsResponse | null>(null)
 const stats = ref<DailyCheckinAdminStats | null>(null)
 const records = ref<DailyCheckinAdminRecord[]>([])
 const totalRecords = ref(0)
@@ -329,8 +442,15 @@ const recordFilters = reactive({
 
 const tabs = computed(() => [
   { key: 'overview' as const, label: t('admin.operations.overview') },
+  { key: 'checkin' as const, label: t('admin.operations.checkinAnalysis') },
   { key: 'records' as const, label: t('admin.operations.records') },
   { key: 'rules' as const, label: t('admin.operations.rules') },
+])
+
+const rangeOptions = computed(() => [
+  { days: 7, label: t('admin.operations.last7Days') },
+  { days: 30, label: t('admin.operations.last30Days') },
+  { days: 90, label: t('admin.operations.last90Days') },
 ])
 
 const usageScopeOptions = computed(() => [
@@ -350,12 +470,25 @@ const critFilterOptions = computed(() => [
 ])
 
 const metrics = computed(() => [
-  { label: t('admin.operations.todayCheckins'), value: formatCount(stats.value?.today_checkins) },
-  { label: t('admin.operations.todayReward'), value: formatUSD(stats.value?.today_reward_usd) },
+  { label: t('admin.operations.apiDau'), value: formatCount(overview.value?.summary.dau), hint: t('admin.operations.apiDauHint') },
+  { label: t('admin.operations.newUsers'), value: formatCount(overview.value?.summary.new_users) },
+  { label: t('admin.operations.checkinRate'), value: formatPercent(checkinAnalytics.value?.summary.checkin_rate) },
   { label: t('admin.operations.monthReward'), value: formatUSD(stats.value?.month_reward_usd) },
-  { label: t('admin.operations.averageReward'), value: formatUSD(stats.value?.average_reward_usd) },
   { label: t('admin.operations.dailyRemaining'), value: formatBudget(stats.value?.daily_budget_usd, stats.value?.daily_remaining_usd) },
 ])
+
+const funnelItems = computed(() => {
+  const summary = checkinAnalytics.value?.summary
+  const qualified = Number(summary?.qualified_users || 0)
+  const checked = Number(summary?.checkin_users || 0)
+  const streak = Number(summary?.streak_users || 0)
+  const max = Math.max(qualified, checked, streak, 1)
+  return [
+    { label: t('admin.operations.qualifiedUsers'), value: formatCount(qualified), width: `${Math.round((qualified / max) * 100)}%` },
+    { label: t('admin.operations.checkinUsers'), value: formatCount(checked), width: `${Math.round((checked / max) * 100)}%` },
+    { label: t('admin.operations.streakUsers'), value: formatCount(streak), width: `${Math.round((streak / max) * 100)}%` },
+  ]
+})
 
 const rewardProbabilityTotal = computed(() =>
   form.daily_checkin_reward_tiers.reduce((sum, tier) => sum + (Number(tier.probability_percent) || 0), 0)
@@ -366,7 +499,15 @@ function formatUSD(value: number | undefined | null): string {
 }
 
 function formatCount(value: number | undefined | null): string {
-  return String(Number(value || 0))
+  return Number(value || 0).toLocaleString()
+}
+
+function formatPercent(value: number | undefined | null): string {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`
+}
+
+function formatDays(value: number | undefined | null): string {
+  return value && value > 0 ? t('admin.operations.daysValue', { count: value }) : '-'
 }
 
 function formatMultiplier(value: number | undefined | null): string {
@@ -374,12 +515,51 @@ function formatMultiplier(value: number | undefined | null): string {
 }
 
 function formatBudget(limit: number | undefined | null, remaining: number | undefined | null): string {
-  return Number(limit || 0) > 0 ? `${formatUSD(remaining)} / ${formatUSD(limit)}` : 'Unlimited'
+  return Number(limit || 0) > 0 ? `${formatUSD(remaining)} / ${formatUSD(limit)}` : t('admin.operations.unlimited')
 }
 
 function formatDateTime(value: string): string {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function dateRangeQuery() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - rangeDays.value + 1)
+  return {
+    start_date: formatDateInput(start),
+    end_date: formatDateInput(end),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  }
+}
+
+function dailyCheckinRecordQuery() {
+  return {
+    ...dateRangeQuery(),
+    ...recordFilters,
+  }
+}
+
+function exportFileDateRange(dataset: OperationsExportDataset) {
+  const range = dateRangeQuery()
+  if (dataset === 'daily_checkin_records') {
+    return {
+      start: recordFilters.date_from || range.start_date,
+      end: recordFilters.date_to || range.end_date,
+    }
+  }
+  return {
+    start: range.start_date,
+    end: range.end_date,
+  }
+}
+
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function assignSettings(settings: Awaited<ReturnType<typeof settingsAPI.getSettings>>) {
@@ -410,13 +590,12 @@ function assignSettings(settings: Awaited<ReturnType<typeof settingsAPI.getSetti
 async function refreshAll() {
   loading.value = true
   try {
-    const [settings, nextStats] = await Promise.all([
-      settingsAPI.getSettings(),
-      operationsAPI.getDailyCheckinStats(),
+    await Promise.all([
+      loadSettingsAndStats(),
+      loadOverview(),
+      loadAnalytics(),
       loadRecords(),
     ])
-    assignSettings(settings)
-    stats.value = nextStats
   } catch (error) {
     console.error('Failed to load operations center:', error)
     appStore.showError(t('admin.operations.loadFailed'))
@@ -425,19 +604,77 @@ async function refreshAll() {
   }
 }
 
+async function loadSettingsAndStats() {
+  const [settings, nextStats] = await Promise.all([
+    settingsAPI.getSettings(),
+    operationsAPI.getDailyCheckinStats(),
+  ])
+  assignSettings(settings)
+  stats.value = nextStats
+}
+
+async function loadOverview() {
+  loadingOverview.value = true
+  try {
+    overview.value = await operationsAPI.getOperationsOverview(dateRangeQuery())
+  } finally {
+    loadingOverview.value = false
+  }
+}
+
+async function loadAnalytics() {
+  loadingAnalytics.value = true
+  try {
+    checkinAnalytics.value = await operationsAPI.getDailyCheckinAnalytics(dateRangeQuery())
+  } finally {
+    loadingAnalytics.value = false
+  }
+}
+
 async function loadRecords() {
   const result = await operationsAPI.listDailyCheckinRecords({
     page: recordPage.value,
     page_size: recordPageSize,
-    ...recordFilters,
+    ...dailyCheckinRecordQuery(),
   })
   records.value = result.items
   totalRecords.value = result.total
 }
 
+async function setRange(days: number) {
+  rangeDays.value = days
+  recordPage.value = 1
+  await Promise.all([loadOverview(), loadAnalytics(), loadRecords()])
+}
+
 async function applyRecordFilters() {
   recordPage.value = 1
   await loadRecords()
+}
+
+async function exportDataset(dataset: OperationsExportDataset) {
+  exporting.value = true
+  try {
+    const blob = await operationsAPI.exportOperationsData({
+      dataset,
+      ...(dataset === 'daily_checkin_records' ? dailyCheckinRecordQuery() : dateRangeQuery()),
+    })
+    const fileRange = exportFileDateRange(dataset)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${dataset}_${fileRange.start}_to_${fileRange.end}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+    appStore.showSuccess(t('admin.operations.exportSuccess'))
+  } catch (error) {
+    console.error('Failed to export operations data:', error)
+    appStore.showError(t('admin.operations.exportFailed'))
+  } finally {
+    exporting.value = false
+  }
 }
 
 function addRewardTier() {
@@ -513,7 +750,7 @@ async function saveRules() {
   try {
     const updated = await operationsAPI.updateDailyCheckinSettings(normalizedRules())
     assignSettings(updated)
-    stats.value = await operationsAPI.getDailyCheckinStats()
+    await Promise.all([loadSettingsAndStats(), loadAnalytics()])
     appStore.showSuccess(t('admin.operations.saved'))
   } catch (error) {
     console.error('Failed to save daily check-in rules:', error)
