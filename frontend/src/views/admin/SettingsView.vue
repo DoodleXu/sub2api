@@ -6699,7 +6699,12 @@
                         v-model="notificationConfig.transports.bark.title_template"
                         type="text"
                         class="input"
-                        :placeholder="t('admin.settings.notifications.barkTitleTemplatePlaceholder')"
+                        :placeholder="
+                          t(
+                            'admin.settings.notifications.barkTitleTemplatePlaceholder',
+                            notificationTemplateVariableParams,
+                          )
+                        "
                       />
                     </div>
                     <div>
@@ -6710,10 +6715,20 @@
                         v-model="notificationConfig.transports.bark.body_template"
                         rows="5"
                         class="input min-h-[132px]"
-                        :placeholder="t('admin.settings.notifications.barkBodyTemplatePlaceholder')"
+                        :placeholder="
+                          t(
+                            'admin.settings.notifications.barkBodyTemplatePlaceholder',
+                            notificationTemplateVariableParams,
+                          )
+                        "
                       ></textarea>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        {{ t("admin.settings.notifications.barkTemplateHint") }}
+                        {{
+                          t(
+                            "admin.settings.notifications.barkTemplateHint",
+                            notificationTemplateVariableParams,
+                          )
+                        }}
                       </p>
                     </div>
                   </div>
@@ -7452,6 +7467,22 @@ const notificationTransports: NotificationTransport[] = [
   "bark",
   "telegram",
 ];
+
+const notificationTemplateVariableNames = [
+  "monitor_name",
+  "provider",
+  "group_name",
+  "model",
+  "old_status",
+  "new_status",
+  "latency_ms",
+  "message",
+  "triggered_at",
+] as const;
+
+const notificationTemplateVariableParams = Object.fromEntries(
+  notificationTemplateVariableNames.map((name) => [name, `{${name}}`]),
+) as Record<(typeof notificationTemplateVariableNames)[number], string>;
 
 const notificationCommonTimezones = [
   "Asia/Shanghai",
