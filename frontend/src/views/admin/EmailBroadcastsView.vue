@@ -64,7 +64,7 @@
               <button
                 type="button"
                 class="btn btn-secondary btn-sm"
-                :disabled="emailBroadcastDraftLoading"
+                :disabled="emailBroadcastDraftLoading || emailBroadcastDraftClearing"
                 @click="loadEmailBroadcastDraft(true)"
               >
                 <Icon
@@ -77,7 +77,7 @@
               <button
                 type="button"
                 class="btn btn-secondary btn-sm"
-                :disabled="emailBroadcastDraftSaving"
+                :disabled="emailBroadcastDraftSaving || emailBroadcastDraftClearing"
                 @click="saveEmailBroadcastDraft"
               >
                 <span
@@ -90,7 +90,12 @@
               <button
                 type="button"
                 class="btn btn-secondary btn-sm"
-                :disabled="emailBroadcastDraftSaving || !emailBroadcastDraftSavedAt"
+                :disabled="
+                  emailBroadcastDraftLoading ||
+                  emailBroadcastDraftSaving ||
+                  emailBroadcastDraftClearing ||
+                  !emailBroadcastDraftSavedAt
+                "
                 @click="() => clearEmailBroadcastDraft()"
               >
                 <Icon name="trash" size="sm" />
@@ -435,21 +440,36 @@ const emailBroadcastTasks = ref<EmailBroadcastStatusResponse[]>([]);
 const activeBatchId = ref("");
 const emailBroadcastDraftLoading = ref(false);
 const emailBroadcastDraftSaving = ref(false);
+const emailBroadcastDraftClearing = ref(false);
 const emailBroadcastDraftSavedAt = ref("");
 const emailBroadcastOperatingBatch = ref<string | null>(null);
 const emailBroadcastCustomEmailsInput = ref("");
 const emailBroadcastCustomUserIDsInput = ref("");
 let emailBroadcastStatusTimer: number | null = null;
 
-const emailBroadcastForm = reactive({
-  scope: "active_users" as EmailBroadcastScope,
-  locale: "zh",
-  message_title: "",
-  message_html: "",
-  action_label: "",
-  action_url: "",
-  rpm: 6,
-});
+type EmailBroadcastFormState = {
+  scope: EmailBroadcastScope;
+  locale: string;
+  message_title: string;
+  message_html: string;
+  action_label: string;
+  action_url: string;
+  rpm: number;
+};
+
+function createDefaultEmailBroadcastForm(): EmailBroadcastFormState {
+  return {
+    scope: "active_users",
+    locale: "zh",
+    message_title: "",
+    message_html: "",
+    action_label: "",
+    action_url: "",
+    rpm: 6,
+  };
+}
+
+const emailBroadcastForm = reactive<EmailBroadcastFormState>(createDefaultEmailBroadcastForm());
 
 const emailBroadcastConfirmPhrase = "SEND";
 const emailBroadcastConfirmDialog = reactive<{
@@ -501,6 +521,7 @@ const canSendEmailBroadcast = computed(
   () =>
     emailBroadcastForm.message_title.trim() !== "" &&
     emailBroadcastForm.message_html.trim() !== "" &&
+    !emailBroadcastDraftClearing.value &&
     !emailBroadcastSending.value,
 );
 
@@ -569,6 +590,16 @@ function applyEmailBroadcastDraft(draft: EmailBroadcastDraftResponse): void {
   emailBroadcastCustomUserIDsInput.value = (draft.user_ids || []).join("\n");
   emailBroadcastCustomEmailsInput.value = (draft.emails || []).join("\n");
   emailBroadcastDraftSavedAt.value = draft.saved_at || "";
+}
+
+function resetEmailBroadcastComposeForm(): void {
+  Object.assign(emailBroadcastForm, createDefaultEmailBroadcastForm());
+  emailBroadcastCustomUserIDsInput.value = "";
+  emailBroadcastCustomEmailsInput.value = "";
+  emailBroadcastDraftSavedAt.value = "";
+  emailBroadcastConfirmDialog.show = false;
+  emailBroadcastConfirmDialog.payload = null;
+  emailBroadcastConfirmDialog.phrase = "";
 }
 
 function emailBroadcastScopeLabel(scope: EmailBroadcastScope): string {
@@ -685,9 +716,10 @@ async function saveEmailBroadcastDraft(): Promise<void> {
 }
 
 async function clearEmailBroadcastDraft(showNotice = true): Promise<void> {
+  emailBroadcastDraftClearing.value = true;
   try {
     await adminAPI.settings.deleteEmailBroadcastDraft();
-    emailBroadcastDraftSavedAt.value = "";
+    resetEmailBroadcastComposeForm();
     if (showNotice) {
       appStore.showSuccess(t("admin.settings.emailBroadcast.draftCleared"));
     }
@@ -697,6 +729,8 @@ async function clearEmailBroadcastDraft(showNotice = true): Promise<void> {
         extractApiErrorMessage(error, t("admin.settings.emailBroadcast.draftClearFailed")),
       );
     }
+  } finally {
+    emailBroadcastDraftClearing.value = false;
   }
 }
 
