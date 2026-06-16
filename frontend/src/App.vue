@@ -3,6 +3,7 @@ import { RouterView, useRouter, useRoute } from 'vue-router'
 import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, watch } from 'vue'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
+import AdminComplianceDialog from '@/components/admin/AdminComplianceDialog.vue'
 import {
   applyRouteSEO,
   resolveCustomPageSEO,
@@ -12,6 +13,7 @@ import {
 } from '@/router/title'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useAdminComplianceStore } from '@/stores/adminCompliance'
 import { getSetupStatus } from '@/api/setup'
 import { updateFavicon } from '@/utils/favicon'
 
@@ -19,6 +21,7 @@ const router = useRouter()
 const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminComplianceStore = useAdminComplianceStore()
 const AnnouncementPopup = defineAsyncComponent(() => import('@/components/common/AnnouncementPopup.vue'))
 
 type SubscriptionStore = Awaited<ReturnType<typeof import('@/stores/subscriptions')['useSubscriptionStore']>>
@@ -51,6 +54,11 @@ function onVisibilityChange() {
   if (document.visibilityState === 'visible' && shouldUseAnnouncementRuntime.value && announcementStore) {
     announcementStore.fetchAnnouncements()
   }
+}
+
+function onAdminComplianceRequired(event: Event) {
+  const detail = (event as CustomEvent<Record<string, string>>).detail || {}
+  adminComplianceStore.requireAcknowledgement(detail)
 }
 
 function registerVisibilityListener() {
@@ -122,6 +130,7 @@ function stopUserRuntime(clearState: boolean) {
   if (clearState) {
     subscriptionStore?.clear()
     announcementStore?.reset()
+    adminComplianceStore.reset()
   } else {
     subscriptionStore?.stopPolling()
   }
@@ -137,6 +146,11 @@ watch(
       stopUserRuntime(true)
       return
     }
+    if (authStore.isAdmin) {
+      adminComplianceStore.fetchStatus().catch((error) => {
+        console.error('Failed to fetch admin compliance status:', error)
+      })
+    }
     void ensureUserRuntimeData(oldValue?.[0] === false)
   },
   { immediate: true }
@@ -145,6 +159,7 @@ watch(
 onBeforeUnmount(() => {
   stopUserRuntime(false)
   cancelSetupStatusCheck()
+  window.removeEventListener('admin-compliance-required', onAdminComplianceRequired)
 })
 
 function applyCurrentRouteSEO() {
@@ -227,6 +242,8 @@ function scheduleSetupStatusCheck() {
 }
 
 onMounted(() => {
+  window.addEventListener('admin-compliance-required', onAdminComplianceRequired)
+
   // Keep the first-run guard, but defer it for authenticated dashboards so it
   // does not compete with first-screen data.
   scheduleSetupStatusCheck()
@@ -253,4 +270,5 @@ watch(
   <RouterView />
   <Toast />
   <AnnouncementPopup v-if="shouldUseAnnouncementRuntime" />
+  <AdminComplianceDialog />
 </template>

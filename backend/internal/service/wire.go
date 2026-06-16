@@ -120,6 +120,18 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
+// ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
+// It depends on the OpenAI token provider for refreshed access tokens and the
+// privacy client factory for the impersonated upstream HTTP client.
+func ProvideOpenAIQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *OpenAITokenProvider,
+	privacyClientFactory PrivacyClientFactory,
+) *OpenAIQuotaService {
+	return NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+}
+
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
@@ -544,6 +556,7 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideOpenAITokenProvider,
+	ProvideOpenAIQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
@@ -606,7 +619,6 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelMonitorRunner,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
-	NewCodexInviteResetService,
 	NewImageGenerationArchiveService,
 )
 
