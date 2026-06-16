@@ -1174,6 +1174,10 @@ export interface EmailBroadcastListResponse {
   active_batch_id?: string;
 }
 
+export interface EmailBroadcastDraftResponse extends SendEmailBroadcastRequest {
+  saved_at: string;
+}
+
 export interface ResumeEmailBroadcastRequest {
   mode?: "remaining" | "failed";
 }
@@ -1260,6 +1264,30 @@ export async function sendEmailBroadcast(
   const { data } = await apiClient.post<SendEmailBroadcastResponse>(
     "/admin/settings/email-broadcasts",
     request,
+  );
+  return data;
+}
+
+export async function getEmailBroadcastDraft(): Promise<EmailBroadcastDraftResponse | null> {
+  const { data } = await apiClient.get<EmailBroadcastDraftResponse | null>(
+    "/admin/settings/email-broadcasts/draft",
+  );
+  return data;
+}
+
+export async function saveEmailBroadcastDraft(
+  request: SendEmailBroadcastRequest,
+): Promise<EmailBroadcastDraftResponse> {
+  const { data } = await apiClient.put<EmailBroadcastDraftResponse>(
+    "/admin/settings/email-broadcasts/draft",
+    request,
+  );
+  return data;
+}
+
+export async function deleteEmailBroadcastDraft(): Promise<{ deleted: boolean }> {
+  const { data } = await apiClient.delete<{ deleted: boolean }>(
+    "/admin/settings/email-broadcasts/draft",
   );
   return data;
 }
@@ -1616,6 +1644,9 @@ export const settingsAPI = {
   updateNotificationConfig,
   testNotificationTransport,
   sendEmailBroadcast,
+  getEmailBroadcastDraft,
+  saveEmailBroadcastDraft,
+  deleteEmailBroadcastDraft,
   getEmailBroadcastStatus,
   listEmailBroadcasts,
   cancelEmailBroadcast,

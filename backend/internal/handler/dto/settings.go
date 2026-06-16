@@ -493,6 +493,9 @@ type EmailBroadcastStatusResponse = service.NotificationEmailBroadcastStatus
 // EmailBroadcastListResponse describes recent broadcast jobs.
 type EmailBroadcastListResponse = service.NotificationEmailBroadcastList
 
+// EmailBroadcastDraftResponse describes the saved compose draft.
+type EmailBroadcastDraftResponse = service.NotificationEmailBroadcastDraft
+
 // ResumeEmailBroadcastRequest selects which recipients to send when resuming a job.
 type ResumeEmailBroadcastRequest = service.NotificationEmailBroadcastResumeInput
 

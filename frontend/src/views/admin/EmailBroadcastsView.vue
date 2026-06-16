@@ -48,6 +48,57 @@
           </div>
         </div>
         <div class="space-y-5 px-6 py-6">
+          <div
+            class="flex flex-col gap-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-3 dark:border-dark-700 dark:bg-dark-800/60 md:flex-row md:items-center md:justify-between"
+          >
+            <div class="text-sm text-gray-600 dark:text-gray-300">
+              {{
+                emailBroadcastDraftSavedAt
+                  ? t("admin.settings.emailBroadcast.draftSavedAt", {
+                      time: formatEmailBroadcastDate(emailBroadcastDraftSavedAt),
+                    })
+                  : t("admin.settings.emailBroadcast.noDraft")
+              }}
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="emailBroadcastDraftLoading"
+                @click="loadEmailBroadcastDraft(true)"
+              >
+                <Icon
+                  name="refresh"
+                  size="sm"
+                  :class="emailBroadcastDraftLoading && 'animate-spin'"
+                />
+                {{ t("admin.settings.emailBroadcast.loadDraft") }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="emailBroadcastDraftSaving"
+                @click="saveEmailBroadcastDraft"
+              >
+                <span
+                  v-if="emailBroadcastDraftSaving"
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-current"
+                ></span>
+                <Icon v-else name="save" size="sm" />
+                {{ t("admin.settings.emailBroadcast.saveDraft") }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="emailBroadcastDraftSaving || !emailBroadcastDraftSavedAt"
+                @click="() => clearEmailBroadcastDraft()"
+              >
+                <Icon name="trash" size="sm" />
+                {{ t("admin.settings.emailBroadcast.clearDraft") }}
+              </button>
+            </div>
+          </div>
+
           <div class="grid gap-4 md:grid-cols-3">
             <div>
               <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -333,26 +384,25 @@
         :title="t('admin.settings.emailBroadcast.confirmTitle')"
         :message="emailBroadcastConfirmDialog.message"
         :confirm-text="t('admin.settings.emailBroadcast.confirmSend')"
+        :confirm-disabled="!canConfirmEmailBroadcast"
         variant="warning"
         @confirm="handleEmailBroadcastConfirm"
         @cancel="cancelEmailBroadcastConfirm"
       >
-        <template #content>
-          <div class="space-y-3 text-sm text-gray-700 dark:text-gray-300">
-            <div>{{ emailBroadcastConfirmDialog.summary }}</div>
-            <div v-if="emailBroadcastConfirmDialog.requiresPhrase">
-              <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
-                {{ t("admin.settings.emailBroadcast.confirmPhraseLabel") }}
-              </label>
-              <input
-                v-model="emailBroadcastConfirmDialog.phrase"
-                type="text"
-                class="input"
-                :placeholder="emailBroadcastConfirmPhrase"
-              />
-            </div>
+        <div class="space-y-3 text-sm text-gray-700 dark:text-gray-300">
+          <div>{{ emailBroadcastConfirmDialog.summary }}</div>
+          <div v-if="emailBroadcastConfirmDialog.requiresPhrase">
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+              {{ t("admin.settings.emailBroadcast.confirmPhraseLabel") }}
+            </label>
+            <input
+              v-model="emailBroadcastConfirmDialog.phrase"
+              type="text"
+              class="input"
+              :placeholder="emailBroadcastConfirmPhrase"
+            />
           </div>
-        </template>
+        </div>
       </ConfirmDialog>
     </div>
   </AppLayout>
@@ -364,6 +414,7 @@ import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api/admin";
 import type {
   EmailBroadcastScope,
+  EmailBroadcastDraftResponse,
   EmailBroadcastStatusResponse,
   ResumeEmailBroadcastRequest,
   SendEmailBroadcastRequest,
@@ -382,6 +433,9 @@ const emailBroadcastSending = ref(false);
 const emailBroadcastTasksLoading = ref(false);
 const emailBroadcastTasks = ref<EmailBroadcastStatusResponse[]>([]);
 const activeBatchId = ref("");
+const emailBroadcastDraftLoading = ref(false);
+const emailBroadcastDraftSaving = ref(false);
+const emailBroadcastDraftSavedAt = ref("");
 const emailBroadcastOperatingBatch = ref<string | null>(null);
 const emailBroadcastCustomEmailsInput = ref("");
 const emailBroadcastCustomUserIDsInput = ref("");
@@ -450,6 +504,12 @@ const canSendEmailBroadcast = computed(
     !emailBroadcastSending.value,
 );
 
+const canConfirmEmailBroadcast = computed(
+  () =>
+    !emailBroadcastConfirmDialog.requiresPhrase ||
+    emailBroadcastConfirmDialog.phrase.trim() === emailBroadcastConfirmPhrase,
+);
+
 function splitNotificationInput(value: string): string[] {
   const seen = new Set<string>();
   return value
@@ -496,6 +556,19 @@ function buildEmailBroadcastPayload(): SendEmailBroadcastRequest {
         : undefined,
     rpm: Math.max(1, Math.min(30, Number(emailBroadcastForm.rpm) || 6)),
   };
+}
+
+function applyEmailBroadcastDraft(draft: EmailBroadcastDraftResponse): void {
+  emailBroadcastForm.scope = draft.scope;
+  emailBroadcastForm.locale = draft.locale;
+  emailBroadcastForm.message_title = draft.message_title;
+  emailBroadcastForm.message_html = draft.message_html;
+  emailBroadcastForm.action_label = draft.action_label || "";
+  emailBroadcastForm.action_url = draft.action_url || "";
+  emailBroadcastForm.rpm = draft.rpm;
+  emailBroadcastCustomUserIDsInput.value = (draft.user_ids || []).join("\n");
+  emailBroadcastCustomEmailsInput.value = (draft.emails || []).join("\n");
+  emailBroadcastDraftSavedAt.value = draft.saved_at || "";
 }
 
 function emailBroadcastScopeLabel(scope: EmailBroadcastScope): string {
@@ -559,6 +632,7 @@ async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<v
   try {
     const result = await adminAPI.settings.sendEmailBroadcast(payload);
     await loadEmailBroadcastTasks();
+    await clearEmailBroadcastDraft(false);
     scheduleEmailBroadcastStatusRefresh();
     appStore.showSuccess(
       t("admin.settings.emailBroadcast.started", {
@@ -572,6 +646,57 @@ async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<v
     );
   } finally {
     emailBroadcastSending.value = false;
+  }
+}
+
+async function loadEmailBroadcastDraft(showError = false): Promise<void> {
+  emailBroadcastDraftLoading.value = true;
+  try {
+    const draft = await adminAPI.settings.getEmailBroadcastDraft();
+    if (draft) {
+      applyEmailBroadcastDraft(draft);
+    } else if (showError) {
+      appStore.showError(t("admin.settings.emailBroadcast.noDraft"));
+    }
+  } catch (error: unknown) {
+    if (showError) {
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.settings.emailBroadcast.draftLoadFailed")),
+      );
+    }
+  } finally {
+    emailBroadcastDraftLoading.value = false;
+  }
+}
+
+async function saveEmailBroadcastDraft(): Promise<void> {
+  emailBroadcastDraftSaving.value = true;
+  try {
+    const result = await adminAPI.settings.saveEmailBroadcastDraft(buildEmailBroadcastPayload());
+    applyEmailBroadcastDraft(result);
+    appStore.showSuccess(t("admin.settings.emailBroadcast.draftSaved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.draftSaveFailed")),
+    );
+  } finally {
+    emailBroadcastDraftSaving.value = false;
+  }
+}
+
+async function clearEmailBroadcastDraft(showNotice = true): Promise<void> {
+  try {
+    await adminAPI.settings.deleteEmailBroadcastDraft();
+    emailBroadcastDraftSavedAt.value = "";
+    if (showNotice) {
+      appStore.showSuccess(t("admin.settings.emailBroadcast.draftCleared"));
+    }
+  } catch (error: unknown) {
+    if (showNotice) {
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.settings.emailBroadcast.draftClearFailed")),
+      );
+    }
   }
 }
 
@@ -703,6 +828,7 @@ function formatEmailBroadcastDate(value?: string): string {
 
 onMounted(() => {
   loadEmailBroadcastTasks();
+  loadEmailBroadcastDraft();
 });
 
 onUnmounted(() => {

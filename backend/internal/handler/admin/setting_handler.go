@@ -4120,6 +4120,59 @@ func (h *SettingHandler) SendEmailBroadcast(c *gin.Context) {
 	response.Success(c, dto.SendEmailBroadcastResponse(result))
 }
 
+// GetEmailBroadcastDraft returns the saved admin email broadcast draft.
+// GET /api/v1/admin/settings/email-broadcasts/draft
+func (h *SettingHandler) GetEmailBroadcastDraft(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	draft, err := h.notificationEmailService.GetBroadcastDraft(c.Request.Context())
+	if err != nil {
+		if errors.Is(err, service.ErrSettingNotFound) {
+			response.Success(c, nil)
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastDraftResponse(draft))
+}
+
+// SaveEmailBroadcastDraft persists the current admin email broadcast compose form.
+// PUT /api/v1/admin/settings/email-broadcasts/draft
+func (h *SettingHandler) SaveEmailBroadcastDraft(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	var req dto.SendEmailBroadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	draft, err := h.notificationEmailService.SaveBroadcastDraft(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastDraftResponse(draft))
+}
+
+// DeleteEmailBroadcastDraft clears the saved admin email broadcast draft.
+// DELETE /api/v1/admin/settings/email-broadcasts/draft
+func (h *SettingHandler) DeleteEmailBroadcastDraft(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	if err := h.notificationEmailService.DeleteBroadcastDraft(c.Request.Context()); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, gin.H{"deleted": true})
+}
+
 // ListEmailBroadcasts returns recent admin email broadcast jobs.
 // GET /api/v1/admin/settings/email-broadcasts
 func (h *SettingHandler) ListEmailBroadcasts(c *gin.Context) {

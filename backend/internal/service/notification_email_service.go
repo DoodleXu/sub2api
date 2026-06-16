@@ -44,6 +44,7 @@ const (
 	notificationEmailDeliveryKeyPrefix    = "notification_email_delivery:"
 	notificationEmailBroadcastKeyPrefix   = "notification_email_broadcast:"
 	notificationEmailBroadcastIndexKey    = notificationEmailBroadcastKeyPrefix + "index"
+	notificationEmailBroadcastDraftKey    = notificationEmailBroadcastKeyPrefix + "draft"
 	notificationEmailLocaleUserKeyPrefix  = "notification_email_locale:user:"
 	notificationEmailLocaleEmailKeyPrefix = "notification_email_locale:email:"
 	notificationEmailUnsubscribeSecretKey = "notification_email_unsubscribe_secret"
@@ -161,6 +162,11 @@ type NotificationEmailBroadcastStatus struct {
 type NotificationEmailBroadcastList struct {
 	Jobs          []NotificationEmailBroadcastStatus `json:"jobs"`
 	ActiveBatchID string                             `json:"active_batch_id,omitempty"`
+}
+
+type NotificationEmailBroadcastDraft struct {
+	NotificationEmailBroadcastInput
+	SavedAt string `json:"saved_at"`
 }
 
 type NotificationEmailBroadcastResumeInput struct {
@@ -512,27 +518,16 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 	if s == nil {
 		return NotificationEmailBroadcastResult{}, errors.New("notification email service is not configured")
 	}
-	input.Scope = strings.ToLower(strings.TrimSpace(input.Scope))
-	input.Locale = normalizeNotificationLocale(input.Locale)
-	input.MessageTitle = strings.TrimSpace(input.MessageTitle)
-	input.MessageHTML = strings.TrimSpace(input.MessageHTML)
-	input.ActionLabel = strings.TrimSpace(input.ActionLabel)
-	input.ActionURL = strings.TrimSpace(input.ActionURL)
-	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
+	normalized, err := normalizeNotificationEmailBroadcastDraftInput(input, false)
+	if err != nil {
+		return NotificationEmailBroadcastResult{}, err
+	}
+	input = normalized
 	if input.MessageTitle == "" {
 		return NotificationEmailBroadcastResult{}, errors.New("broadcast message title is required")
 	}
-	if len([]rune(input.MessageTitle)) > notificationEmailMaxSubjectLength {
-		return NotificationEmailBroadcastResult{}, fmt.Errorf("broadcast message title cannot exceed %d characters", notificationEmailMaxSubjectLength)
-	}
 	if input.MessageHTML == "" {
 		return NotificationEmailBroadcastResult{}, errors.New("broadcast message html is required")
-	}
-	if len([]byte(input.MessageHTML)) > notificationEmailMaxHTMLLength {
-		return NotificationEmailBroadcastResult{}, fmt.Errorf("broadcast message html cannot exceed %d bytes", notificationEmailMaxHTMLLength)
-	}
-	if input.ActionURL != "" && !isSafeNotificationEmailURL(input.ActionURL) {
-		return NotificationEmailBroadcastResult{}, errors.New("broadcast action url must be http(s), mailto, or a relative path")
 	}
 	if s.emailService == nil {
 		return NotificationEmailBroadcastResult{}, errors.New("email service is not configured")
@@ -611,6 +606,58 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 	}
 	go s.runBroadcast(base, batchID, input, recipients, startedAt)
 	return result, nil
+}
+
+func (s *NotificationEmailService) GetBroadcastDraft(ctx context.Context) (NotificationEmailBroadcastDraft, error) {
+	if s == nil || s.settingRepo == nil {
+		return NotificationEmailBroadcastDraft{}, errors.New("notification email service is not configured")
+	}
+	raw, err := s.settingRepo.GetValue(ctx, notificationEmailBroadcastDraftKey)
+	if err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	var draft NotificationEmailBroadcastDraft
+	if err := json.Unmarshal([]byte(raw), &draft); err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	input, err := normalizeNotificationEmailBroadcastDraftInput(draft.NotificationEmailBroadcastInput, true)
+	if err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	draft.NotificationEmailBroadcastInput = input
+	return draft, nil
+}
+
+func (s *NotificationEmailService) SaveBroadcastDraft(ctx context.Context, input NotificationEmailBroadcastInput) (NotificationEmailBroadcastDraft, error) {
+	if s == nil || s.settingRepo == nil {
+		return NotificationEmailBroadcastDraft{}, errors.New("notification email service is not configured")
+	}
+	normalized, err := normalizeNotificationEmailBroadcastDraftInput(input, true)
+	if err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	draft := NotificationEmailBroadcastDraft{
+		NotificationEmailBroadcastInput: normalized,
+		SavedAt:                         s.nowUTC().Format(time.RFC3339),
+	}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	if err := s.settingRepo.Set(ctx, notificationEmailBroadcastDraftKey, string(raw)); err != nil {
+		return NotificationEmailBroadcastDraft{}, err
+	}
+	return draft, nil
+}
+
+func (s *NotificationEmailService) DeleteBroadcastDraft(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return errors.New("notification email service is not configured")
+	}
+	if err := s.settingRepo.Delete(ctx, notificationEmailBroadcastDraftKey); err != nil && !errors.Is(err, ErrSettingNotFound) {
+		return err
+	}
+	return nil
 }
 
 func (s *NotificationEmailService) GetBroadcastStatus(ctx context.Context, batchID string) (NotificationEmailBroadcastStatus, error) {
@@ -693,6 +740,9 @@ func (s *NotificationEmailService) ResumeBroadcast(ctx context.Context, batchID 
 	}
 	status, err := s.GetBroadcastStatus(ctx, batchID)
 	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return NotificationEmailBroadcastResult{}, errors.New("该群发任务不存在或已被清理，无法继续或补发")
+		}
 		return NotificationEmailBroadcastResult{}, err
 	}
 	if status.Status == "running" || status.Status == "canceling" {
@@ -700,10 +750,16 @@ func (s *NotificationEmailService) ResumeBroadcast(ctx context.Context, batchID 
 	}
 	payload, err := s.getBroadcastPayload(ctx, batchID)
 	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return NotificationEmailBroadcastResult{}, errors.New("该群发任务缺少发送内容快照，无法继续或补发；请重新创建群发任务")
+		}
 		return NotificationEmailBroadcastResult{}, err
 	}
 	states, err := s.getBroadcastRecipients(ctx, batchID)
 	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return NotificationEmailBroadcastResult{}, errors.New("该群发任务缺少收件人明细，无法继续或补发；请重新创建群发任务")
+		}
 		return NotificationEmailBroadcastResult{}, err
 	}
 	targets := notificationEmailBroadcastRetryRecipients(states, mode)
@@ -1145,6 +1201,82 @@ func (s *NotificationEmailService) getBroadcastPayload(ctx context.Context, batc
 	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
 	input.Locale = normalizeNotificationLocale(input.Locale)
 	return input, nil
+}
+
+func normalizeNotificationEmailBroadcastDraftInput(input NotificationEmailBroadcastInput, allowBlankMessage bool) (NotificationEmailBroadcastInput, error) {
+	input.Scope = strings.ToLower(strings.TrimSpace(input.Scope))
+	if input.Scope == "" {
+		input.Scope = "active_users"
+	}
+	switch input.Scope {
+	case "active_users", "all_users", "admins", "custom":
+	default:
+		return NotificationEmailBroadcastInput{}, fmt.Errorf("unsupported broadcast scope: %s", input.Scope)
+	}
+	input.Locale = normalizeNotificationLocale(input.Locale)
+	input.MessageTitle = strings.TrimSpace(input.MessageTitle)
+	input.MessageHTML = strings.TrimSpace(input.MessageHTML)
+	input.ActionLabel = strings.TrimSpace(input.ActionLabel)
+	input.ActionURL = strings.TrimSpace(input.ActionURL)
+	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
+	if !allowBlankMessage && input.MessageTitle == "" {
+		return NotificationEmailBroadcastInput{}, errors.New("broadcast message title is required")
+	}
+	if len([]rune(input.MessageTitle)) > notificationEmailMaxSubjectLength {
+		return NotificationEmailBroadcastInput{}, fmt.Errorf("broadcast message title cannot exceed %d characters", notificationEmailMaxSubjectLength)
+	}
+	if !allowBlankMessage && input.MessageHTML == "" {
+		return NotificationEmailBroadcastInput{}, errors.New("broadcast message html is required")
+	}
+	if len([]byte(input.MessageHTML)) > notificationEmailMaxHTMLLength {
+		return NotificationEmailBroadcastInput{}, fmt.Errorf("broadcast message html cannot exceed %d bytes", notificationEmailMaxHTMLLength)
+	}
+	if input.ActionURL != "" && !isSafeNotificationEmailURL(input.ActionURL) {
+		return NotificationEmailBroadcastInput{}, errors.New("broadcast action url must be http(s), mailto, or a relative path")
+	}
+	input.UserIDs = normalizeNotificationEmailBroadcastUserIDs(input.UserIDs)
+	input.Emails = normalizeNotificationEmailBroadcastEmails(input.Emails)
+	return input, nil
+}
+
+func normalizeNotificationEmailBroadcastUserIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[int64]struct{}{}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func normalizeNotificationEmailBroadcastEmails(emails []string) []string {
+	if len(emails) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(emails))
+	for _, email := range emails {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			continue
+		}
+		key := strings.ToLower(email)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, email)
+	}
+	return out
 }
 
 func (s *NotificationEmailService) getBroadcastRecipients(ctx context.Context, batchID string) ([]notificationEmailBroadcastRecipientState, error) {

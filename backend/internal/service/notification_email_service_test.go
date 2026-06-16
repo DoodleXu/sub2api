@@ -263,6 +263,59 @@ func TestNotificationEmailBroadcastPreflightsEmailConfig(t *testing.T) {
 	require.Contains(t, err.Error(), "email service is not configured")
 }
 
+func TestNotificationEmailBroadcastDraftPersistsPartialComposeState(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+
+	draft, err := svc.SaveBroadcastDraft(ctx, NotificationEmailBroadcastInput{
+		Scope:        " CUSTOM ",
+		Locale:       "zh-CN",
+		MessageTitle: "  Draft title  ",
+		MessageHTML:  "",
+		ActionLabel:  "  Read more ",
+		ActionURL:    "/notice",
+		UserIDs:      []int64{7, 0, 7, 9},
+		Emails:       []string{" User@Example.test ", "user@example.test", "extra@example.test"},
+		RPM:          120,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "custom", draft.Scope)
+	require.Equal(t, "zh", draft.Locale)
+	require.Equal(t, "Draft title", draft.MessageTitle)
+	require.Equal(t, "", draft.MessageHTML)
+	require.Equal(t, "Read more", draft.ActionLabel)
+	require.Equal(t, []int64{7, 9}, draft.UserIDs)
+	require.Equal(t, []string{"User@Example.test", "extra@example.test"}, draft.Emails)
+	require.Equal(t, notificationEmailBroadcastMaxRPM, draft.RPM)
+	require.NotEmpty(t, draft.SavedAt)
+
+	loaded, err := svc.GetBroadcastDraft(ctx)
+	require.NoError(t, err)
+	require.Equal(t, draft, loaded)
+}
+
+func TestNotificationEmailBroadcastDraftRejectsUnsafeActionURL(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	_, err := svc.SaveBroadcastDraft(ctx, NotificationEmailBroadcastInput{
+		Scope:     "active_users",
+		ActionURL: "javascript:alert(1)",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "action url")
+}
+
+func TestNotificationEmailBroadcastDraftDeleteIgnoresMissingDraft(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	require.NoError(t, svc.DeleteBroadcastDraft(ctx))
+	_, err := svc.GetBroadcastDraft(ctx)
+	require.ErrorIs(t, err, ErrSettingNotFound)
+}
+
 func TestNotificationEmailBroadcastActionHTMLIsOptionalAndEscaped(t *testing.T) {
 	require.Empty(t, notificationEmailBroadcastActionHTML("", "https://example.com/notice"))
 	require.Empty(t, notificationEmailBroadcastActionHTML("Open", "javascript:alert(1)"))
@@ -558,6 +611,52 @@ func TestNotificationEmailBroadcastResumeTargetsRemainingOrFailedRecipients(t *t
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+func TestNotificationEmailBroadcastResumeMissingPayloadReturnsBusinessMessage(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	batchID := "broadcast_missing_payload"
+	require.NoError(t, svc.saveBroadcastRecipients(ctx, batchID, []notificationEmailBroadcastRecipientState{
+		{Email: "failed@example.test", Status: "failed", Error: "smtp"},
+	}))
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:   batchID,
+		Status:    "interrupted",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	_, err := svc.ResumeBroadcast(ctx, batchID, NotificationEmailBroadcastResumeInput{Mode: "failed"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "缺少发送内容快照")
+	require.NotContains(t, err.Error(), "SETTING_NOT_FOUND")
+}
+
+func TestNotificationEmailBroadcastResumeMissingRecipientsReturnsBusinessMessage(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	batchID := "broadcast_missing_recipients"
+	require.NoError(t, svc.saveBroadcastPayload(ctx, batchID, NotificationEmailBroadcastInput{
+		Scope:        "custom",
+		Locale:       "zh",
+		MessageTitle: "Notice",
+		MessageHTML:  "<p>Hello</p>",
+		RPM:          60000,
+	}))
+	setNotificationEmailBroadcastStatusForTest(t, repo, NotificationEmailBroadcastStatus{
+		BatchID:   batchID,
+		Status:    "interrupted",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	_, err := svc.ResumeBroadcast(ctx, batchID, NotificationEmailBroadcastResumeInput{Mode: "failed"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "缺少收件人明细")
+	require.NotContains(t, err.Error(), "SETTING_NOT_FOUND")
 }
 
 func TestNotificationEmailFallbackClassification(t *testing.T) {
