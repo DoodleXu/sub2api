@@ -2637,6 +2637,29 @@ func TestHandleNonStreamingResponse_APIKeyFallsBackToSSEBodyWhenContentTypeIsWro
 	require.Equal(t, "hello", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 }
 
+func TestHandleNonStreamingResponse_ArchivesResponsesImageOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_img","object":"response","model":"gpt-5.4","status":"completed","output":[{"id":"ig_1","type":"image_generation_call","result":"aW1hZ2UtMQ==","revised_prompt":"draw a cat","output_format":"png"}],"usage":{"input_tokens":7,"output_tokens":9,"total_tokens":16,"output_tokens_details":{"image_tokens":4}}}`)),
+	}
+	account := &Account{ID: 1, Type: AccountTypeAPIKey}
+
+	result, err := svc.handleNonStreamingResponse(context.Background(), resp, c, account, "gpt-5.4", "gpt-5.4")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 4, result.ImageOutputTokens)
+	require.Len(t, result.archiveInputs, 1)
+	require.Equal(t, "aW1hZ2UtMQ==", result.archiveInputs[0].B64JSON)
+	require.Equal(t, 0, result.archiveInputs[0].Index)
+}
+
 func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -2662,6 +2685,9 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 	require.Equal(t, "image_generation_call", gjson.Get(rec.Body.String(), "output.0.type").String())
 	require.Equal(t, "aGVsbG8=", gjson.Get(rec.Body.String(), "output.0.result").String())
 	require.Equal(t, "draw a cat", gjson.Get(rec.Body.String(), "output.0.revised_prompt").String())
+	require.Len(t, usage.archiveInputs, 1)
+	require.Equal(t, "aGVsbG8=", usage.archiveInputs[0].B64JSON)
+	require.Equal(t, 0, usage.archiveInputs[0].Index)
 }
 
 func TestHandleSSEToJSON_NoFinalResponseKeepsSSEBody(t *testing.T) {

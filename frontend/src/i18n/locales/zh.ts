@@ -354,6 +354,7 @@ export default {
     emailBroadcasts: '邮件群发',
     apiKeys: 'API 密钥',
     usage: '使用记录',
+    imageGenerations: '生图管理',
     redeem: '兑换',
     affiliate: '邀请返利',
     affiliateManagement: '邀请返利',

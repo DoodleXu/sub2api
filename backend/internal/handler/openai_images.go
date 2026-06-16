@@ -367,6 +367,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				).Error("openai.images.record_usage_failed", zap.Error(err))
 			}
 		})
+		h.submitImageArchiveTask(subject.UserID, apiKey.ID, apiKey.GroupID, account.ID, result, parsed.Endpoint, requestModel, parsed.Prompt)
 
 		reqLog.Debug("openai.images.request_completed",
 			zap.Int64("account_id", account.ID),
@@ -374,6 +375,44 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		)
 		return
 	}
+}
+
+func (h *OpenAIGatewayHandler) submitImageArchiveTask(userID, apiKeyID int64, groupID *int64, accountID int64, result *service.OpenAIForwardResult, endpoint, model, prompt string) {
+	if h.imageArchiveService == nil || result == nil || len(result.ImageArchiveInputs) == 0 {
+		return
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	model = strings.TrimSpace(model)
+	prompt = strings.TrimSpace(prompt)
+	var groupIDCopy *int64
+	if groupID != nil {
+		v := *groupID
+		groupIDCopy = &v
+	}
+	inputs := append([]service.ArchivedImageInput(nil), result.ImageArchiveInputs...)
+	go func() {
+		ctx := context.Background()
+		userIDCopy := userID
+		apiKeyIDCopy := apiKeyID
+		accountIDCopy := accountID
+		record := &service.ImageGenerationRecord{
+			UserID:        &userIDCopy,
+			APIKeyID:      &apiKeyIDCopy,
+			GroupID:       groupIDCopy,
+			AccountID:     &accountIDCopy,
+			RequestID:     result.RequestID,
+			Source:        "gateway",
+			Endpoint:      endpoint,
+			Model:         model,
+			PromptExcerpt: prompt,
+			Status:        "pending",
+		}
+		if err := h.imageArchiveService.CreateRecord(ctx, record); err != nil {
+			logger.L().With(zap.String("component", "handler.openai_gateway.images")).Warn("image_archive.create_record_failed", zap.Error(err))
+			return
+		}
+		h.imageArchiveService.ArchiveBase64Images(ctx, record, inputs)
+	}()
 }
 
 func isMultipartImagesContentType(contentType string) bool {

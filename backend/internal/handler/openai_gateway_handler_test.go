@@ -2069,3 +2069,13 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 		require.False(t, reported)
 	})
 }
+
+func TestExtractOpenAIResponsesPromptExcerpt(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_text","text":"world"}]},{"type":"message","role":"developer","content":"keep"}],"tools":[{"type":"function","name":"shell"}]}`)
+
+	excerpt := extractOpenAIResponsesPromptExcerpt(body)
+
+	require.Equal(t, "hello\nworld", excerpt)
+
+	require.Equal(t, "draw a cat", extractOpenAIResponsesPromptExcerpt([]byte(`{"prompt":"draw a cat"}`)))
+}

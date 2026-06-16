@@ -354,6 +354,7 @@ export default {
     emailBroadcasts: 'Email Broadcasts',
     apiKeys: 'API Keys',
     usage: 'Usage',
+    imageGenerations: 'Image Generations',
     redeem: 'Redeem',
     affiliate: 'Affiliate Rebates',
     affiliateManagement: 'Affiliate Rebates',

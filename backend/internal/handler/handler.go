@@ -37,27 +37,29 @@ type AdminHandlers struct {
 	Payment                *admin.PaymentHandler
 	Affiliate              *admin.AffiliateHandler
 	CodexInviteReset       *admin.CodexInviteResetHandler
+	ImageGeneration        *admin.ImageGenerationHandler
 }
 
 // Handlers contains all HTTP handlers
 type Handlers struct {
-	Auth             *AuthHandler
-	User             *UserHandler
-	APIKey           *APIKeyHandler
-	Usage            *UsageHandler
-	Redeem           *RedeemHandler
-	Subscription     *SubscriptionHandler
-	Announcement     *AnnouncementHandler
-	DailyCheckin     *DailyCheckinHandler
-	ChannelMonitor   *ChannelMonitorUserHandler
-	Admin            *AdminHandlers
-	Gateway          *GatewayHandler
-	OpenAIGateway    *OpenAIGatewayHandler
-	Setting          *SettingHandler
-	Totp             *TotpHandler
-	Payment          *PaymentHandler
-	PaymentWebhook   *PaymentWebhookHandler
-	AvailableChannel *AvailableChannelHandler
+	Auth                *AuthHandler
+	User                *UserHandler
+	APIKey              *APIKeyHandler
+	Usage               *UsageHandler
+	Redeem              *RedeemHandler
+	Subscription        *SubscriptionHandler
+	Announcement        *AnnouncementHandler
+	DailyCheckin        *DailyCheckinHandler
+	ChannelMonitor      *ChannelMonitorUserHandler
+	Admin               *AdminHandlers
+	Gateway             *GatewayHandler
+	OpenAIGateway       *OpenAIGatewayHandler
+	Setting             *SettingHandler
+	Totp                *TotpHandler
+	Payment             *PaymentHandler
+	PaymentWebhook      *PaymentWebhookHandler
+	AvailableChannel    *AvailableChannelHandler
+	WebConsoleImageTask *WebConsoleImageTaskHandler
 }
 
 // BuildInfo contains build-time information

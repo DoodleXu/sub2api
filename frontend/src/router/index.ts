@@ -631,6 +631,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/image-generations',
+    name: 'AdminImageGenerations',
+    component: () => import('@/views/admin/ImageGenerationsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Image Generations',
+      titleKey: 'nav.imageGenerations'
+    }
+  },
+  {
     path: '/admin/affiliates',
     redirect: '/admin/affiliates/invites'
   },

@@ -140,5 +140,13 @@ func RegisterUserRoutes(
 			monitors.GET("", h.ChannelMonitor.List)
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
+
+		// 网页工作台异步生图任务
+		webConsoleImageTasks := authenticated.Group("/web-console/image-tasks")
+		{
+			webConsoleImageTasks.POST("", h.WebConsoleImageTask.Create)
+			webConsoleImageTasks.GET("/assets/:asset_id", h.WebConsoleImageTask.GetAsset)
+			webConsoleImageTasks.GET("/:id", h.WebConsoleImageTask.Get)
+		}
 	}
 }

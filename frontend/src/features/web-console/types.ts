@@ -23,6 +23,8 @@ export interface WebConsoleMessage {
   content: string
   images?: WebConsoleImage[]
   imageRequest?: WebConsoleImageRequest
+  imageTaskId?: number
+  status?: 'pending' | 'running' | 'completed' | 'failed'
   created_at: string
 }
 

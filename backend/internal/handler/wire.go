@@ -40,6 +40,7 @@ func ProvideAdminHandlers(
 	paymentHandler *admin.PaymentHandler,
 	affiliateHandler *admin.AffiliateHandler,
 	codexInviteResetHandler *admin.CodexInviteResetHandler,
+	imageGenerationHandler *admin.ImageGenerationHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
@@ -73,6 +74,7 @@ func ProvideAdminHandlers(
 		Payment:                paymentHandler,
 		Affiliate:              affiliateHandler,
 		CodexInviteReset:       codexInviteResetHandler,
+		ImageGeneration:        imageGenerationHandler,
 	}
 }
 
@@ -115,27 +117,29 @@ func ProvideHandlers(
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
+	webConsoleImageTaskHandler *WebConsoleImageTaskHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:             authHandler,
-		User:             userHandler,
-		APIKey:           apiKeyHandler,
-		Usage:            usageHandler,
-		Redeem:           redeemHandler,
-		Subscription:     subscriptionHandler,
-		Announcement:     announcementHandler,
-		DailyCheckin:     dailyCheckinHandler,
-		ChannelMonitor:   channelMonitorUserHandler,
-		Admin:            adminHandlers,
-		Gateway:          gatewayHandler,
-		OpenAIGateway:    openaiGatewayHandler,
-		Setting:          settingHandler,
-		Totp:             totpHandler,
-		Payment:          paymentHandler,
-		PaymentWebhook:   paymentWebhookHandler,
-		AvailableChannel: availableChannelHandler,
+		Auth:                authHandler,
+		User:                userHandler,
+		APIKey:              apiKeyHandler,
+		Usage:               usageHandler,
+		Redeem:              redeemHandler,
+		Subscription:        subscriptionHandler,
+		Announcement:        announcementHandler,
+		DailyCheckin:        dailyCheckinHandler,
+		ChannelMonitor:      channelMonitorUserHandler,
+		Admin:               adminHandlers,
+		Gateway:             gatewayHandler,
+		OpenAIGateway:       openaiGatewayHandler,
+		Setting:             settingHandler,
+		Totp:                totpHandler,
+		Payment:             paymentHandler,
+		PaymentWebhook:      paymentWebhookHandler,
+		AvailableChannel:    availableChannelHandler,
+		WebConsoleImageTask: webConsoleImageTaskHandler,
 	}
 }
 
@@ -158,6 +162,7 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
+	NewWebConsoleImageTaskHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -191,6 +196,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewPaymentHandler,
 	admin.NewAffiliateHandler,
 	admin.NewCodexInviteResetHandler,
+	admin.NewImageGenerationHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

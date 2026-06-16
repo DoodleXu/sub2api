@@ -254,7 +254,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
-import { keysAPI } from '@/api'
+import { keysAPI, webConsoleImageTasksAPI } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { isSubscriptionType } from '@/utils/subscriptionType'
 import type { ApiKey } from '@/types'
@@ -266,7 +266,6 @@ import {
   titleFromPrompt,
 } from '@/features/web-console/storage'
 import {
-  generateWebConsoleImage,
   isWebConsoleOpenAICompatibleEndpoint,
   sendWebConsoleChat,
   webConsoleErrorMessage,
@@ -311,16 +310,25 @@ const endpointOptions = computed<EndpointOption[]>(() => {
   const items: EndpointOption[] = []
   const add = (name: string, endpoint: string, description?: string) => {
     const value = endpoint.trim()
-    if (!value || !isWebConsoleOpenAICompatibleEndpoint(value) || items.some((item) => item.endpoint === value)) return
+    if (!value || !isAbsoluteHttpEndpoint(value) || !isWebConsoleOpenAICompatibleEndpoint(value) || items.some((item) => item.endpoint === value)) return
     items.push({ name, endpoint: value, description })
   }
   add('主端点', settings?.api_base_url || '')
   for (const endpoint of settings?.custom_endpoints || []) {
     add(endpoint.name || endpoint.endpoint, endpoint.endpoint, endpoint.description)
   }
-  add('当前站点', window.location.origin)
+  add('默认端点', settings?.web_console_default_endpoint || '')
   return items
 })
+
+function isAbsoluteHttpEndpoint(endpoint: string): boolean {
+  try {
+    const parsed = new URL(endpoint)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
 
 function compatiblePlatformsForEndpoint(endpoint: string): string[] {
   return isWebConsoleOpenAICompatibleEndpoint(endpoint) ? ['openai'] : []
@@ -520,6 +528,64 @@ function assistantImageContent(result: { images: WebConsoleImage[]; text?: strin
   return result.text || `已生成 ${result.images.length} 张图片。`
 }
 
+function pendingImageContent(): string {
+  return '生图任务已提交，正在生成图片。'
+}
+
+function failedImageContent(message?: string): string {
+  return message ? `生图失败：${message}` : '生图失败，请稍后重试。'
+}
+
+async function createImageTaskForMessage(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
+  if (!selectedKey.value || !message.imageRequest) return
+  const { task } = await webConsoleImageTasksAPI.create({
+    api_key_id: selectedKey.value.id,
+    endpoint: selectedEndpoint.value,
+    model: message.imageRequest.model,
+    prompt: message.imageRequest.prompt,
+    options: message.imageRequest.options,
+    session_id: session.id,
+    message_id: message.id,
+  })
+  message.imageTaskId = task.id
+  message.status = task.status
+  touchSession(session)
+  void pollImageTask(session, message)
+}
+
+async function pollImageTask(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
+  if (!message.imageTaskId) return
+  for (let attempt = 0; attempt < 900; attempt++) {
+    const task = await webConsoleImageTasksAPI.get(message.imageTaskId)
+    message.status = task.status
+    if (task.status === 'completed') {
+      message.images = task.assets.map((asset) => ({ url: asset.url, alt: message.imageRequest?.prompt }))
+      message.content = assistantImageContent({ images: message.images })
+      touchSession(session)
+      await scrollToBottom()
+      return
+    }
+    if (task.status === 'failed') {
+      message.content = failedImageContent(task.error_message)
+      touchSession(session)
+      await scrollToBottom()
+      return
+    }
+    touchSession(session)
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  }
+}
+
+function resumePendingImageTasks(): void {
+  for (const session of sessions.value) {
+    for (const message of session.messages) {
+      if (message.imageTaskId && (message.status === 'pending' || message.status === 'running')) {
+        void pollImageTask(session, message)
+      }
+    }
+  }
+}
+
 function clearSubmitState(): void {
   prompt.value = ''
   errorMessage.value = ''
@@ -578,22 +644,14 @@ async function regenerateImage(message: WebConsoleMessage): Promise<void> {
   submitting.value = true
 
   try {
-    const request = message.imageRequest
-    const result = await generateWebConsoleImage(
-      {
-        endpoint: selectedEndpoint.value,
-        apiKey: selectedKey.value.key,
-        model: request.model,
-        prompt: request.prompt,
-        history: currentSession.value?.messages.filter((item) => item.id !== message.id) || [],
-        imageOptions: request.options,
-      }
-    )
-    message.content = assistantImageContent(result)
-    message.images = result.images
+    message.content = pendingImageContent()
+    message.images = []
+    message.status = 'pending'
+    message.imageTaskId = undefined
     message.created_at = new Date().toISOString()
     const session = currentSession.value
     if (session) {
+      await createImageTaskForMessage(session, message)
       touchSession(session)
     }
     await scrollToBottom()
@@ -631,24 +689,19 @@ async function submit(): Promise<void> {
   try {
     if (activeMode.value === 'image') {
       const imageRequest = createImageRequest(input)
-      const result = await generateWebConsoleImage(
-        {
-          endpoint: selectedEndpoint.value,
-          apiKey: selectedKey.value.key,
-          model: imageRequest.model,
-          prompt: input,
-          history: session.messages.slice(0, -1),
-          imageOptions: imageRequest.options,
-        }
-      )
-      session.messages.push({
+      const assistantMessage: WebConsoleMessage = {
         id: createWebConsoleMessageId(),
         role: 'assistant',
-        content: assistantImageContent(result),
-        images: result.images,
+        content: pendingImageContent(),
+        images: [],
         imageRequest,
+        status: 'pending',
         created_at: new Date().toISOString(),
-      })
+      }
+      session.messages.push(assistantMessage)
+      touchSession(session)
+      await scrollToBottom()
+      await createImageTaskForMessage(session, assistantMessage)
     } else {
       const result = await sendWebConsoleChat(
         {
@@ -692,7 +745,7 @@ function applyDefaultEndpoint(): void {
   selectedEndpoint.value =
     (preferred && options.some((item) => item.endpoint === preferred) ? preferred : '') ||
     options[0]?.endpoint ||
-    window.location.origin
+    ''
 }
 
 function syncSelectedKeyWithEndpoint(): void {
@@ -730,6 +783,7 @@ onMounted(async () => {
   }
   applyDefaultEndpoint()
   await loadApiKeys()
+  resumePendingImageTasks()
 })
 </script>
 
