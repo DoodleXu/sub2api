@@ -234,10 +234,7 @@ func formatEmailHeaders(headers map[string]string) string {
 	sort.Strings(keys)
 	var builder strings.Builder
 	for _, key := range keys {
-		builder.WriteString(key)
-		builder.WriteString(": ")
-		builder.WriteString(sanitizeEmailHeader(headers[key]))
-		builder.WriteString("\r\n")
+		_, _ = fmt.Fprintf(&builder, "%s: %s\r\n", key, sanitizeEmailHeader(headers[key]))
 	}
 	return builder.String()
 }

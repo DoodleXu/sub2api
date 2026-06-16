@@ -1567,10 +1567,6 @@ func (s *NotificationEmailService) siteName(ctx context.Context) string {
 	return strings.TrimSpace(name)
 }
 
-func (s *NotificationEmailService) baseURL(ctx context.Context) string {
-	return s.configuredBaseURL(ctx, SettingKeyAPIBaseURL, SettingKeyFrontendURL)
-}
-
 func (s *NotificationEmailService) configuredBaseURL(ctx context.Context, keys ...string) string {
 	if s == nil || s.settingRepo == nil {
 		return ""
@@ -1594,14 +1590,6 @@ func (s *NotificationEmailService) unsubscribePageBaseURL(ctx context.Context) s
 
 func (s *NotificationEmailService) unsubscribeAPIBaseURL(ctx context.Context) string {
 	return s.configuredBaseURL(ctx, SettingKeyAPIBaseURL)
-}
-
-func (s *NotificationEmailService) buildUnsubscribeURL(ctx context.Context, email, event string) (string, error) {
-	token, err := s.createUnsubscribeToken(ctx, email, event)
-	if err != nil {
-		return "", err
-	}
-	return s.buildUnsubscribeAPIURL(ctx, token), nil
 }
 
 func (s *NotificationEmailService) buildUnsubscribePageURL(ctx context.Context, token string) string {
