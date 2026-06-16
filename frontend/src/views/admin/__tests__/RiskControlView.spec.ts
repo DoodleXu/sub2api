@@ -11,6 +11,7 @@ const {
   updateConfig,
   getStatus,
   listLogs,
+  listAllowedHashes,
   listUserPolicies,
   getGroups,
   getUserById,
@@ -18,6 +19,7 @@ const {
   allowHash,
   deleteAllowedHash,
   deleteFlaggedHash,
+  clearAllowedHashes,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -25,6 +27,7 @@ const {
   updateConfig: vi.fn(),
   getStatus: vi.fn(),
   listLogs: vi.fn(),
+  listAllowedHashes: vi.fn(),
   listUserPolicies: vi.fn(),
   getGroups: vi.fn(),
   getUserById: vi.fn(),
@@ -32,6 +35,7 @@ const {
   allowHash: vi.fn(),
   deleteAllowedHash: vi.fn(),
   deleteFlaggedHash: vi.fn(),
+  clearAllowedHashes: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -43,12 +47,14 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      listAllowedHashes,
       listUserPolicies,
       testAPIKeys: vi.fn(),
       allowHash,
       deleteAllowedHash,
       deleteFlaggedHash,
       clearFlaggedHashes: vi.fn(),
+      clearAllowedHashes,
       unbanUser: vi.fn(),
     },
     groups: {
@@ -276,6 +282,7 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    listAllowedHashes.mockReset()
     listUserPolicies.mockReset()
     getGroups.mockReset()
     getUserById.mockReset()
@@ -283,12 +290,14 @@ describe('admin RiskControlView', () => {
     allowHash.mockReset()
     deleteAllowedHash.mockReset()
     deleteFlaggedHash.mockReset()
+    clearAllowedHashes.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
 
     getConfig.mockResolvedValue(baseConfig())
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
+    listAllowedHashes.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10, pages: 1 })
     listUserPolicies.mockResolvedValue([])
     getGroups.mockResolvedValue([])
     getUserById.mockImplementation(async (id: number) => ({
@@ -344,12 +353,12 @@ describe('admin RiskControlView', () => {
     await findButtonByText(wrapper, fullInput).trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('admin.riskControl.inputDetailFullTitle')
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailTitle')
     expect(wrapper.text()).toContain('admin.riskControl.inputDetailContent')
     expect(wrapper.text()).toContain(fullInput)
   })
 
-  it('keeps normal allowed logs as summary content in the input dialog', async () => {
+  it('keeps normal allowed logs as full input content in the input dialog', async () => {
     listLogs.mockResolvedValue({
       items: [moderationLog({ input_excerpt: 'normal request summary' })],
       total: 1,
@@ -365,8 +374,7 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.riskControl.inputDetailTitle')
-    expect(wrapper.text()).toContain('admin.riskControl.inputDetailSummaryContent')
-    expect(wrapper.text()).not.toContain('admin.riskControl.inputDetailFullTitle')
+    expect(wrapper.text()).toContain('admin.riskControl.inputDetailContent')
   })
 
   it('allows a log hash directly from the audit table', async () => {
@@ -386,8 +394,53 @@ describe('admin RiskControlView', () => {
     await findButtonByText(wrapper, 'admin.riskControl.allowHashShort').trigger('click')
     await flushPromises()
 
-    expect(allowHash).toHaveBeenCalledWith(inputHash)
+    expect(allowHash).toHaveBeenCalledWith({
+      input_hash: inputHash,
+      source_log_id: 1,
+      note: undefined,
+    })
     expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.allowedHashAdded')
+  })
+
+  it('loads allowlisted hashes and clears them after confirmation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    listAllowedHashes.mockResolvedValue({
+      items: [
+        {
+          input_hash: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          source: 'manual',
+          input_excerpt: 'reviewed prompt',
+          created_by_email: 'admin@example.com',
+          note: 'false positive',
+          created_at: '2026-06-05T03:43:09Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+      pages: 1,
+    })
+    clearAllowedHashes.mockResolvedValue({ deleted: 1 })
+    getStatus
+      .mockResolvedValueOnce({ ...runtimeStatus(), allowed_hash_count: 1 })
+      .mockResolvedValue({ ...runtimeStatus(), allowed_hash_count: 0 })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.runtime').trigger('click')
+    await flushPromises()
+
+    expect(listAllowedHashes).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('false positive')
+
+    await findButtonByText(wrapper, 'admin.riskControl.clearAllowedHashes').trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalledWith('admin.riskControl.clearAllowedHashesConfirm')
+    expect(clearAllowedHashes).toHaveBeenCalled()
+    expect(showSuccess).toHaveBeenCalledWith('admin.riskControl.allowedHashesCleared')
+    confirmSpy.mockRestore()
   })
 
   it('saves the selected model filter mode and models', async () => {

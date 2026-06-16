@@ -63,7 +63,9 @@ type contentModerationAPIKeyTestRequest struct {
 }
 
 type contentModerationHashRequest struct {
-	InputHash string `json:"input_hash"`
+	InputHash   string `json:"input_hash"`
+	SourceLogID *int64 `json:"source_log_id"`
+	Note        string `json:"note"`
 }
 
 type contentModerationUserPolicyRequest struct {
@@ -211,6 +213,23 @@ func (h *ContentModerationHandler) ListLogs(c *gin.Context) {
 	response.Paginated(c, items, pageResult.Total, pageResult.Page, pageResult.PageSize)
 }
 
+func (h *ContentModerationHandler) ListAllowedHashes(c *gin.Context) {
+	page, pageSize := response.ParsePagination(c)
+	items, pageResult, err := h.service.ListAllowedInputHashes(c.Request.Context(), service.ContentModerationAllowedHashFilter{
+		Pagination: pagination.PaginationParams{
+			Page:      page,
+			PageSize:  pageSize,
+			SortOrder: pagination.SortOrderDesc,
+		},
+		Search: c.Query("search"),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, items, pageResult.Total, pageResult.Page, pageResult.PageSize)
+}
+
 func (h *ContentModerationHandler) ListUserPolicies(c *gin.Context) {
 	items, err := h.service.ListUserPolicies(c.Request.Context())
 	if err != nil {
@@ -300,7 +319,12 @@ func (h *ContentModerationHandler) AllowHash(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	result, err := h.service.AllowInputHash(c.Request.Context(), req.InputHash)
+	result, err := h.service.AllowInputHash(c.Request.Context(), service.ContentModerationAllowHashInput{
+		InputHash:   req.InputHash,
+		SourceLogID: req.SourceLogID,
+		Note:        req.Note,
+		ActorID:     getAdminIDFromContext(c),
+	})
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -314,7 +338,16 @@ func (h *ContentModerationHandler) DeleteAllowedHash(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	result, err := h.service.DeleteAllowedInputHash(c.Request.Context(), req.InputHash)
+	result, err := h.service.DeleteAllowedInputHash(c.Request.Context(), req.InputHash, getAdminIDFromContext(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ContentModerationHandler) ClearAllowedHashes(c *gin.Context) {
+	result, err := h.service.ClearAllowedInputHashes(c.Request.Context(), getAdminIDFromContext(c))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

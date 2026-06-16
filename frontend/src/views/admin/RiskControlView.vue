@@ -358,7 +358,7 @@
                           class="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
                           :title="t('admin.riskControl.allowHash')"
                           :disabled="hashActionLoading"
-                          @click="allowHash(row.input_hash)"
+                          @click="allowHash(row.input_hash, row.id)"
                         >
                           <Icon name="checkCircle" size="xs" />
                           {{ t('admin.riskControl.allowHashShort') }}
@@ -964,23 +964,38 @@
                 </div>
                 <div class="mt-4 border-t border-gray-200 pt-4 dark:border-dark-700">
                   <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                    <div>
-                      <p class="text-sm font-medium text-gray-900 dark:text-white">
-                        {{ t('admin.riskControl.allowedHashCount', { count: formatNumber(status?.allowed_hash_count ?? 0) }) }}
-                      </p>
-                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashHint') }}</p>
-                    </div>
-                  </div>
-                  <div class="mt-3 flex flex-col gap-2 sm:flex-row">
-                    <input
-                      v-model.trim="allowedHashInput"
-                      type="text"
-                      class="input font-mono text-sm"
-                      :placeholder="t('admin.riskControl.allowedHashPlaceholder')"
-                    />
-                    <button
-                      type="button"
-                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
+	                    <div>
+	                      <p class="text-sm font-medium text-gray-900 dark:text-white">
+	                        {{ t('admin.riskControl.allowedHashCount', { count: formatNumber(status?.allowed_hash_count ?? 0) }) }}
+	                      </p>
+	                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashHint') }}</p>
+	                    </div>
+	                    <button
+	                      type="button"
+	                      class="btn btn-secondary inline-flex items-center justify-center gap-2 text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-300"
+	                      :disabled="hashActionLoading || (status?.allowed_hash_count ?? 0) === 0"
+	                      @click="clearAllowedHashes"
+	                    >
+	                      <Icon name="trash" size="sm" :class="hashActionLoading ? 'animate-pulse' : ''" />
+	                      {{ t('admin.riskControl.clearAllowedHashes') }}
+	                    </button>
+	                  </div>
+	                  <div class="mt-3 grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.3fr)_minmax(180px,0.7fr)_auto_auto]">
+	                    <input
+	                      v-model.trim="allowedHashInput"
+	                      type="text"
+	                      class="input font-mono text-sm"
+	                      :placeholder="t('admin.riskControl.allowedHashPlaceholder')"
+	                    />
+	                    <input
+	                      v-model.trim="allowedHashNote"
+	                      type="text"
+	                      class="input text-sm"
+	                      :placeholder="t('admin.riskControl.allowedHashNotePlaceholder')"
+	                    />
+	                    <button
+	                      type="button"
+	                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
                       :disabled="hashActionLoading || !isAllowedHashInputValid"
                       @click="allowHash()"
                     >
@@ -988,16 +1003,91 @@
                       {{ t('admin.riskControl.allowHash') }}
                     </button>
                     <button
-                      type="button"
-                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
-                      :disabled="hashActionLoading || !isAllowedHashInputValid"
-                      @click="deleteAllowedHash"
-                    >
-                      <Icon name="trash" size="sm" />
-                      {{ t('admin.riskControl.deleteAllowedHash') }}
-                    </button>
-                  </div>
-                </div>
+	                      type="button"
+	                      class="btn btn-secondary inline-flex items-center justify-center gap-2"
+	                      :disabled="hashActionLoading || !isAllowedHashInputValid"
+	                      @click="deleteAllowedHash()"
+	                    >
+	                      <Icon name="trash" size="sm" />
+	                      {{ t('admin.riskControl.deleteAllowedHash') }}
+	                    </button>
+	                  </div>
+	                  <div class="mt-4 rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-800">
+	                    <div class="flex flex-col gap-2 border-b border-gray-100 p-3 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between">
+	                      <input
+	                        v-model.trim="allowedHashSearch"
+	                        type="search"
+	                        class="input sm:w-80"
+	                        :placeholder="t('admin.riskControl.allowedHashSearchPlaceholder')"
+	                        @keyup.enter="reloadAllowedHashesFromFirstPage"
+	                      />
+	                      <button
+	                        type="button"
+	                        class="btn btn-secondary inline-flex items-center justify-center gap-2"
+	                        :disabled="allowedHashesLoading"
+	                        @click="loadAllowedHashes"
+	                      >
+	                        <Icon name="refresh" size="sm" :class="allowedHashesLoading ? 'animate-spin' : ''" />
+	                        {{ t('admin.riskControl.refresh') }}
+	                      </button>
+	                    </div>
+	                    <div class="overflow-x-auto">
+	                      <table class="min-w-full divide-y divide-gray-100 dark:divide-dark-700">
+	                        <thead class="bg-gray-50 dark:bg-dark-900/40">
+	                          <tr>
+	                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashColumns.hash') }}</th>
+	                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashColumns.source') }}</th>
+	                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashColumns.note') }}</th>
+	                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashColumns.createdAt') }}</th>
+	                            <th class="px-3 py-2 text-right text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{{ t('common.actions') }}</th>
+	                          </tr>
+	                        </thead>
+	                        <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+	                          <tr v-if="allowedHashesLoading">
+	                            <td colspan="5" class="px-3 py-8 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('common.loading') }}</td>
+	                          </tr>
+	                          <tr v-else-if="allowedHashes.length === 0">
+	                            <td colspan="5" class="px-3 py-8 text-center text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.allowedHashEmpty') }}</td>
+	                          </tr>
+	                          <template v-else>
+	                            <tr v-for="item in allowedHashes" :key="item.input_hash" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
+	                              <td class="whitespace-nowrap px-3 py-2">
+	                                <button type="button" class="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-600 hover:text-primary-700 dark:border-dark-600 dark:bg-dark-900/40 dark:text-gray-300" :title="item.input_hash" @click="copyInputHash(item.input_hash)">
+	                                  <Icon name="copy" size="xs" />
+	                                  {{ shortHash(item.input_hash) }}
+	                                </button>
+	                              </td>
+	                              <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+	                                <div>{{ allowedHashSourceLabel(item.source) }}</div>
+	                                <div v-if="item.source_log_id" class="text-xs text-gray-400">#{{ item.source_log_id }}</div>
+	                              </td>
+	                              <td class="max-w-xs px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+	                                <div class="truncate">{{ item.note || item.input_excerpt || '-' }}</div>
+	                                <div v-if="item.created_by_email" class="truncate text-xs text-gray-400">{{ item.created_by_email }}</div>
+	                              </td>
+	                              <td class="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{{ formatDateTime(item.created_at) }}</td>
+	                              <td class="whitespace-nowrap px-3 py-2 text-right">
+	                                <button type="button" class="rounded-md p-2 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-900/20" :disabled="hashActionLoading" :title="t('admin.riskControl.deleteAllowedHash')" @click="deleteAllowedHash(item.input_hash)">
+	                                  <Icon name="trash" size="sm" />
+	                                </button>
+	                              </td>
+	                            </tr>
+	                          </template>
+	                        </tbody>
+	                      </table>
+	                    </div>
+	                    <div class="border-t border-gray-100 p-3 dark:border-dark-700">
+	                      <Pagination
+	                        v-if="allowedHashPagination.total > 0"
+	                        :page="allowedHashPagination.page"
+	                        :total="allowedHashPagination.total"
+	                        :page-size="allowedHashPagination.page_size"
+	                        @update:page="onAllowedHashPageChange"
+	                        @update:pageSize="onAllowedHashPageSizeChange"
+	                      />
+	                    </div>
+	                  </div>
+	                </div>
               </div>
             </div>
           </div>
@@ -1443,21 +1533,22 @@ import Pagination from '@/components/common/Pagination.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
 import type {
+  ContentModerationAllowedHash,
   ContentModerationAPIKeyLoad,
   ContentModerationAPIKeyStatus,
-	  ContentModerationConfig,
-	  ContentModerationLog,
-	  ContentModerationModelFilter,
-	  ContentModerationModelFilterType,
-	  ContentModerationRuntimeStatus,
-	  ContentModerationTestAuditResult,
-	  ContentModerationUserPolicy,
-	  ContentModerationUserPolicyAction,
-	  KeywordBlockingMode,
-	  ModerationMode,
-	  UpdateContentModerationConfig,
-	  UpsertContentModerationUserPolicyPayload,
-	} from '@/api/admin/riskControl'
+  ContentModerationConfig,
+  ContentModerationLog,
+  ContentModerationModelFilter,
+  ContentModerationModelFilterType,
+  ContentModerationRuntimeStatus,
+  ContentModerationTestAuditResult,
+  ContentModerationUserPolicy,
+  ContentModerationUserPolicyAction,
+  KeywordBlockingMode,
+  ModerationMode,
+  UpdateContentModerationConfig,
+  UpsertContentModerationUserPolicyPayload,
+} from '@/api/admin/riskControl'
 import type { AdminGroup, AdminUser, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
@@ -1522,6 +1613,7 @@ const loading = ref(true)
 const saving = ref(false)
 const logsLoading = ref(false)
 const statusLoading = ref(false)
+const allowedHashesLoading = ref(false)
 const apiKeyTesting = ref(false)
 const hashActionLoading = ref(false)
 const userPoliciesLoading = ref(false)
@@ -1537,6 +1629,8 @@ const whitelistUserSearchOpen = ref(false)
 const whitelistUserSearchLoading = ref(false)
 const flaggedHashInput = ref('')
 const allowedHashInput = ref('')
+const allowedHashNote = ref('')
+const allowedHashSearch = ref('')
 const groups = ref<AdminGroup[]>([])
 const whitelistUsers = ref<Record<number, WhitelistUserSummary>>({})
 const userPolicies = ref<ContentModerationUserPolicy[]>([])
@@ -1549,6 +1643,7 @@ const editingUserPolicyID = ref<number | null>(null)
 const forcedWhitelistUserIDs = ref<number[]>([])
 const whitelistUserSearchResults = ref<AdminUser[]>([])
 const logs = ref<ContentModerationLog[]>([])
+const allowedHashes = ref<ContentModerationAllowedHash[]>([])
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const testedApiKeyStatuses = ref<ContentModerationAPIKeyStatus[]>([])
 const pendingDeleteApiKeyHashes = ref<string[]>([])
@@ -1616,6 +1711,13 @@ const userPolicyForm = reactive({
 const pagination = reactive({
   page: 1,
   page_size: 20,
+  total: 0,
+  pages: 1,
+})
+
+const allowedHashPagination = reactive({
+  page: 1,
+  page_size: 10,
   total: 0,
   pages: 1,
 })
@@ -1975,15 +2077,11 @@ const inputDetailText = computed(() => {
 })
 
 const inputDetailTitle = computed(() => (
-  inputDetailRow.value && isBlockedRow(inputDetailRow.value)
-    ? t('admin.riskControl.inputDetailFullTitle')
-    : t('admin.riskControl.inputDetailTitle')
+  t('admin.riskControl.inputDetailTitle')
 ))
 
 const inputDetailContentLabel = computed(() => (
-  inputDetailRow.value && isBlockedRow(inputDetailRow.value)
-    ? t('admin.riskControl.inputDetailContent')
-    : t('admin.riskControl.inputDetailSummaryContent')
+  t('admin.riskControl.inputDetailContent')
 ))
 
 const queueUsagePercent = computed(() => `${Math.min(100, Math.max(0, status.value?.queue_usage_percent ?? 0)).toFixed(1)}%`)
@@ -2155,7 +2253,7 @@ async function loadAll() {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
       prunePendingDeleteAPIKeyHashes()
     }
-    await loadLogs()
+    await Promise.all([loadLogs(), loadAllowedHashes()])
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.loadFailed')))
   } finally {
@@ -2270,6 +2368,26 @@ async function loadLogs() {
   }
 }
 
+async function loadAllowedHashes() {
+  allowedHashesLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.listAllowedHashes({
+      page: allowedHashPagination.page,
+      page_size: allowedHashPagination.page_size,
+      search: allowedHashSearch.value || undefined,
+    })
+    allowedHashes.value = result.items
+    allowedHashPagination.total = result.total
+    allowedHashPagination.page = result.page
+    allowedHashPagination.page_size = result.page_size
+    allowedHashPagination.pages = result.pages
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashListFailed')))
+  } finally {
+    allowedHashesLoading.value = false
+  }
+}
+
 function canUnbanRow(row: ContentModerationLog): boolean {
   return Boolean(row.auto_banned && row.user_id && row.user_status === 'disabled')
 }
@@ -2282,6 +2400,15 @@ function shortHash(hash: string): string {
   const value = (hash || '').trim()
   if (value.length <= 16) return value || '-'
   return `${value.slice(0, 8)}...${value.slice(-6)}`
+}
+
+function allowedHashSourceLabel(source: ContentModerationAllowedHash['source']): string {
+  const labels: Record<ContentModerationAllowedHash['source'], string> = {
+    manual: t('admin.riskControl.allowedHashSources.manual'),
+    audit_log: t('admin.riskControl.allowedHashSources.auditLog'),
+    legacy_redis: t('admin.riskControl.allowedHashSources.legacyRedis'),
+  }
+  return labels[source] || source
 }
 
 async function copyInputHash(hash: string) {
@@ -2338,16 +2465,21 @@ async function deleteFlaggedHash() {
   }
 }
 
-async function allowHash(inputHash?: string) {
+async function allowHash(inputHash?: string, sourceLogID?: number) {
   const hash = (inputHash ?? allowedHashInput.value).trim()
   if (!/^[a-fA-F0-9]{64}$/.test(hash) || hashActionLoading.value) return
   hashActionLoading.value = true
   try {
-    const result = await adminAPI.riskControl.allowHash(hash)
+    const result = await adminAPI.riskControl.allowHash({
+      input_hash: hash,
+      source_log_id: sourceLogID,
+      note: inputHash ? undefined : allowedHashNote.value.trim() || undefined,
+    })
     if (!inputHash) {
       allowedHashInput.value = ''
+      allowedHashNote.value = ''
     }
-    await loadStatus(true)
+    await Promise.all([loadStatus(true), loadAllowedHashes()])
     appStore.showSuccess(result.added ? t('admin.riskControl.allowedHashAdded') : t('admin.riskControl.allowedHashAlreadyExists'))
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashAddFailed')))
@@ -2356,16 +2488,37 @@ async function allowHash(inputHash?: string) {
   }
 }
 
-async function deleteAllowedHash() {
-  if (!isAllowedHashInputValid.value || hashActionLoading.value) return
+async function deleteAllowedHash(inputHash?: string) {
+  const hash = (inputHash ?? allowedHashInput.value).trim()
+  if (!/^[a-fA-F0-9]{64}$/.test(hash) || hashActionLoading.value) return
   hashActionLoading.value = true
   try {
-    const result = await adminAPI.riskControl.deleteAllowedHash(allowedHashInput.value)
-    allowedHashInput.value = ''
-    await loadStatus(true)
+    const result = await adminAPI.riskControl.deleteAllowedHash(hash)
+    if (!inputHash) {
+      allowedHashInput.value = ''
+    }
+    await Promise.all([loadStatus(true), loadAllowedHashes()])
     appStore.showSuccess(result.deleted ? t('admin.riskControl.allowedHashDeleted') : t('admin.riskControl.allowedHashNotFound'))
   } catch (err: unknown) {
     appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashDeleteFailed')))
+  } finally {
+    hashActionLoading.value = false
+  }
+}
+
+async function clearAllowedHashes() {
+  if (hashActionLoading.value) return
+  const confirmed = window.confirm(t('admin.riskControl.clearAllowedHashesConfirm'))
+  if (!confirmed) return
+  hashActionLoading.value = true
+  try {
+    const result = await adminAPI.riskControl.clearAllowedHashes()
+    allowedHashInput.value = ''
+    allowedHashNote.value = ''
+    await Promise.all([loadStatus(true), loadAllowedHashes()])
+    appStore.showSuccess(t('admin.riskControl.allowedHashesCleared', { count: result.deleted }))
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.riskControl.allowedHashesClearFailed')))
   } finally {
     hashActionLoading.value = false
   }
@@ -2417,6 +2570,22 @@ function onPageSizeChange(pageSize: number) {
   pagination.page = 1
   pagination.page_size = pageSize
   void loadLogs()
+}
+
+function reloadAllowedHashesFromFirstPage() {
+  allowedHashPagination.page = 1
+  void loadAllowedHashes()
+}
+
+function onAllowedHashPageChange(page: number) {
+  allowedHashPagination.page = page
+  void loadAllowedHashes()
+}
+
+function onAllowedHashPageSizeChange(pageSize: number) {
+  allowedHashPagination.page = 1
+  allowedHashPagination.page_size = pageSize
+  void loadAllowedHashes()
 }
 
 function toggleClearApiKey() {

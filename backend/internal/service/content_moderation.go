@@ -58,6 +58,10 @@ const (
 	ContentModerationUserPolicyActionBlockNotify    = "block_notify"
 	ContentModerationUserPolicyActionBlockNotifyBan = "block_notify_disable"
 
+	ContentModerationAllowedHashSourceManual      = "manual"
+	ContentModerationAllowedHashSourceAuditLog    = "audit_log"
+	ContentModerationAllowedHashSourceLegacyRedis = "legacy_redis"
+
 	defaultContentModerationAdminUserID = 1
 
 	defaultContentModerationBaseURL   = "https://api.openai.com"
@@ -65,7 +69,6 @@ const (
 	defaultContentModerationTimeoutMS = 3000
 	maxContentModerationTimeoutMS     = 30000
 	maxModerationInputRunes           = 12000
-	maxModerationExcerptRunes         = 240
 
 	defaultContentModerationWorkerCount          = 4
 	maxContentModerationWorkerCount              = 32
@@ -95,8 +98,10 @@ const (
 	maxContentModerationModelFilterRunes         = 200
 	maxContentModerationWhitelistUserIDs         = 1000
 	maxContentModerationPolicyNoteRunes          = 500
+	maxContentModerationAllowedHashNoteRunes     = 500
 	contentModerationPolicyCacheTTL              = 30 * time.Second
 	contentModerationForcedWhitelistCacheTTL     = time.Minute
+	contentModerationLegacyAllowedHashImportKey  = "content_moderation.allowed_hash_legacy_redis_imported"
 
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
@@ -533,6 +538,39 @@ type ContentModerationClearHashesResult struct {
 	Deleted int64 `json:"deleted"`
 }
 
+type ContentModerationAllowedHash struct {
+	InputHash      string    `json:"input_hash"`
+	Source         string    `json:"source"`
+	SourceLogID    *int64    `json:"source_log_id,omitempty"`
+	InputExcerpt   string    `json:"input_excerpt"`
+	CreatedBy      *int64    `json:"created_by,omitempty"`
+	CreatedByEmail string    `json:"created_by_email"`
+	Note           string    `json:"note"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ContentModerationAllowedHashFilter struct {
+	Pagination pagination.PaginationParams
+	Search     string
+}
+
+type ContentModerationAllowHashInput struct {
+	InputHash   string
+	SourceLogID *int64
+	Note        string
+	ActorID     int64
+	Source      string
+}
+
+type ContentModerationAllowedHashEvent struct {
+	Action      string
+	InputHash   string
+	ActorID     int64
+	SourceLogID *int64
+	Note        string
+	Metadata    map[string]any
+}
+
 type ContentModerationRepository interface {
 	CreateLog(ctx context.Context, log *ContentModerationLog) error
 	ListLogs(ctx context.Context, filter ContentModerationLogFilter) ([]ContentModerationLog, *pagination.PaginationResult, error)
@@ -542,6 +580,13 @@ type ContentModerationRepository interface {
 	CreateUserPolicy(ctx context.Context, policy *ContentModerationUserPolicy) error
 	UpdateUserPolicy(ctx context.Context, policy *ContentModerationUserPolicy) error
 	DeleteUserPolicy(ctx context.Context, id int64) error
+	ListAllowedHashes(ctx context.Context, filter ContentModerationAllowedHashFilter) ([]ContentModerationAllowedHash, *pagination.PaginationResult, error)
+	HasAllowedHash(ctx context.Context, inputHash string) (bool, error)
+	CountAllowedHashes(ctx context.Context) (int64, error)
+	AllowHash(ctx context.Context, input ContentModerationAllowHashInput) (bool, error)
+	DeleteAllowedHash(ctx context.Context, inputHash string, actorID int64) (bool, error)
+	ClearAllowedHashes(ctx context.Context, actorID int64) (int64, error)
+	RecordAllowedHashEvent(ctx context.Context, event ContentModerationAllowedHashEvent) error
 }
 
 type ContentModerationHashCache interface {
@@ -553,43 +598,46 @@ type ContentModerationHashCache interface {
 	RecordAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
 	HasAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
 	DeleteAllowedInputHash(ctx context.Context, inputHash string) (bool, error)
+	ClearAllowedInputHashes(ctx context.Context) (int64, error)
 	CountAllowedInputHashes(ctx context.Context) (int64, error)
+	ListAllowedInputHashes(ctx context.Context) ([]string, error)
 }
 
 type ContentModerationService struct {
-	settingRepo              SettingRepository
-	repo                     ContentModerationRepository
-	hashCache                ContentModerationHashCache
-	groupRepo                GroupRepository
-	userRepo                 UserRepository
-	authCacheInvalidator     APIKeyAuthCacheInvalidator
-	emailService             *EmailService
-	httpClient               *http.Client
-	asyncQueue               chan contentModerationTask
-	workerCount              int
-	apiKeyCursor             atomic.Uint64
-	asyncActive              atomic.Int64
-	asyncEnqueued            atomic.Int64
-	asyncDropped             atomic.Int64
-	asyncProcessed           atomic.Int64
-	asyncErrors              atomic.Int64
-	preBlockActive           atomic.Int64
-	preBlockChecked          atomic.Int64
-	preBlockAllowed          atomic.Int64
-	preBlockBlocked          atomic.Int64
-	preBlockErrors           atomic.Int64
-	preBlockLatencyTotalMS   atomic.Int64
-	lastCleanupUnix          atomic.Int64
-	lastCleanupDeletedHit    atomic.Int64
-	lastCleanupDeletedNonHit atomic.Int64
-	keyHealthMu              sync.Mutex
-	keyHealth                map[string]*contentModerationKeyHealth
-	forcedWhitelistMu        sync.Mutex
-	forcedWhitelistIDs       []int64
-	forcedWhitelistLoadedAt  time.Time
-	policyMu                 sync.RWMutex
-	policyByUserID           map[int64]ContentModerationUserPolicy
-	policyLoadedAt           time.Time
+	settingRepo                    SettingRepository
+	repo                           ContentModerationRepository
+	hashCache                      ContentModerationHashCache
+	groupRepo                      GroupRepository
+	userRepo                       UserRepository
+	authCacheInvalidator           APIKeyAuthCacheInvalidator
+	emailService                   *EmailService
+	httpClient                     *http.Client
+	asyncQueue                     chan contentModerationTask
+	workerCount                    int
+	apiKeyCursor                   atomic.Uint64
+	asyncActive                    atomic.Int64
+	asyncEnqueued                  atomic.Int64
+	asyncDropped                   atomic.Int64
+	asyncProcessed                 atomic.Int64
+	asyncErrors                    atomic.Int64
+	preBlockActive                 atomic.Int64
+	preBlockChecked                atomic.Int64
+	preBlockAllowed                atomic.Int64
+	preBlockBlocked                atomic.Int64
+	preBlockErrors                 atomic.Int64
+	preBlockLatencyTotalMS         atomic.Int64
+	lastCleanupUnix                atomic.Int64
+	lastCleanupDeletedHit          atomic.Int64
+	lastCleanupDeletedNonHit       atomic.Int64
+	keyHealthMu                    sync.Mutex
+	keyHealth                      map[string]*contentModerationKeyHealth
+	forcedWhitelistMu              sync.Mutex
+	forcedWhitelistIDs             []int64
+	forcedWhitelistLoadedAt        time.Time
+	policyMu                       sync.RWMutex
+	policyByUserID                 map[int64]ContentModerationUserPolicy
+	policyLoadedAt                 time.Time
+	allowedHashLegacyRedisImported atomic.Bool
 }
 
 type contentModerationTask struct {
@@ -976,24 +1024,22 @@ func (s *ContentModerationService) Check(ctx context.Context, input ContentModer
 		"image_count", len(content.Images))
 	hashText := content.Hash()
 	effectiveCfg := s.effectiveConfigForUserPolicy(ctx, cfg, input.UserID)
-	if s.hashCache != nil {
-		allowed, err := s.hashCache.HasAllowedInputHash(ctx, hashText)
-		if err != nil {
-			slog.Warn("content_moderation.allow_hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
-		} else if allowed {
-			if effectiveCfg.Mode == ContentModerationModePreBlock {
-				s.recordPreBlockSyncMetric(0, ContentModerationActionAllow)
-			}
-			slog.Info("content_moderation.allow_hash_matched",
-				"user_id", input.UserID,
-				"api_key_id", input.APIKeyID,
-				"group_id", contentModerationLogGroupID(input.GroupID),
-				"endpoint", input.Endpoint,
-				"protocol", input.Protocol,
-				"input_hash", hashText)
-			s.recordAllowedInputHashLog(ctx, input, effectiveCfg, content, hashText)
-			return allow, nil
+	allowed, err := s.hasAllowedInputHash(ctx, hashText)
+	if err != nil {
+		slog.Warn("content_moderation.allow_hash_check_failed", "user_id", input.UserID, "endpoint", input.Endpoint, "error", err)
+	} else if allowed {
+		if effectiveCfg.Mode == ContentModerationModePreBlock {
+			s.recordPreBlockSyncMetric(0, ContentModerationActionAllow)
 		}
+		slog.Info("content_moderation.allow_hash_matched",
+			"user_id", input.UserID,
+			"api_key_id", input.APIKeyID,
+			"group_id", contentModerationLogGroupID(input.GroupID),
+			"endpoint", input.Endpoint,
+			"protocol", input.Protocol,
+			"input_hash", hashText)
+		s.recordAllowedInputHashLog(ctx, input, effectiveCfg, content, hashText)
+		return allow, nil
 	}
 	if effectiveCfg.Mode == ContentModerationModePreBlock {
 		if effectiveCfg.KeywordBlockingMode != ContentModerationKeywordModeAPIOnly && len(effectiveCfg.BlockedKeywords) > 0 {
@@ -1518,20 +1564,46 @@ func (s *ContentModerationService) DeleteFlaggedInputHash(ctx context.Context, i
 	}, nil
 }
 
-func (s *ContentModerationService) AllowInputHash(ctx context.Context, inputHash string) (*ContentModerationAllowHashResult, error) {
-	inputHash = normalizeContentModerationHash(inputHash)
+func (s *ContentModerationService) ListAllowedInputHashes(ctx context.Context, filter ContentModerationAllowedHashFilter) ([]ContentModerationAllowedHash, *pagination.PaginationResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "内容审计白名单存储不可用")
+	}
+	s.importLegacyRedisAllowedHashes(ctx)
+	items, page, err := s.repo.ListAllowedHashes(ctx, filter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list content moderation allowed hashes: %w", err)
+	}
+	return items, page, nil
+}
+
+func (s *ContentModerationService) AllowInputHash(ctx context.Context, input ContentModerationAllowHashInput) (*ContentModerationAllowHashResult, error) {
+	inputHash := normalizeContentModerationHash(input.InputHash)
 	if inputHash == "" {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_HASH", "风险输入哈希无效")
 	}
-	if s == nil || s.hashCache == nil {
-		return nil, infraerrors.InternalServer("CONTENT_MODERATION_HASH_CACHE_UNAVAILABLE", "内容审计哈希缓存不可用")
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "内容审计白名单存储不可用")
 	}
-	added, err := s.hashCache.RecordAllowedInputHash(ctx, inputHash)
+	input.InputHash = inputHash
+	if input.SourceLogID != nil && *input.SourceLogID <= 0 {
+		input.SourceLogID = nil
+	}
+	input.Note = trimRunes(strings.TrimSpace(input.Note), maxContentModerationAllowedHashNoteRunes)
+	input.Source = normalizeContentModerationAllowedHashSource(input.Source, input.SourceLogID)
+	s.importLegacyRedisAllowedHashes(ctx)
+	added, err := s.repo.AllowHash(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("allow content moderation hash: %w", err)
 	}
-	if _, err := s.hashCache.DeleteFlaggedInputHash(ctx, inputHash); err != nil {
-		slog.Warn("content_moderation.delete_flagged_hash_after_allow_failed", "input_hash", inputHash, "error", err)
+	if s.hashCache != nil {
+		if _, err := s.hashCache.RecordAllowedInputHash(ctx, inputHash); err != nil {
+			slog.Warn("content_moderation.cache_allowed_hash_after_allow_failed", "input_hash", inputHash, "error", err)
+		}
+	}
+	if s.hashCache != nil {
+		if _, err := s.hashCache.DeleteFlaggedInputHash(ctx, inputHash); err != nil {
+			slog.Warn("content_moderation.delete_flagged_hash_after_allow_failed", "input_hash", inputHash, "error", err)
+		}
 	}
 	return &ContentModerationAllowHashResult{
 		InputHash: inputHash,
@@ -1539,22 +1611,163 @@ func (s *ContentModerationService) AllowInputHash(ctx context.Context, inputHash
 	}, nil
 }
 
-func (s *ContentModerationService) DeleteAllowedInputHash(ctx context.Context, inputHash string) (*ContentModerationDeleteHashResult, error) {
+func (s *ContentModerationService) hasAllowedInputHash(ctx context.Context, inputHash string) (bool, error) {
+	inputHash = normalizeContentModerationHash(inputHash)
+	if inputHash == "" {
+		return false, nil
+	}
+	if s == nil {
+		return false, nil
+	}
+	if s.repo != nil {
+		s.importLegacyRedisAllowedHashes(ctx)
+		allowed, err := s.repo.HasAllowedHash(ctx, inputHash)
+		if err != nil {
+			return false, err
+		}
+		if allowed {
+			if s.hashCache != nil {
+				if _, err := s.hashCache.RecordAllowedInputHash(ctx, inputHash); err != nil {
+					slog.Warn("content_moderation.cache_allowed_hash_after_db_hit_failed", "input_hash", inputHash, "error", err)
+				}
+			}
+			return true, nil
+		}
+		return false, nil
+	}
+	if s.hashCache == nil {
+		return false, nil
+	}
+	allowed, err := s.hashCache.HasAllowedInputHash(ctx, inputHash)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	return true, nil
+}
+
+func (s *ContentModerationService) DeleteAllowedInputHash(ctx context.Context, inputHash string, actorID int64) (*ContentModerationDeleteHashResult, error) {
 	inputHash = normalizeContentModerationHash(inputHash)
 	if inputHash == "" {
 		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_HASH", "风险输入哈希无效")
 	}
-	if s == nil || s.hashCache == nil {
-		return nil, infraerrors.InternalServer("CONTENT_MODERATION_HASH_CACHE_UNAVAILABLE", "内容审计哈希缓存不可用")
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "内容审计白名单存储不可用")
 	}
-	deleted, err := s.hashCache.DeleteAllowedInputHash(ctx, inputHash)
+	s.importLegacyRedisAllowedHashes(ctx)
+	deleted, err := s.repo.DeleteAllowedHash(ctx, inputHash, actorID)
 	if err != nil {
 		return nil, fmt.Errorf("delete content moderation allowed hash: %w", err)
+	}
+	if s.hashCache != nil {
+		if _, err := s.hashCache.DeleteAllowedInputHash(ctx, inputHash); err != nil {
+			slog.Warn("content_moderation.cache_allowed_hash_delete_failed", "input_hash", inputHash, "error", err)
+		}
 	}
 	return &ContentModerationDeleteHashResult{
 		InputHash: inputHash,
 		Deleted:   deleted,
 	}, nil
+}
+
+func (s *ContentModerationService) ClearAllowedInputHashes(ctx context.Context, actorID int64) (*ContentModerationClearHashesResult, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CONTENT_MODERATION_REPOSITORY_UNAVAILABLE", "内容审计白名单存储不可用")
+	}
+	s.importLegacyRedisAllowedHashes(ctx)
+	deleted, err := s.repo.ClearAllowedHashes(ctx, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("clear content moderation allowed hashes: %w", err)
+	}
+	if s.hashCache != nil {
+		if _, err := s.hashCache.ClearAllowedInputHashes(ctx); err != nil {
+			slog.Warn("content_moderation.cache_allowed_hash_clear_failed", "error", err)
+		}
+	}
+	return &ContentModerationClearHashesResult{Deleted: deleted}, nil
+}
+
+func (s *ContentModerationService) importLegacyRedisAllowedHashes(ctx context.Context) {
+	if s == nil || s.repo == nil || s.hashCache == nil {
+		return
+	}
+	if s.allowedHashLegacyRedisImported.Load() {
+		return
+	}
+	if s.legacyRedisAllowedHashImportCompleted(ctx) {
+		s.allowedHashLegacyRedisImported.Store(true)
+		return
+	}
+	if !s.allowedHashLegacyRedisImported.CompareAndSwap(false, true) {
+		return
+	}
+	hashes, err := s.hashCache.ListAllowedInputHashes(ctx)
+	if err != nil {
+		s.allowedHashLegacyRedisImported.Store(false)
+		slog.Warn("content_moderation.legacy_allowed_hash_list_failed", "error", err)
+		return
+	}
+	importFailed := false
+	for _, hash := range hashes {
+		hash = normalizeContentModerationHash(hash)
+		if hash == "" {
+			continue
+		}
+		if added, err := s.repo.AllowHash(ctx, ContentModerationAllowHashInput{
+			InputHash: hash,
+			Source:    ContentModerationAllowedHashSourceLegacyRedis,
+			Note:      "imported from legacy Redis allowlist",
+		}); err != nil {
+			importFailed = true
+			slog.Warn("content_moderation.legacy_allowed_hash_import_failed", "input_hash", hash, "error", err)
+		} else if added {
+			slog.Info("content_moderation.legacy_allowed_hash_imported", "input_hash", hash)
+		}
+	}
+	if importFailed {
+		s.allowedHashLegacyRedisImported.Store(false)
+		return
+	}
+	if err := s.markLegacyRedisAllowedHashImportCompleted(ctx); err != nil {
+		s.allowedHashLegacyRedisImported.Store(false)
+		slog.Warn("content_moderation.legacy_allowed_hash_import_marker_failed", "error", err)
+	}
+}
+
+func (s *ContentModerationService) legacyRedisAllowedHashImportCompleted(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, contentModerationLegacyAllowedHashImportKey)
+	if err == nil {
+		return strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	if !errors.Is(err, ErrSettingNotFound) {
+		slog.Warn("content_moderation.legacy_allowed_hash_import_marker_read_failed", "error", err)
+	}
+	return false
+}
+
+func (s *ContentModerationService) markLegacyRedisAllowedHashImportCompleted(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	return s.settingRepo.Set(ctx, contentModerationLegacyAllowedHashImportKey, "true")
+}
+
+func normalizeContentModerationAllowedHashSource(source string, sourceLogID *int64) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case ContentModerationAllowedHashSourceLegacyRedis:
+		return ContentModerationAllowedHashSourceLegacyRedis
+	case ContentModerationAllowedHashSourceAuditLog:
+		return ContentModerationAllowedHashSourceAuditLog
+	case ContentModerationAllowedHashSourceManual:
+		return ContentModerationAllowedHashSourceManual
+	default:
+		if sourceLogID != nil && *sourceLogID > 0 {
+			return ContentModerationAllowedHashSourceAuditLog
+		}
+		return ContentModerationAllowedHashSourceManual
+	}
 }
 
 func (s *ContentModerationService) ClearFlaggedInputHashes(ctx context.Context) (*ContentModerationClearHashesResult, error) {
@@ -1610,11 +1823,18 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		}
 	}
 	var allowedHashCount int64
-	if s.hashCache != nil {
-		if n, err := s.hashCache.CountAllowedInputHashes(ctx); err == nil {
+	if s.repo != nil {
+		s.importLegacyRedisAllowedHashes(ctx)
+		if n, err := s.repo.CountAllowedHashes(ctx); err == nil {
 			allowedHashCount = n
 		} else {
 			slog.Warn("content_moderation.allowed_hash_count_failed", "error", err)
+		}
+	} else if s.hashCache != nil {
+		if n, err := s.hashCache.CountAllowedInputHashes(ctx); err == nil {
+			allowedHashCount = n
+		} else {
+			slog.Warn("content_moderation.allowed_hash_cache_count_failed", "error", err)
 		}
 	}
 	var lastCleanupAt *time.Time
@@ -2029,10 +2249,6 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 	if input.APIKeyID > 0 {
 		apiKeyID = &input.APIKeyID
 	}
-	excerptLimit := maxModerationExcerptRunes
-	if isContentModerationBlockedAction(action) {
-		excerptLimit = maxModerationInputRunes
-	}
 	return &ContentModerationLog{
 		RequestID:         input.RequestID,
 		UserID:            userID,
@@ -2051,7 +2267,7 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		HighestScore:      highestScore,
 		CategoryScores:    cloneFloatMap(scores),
 		ThresholdSnapshot: cloneFloatMap(cfg.Thresholds),
-		InputExcerpt:      trimRunes(redactContentModerationSecrets(text), excerptLimit),
+		InputExcerpt:      trimRunes(redactContentModerationSecrets(text), maxModerationInputRunes),
 		PolicyID:          contentModerationPolicyIDPtr(cfg.UserPolicy),
 		PolicyAction:      contentModerationPolicyAction(cfg.UserPolicy),
 		PolicySnapshot:    contentModerationPolicySnapshot(cfg.UserPolicy),
@@ -2060,15 +2276,6 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		UpstreamLatencyMS: latency,
 		QueueDelayMS:      queueDelay,
 		Error:             errText,
-	}
-}
-
-func isContentModerationBlockedAction(action string) bool {
-	switch action {
-	case ContentModerationActionBlock, ContentModerationActionHashBlock, ContentModerationActionKeywordBlock:
-		return true
-	default:
-		return false
 	}
 }
 

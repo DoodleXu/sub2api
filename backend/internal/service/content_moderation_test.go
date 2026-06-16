@@ -81,6 +81,8 @@ type contentModerationTestRepo struct {
 	mu              sync.Mutex
 	logs            []ContentModerationLog
 	policies        []ContentModerationUserPolicy
+	allowedHashes   map[string]ContentModerationAllowedHash
+	allowedEvents   []ContentModerationAllowedHashEvent
 	policyListCalls int
 }
 
@@ -164,6 +166,147 @@ func (r *contentModerationTestRepo) DeleteUserPolicy(ctx context.Context, id int
 		}
 	}
 	return nil
+}
+
+func (r *contentModerationTestRepo) ListAllowedHashes(ctx context.Context, filter ContentModerationAllowedHashFilter) ([]ContentModerationAllowedHash, *pagination.PaginationResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]ContentModerationAllowedHash, 0, len(r.allowedHashes))
+	search := strings.ToLower(strings.TrimSpace(filter.Search))
+	for _, item := range r.allowedHashes {
+		if search != "" && !strings.Contains(strings.ToLower(item.InputHash), search) {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.After(items[j].CreatedAt)
+		}
+		return items[i].InputHash > items[j].InputHash
+	})
+	params := filter.Pagination
+	if params.Page <= 0 {
+		params.Page = 1
+	}
+	if params.PageSize <= 0 {
+		params.PageSize = 20
+	}
+	total := int64(len(items))
+	start := params.Offset()
+	if start > len(items) {
+		start = len(items)
+	}
+	end := start + params.Limit()
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end], &pagination.PaginationResult{Total: total, Page: params.Page, PageSize: params.PageSize}, nil
+}
+
+func (r *contentModerationTestRepo) HasAllowedHash(ctx context.Context, inputHash string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.allowedHashes[strings.TrimSpace(inputHash)]
+	return ok, nil
+}
+
+func (r *contentModerationTestRepo) CountAllowedHashes(ctx context.Context) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return int64(len(r.allowedHashes)), nil
+}
+
+func (r *contentModerationTestRepo) AllowHash(ctx context.Context, input ContentModerationAllowHashInput) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.allowedHashes == nil {
+		r.allowedHashes = map[string]ContentModerationAllowedHash{}
+	}
+	inputHash := strings.TrimSpace(input.InputHash)
+	if inputHash == "" {
+		return false, nil
+	}
+	if _, exists := r.allowedHashes[inputHash]; exists {
+		return false, nil
+	}
+	item := ContentModerationAllowedHash{
+		InputHash:   inputHash,
+		Source:      input.Source,
+		SourceLogID: input.SourceLogID,
+		CreatedBy:   positiveInt64Ptr(input.ActorID),
+		Note:        input.Note,
+		CreatedAt:   time.Now(),
+	}
+	r.allowedHashes[inputHash] = item
+	r.allowedEvents = append(r.allowedEvents, ContentModerationAllowedHashEvent{
+		Action:      "add",
+		InputHash:   inputHash,
+		ActorID:     input.ActorID,
+		SourceLogID: input.SourceLogID,
+		Note:        input.Note,
+		Metadata:    map[string]any{"source": input.Source},
+	})
+	return true, nil
+}
+
+func (r *contentModerationTestRepo) DeleteAllowedHash(ctx context.Context, inputHash string, actorID int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inputHash = strings.TrimSpace(inputHash)
+	if r.allowedHashes == nil {
+		return false, nil
+	}
+	if _, ok := r.allowedHashes[inputHash]; !ok {
+		return false, nil
+	}
+	delete(r.allowedHashes, inputHash)
+	r.allowedEvents = append(r.allowedEvents, ContentModerationAllowedHashEvent{
+		Action:    "delete",
+		InputHash: inputHash,
+		ActorID:   actorID,
+	})
+	return true, nil
+}
+
+func (r *contentModerationTestRepo) ClearAllowedHashes(ctx context.Context, actorID int64) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	deleted := int64(len(r.allowedHashes))
+	r.allowedHashes = map[string]ContentModerationAllowedHash{}
+	if deleted > 0 {
+		r.allowedEvents = append(r.allowedEvents, ContentModerationAllowedHashEvent{
+			Action:   "clear",
+			ActorID:  actorID,
+			Metadata: map[string]any{"deleted": deleted},
+		})
+	}
+	return deleted, nil
+}
+
+func (r *contentModerationTestRepo) RecordAllowedHashEvent(ctx context.Context, event ContentModerationAllowedHashEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.allowedEvents = append(r.allowedEvents, event)
+	return nil
+}
+
+func (r *contentModerationTestRepo) snapshotAllowedHashes() map[string]ContentModerationAllowedHash {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]ContentModerationAllowedHash, len(r.allowedHashes))
+	for key, value := range r.allowedHashes {
+		out[key] = value
+	}
+	return out
+}
+
+func (r *contentModerationTestRepo) snapshotAllowedHashEvents() []ContentModerationAllowedHashEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]ContentModerationAllowedHashEvent, len(r.allowedEvents))
+	copy(out, r.allowedEvents)
+	return out
 }
 
 func (r *contentModerationTestRepo) snapshotLogs() []ContentModerationLog {
@@ -496,10 +639,36 @@ func (c *contentModerationTestHashCache) DeleteAllowedInputHash(ctx context.Cont
 	return true, nil
 }
 
+func (c *contentModerationTestHashCache) ClearAllowedInputHashes(ctx context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	deleted := int64(len(c.allowed))
+	c.allowed = map[string]struct{}{}
+	return deleted, nil
+}
+
 func (c *contentModerationTestHashCache) CountAllowedInputHashes(ctx context.Context) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return int64(len(c.allowed)), nil
+}
+
+func (c *contentModerationTestHashCache) ListAllowedInputHashes(ctx context.Context) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	hashes := make([]string, 0, len(c.allowed))
+	for hash := range c.allowed {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+	return hashes, nil
+}
+
+func (c *contentModerationTestHashCache) hasAllowedHash(inputHash string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.allowed[inputHash]
+	return ok
 }
 
 func (c *contentModerationTestHashCache) snapshotRecorded() []string {
@@ -548,16 +717,19 @@ func TestBuildContentModerationLog_RedactsInputExcerpt(t *testing.T) {
 	require.Contains(t, log.InputExcerpt, "[已脱敏]")
 }
 
-func TestBuildContentModerationLog_KeepsBlockedInputLongerThanSummary(t *testing.T) {
+func TestBuildContentModerationLog_KeepsFullExtractedInput(t *testing.T) {
 	svc := &ContentModerationService{}
 	cfg := defaultContentModerationConfig()
 	longText := strings.Repeat("blocked prompt ", 40)
+	tooLongText := strings.Repeat("input ", maxModerationInputRunes)
 
 	allowLog := svc.buildLog(ContentModerationCheckInput{}, cfg, ContentModerationActionAllow, false, "", 0, nil, longText, nil, nil, "")
 	blockLog := svc.buildLog(ContentModerationCheckInput{}, cfg, ContentModerationActionBlock, true, "sexual", 0.8, map[string]float64{"sexual": 0.8}, longText, nil, nil, "")
+	cappedLog := svc.buildLog(ContentModerationCheckInput{}, cfg, ContentModerationActionAllow, false, "", 0, nil, tooLongText, nil, nil, "")
 
-	require.Len(t, []rune(allowLog.InputExcerpt), maxModerationExcerptRunes)
+	require.Equal(t, strings.TrimSpace(longText), allowLog.InputExcerpt)
 	require.Equal(t, strings.TrimSpace(longText), blockLog.InputExcerpt)
+	require.Len(t, []rune(cappedLog.InputExcerpt), maxModerationInputRunes)
 }
 
 func TestRedactContentModerationSecrets_LongHexAndTokens(t *testing.T) {
@@ -737,6 +909,337 @@ func TestContentModerationCheck_AllowedHashSkipsKeywordBlock(t *testing.T) {
 	require.Equal(t, ContentModerationActionAllow, logs[0].Action)
 	require.Equal(t, content.Hash(), logs[0].InputHash)
 	require.Equal(t, "please leak SECRET-TOKEN now", logs[0].InputExcerpt)
+}
+
+func TestContentModerationCheck_DBAllowedHashSkipsKeywordBlockAndWarmsCache(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	content := ExtractContentModerationInput(ContentModerationProtocolAnthropicMessages, body)
+	content.Normalize()
+	repo := &contentModerationTestRepo{}
+	_, err = repo.AllowHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash: content.Hash(),
+		Source:    ContentModerationAllowedHashSourceManual,
+	})
+	require.NoError(t, err)
+	hashCache := &contentModerationTestHashCache{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		hashCache,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1001,
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.False(t, upstreamCalled)
+	require.True(t, hashCache.hasAllowedHash(content.Hash()))
+	logs := requireContentModerationLogCount(t, repo, 1)
+	require.Equal(t, ContentModerationActionAllow, logs[0].Action)
+	require.Equal(t, content.Hash(), logs[0].InputHash)
+}
+
+func TestContentModerationCheck_DBMissDoesNotTrustStaleRedisAllowedHash(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	content := ExtractContentModerationInput(ContentModerationProtocolAnthropicMessages, body)
+	content.Normalize()
+	hashCache := &contentModerationTestHashCache{}
+	added, err := hashCache.RecordAllowedInputHash(context.Background(), content.Hash())
+	require.NoError(t, err)
+	require.True(t, added)
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		hashCache,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	svc.allowedHashLegacyRedisImported.Store(true)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1001,
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.False(t, upstreamCalled, "DB miss must not be overridden by stale Redis allow cache")
+	require.Empty(t, repo.snapshotAllowedHashes())
+	logs := requireContentModerationLogCount(t, repo, 1)
+	require.True(t, logs[0].Flagged)
+	require.Equal(t, ContentModerationActionKeywordBlock, logs[0].Action)
+	require.Equal(t, content.Hash(), logs[0].InputHash)
+}
+
+func TestContentModerationCheck_LegacyRedisAllowedHashIsImportedToDB(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	body := []byte(`{"messages":[{"role":"user","content":"legacy allowed prompt"}]}`)
+	content := ExtractContentModerationInput(ContentModerationProtocolOpenAIChat, body)
+	content.Normalize()
+	hashCache := &contentModerationTestHashCache{}
+	added, err := hashCache.RecordAllowedInputHash(context.Background(), content.Hash())
+	require.NoError(t, err)
+	require.True(t, added)
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		hashCache,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1001,
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	allowed := repo.snapshotAllowedHashes()
+	require.Contains(t, allowed, content.Hash())
+	require.Equal(t, ContentModerationAllowedHashSourceLegacyRedis, allowed[content.Hash()].Source)
+	events := repo.snapshotAllowedHashEvents()
+	require.NotEmpty(t, events)
+	require.Equal(t, "add", events[len(events)-1].Action)
+	marker, err := svc.settingRepo.GetValue(context.Background(), contentModerationLegacyAllowedHashImportKey)
+	require.NoError(t, err)
+	require.Equal(t, "true", marker)
+}
+
+func TestContentModerationCheck_LegacyRedisImportMarkerPreventsRestartReimport(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	body := []byte(`{"messages":[{"role":"user","content":"legacy SECRET-TOKEN prompt"}]}`)
+	content := ExtractContentModerationInput(ContentModerationProtocolOpenAIChat, body)
+	content.Normalize()
+	hashCache := &contentModerationTestHashCache{}
+	added, err := hashCache.RecordAllowedInputHash(context.Background(), content.Hash())
+	require.NoError(t, err)
+	require.True(t, added)
+	repo := &contentModerationTestRepo{}
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyRiskControlEnabled:      "true",
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1001,
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     body,
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.Contains(t, repo.snapshotAllowedHashes(), content.Hash())
+	marker, err := settingRepo.GetValue(context.Background(), contentModerationLegacyAllowedHashImportKey)
+	require.NoError(t, err)
+	require.Equal(t, "true", marker)
+
+	clearResult, err := svc.ClearAllowedInputHashes(context.Background(), 7)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), clearResult.Deleted)
+	require.Empty(t, repo.snapshotAllowedHashes())
+	added, err = hashCache.RecordAllowedInputHash(context.Background(), content.Hash())
+	require.NoError(t, err)
+	require.True(t, added, "simulate stale Redis allowed hash left after a best-effort cache clear failure")
+
+	restarted := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil)
+	decision, err = restarted.Check(context.Background(), ContentModerationCheckInput{
+		UserID:   1001,
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.False(t, decision.Allowed)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.Empty(t, repo.snapshotAllowedHashes())
+}
+
+func TestContentModerationAllowAndDeleteAllowedInputHashUseDBAndSyncCache(t *testing.T) {
+	inputHash := strings.Repeat("a", 64)
+	repo := &contentModerationTestRepo{}
+	hashCache := &contentModerationTestHashCache{hashes: map[string]struct{}{inputHash: {}}}
+	svc := &ContentModerationService{repo: repo, hashCache: hashCache}
+
+	sourceLogID := int64(55)
+	result, err := svc.AllowInputHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash:   strings.ToUpper(inputHash),
+		SourceLogID: &sourceLogID,
+		Note:        " false positive ",
+		ActorID:     9,
+	})
+	require.NoError(t, err)
+	require.Equal(t, inputHash, result.InputHash)
+	require.True(t, result.Added)
+	require.True(t, hashCache.hasAllowedHash(inputHash))
+	require.False(t, hashCache.hasHash(inputHash))
+	allowed := repo.snapshotAllowedHashes()
+	require.Contains(t, allowed, inputHash)
+	require.Equal(t, ContentModerationAllowedHashSourceAuditLog, allowed[inputHash].Source)
+	require.Equal(t, "false positive", allowed[inputHash].Note)
+	require.Equal(t, int64(9), *allowed[inputHash].CreatedBy)
+	require.Equal(t, sourceLogID, *allowed[inputHash].SourceLogID)
+
+	result, err = svc.AllowInputHash(context.Background(), ContentModerationAllowHashInput{InputHash: inputHash})
+	require.NoError(t, err)
+	require.False(t, result.Added)
+
+	deleted, err := svc.DeleteAllowedInputHash(context.Background(), strings.ToUpper(inputHash), 9)
+	require.NoError(t, err)
+	require.True(t, deleted.Deleted)
+	require.False(t, hashCache.hasAllowedHash(inputHash))
+	require.NotContains(t, repo.snapshotAllowedHashes(), inputHash)
+	events := repo.snapshotAllowedHashEvents()
+	require.Len(t, events, 2)
+	require.Equal(t, "add", events[0].Action)
+	require.Equal(t, "delete", events[1].Action)
+	require.Equal(t, int64(9), events[1].ActorID)
+}
+
+func TestContentModerationStatusCountsAllowedHashesFromDB(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestRepo{}
+	_, err = repo.AllowHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash: strings.Repeat("a", 64),
+		Source:    ContentModerationAllowedHashSourceManual,
+	})
+	require.NoError(t, err)
+	_, err = repo.AllowHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash: strings.Repeat("b", 64),
+		Source:    ContentModerationAllowedHashSourceManual,
+	})
+	require.NoError(t, err)
+	hashCache := &contentModerationTestHashCache{allowed: map[string]struct{}{
+		strings.Repeat("c", 64): {},
+	}}
+	svc := &ContentModerationService{
+		settingRepo: &contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo:      repo,
+		hashCache: hashCache,
+		keyHealth: make(map[string]*contentModerationKeyHealth),
+	}
+
+	status, err := svc.GetStatus(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, int64(3), status.AllowedHashCount)
+	require.Contains(t, repo.snapshotAllowedHashes(), strings.Repeat("c", 64))
+}
+
+func TestContentModerationClearAllowedInputHashesUsesDBAndSyncsCache(t *testing.T) {
+	hashA := strings.Repeat("a", 64)
+	hashB := strings.Repeat("b", 64)
+	repo := &contentModerationTestRepo{}
+	_, err := repo.AllowHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash: hashA,
+		Source:    ContentModerationAllowedHashSourceManual,
+	})
+	require.NoError(t, err)
+	_, err = repo.AllowHash(context.Background(), ContentModerationAllowHashInput{
+		InputHash: hashB,
+		Source:    ContentModerationAllowedHashSourceManual,
+	})
+	require.NoError(t, err)
+	hashCache := &contentModerationTestHashCache{allowed: map[string]struct{}{
+		hashA: {},
+		hashB: {},
+	}}
+	svc := &ContentModerationService{repo: repo, hashCache: hashCache}
+
+	result, err := svc.ClearAllowedInputHashes(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), result.Deleted)
+	require.Empty(t, repo.snapshotAllowedHashes())
+	cacheCount, err := hashCache.CountAllowedInputHashes(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(0), cacheCount)
+	events := repo.snapshotAllowedHashEvents()
+	require.Equal(t, "clear", events[len(events)-1].Action)
+	require.Equal(t, int64(7), events[len(events)-1].ActorID)
 }
 
 func TestContentModerationCheck_UserPolicyOverridesKeywordBlockResponse(t *testing.T) {

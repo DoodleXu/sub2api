@@ -834,6 +834,34 @@ func (r *contentModerationHandlerTestRepo) DeleteUserPolicy(ctx context.Context,
 	return nil
 }
 
+func (r *contentModerationHandlerTestRepo) ListAllowedHashes(ctx context.Context, filter service.ContentModerationAllowedHashFilter) ([]service.ContentModerationAllowedHash, *pagination.PaginationResult, error) {
+	return nil, &pagination.PaginationResult{}, nil
+}
+
+func (r *contentModerationHandlerTestRepo) HasAllowedHash(ctx context.Context, inputHash string) (bool, error) {
+	return false, nil
+}
+
+func (r *contentModerationHandlerTestRepo) CountAllowedHashes(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (r *contentModerationHandlerTestRepo) AllowHash(ctx context.Context, input service.ContentModerationAllowHashInput) (bool, error) {
+	return true, nil
+}
+
+func (r *contentModerationHandlerTestRepo) DeleteAllowedHash(ctx context.Context, inputHash string, actorID int64) (bool, error) {
+	return true, nil
+}
+
+func (r *contentModerationHandlerTestRepo) ClearAllowedHashes(ctx context.Context, actorID int64) (int64, error) {
+	return 0, nil
+}
+
+func (r *contentModerationHandlerTestRepo) RecordAllowedHashEvent(ctx context.Context, event service.ContentModerationAllowedHashEvent) error {
+	return nil
+}
+
 func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

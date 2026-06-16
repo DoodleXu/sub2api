@@ -105,9 +105,33 @@ func (c *contentModerationHashCache) DeleteAllowedInputHash(ctx context.Context,
 	return deleted > 0, nil
 }
 
+func (c *contentModerationHashCache) ClearAllowedInputHashes(ctx context.Context) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, nil
+	}
+	deleted, err := c.rdb.SCard(ctx, contentModerationAllowedHashSetKey).Result()
+	if err != nil {
+		return 0, err
+	}
+	if deleted == 0 {
+		return 0, nil
+	}
+	if err := c.rdb.Del(ctx, contentModerationAllowedHashSetKey).Err(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func (c *contentModerationHashCache) CountAllowedInputHashes(ctx context.Context) (int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, nil
 	}
 	return c.rdb.SCard(ctx, contentModerationAllowedHashSetKey).Result()
+}
+
+func (c *contentModerationHashCache) ListAllowedInputHashes(ctx context.Context) ([]string, error) {
+	if c == nil || c.rdb == nil {
+		return nil, nil
+	}
+	return c.rdb.SMembers(ctx, contentModerationAllowedHashSetKey).Result()
 }

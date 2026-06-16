@@ -227,6 +227,31 @@ export interface ContentModerationLogsResponse {
   pages: number
 }
 
+export interface ContentModerationAllowedHash {
+  input_hash: string
+  source: 'manual' | 'audit_log' | 'legacy_redis'
+  source_log_id?: number
+  input_excerpt: string
+  created_by?: number
+  created_by_email: string
+  note: string
+  created_at: string
+}
+
+export interface ListContentModerationAllowedHashesParams {
+  page?: number
+  page_size?: number
+  search?: string
+}
+
+export interface ContentModerationAllowedHashesResponse {
+  items: ContentModerationAllowedHash[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
 export interface ContentModerationUnbanUserResponse {
   user_id: number
   status: string
@@ -279,6 +304,12 @@ export interface ClearFlaggedHashesResponse {
   deleted: number
 }
 
+export interface AllowHashPayload {
+  input_hash: string
+  source_log_id?: number
+  note?: string
+}
+
 export async function getConfig(): Promise<ContentModerationConfig> {
   const { data } = await apiClient.get<ContentModerationConfig>('/admin/risk-control/config')
   return data
@@ -307,6 +338,15 @@ export async function listLogs(
   params: ListContentModerationLogsParams = {}
 ): Promise<ContentModerationLogsResponse> {
   const { data } = await apiClient.get<ContentModerationLogsResponse>('/admin/risk-control/logs', {
+    params,
+  })
+  return data
+}
+
+export async function listAllowedHashes(
+  params: ListContentModerationAllowedHashesParams = {}
+): Promise<ContentModerationAllowedHashesResponse> {
+  const { data } = await apiClient.get<ContentModerationAllowedHashesResponse>('/admin/risk-control/hashes/allow', {
     params,
   })
   return data
@@ -351,10 +391,9 @@ export async function deleteFlaggedHash(inputHash: string): Promise<DeleteFlagge
   return data
 }
 
-export async function allowHash(inputHash: string): Promise<AllowHashResponse> {
-  const { data } = await apiClient.post<AllowHashResponse>('/admin/risk-control/hashes/allow', {
-    input_hash: inputHash,
-  })
+export async function allowHash(payload: string | AllowHashPayload): Promise<AllowHashResponse> {
+  const body = typeof payload === 'string' ? { input_hash: payload } : payload
+  const { data } = await apiClient.post<AllowHashResponse>('/admin/risk-control/hashes/allow', body)
   return data
 }
 
@@ -370,12 +409,18 @@ export async function clearFlaggedHashes(): Promise<ClearFlaggedHashesResponse> 
   return data
 }
 
+export async function clearAllowedHashes(): Promise<ClearFlaggedHashesResponse> {
+  const { data } = await apiClient.delete<ClearFlaggedHashesResponse>('/admin/risk-control/hashes/allow/all')
+  return data
+}
+
 export const riskControlAPI = {
   getConfig,
   updateConfig,
   getStatus,
   testAPIKeys,
   listLogs,
+  listAllowedHashes,
   listUserPolicies,
   createUserPolicy,
   updateUserPolicy,
@@ -385,6 +430,7 @@ export const riskControlAPI = {
   deleteAllowedHash,
   deleteFlaggedHash,
   clearFlaggedHashes,
+  clearAllowedHashes,
 }
 
 export default riskControlAPI

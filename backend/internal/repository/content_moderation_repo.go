@@ -384,6 +384,229 @@ func (r *contentModerationRepository) DeleteUserPolicy(ctx context.Context, id i
 	return nil
 }
 
+func (r *contentModerationRepository) ListAllowedHashes(ctx context.Context, filter service.ContentModerationAllowedHashFilter) ([]service.ContentModerationAllowedHash, *pagination.PaginationResult, error) {
+	where := []string{"h.input_hash <> ''"}
+	args := make([]any, 0)
+	if search := strings.TrimSpace(filter.Search); search != "" {
+		args = append(args, "%"+search+"%")
+		where = append(where, fmt.Sprintf("h.input_hash ILIKE $%d", len(args)))
+	}
+	whereSQL := "WHERE " + strings.Join(where, " AND ")
+
+	var total int64
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM content_moderation_allowed_hashes h "+whereSQL, args...).Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count content moderation allowed hashes: %w", err)
+	}
+
+	params := filter.Pagination
+	if params.Page <= 0 {
+		params.Page = 1
+	}
+	if params.PageSize <= 0 {
+		params.PageSize = 20
+	}
+	if params.PageSize > 100 {
+		params.PageSize = 100
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, params.Limit(), params.Offset())
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+    h.input_hash, h.source, h.source_log_id, COALESCE(l.input_excerpt, ''),
+    h.created_by, COALESCE(u.email, ''), h.note, h.created_at
+FROM content_moderation_allowed_hashes h
+LEFT JOIN content_moderation_logs l ON l.id = h.source_log_id
+LEFT JOIN users u ON u.id = h.created_by
+`+whereSQL+`
+ORDER BY h.created_at DESC, h.input_hash DESC
+LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list content moderation allowed hashes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	items := make([]service.ContentModerationAllowedHash, 0)
+	for rows.Next() {
+		var item service.ContentModerationAllowedHash
+		var sourceLogID, createdBy sql.NullInt64
+		if err := rows.Scan(
+			&item.InputHash,
+			&item.Source,
+			&sourceLogID,
+			&item.InputExcerpt,
+			&createdBy,
+			&item.CreatedByEmail,
+			&item.Note,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, nil, fmt.Errorf("scan content moderation allowed hash: %w", err)
+		}
+		if sourceLogID.Valid {
+			v := sourceLogID.Int64
+			item.SourceLogID = &v
+		}
+		if createdBy.Valid {
+			v := createdBy.Int64
+			item.CreatedBy = &v
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate content moderation allowed hashes: %w", err)
+	}
+	return items, paginationResultFromTotal(total, params), nil
+}
+
+func (r *contentModerationRepository) HasAllowedHash(ctx context.Context, inputHash string) (bool, error) {
+	inputHash = strings.TrimSpace(inputHash)
+	if inputHash == "" {
+		return false, nil
+	}
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM content_moderation_allowed_hashes WHERE input_hash = $1)`, inputHash).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check content moderation allowed hash: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *contentModerationRepository) CountAllowedHashes(ctx context.Context) (int64, error) {
+	var total int64
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM content_moderation_allowed_hashes`).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count content moderation allowed hashes: %w", err)
+	}
+	return total, nil
+}
+
+func (r *contentModerationRepository) AllowHash(ctx context.Context, input service.ContentModerationAllowHashInput) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin allow content moderation hash: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO content_moderation_allowed_hashes (
+    input_hash, source, source_log_id, note, created_by
+) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (input_hash) DO NOTHING`,
+		input.InputHash, input.Source, nullableInt64Ptr(input.SourceLogID), input.Note, nullableActorID(input.ActorID),
+	)
+	if err != nil {
+		return false, fmt.Errorf("insert content moderation allowed hash: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	added := affected > 0
+	if added {
+		if err := insertAllowedHashEvent(ctx, tx, service.ContentModerationAllowedHashEvent{
+			Action:      "add",
+			InputHash:   input.InputHash,
+			ActorID:     input.ActorID,
+			SourceLogID: input.SourceLogID,
+			Note:        input.Note,
+			Metadata: map[string]any{
+				"source": input.Source,
+			},
+		}); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit allow content moderation hash: %w", err)
+	}
+	return added, nil
+}
+
+func (r *contentModerationRepository) DeleteAllowedHash(ctx context.Context, inputHash string, actorID int64) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin delete content moderation allowed hash: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM content_moderation_allowed_hashes WHERE input_hash = $1`, inputHash)
+	if err != nil {
+		return false, fmt.Errorf("delete content moderation allowed hash: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	deleted := affected > 0
+	if deleted {
+		if err := insertAllowedHashEvent(ctx, tx, service.ContentModerationAllowedHashEvent{
+			Action:    "delete",
+			InputHash: inputHash,
+			ActorID:   actorID,
+		}); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit delete content moderation allowed hash: %w", err)
+	}
+	return deleted, nil
+}
+
+func (r *contentModerationRepository) ClearAllowedHashes(ctx context.Context, actorID int64) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin clear content moderation allowed hashes: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM content_moderation_allowed_hashes`)
+	if err != nil {
+		return 0, fmt.Errorf("clear content moderation allowed hashes: %w", err)
+	}
+	deleted, _ := result.RowsAffected()
+	if deleted > 0 {
+		if err := insertAllowedHashEvent(ctx, tx, service.ContentModerationAllowedHashEvent{
+			Action:  "clear",
+			ActorID: actorID,
+			Metadata: map[string]any{
+				"deleted": deleted,
+			},
+		}); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit clear content moderation allowed hashes: %w", err)
+	}
+	return deleted, nil
+}
+
+func (r *contentModerationRepository) RecordAllowedHashEvent(ctx context.Context, event service.ContentModerationAllowedHashEvent) error {
+	if err := insertAllowedHashEvent(ctx, r.db, event); err != nil {
+		return err
+	}
+	return nil
+}
+
+type contentModerationAllowedHashEventExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertAllowedHashEvent(ctx context.Context, exec contentModerationAllowedHashEventExecutor, event service.ContentModerationAllowedHashEvent) error {
+	metadata := event.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("marshal content moderation allowed hash event metadata: %w", err)
+	}
+	_, err = exec.ExecContext(ctx, `
+INSERT INTO content_moderation_allowed_hash_events (
+    action, input_hash, actor_id, source_log_id, note, metadata
+) VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+		event.Action, event.InputHash, nullableActorID(event.ActorID), nullableInt64Ptr(event.SourceLogID), event.Note, string(raw),
+	)
+	if err != nil {
+		return fmt.Errorf("insert content moderation allowed hash event: %w", err)
+	}
+	return nil
+}
+
 func nullableIntPtr(value *int) any {
 	if value == nil {
 		return nil
@@ -396,6 +619,13 @@ func nullableInt64Ptr(value *int64) any {
 		return nil
 	}
 	return *value
+}
+
+func nullableActorID(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
 }
 
 func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) ([]string, []any) {
