@@ -19,10 +19,13 @@ import (
 )
 
 type contentModerationTestSettingRepo struct {
+	mu     sync.RWMutex
 	values map[string]string
 }
 
 func (r *contentModerationTestSettingRepo) Get(ctx context.Context, key string) (*Setting, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if value, ok := r.values[key]; ok {
 		return &Setting{Key: key, Value: value}, nil
 	}
@@ -30,6 +33,8 @@ func (r *contentModerationTestSettingRepo) Get(ctx context.Context, key string) 
 }
 
 func (r *contentModerationTestSettingRepo) GetValue(ctx context.Context, key string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if value, ok := r.values[key]; ok {
 		return value, nil
 	}
@@ -37,6 +42,8 @@ func (r *contentModerationTestSettingRepo) GetValue(ctx context.Context, key str
 }
 
 func (r *contentModerationTestSettingRepo) Set(ctx context.Context, key, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.values == nil {
 		r.values = map[string]string{}
 	}
@@ -45,6 +52,8 @@ func (r *contentModerationTestSettingRepo) Set(ctx context.Context, key, value s
 }
 
 func (r *contentModerationTestSettingRepo) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := map[string]string{}
 	for _, key := range keys {
 		if value, ok := r.values[key]; ok {
@@ -55,6 +64,8 @@ func (r *contentModerationTestSettingRepo) GetMultiple(ctx context.Context, keys
 }
 
 func (r *contentModerationTestSettingRepo) SetMultiple(ctx context.Context, settings map[string]string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.values == nil {
 		r.values = map[string]string{}
 	}
@@ -65,6 +76,8 @@ func (r *contentModerationTestSettingRepo) SetMultiple(ctx context.Context, sett
 }
 
 func (r *contentModerationTestSettingRepo) GetAll(ctx context.Context) (map[string]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make(map[string]string, len(r.values))
 	for key, value := range r.values {
 		out[key] = value
@@ -73,6 +86,8 @@ func (r *contentModerationTestSettingRepo) GetAll(ctx context.Context) (map[stri
 }
 
 func (r *contentModerationTestSettingRepo) Delete(ctx context.Context, key string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.values, key)
 	return nil
 }
