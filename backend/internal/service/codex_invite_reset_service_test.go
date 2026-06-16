@@ -95,6 +95,9 @@ func TestCodexInviteResetServiceGetStatusAggregatesDesktopEndpoints(t *testing.T
 	require.Equal(t, "1", upstream.requests[0].Header.Get("X-OpenAI-Attach-Integrity-State"))
 	require.Equal(t, "chatgpt-acc", upstream.requests[0].Header.Get("chatgpt-account-id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))
+	require.Len(t, upstream.profiles, 3)
+	require.NotNil(t, upstream.profiles[0])
+	require.Equal(t, codexInviteResetDefaultTLSProfileName, upstream.profiles[0].Name)
 }
 
 func TestCodexInviteResetServiceSendInviteNormalizesEmails(t *testing.T) {
@@ -191,6 +194,29 @@ func TestCodexInviteResetServiceDoesNotReuseUnrelatedUserAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 3)
 	require.Equal(t, codexInviteResetDefaultUserAgent, upstream.requests[0].Header.Get("User-Agent"))
+}
+
+func TestCodexInviteResetServiceUsesBuiltInTLSProfileByDefault(t *testing.T) {
+	account := &Account{
+		ID:          46,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+	}
+	upstream := &codexInviteResetHTTPUpstreamStub{responses: []*http.Response{
+		codexInviteResetJSONResponse(`{"requires_explicit_confirmation":true}`),
+		codexInviteResetJSONResponse(`{"rules":[]}`),
+		codexInviteResetJSONResponse(`{"available_count":0,"credits":[]}`),
+	}}
+	svc := NewCodexInviteResetService(codexInviteResetAdminServiceStub{account: account}, upstream, nil, &TLSFingerprintProfileService{})
+
+	_, err := svc.GetStatus(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Len(t, upstream.profiles, 3)
+	for _, profile := range upstream.profiles {
+		require.NotNil(t, profile)
+		require.Equal(t, codexInviteResetDefaultTLSProfileName, profile.Name)
+	}
 }
 
 func TestCodexInviteResetServiceUsesConfiguredInviteResetTLSProfile(t *testing.T) {

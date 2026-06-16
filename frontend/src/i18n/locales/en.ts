@@ -3666,11 +3666,11 @@ export default {
         codexInviteResetUserAgentPlaceholder: 'Codex Desktop/0.0.0 (Linux; x86_64)',
         codexInviteResetUserAgentHint: 'Leave empty to use the default Codex Desktop User-Agent.',
         codexInviteResetTLSProfile: 'Reset request TLS profile',
-        codexInviteResetTLSProfileAccount: 'Use account TLS settings',
+        codexInviteResetTLSProfileAccount: 'Default Codex Desktop fingerprint',
         codexInviteResetTLSProfileDefault: 'Built-in default profile',
         codexInviteResetTLSProfileRandom: 'Random profile',
         codexInviteResetTLSProfileHint:
-          'Unset falls back to the account TLS settings. Selecting a profile applies it only to official quota reset requests.',
+          'Unset uses the default Codex Desktop/Node TLS fingerprint. Selecting a profile applies it only to official quota reset requests.',
         codexImageGenerationBridge: 'Codex image-generation bridge',
         codexImageGenerationBridgeDesc:
           'Account policy takes precedence over channel and global settings. Only controls whether Codex requests through the /responses text endpoint receive the image_generation tool; standalone image-generation endpoints are unaffected.',

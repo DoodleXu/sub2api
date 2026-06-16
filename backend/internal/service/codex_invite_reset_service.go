@@ -21,7 +21,8 @@ const (
 	codexInviteResetBackendAPIBaseURL = "https://chatgpt.com/backend-api"
 	codexInviteResetMaxEmails         = 5
 	// Codex Desktop 的邀请重置请求默认使用 Desktop UA；账号可配置专用 UA 覆盖。
-	codexInviteResetDefaultUserAgent = "Codex Desktop/0.0.0 (Linux; x86_64)"
+	codexInviteResetDefaultUserAgent      = "Codex Desktop/0.0.0 (Linux; x86_64)"
+	codexInviteResetDefaultTLSProfileName = "Built-in Default (Node.js 24.x)"
 )
 
 var codexInviteResetEmailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
@@ -255,14 +256,21 @@ func (s *CodexInviteResetService) resolveUserAgent(account *Account) string {
 
 func (s *CodexInviteResetService) resolveTLSProfile(account *Account) *tlsfingerprint.Profile {
 	if s == nil || s.tlsFPProfileService == nil {
-		return nil
+		return codexInviteResetDefaultTLSProfile()
 	}
 	if profileID := account.GetCodexInviteResetTLSFingerprintProfileID(); profileID != nil {
 		if profile, ok := s.tlsFPProfileService.ResolveTokenTLSProfileByID(*profileID); ok {
 			return profile
 		}
 	}
-	return s.tlsFPProfileService.ResolveTLSProfile(account)
+	if profile := s.tlsFPProfileService.ResolveTLSProfile(account); profile != nil {
+		return profile
+	}
+	return codexInviteResetDefaultTLSProfile()
+}
+
+func codexInviteResetDefaultTLSProfile() *tlsfingerprint.Profile {
+	return &tlsfingerprint.Profile{Name: codexInviteResetDefaultTLSProfileName}
 }
 
 func (s *CodexInviteResetService) getJSON(ctx context.Context, accountCtx *codexInviteResetAccountContext, path string, query map[string]string) (map[string]any, error) {

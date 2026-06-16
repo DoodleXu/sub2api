@@ -1649,7 +1649,7 @@ func (a *Account) GetCodexInviteResetUserAgent() string {
 }
 
 // GetCodexInviteResetTLSFingerprintProfileID 获取 Codex 官方额度重置请求专用 TLS 模板 ID。
-// nil 表示未配置，调用方应回退账号自身 TLS 配置；0/-1/正数分别表示内置默认/随机/指定模板。
+// nil 表示未配置，调用方决定默认行为；0/-1/正数分别表示内置默认/随机/指定模板。
 func (a *Account) GetCodexInviteResetTLSFingerprintProfileID() *int64 {
 	if a == nil || a.Extra == nil {
 		return nil

@@ -3808,10 +3808,10 @@ export default {
         codexInviteResetUserAgentPlaceholder: 'Codex Desktop/0.0.0 (Linux; x86_64)',
         codexInviteResetUserAgentHint: '留空时使用 Codex Desktop 默认 User-Agent。',
         codexInviteResetTLSProfile: '重置请求 TLS 模板',
-        codexInviteResetTLSProfileAccount: '使用账号 TLS 配置',
+        codexInviteResetTLSProfileAccount: '默认 Codex Desktop 指纹',
         codexInviteResetTLSProfileDefault: '内置默认模板',
         codexInviteResetTLSProfileRandom: '随机模板',
-        codexInviteResetTLSProfileHint: '不配置时回退账号 TLS 配置；选择模板后仅官方额度重置请求使用该 TLS 指纹。',
+        codexInviteResetTLSProfileHint: '不配置时使用默认 Codex Desktop/Node TLS 指纹；选择模板后仅官方额度重置请求使用该 TLS 指纹。',
         codexImageGenerationBridge: 'Codex 图片生成桥接',
         codexImageGenerationBridgeDesc:
           '账号级策略优先于渠道和全局配置。仅控制 Codex 走 /responses 文本端点时是否注入 image_generation 工具；不影响独立图片生成接口。',
