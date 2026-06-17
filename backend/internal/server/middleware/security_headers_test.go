@@ -332,7 +332,7 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 	})
 
 	t.Run("adds_airwallex_domains_for_payment_sdk", func(t *testing.T) {
-		policy := "default-src 'self'; script-src 'self' __CSP_NONCE__; style-src 'self'; frame-src 'self'"
+		policy := "default-src 'self'; script-src 'self' __CSP_NONCE__; style-src 'self'; img-src 'self' data: https:; frame-src 'self'"
 		enhanced := enhanceCSPPolicy(policy)
 
 		assert.Contains(t, enhanced, "script-src 'self' __CSP_NONCE__")
@@ -341,11 +341,12 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Contains(t, enhanced, AirwallexDemoStaticDomain)
 		assert.Contains(t, enhanced, AirwallexDemoCheckoutDomain)
 		assert.Contains(t, enhanced, "style-src 'self'")
+		assert.Contains(t, enhanced, "img-src 'self' data: https: blob:")
 		assert.Contains(t, enhanced, "frame-src 'self'")
 	})
 
-	t.Run("does_not_duplicate_airwallex_domains", func(t *testing.T) {
-		policy := "default-src 'self'; script-src 'self' https://static.airwallex.com https://static-demo.airwallex.com; frame-src https://checkout.airwallex.com https://checkout-demo.airwallex.com"
+	t.Run("does_not_duplicate_required_directive_values", func(t *testing.T) {
+		policy := "default-src 'self'; script-src 'self' https://static.airwallex.com https://static-demo.airwallex.com; img-src 'self' blob:; frame-src https://checkout.airwallex.com https://checkout-demo.airwallex.com"
 		enhanced := enhanceCSPPolicy(policy)
 
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "script-src", AirwallexStaticDomain))
@@ -358,6 +359,7 @@ func TestEnhanceCSPPolicy(t *testing.T) {
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "style-src", AirwallexDemoStaticDomain))
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "style-src", AirwallexDemoCheckoutDomain))
 		assert.Equal(t, 1, countDirectiveValue(enhanced, "frame-src", AirwallexDemoCheckoutDomain))
+		assert.Equal(t, 1, countDirectiveValue(enhanced, "img-src", BlobSource))
 	})
 }
 
