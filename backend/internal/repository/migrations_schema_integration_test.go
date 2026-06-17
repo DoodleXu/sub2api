@@ -92,6 +92,12 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.settings')").Scan(&settingsRegclass))
 	require.True(t, settingsRegclass.Valid, "expected settings table to exist")
 
+	// web console image tasks: user-side deletion marker should not remove admin image archives
+	var webConsoleImageTasksRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.web_console_image_tasks')").Scan(&webConsoleImageTasksRegclass))
+	require.True(t, webConsoleImageTasksRegclass.Valid, "expected web_console_image_tasks table to exist")
+	requireColumn(t, tx, "web_console_image_tasks", "user_deleted_at", "timestamp with time zone", 0, true)
+
 	// security_secrets table should exist
 	var securitySecretsRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.security_secrets')").Scan(&securitySecretsRegclass))

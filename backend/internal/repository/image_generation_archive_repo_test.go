@@ -18,10 +18,10 @@ func TestImageGenerationArchiveRepositoryClaimWebConsoleTask(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "api_key_id", "session_id", "message_id", "status", "request_json", "record_id",
-		"error_message", "created_at", "started_at", "completed_at", "updated_at",
-	}).AddRow(int64(42), int64(7), apiKeyID, "session-1", "message-1", "running", []byte(`{"version":1}`), nil, "", now, now, nil, now)
+		"error_message", "created_at", "started_at", "completed_at", "user_deleted_at", "updated_at",
+	}).AddRow(int64(42), int64(7), apiKeyID, "session-1", "message-1", "running", []byte(`{"version":1}`), nil, "", now, now, nil, nil, now)
 
-	mock.ExpectQuery("UPDATE web_console_image_tasks").
+	mock.ExpectQuery("UPDATE web_console_image_tasks[\\s\\S]+user_deleted_at IS NULL").
 		WithArgs(int64(42), staleBefore).
 		WillReturnRows(rows)
 
@@ -43,10 +43,10 @@ func TestImageGenerationArchiveRepositoryClaimWebConsoleTaskReturnsFalseWhenAlre
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "api_key_id", "session_id", "message_id", "status", "request_json", "record_id",
-		"error_message", "created_at", "started_at", "completed_at", "updated_at",
+		"error_message", "created_at", "started_at", "completed_at", "user_deleted_at", "updated_at",
 	})
 
-	mock.ExpectQuery("UPDATE web_console_image_tasks").
+	mock.ExpectQuery("UPDATE web_console_image_tasks[\\s\\S]+user_deleted_at IS NULL").
 		WithArgs(int64(42), staleBefore).
 		WillReturnRows(rows)
 
@@ -55,5 +55,20 @@ func TestImageGenerationArchiveRepositoryClaimWebConsoleTaskReturnsFalseWhenAlre
 	require.NoError(t, err)
 	require.False(t, claimed)
 	require.Nil(t, task)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageGenerationArchiveRepositoryMarkWebConsoleTasksUserDeletedBySessionID(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &imageGenerationArchiveRepository{db: db}
+
+	mock.ExpectExec("UPDATE web_console_image_tasks").
+		WithArgs(int64(7), "session-1").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	deleted, err := repo.MarkWebConsoleTasksUserDeletedBySessionID(context.Background(), 7, " session-1 ")
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

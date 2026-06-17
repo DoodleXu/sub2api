@@ -7,7 +7,9 @@ import type { WebConsoleSession } from '@/features/web-console/types'
 const keysListMock = vi.hoisted(() => vi.fn())
 const fetchPublicSettingsMock = vi.hoisted(() => vi.fn())
 const sendWebConsoleChatMock = vi.hoisted(() => vi.fn())
-const generateWebConsoleImageMock = vi.hoisted(() => vi.fn())
+const createImageTaskMock = vi.hoisted(() => vi.fn())
+const getImageTaskMock = vi.hoisted(() => vi.fn())
+const deleteImageTaskSessionMock = vi.hoisted(() => vi.fn())
 const appStore = vi.hoisted(() => ({
   cachedPublicSettings: {
     api_base_url: 'https://api.example.com',
@@ -19,7 +21,6 @@ const appStore = vi.hoisted(() => ({
 
 vi.mock('@/features/web-console/openaiClient', () => ({
   sendWebConsoleChat: sendWebConsoleChatMock,
-  generateWebConsoleImage: generateWebConsoleImageMock,
   isWebConsoleOpenAICompatibleEndpoint: (endpoint: string) => {
     const path = new URL(endpoint, 'https://app.example.com').pathname.replace(/\/+$/, '').toLowerCase()
     return !(path.endsWith('/v1beta') || path.includes('/v1beta/') || path.endsWith('/antigravity/v1') || path.includes('/antigravity/v1/'))
@@ -30,6 +31,11 @@ vi.mock('@/features/web-console/openaiClient', () => ({
 vi.mock('@/api', () => ({
   keysAPI: {
     list: keysListMock,
+  },
+  webConsoleImageTasksAPI: {
+    create: createImageTaskMock,
+    get: getImageTaskMock,
+    deleteSession: deleteImageTaskSessionMock,
   },
 }))
 
@@ -129,7 +135,10 @@ describe('WebConsoleView', () => {
     }
     fetchPublicSettingsMock.mockResolvedValue(appStore.cachedPublicSettings)
     sendWebConsoleChatMock.mockReset()
-    generateWebConsoleImageMock.mockReset()
+    createImageTaskMock.mockReset()
+    getImageTaskMock.mockReset()
+    deleteImageTaskSessionMock.mockReset()
+    deleteImageTaskSessionMock.mockResolvedValue({ deleted: 0 })
     keysListMock.mockResolvedValue({
       items: [{
         id: 1,
@@ -147,7 +156,7 @@ describe('WebConsoleView', () => {
     })
   })
 
-  it('移动端提供会话切换、新建和清空入口', async () => {
+  it('移动端提供会话切换、新建和删除入口', async () => {
     saveWebConsoleSessions([
       session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
       session({
@@ -165,7 +174,7 @@ describe('WebConsoleView', () => {
     const sessionSelect = wrapper.get('button[aria-label="切换会话"]')
     expect(sessionSelect.text()).toContain('海报会话')
     expect(wrapper.get('button[aria-label="新建会话"]').exists()).toBe(true)
-    expect(wrapper.get('button[aria-label="清空当前会话"]').exists()).toBe(true)
+    expect(wrapper.get('button[aria-label="删除当前会话"]').exists()).toBe(true)
 
     await openSelect(wrapper, '切换会话')
     expect(selectOptionTexts().join('\n')).toContain('海报会话')
@@ -183,9 +192,78 @@ describe('WebConsoleView', () => {
     expect(document.body.querySelectorAll('[role="option"]')).toHaveLength(optionCountBefore + 1)
     await wrapper.get('button[aria-label="切换会话"]').trigger('click')
 
-    await wrapper.get('button[aria-label="清空当前会话"]').trigger('click')
+    await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).not.toContain('旧消息')
+    expect(deleteImageTaskSessionMock).toHaveBeenCalledTimes(1)
+    expect(deleteImageTaskSessionMock).toHaveBeenCalledWith(expect.stringMatching(/^session-/))
+
+    await openSelect(wrapper, '切换会话')
+    const remainingSessions = selectOptionTexts().join('\n')
+    expect(remainingSessions).not.toContain('新生图会话')
+    expect(remainingSessions).toContain('海报会话')
+    await wrapper.get('button[aria-label="切换会话"]').trigger('click')
+  })
+
+  it('删除生图会话时一并删除后端恢复态并移除本地 session', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image',
+        title: '海报会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image',
+          role: 'assistant',
+          content: '已生成 1 张图片。',
+          images: [],
+          imageTaskId: 101,
+          imageRequest: {
+            prompt: '画一张海报',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'completed',
+          created_at: '2026-05-28T00:00:00.000Z',
+        }],
+        updated_at: '2026-05-28T00:01:00.000Z',
+      }),
+      session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
+    ])
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteImageTaskSessionMock).toHaveBeenCalledWith('session-image')
+    const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
+    expect(stored.some((item) => item.id === 'session-image')).toBe(false)
+    expect(stored.some((item) => item.id === 'session-chat')).toBe(true)
+  })
+
+  it('删除普通对话会话时只移除本地 session', async () => {
+    saveWebConsoleSessions([
+      session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
+      session({ id: 'session-image', title: '海报会话', mode: 'image' }),
+    ])
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteImageTaskSessionMock).not.toHaveBeenCalled()
+    const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
+    expect(stored.some((item) => item.id === 'session-chat')).toBe(false)
+    expect(stored.some((item) => item.id === 'session-image')).toBe(true)
   })
 
   it('只展示 OpenAI-compatible 端点和 OpenAI 分组 API Key', async () => {
@@ -291,7 +369,7 @@ describe('WebConsoleView', () => {
 
     expect(wrapper.text()).toContain('当前端点仅支持 OpenAI 分组的 API Key')
     expect(sendWebConsoleChatMock).not.toHaveBeenCalled()
-    expect(generateWebConsoleImageMock).not.toHaveBeenCalled()
+    expect(createImageTaskMock).not.toHaveBeenCalled()
   })
 
   it('OpenAI 在线对话提交时使用选中的 OpenAI key 和 endpoint', async () => {
@@ -319,11 +397,18 @@ describe('WebConsoleView', () => {
     expect(wrapper.text()).toContain('你好，有什么可以帮你？')
   })
 
-  it('生图模式固定使用 Responses image_generation 路径', async () => {
-    generateWebConsoleImageMock.mockResolvedValue({
-      images: [{ url: 'data:image/png;base64,ZmFrZQ==', alt: '画一只猫' }],
-      text: '',
-      usedMode: 'responses',
+  it('生图模式通过任务接口提交图片生成请求', async () => {
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 101,
+        status: 'completed',
+        assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 101,
+      status: 'completed',
+      assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
     })
 
     const wrapper = mount(WebConsoleView)
@@ -340,13 +425,49 @@ describe('WebConsoleView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(generateWebConsoleImageMock).toHaveBeenCalledTimes(1)
-    expect(generateWebConsoleImageMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createImageTaskMock).toHaveBeenCalledTimes(1)
+    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+      api_key_id: 1,
       endpoint: 'https://api.example.com',
-      apiKey: 'sk-test',
       model: 'gpt-5.5',
       prompt: '画一只猫',
     }))
+  })
+
+  it('生图任务完成前只展示居中动画且不展示重新生成按钮', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image',
+        title: '海报会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageRequest: {
+            prompt: '画一只猫',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'running',
+          created_at: '2026-05-28T00:00:00.000Z',
+        }],
+      }),
+    ])
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    expect(wrapper.get('[role="status"]').text()).toContain('生图任务已提交，正在生成图片。')
+    expect(wrapper.findAll('button').some((button) => button.text().includes('重新生成'))).toBe(false)
+    expect(createImageTaskMock).not.toHaveBeenCalled()
   })
 
   it('对话模式不暴露调试选项并默认启用 tools', async () => {

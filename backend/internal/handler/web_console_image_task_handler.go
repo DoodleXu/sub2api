@@ -32,7 +32,13 @@ type WebConsoleImageTaskHandler struct {
 	runningTasks   sync.Map
 }
 
-const webConsoleImageTaskLease = 10 * time.Minute
+const (
+	webConsoleImageTaskLease                  = 10 * time.Minute
+	webConsoleImageRequestTimeout             = 10 * time.Minute
+	webConsoleImageResponseHeaderTimeout      = 0
+	webConsoleImageRequestMaxIdleConnsPerHost = 4
+	webConsoleImageRequestMaxConnsPerHost     = 8
+)
 
 func NewWebConsoleImageTaskHandler(imageService *service.ImageGenerationArchiveService, apiKeyService *service.APIKeyService, settingService *service.SettingService) *WebConsoleImageTaskHandler {
 	return &WebConsoleImageTaskHandler{imageService: imageService, apiKeyService: apiKeyService, settingService: settingService}
@@ -158,6 +164,10 @@ func (h *WebConsoleImageTaskHandler) Get(c *gin.Context) {
 		response.Forbidden(c, "task does not belong to current user")
 		return
 	}
+	if task.UserDeletedAt != nil {
+		response.ErrorFrom(c, service.ErrWebConsoleImageTaskNotFound)
+		return
+	}
 	h.resumeWebConsoleImageTaskIfNeeded(task)
 	assets := []gin.H{}
 	if task.RecordID != nil {
@@ -166,6 +176,25 @@ func (h *WebConsoleImageTaskHandler) Get(c *gin.Context) {
 		}
 	}
 	response.Success(c, webConsoleTaskResponse(task, assets))
+}
+
+func (h *WebConsoleImageTaskHandler) DeleteSession(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "unauthorized")
+		return
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" {
+		response.BadRequest(c, "invalid session id")
+		return
+	}
+	deleted, err := h.imageService.MarkWebConsoleTasksUserDeletedBySessionID(c.Request.Context(), subject.UserID, sessionID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"deleted": deleted})
 }
 
 func (h *WebConsoleImageTaskHandler) GetAsset(c *gin.Context) {
@@ -256,6 +285,9 @@ func (h *WebConsoleImageTaskHandler) runWebConsoleImageTask(taskID, userID int64
 		return
 	}
 	if !claimed || task == nil {
+		return
+	}
+	if task.UserDeletedAt != nil {
 		return
 	}
 	apiKey, err := h.apiKeyService.GetByID(ctx, snapshot.APIKeyID)
@@ -535,13 +567,17 @@ func webConsoleImageResponsesPayload(req createWebConsoleImageTaskRequest, optio
 }
 
 func webConsoleHTTPClient() (*http.Client, error) {
-	return httpclient.GetClient(httpclient.Options{
-		Timeout:               10 * time.Minute,
-		ResponseHeaderTimeout: 60 * time.Second,
+	return httpclient.GetClient(webConsoleHTTPClientOptions())
+}
+
+func webConsoleHTTPClientOptions() httpclient.Options {
+	return httpclient.Options{
+		Timeout:               webConsoleImageRequestTimeout,
+		ResponseHeaderTimeout: webConsoleImageResponseHeaderTimeout,
 		ValidateResolvedIP:    true,
-		MaxIdleConnsPerHost:   4,
-		MaxConnsPerHost:       8,
-	})
+		MaxIdleConnsPerHost:   webConsoleImageRequestMaxIdleConnsPerHost,
+		MaxConnsPerHost:       webConsoleImageRequestMaxConnsPerHost,
+	}
 }
 
 func (h *WebConsoleImageTaskHandler) authorizeWebConsoleEndpoint(c *gin.Context, rawEndpoint string) (string, error) {

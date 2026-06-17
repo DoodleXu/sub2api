@@ -42,6 +42,11 @@ export async function get(id: number): Promise<WebConsoleImageTask> {
   return data
 }
 
-export const webConsoleImageTasksAPI = { create, get }
+export async function deleteSession(sessionId: string): Promise<{ deleted: number }> {
+  const { data } = await apiClient.delete<{ deleted: number }>(`/web-console/image-tasks/sessions/${encodeURIComponent(sessionId)}`)
+  return data
+}
+
+export const webConsoleImageTasksAPI = { create, get, deleteSession }
 
 export default webConsoleImageTasksAPI

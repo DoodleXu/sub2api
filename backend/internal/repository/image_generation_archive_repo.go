@@ -344,12 +344,13 @@ func (r *imageGenerationArchiveRepository) ClaimWebConsoleTask(ctx context.Conte
 			error_message = '',
 			updated_at = NOW()
 		WHERE id = $1
+		  AND user_deleted_at IS NULL
 		  AND (
 			status = 'pending'
 			OR (status = 'running' AND updated_at < $2)
 		  )
 		RETURNING id, user_id, api_key_id, session_id, message_id, status, request_json, record_id,
-			error_message, created_at, started_at, completed_at, updated_at
+			error_message, created_at, started_at, completed_at, user_deleted_at, updated_at
 	`
 	task := &service.WebConsoleImageTask{}
 	err := scanTask(ctx, r.db, query, []any{id, staleBefore}, task)
@@ -365,9 +366,9 @@ func (r *imageGenerationArchiveRepository) ClaimWebConsoleTask(ctx context.Conte
 func (r *imageGenerationArchiveRepository) GetWebConsoleTaskByID(ctx context.Context, id int64) (*service.WebConsoleImageTask, error) {
 	query := `
 		SELECT id, user_id, api_key_id, session_id, message_id, status, request_json, record_id,
-			error_message, created_at, started_at, completed_at, updated_at
+			error_message, created_at, started_at, completed_at, user_deleted_at, updated_at
 		FROM web_console_image_tasks
-		WHERE id = $1
+		WHERE id = $1 AND user_deleted_at IS NULL
 	`
 	task := &service.WebConsoleImageTask{}
 	if err := scanTask(ctx, r.db, query, []any{id}, task); err != nil {
@@ -381,7 +382,7 @@ func (r *imageGenerationArchiveRepository) GetWebConsoleTaskByID(ctx context.Con
 
 func (r *imageGenerationArchiveRepository) ListWebConsoleTasksByUserID(ctx context.Context, userID int64, params pagination.PaginationParams) ([]*service.WebConsoleImageTask, *pagination.PaginationResult, error) {
 	var total int64
-	if err := scanSingleRow(ctx, r.db, "SELECT COUNT(*) FROM web_console_image_tasks WHERE user_id = $1", []any{userID}, &total); err != nil {
+	if err := scanSingleRow(ctx, r.db, "SELECT COUNT(*) FROM web_console_image_tasks WHERE user_id = $1 AND user_deleted_at IS NULL", []any{userID}, &total); err != nil {
 		return nil, nil, err
 	}
 	if total == 0 {
@@ -389,9 +390,9 @@ func (r *imageGenerationArchiveRepository) ListWebConsoleTasksByUserID(ctx conte
 	}
 	query := `
 		SELECT id, user_id, api_key_id, session_id, message_id, status, request_json, record_id,
-			error_message, created_at, started_at, completed_at, updated_at
+			error_message, created_at, started_at, completed_at, user_deleted_at, updated_at
 		FROM web_console_image_tasks
-		WHERE user_id = $1
+		WHERE user_id = $1 AND user_deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
 		LIMIT $2 OFFSET $3
 	`
@@ -412,6 +413,26 @@ func (r *imageGenerationArchiveRepository) ListWebConsoleTasksByUserID(ctx conte
 		return nil, nil, err
 	}
 	return out, paginationResultFromTotal(total, params), nil
+}
+
+func (r *imageGenerationArchiveRepository) MarkWebConsoleTasksUserDeletedBySessionID(ctx context.Context, userID int64, sessionID string) (int64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if userID <= 0 || sessionID == "" {
+		return 0, nil
+	}
+	query := `
+		UPDATE web_console_image_tasks
+		SET user_deleted_at = COALESCE(user_deleted_at, NOW()),
+			updated_at = NOW()
+		WHERE user_id = $1
+		  AND session_id = $2
+		  AND user_deleted_at IS NULL
+	`
+	result, err := r.db.ExecContext(ctx, query, userID, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (r *imageGenerationArchiveRepository) UpdateWebConsoleTask(ctx context.Context, task *service.WebConsoleImageTask) error {
@@ -491,10 +512,10 @@ func scanTask(ctx context.Context, q sqlQueryer, query string, args []any, task 
 
 func scanTaskRows(rows interface{ Scan(dest ...any) error }, task *service.WebConsoleImageTask) error {
 	var apiKeyID, recordID sql.NullInt64
-	var startedAt, completedAt sql.NullTime
+	var startedAt, completedAt, userDeletedAt sql.NullTime
 	if err := rows.Scan(
 		&task.ID, &task.UserID, &apiKeyID, &task.SessionID, &task.MessageID, &task.Status, &task.RequestJSON, &recordID,
-		&task.ErrorMessage, &task.CreatedAt, &startedAt, &completedAt, &task.UpdatedAt,
+		&task.ErrorMessage, &task.CreatedAt, &startedAt, &completedAt, &userDeletedAt, &task.UpdatedAt,
 	); err != nil {
 		return err
 	}
@@ -505,6 +526,9 @@ func scanTaskRows(rows interface{ Scan(dest ...any) error }, task *service.WebCo
 	}
 	if completedAt.Valid {
 		task.CompletedAt = &completedAt.Time
+	}
+	if userDeletedAt.Valid {
+		task.UserDeletedAt = &userDeletedAt.Time
 	}
 	return nil
 }

@@ -75,6 +75,16 @@ func TestWebConsoleUserAssetResponsesUseSignedPublicAssetURL(t *testing.T) {
 	require.True(t, imageService.VerifyAssetToken(7, parsed.Query().Get("scope"), parsed.Query().Get("expires"), parsed.Query().Get("sig"), time.Now().UTC()))
 }
 
+func TestWebConsoleHTTPClientOptionsDoNotCutOffSlowImageHeaders(t *testing.T) {
+	opts := webConsoleHTTPClientOptions()
+
+	require.Equal(t, 10*time.Minute, opts.Timeout)
+	require.Zero(t, opts.ResponseHeaderTimeout)
+	require.True(t, opts.ValidateResolvedIP)
+	require.Equal(t, 4, opts.MaxIdleConnsPerHost)
+	require.Equal(t, 8, opts.MaxConnsPerHost)
+}
+
 func webConsoleTestContext() *gin.Context {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

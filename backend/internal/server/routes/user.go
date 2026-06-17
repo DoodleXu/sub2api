@@ -146,6 +146,7 @@ func RegisterUserRoutes(
 		{
 			webConsoleImageTasks.POST("", h.WebConsoleImageTask.Create)
 			webConsoleImageTasks.GET("/assets/:asset_id", h.WebConsoleImageTask.GetAsset)
+			webConsoleImageTasks.DELETE("/sessions/:session_id", h.WebConsoleImageTask.DeleteSession)
 			webConsoleImageTasks.GET("/:id", h.WebConsoleImageTask.Get)
 		}
 	}

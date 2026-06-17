@@ -31,9 +31,9 @@
           </button>
         </div>
         <div class="border-t border-gray-100 p-[14px] dark:border-dark-700">
-          <button type="button" class="btn btn-secondary h-[50px] w-full" @click="clearCurrentMessages" :disabled="!currentSession">
+          <button type="button" class="btn btn-secondary h-[50px] w-full" @click="deleteCurrentSession" :disabled="!currentSession || deletingSession">
             <Icon name="trash" size="sm" class="mr-2" />
-            清空当前会话
+            删除当前会话
           </button>
         </div>
       </aside>
@@ -59,10 +59,10 @@
             <button
               type="button"
               class="btn btn-secondary shrink-0 px-3"
-              title="清空当前会话"
-              aria-label="清空当前会话"
-              :disabled="!currentSession"
-              @click="clearCurrentMessages"
+              title="删除当前会话"
+              aria-label="删除当前会话"
+              :disabled="!currentSession || deletingSession"
+              @click="deleteCurrentSession"
             >
               <Icon name="trash" size="sm" />
             </button>
@@ -174,7 +174,19 @@
                 message.images?.length ? 'w-fit' : '',
               ]"
             >
-              <p v-if="message.content" class="whitespace-pre-wrap text-sm leading-6">{{ message.content }}</p>
+              <div
+                v-if="isImageGenerationInProgress(message)"
+                class="flex min-h-24 min-w-64 flex-col items-center justify-center gap-3 text-center"
+                role="status"
+                aria-live="polite"
+              >
+                <span class="relative flex h-10 w-10 items-center justify-center rounded-full bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300">
+                  <span class="absolute h-full w-full animate-ping rounded-full bg-primary-300/40 dark:bg-primary-500/30"></span>
+                  <Icon name="refresh" size="md" class="relative animate-spin" />
+                </span>
+                <span class="text-sm text-gray-600 dark:text-gray-300">{{ message.content || pendingImageContent() }}</span>
+              </div>
+              <p v-else-if="message.content" class="whitespace-pre-wrap text-sm leading-6">{{ message.content }}</p>
               <div
                 v-if="message.images?.length"
                 class="mt-3 grid grid-cols-1 gap-3"
@@ -212,7 +224,7 @@
                   </div>
                 </figure>
               </div>
-              <div v-if="message.role === 'assistant' && message.imageRequest" class="mt-3 flex justify-end">
+              <div v-if="message.role === 'assistant' && message.imageRequest && !isImageGenerationInProgress(message)" class="mt-3 flex justify-end">
                 <button
                   type="button"
                   class="inline-flex items-center rounded-md border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-dark-700 dark:text-gray-300 dark:hover:bg-dark-800"
@@ -301,8 +313,10 @@ const imageOutputFormat = ref('png')
 const imageCount = ref(1)
 const prompt = ref('')
 const submitting = ref(false)
+const deletingSession = ref(false)
 const errorMessage = ref('')
 const messagePanel = ref<HTMLElement | null>(null)
+const deletingSessionIds = new Set<string>()
 
 const publicSettings = computed(() => appStore.cachedPublicSettings)
 const endpointOptions = computed<EndpointOption[]>(() => {
@@ -461,6 +475,7 @@ function switchMode(mode: WebConsoleMode): void {
 }
 
 function touchSession(session: WebConsoleSession, titlePrompt?: string): void {
+  if (deletingSessionIds.has(session.id)) return
   session.updated_at = new Date().toISOString()
   if (titlePrompt && session.messages.length <= 1) {
     session.title = titleFromPrompt(titlePrompt, session.mode === 'image' ? '新生图会话' : '新对话')
@@ -473,12 +488,37 @@ function touchSession(session: WebConsoleSession, titlePrompt?: string): void {
   persistSessions()
 }
 
-function clearCurrentMessages(): void {
+async function deleteCurrentSession(): Promise<void> {
   const session = currentSession.value
-  if (!session) return
-  session.messages = []
-  session.title = session.mode === 'image' ? '新生图会话' : '新对话'
-  touchSession(session)
+  if (!session || deletingSession.value) return
+  deletingSession.value = true
+  errorMessage.value = ''
+  deletingSessionIds.add(session.id)
+  try {
+    if (session.mode === 'image') {
+      await webConsoleImageTasksAPI.deleteSession(session.id)
+    }
+  } catch (error) {
+    deletingSessionIds.delete(session.id)
+    errorMessage.value = webConsoleErrorMessage(error)
+    return
+  } finally {
+    deletingSession.value = false
+  }
+  const deletedMode = session.mode
+  sessions.value = sessions.value.filter((item) => item.id !== session.id)
+  const nextSession = sessions.value.find((item) => item.mode === deletedMode) || sessions.value[0]
+  if (nextSession) {
+    currentSessionId.value = nextSession.id
+    activeMode.value = nextSession.mode
+  } else {
+    const replacement = createWebConsoleSession(deletedMode)
+    sessions.value.unshift(replacement)
+    currentSessionId.value = replacement.id
+    activeMode.value = replacement.mode
+  }
+  persistSessions()
+  deletingSessionIds.delete(session.id)
 }
 
 function clampImageCount(): void {
@@ -536,6 +576,10 @@ function failedImageContent(message?: string): string {
   return message ? `生图失败：${message}` : '生图失败，请稍后重试。'
 }
 
+function isImageGenerationInProgress(message: WebConsoleMessage): boolean {
+  return Boolean(message.imageRequest && (message.status === 'pending' || message.status === 'running'))
+}
+
 async function createImageTaskForMessage(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!selectedKey.value || !message.imageRequest) return
   const { task } = await webConsoleImageTasksAPI.create({
@@ -556,7 +600,10 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
 async function pollImageTask(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!message.imageTaskId) return
   for (let attempt = 0; attempt < 900; attempt++) {
+    if (deletingSessionIds.has(session.id)) return
     const task = await webConsoleImageTasksAPI.get(message.imageTaskId)
+    if (deletingSessionIds.has(session.id)) return
+    if (!task) return
     message.status = task.status
     if (task.status === 'completed') {
       message.images = task.assets.map((asset) => ({ url: asset.url, alt: message.imageRequest?.prompt }))
@@ -639,7 +686,7 @@ async function downloadImage(image: WebConsoleImage, message: WebConsoleMessage,
 }
 
 async function regenerateImage(message: WebConsoleMessage): Promise<void> {
-  if (submitting.value || !selectedKey.value || !message.imageRequest) return
+  if (submitting.value || !selectedKey.value || !message.imageRequest || isImageGenerationInProgress(message)) return
   errorMessage.value = ''
   submitting.value = true
 

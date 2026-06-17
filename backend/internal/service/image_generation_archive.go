@@ -55,6 +55,7 @@ type ImageGenerationArchiveRepository interface {
 	ClaimWebConsoleTask(ctx context.Context, id int64, staleBefore time.Time) (*WebConsoleImageTask, bool, error)
 	GetWebConsoleTaskByID(ctx context.Context, id int64) (*WebConsoleImageTask, error)
 	ListWebConsoleTasksByUserID(ctx context.Context, userID int64, params pagination.PaginationParams) ([]*WebConsoleImageTask, *pagination.PaginationResult, error)
+	MarkWebConsoleTasksUserDeletedBySessionID(ctx context.Context, userID int64, sessionID string) (int64, error)
 	UpdateWebConsoleTask(ctx context.Context, task *WebConsoleImageTask) error
 	CountDailyByDate(ctx context.Context, day time.Time) (int64, error)
 }
@@ -110,19 +111,20 @@ type ImageGenerationAsset struct {
 }
 
 type WebConsoleImageTask struct {
-	ID           int64           `json:"id"`
-	UserID       int64           `json:"user_id"`
-	APIKeyID     *int64          `json:"api_key_id,omitempty"`
-	SessionID    string          `json:"session_id"`
-	MessageID    string          `json:"message_id"`
-	Status       string          `json:"status"`
-	RequestJSON  json.RawMessage `json:"request_json"`
-	RecordID     *int64          `json:"record_id,omitempty"`
-	ErrorMessage string          `json:"error_message"`
-	CreatedAt    time.Time       `json:"created_at"`
-	StartedAt    *time.Time      `json:"started_at,omitempty"`
-	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID            int64           `json:"id"`
+	UserID        int64           `json:"user_id"`
+	APIKeyID      *int64          `json:"api_key_id,omitempty"`
+	SessionID     string          `json:"session_id"`
+	MessageID     string          `json:"message_id"`
+	Status        string          `json:"status"`
+	RequestJSON   json.RawMessage `json:"request_json"`
+	RecordID      *int64          `json:"record_id,omitempty"`
+	ErrorMessage  string          `json:"error_message"`
+	CreatedAt     time.Time       `json:"created_at"`
+	StartedAt     *time.Time      `json:"started_at,omitempty"`
+	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
+	UserDeletedAt *time.Time      `json:"user_deleted_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type ImageGenerationRecordListParams struct {
@@ -678,6 +680,13 @@ func (s *ImageGenerationArchiveService) ClaimWebConsoleTask(ctx context.Context,
 
 func (s *ImageGenerationArchiveService) GetWebConsoleTaskByID(ctx context.Context, id int64) (*WebConsoleImageTask, error) {
 	return s.repo.GetWebConsoleTaskByID(ctx, id)
+}
+
+func (s *ImageGenerationArchiveService) MarkWebConsoleTasksUserDeletedBySessionID(ctx context.Context, userID int64, sessionID string) (int64, error) {
+	if s == nil || s.repo == nil || userID <= 0 || strings.TrimSpace(sessionID) == "" {
+		return 0, nil
+	}
+	return s.repo.MarkWebConsoleTasksUserDeletedBySessionID(ctx, userID, strings.TrimSpace(sessionID))
 }
 
 func (s *ImageGenerationArchiveService) UpdateWebConsoleTask(ctx context.Context, task *WebConsoleImageTask) error {
