@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -372,6 +373,8 @@ type contentModerationTestHashCache struct {
 	recorded      []string
 	checked       []string
 	deleted       []string
+	dedupe        map[string]time.Time
+	dedupeErr     error
 	hasResult     bool
 	hasResultUsed bool
 }
@@ -684,6 +687,26 @@ func (c *contentModerationTestHashCache) ListAllowedInputHashes(ctx context.Cont
 	}
 	sort.Strings(hashes)
 	return hashes, nil
+}
+
+func (c *contentModerationTestHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dedupeErr != nil {
+		return false, c.dedupeErr
+	}
+	if c.dedupe == nil {
+		c.dedupe = map[string]time.Time{}
+	}
+	now := time.Now()
+	if expiresAt, ok := c.dedupe[key]; ok && now.Before(expiresAt) {
+		return false, nil
+	}
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	c.dedupe[key] = now.Add(ttl)
+	return true, nil
 }
 
 func (c *contentModerationTestHashCache) hasAllowedHash(inputHash string) bool {
@@ -2829,12 +2852,23 @@ func TestContentModerationAdminBelowBanThresholdRecordsViolationOnly(t *testing.
 func newContentModerationFlaggedLog(userID int64) *ContentModerationLog {
 	return &ContentModerationLog{
 		UserID:          &userID,
+		UserEmail:       "user@example.com",
 		Action:          ContentModerationActionBlock,
 		Flagged:         true,
 		HighestCategory: "sexual",
 		HighestScore:    0.9,
 		CreatedAt:       time.Now(),
 	}
+}
+
+func newContentModerationEmailSettingRepo() *notificationEmailMemorySettingRepo {
+	repo := newNotificationEmailMemorySettingRepo()
+	_ = repo.Set(context.Background(), SettingKeySiteName, "Sub2API")
+	return repo
+}
+
+func newContentModerationEmailTestService(repo *notificationEmailMemorySettingRepo) *EmailService {
+	return NewEmailService(repo, nil)
 }
 
 func TestContentModerationCheck_PreBlockFlaggedWritesRedisHashCache(t *testing.T) {
@@ -2899,6 +2933,113 @@ func TestContentModerationCheck_PreBlockFlaggedWritesRedisHashCache(t *testing.T
 	logs := requireContentModerationLogCount(t, repo, 2)
 	require.Equal(t, ContentModerationActionBlock, logs[0].Action)
 	require.Equal(t, ContentModerationActionHashBlock, logs[1].Action)
+}
+
+func TestContentModerationViolationEmailDedupeSuppressesHashRetry(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.EmailOnHit = true
+	userID := int64(1001)
+	inputHash := strings.Repeat("a", 64)
+	hashCache := &contentModerationTestHashCache{}
+	settingRepo := newContentModerationEmailSettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
+	emailSvc := newContentModerationEmailTestService(settingRepo)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+
+	first := newContentModerationFlaggedLog(userID)
+	first.InputHash = inputHash
+	first.Action = ContentModerationActionBlock
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, first, false)
+	require.True(t, first.EmailSent)
+	require.Equal(t, int64(1), smtpServer.messageCount())
+
+	retry := newContentModerationFlaggedLog(userID)
+	retry.InputHash = inputHash
+	retry.Action = ContentModerationActionHashBlock
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, retry, false)
+	require.False(t, retry.EmailSent)
+	require.Equal(t, int64(1), smtpServer.messageCount())
+}
+
+func TestContentModerationViolationEmailDedupeAllowsDifferentInputsAndUsers(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.EmailOnHit = true
+	hashCache := &contentModerationTestHashCache{}
+	settingRepo := newContentModerationEmailSettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
+	emailSvc := newContentModerationEmailTestService(settingRepo)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+
+	first := newContentModerationFlaggedLog(1001)
+	first.UserEmail = "same@example.com"
+	first.InputHash = strings.Repeat("a", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, first, false)
+
+	differentInput := newContentModerationFlaggedLog(1001)
+	differentInput.UserEmail = "same@example.com"
+	differentInput.InputHash = strings.Repeat("b", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, differentInput, false)
+
+	differentUser := newContentModerationFlaggedLog(1002)
+	differentUser.UserEmail = "other@example.com"
+	differentUser.InputHash = strings.Repeat("a", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, differentUser, false)
+
+	require.True(t, first.EmailSent)
+	require.True(t, differentInput.EmailSent)
+	require.True(t, differentUser.EmailSent)
+	require.Equal(t, int64(3), smtpServer.messageCount())
+}
+
+func TestContentModerationViolationEmailDedupeFailOpenOnCacheError(t *testing.T) {
+	var slogOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&slogOutput, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+	})
+
+	cfg := defaultContentModerationConfig()
+	cfg.EmailOnHit = true
+	hashCache := &contentModerationTestHashCache{dedupeErr: errors.New("redis unavailable")}
+	settingRepo := newContentModerationEmailSettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
+	emailSvc := newContentModerationEmailTestService(settingRepo)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+
+	log := newContentModerationFlaggedLog(1001)
+	log.InputHash = strings.Repeat("a", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, log, false)
+
+	require.True(t, log.EmailSent)
+	require.Equal(t, int64(1), smtpServer.messageCount())
+	require.Contains(t, slogOutput.String(), "content_moderation.email_dedupe_failed")
+}
+
+func TestContentModerationAccountDisabledEmailBypassesViolationDedupe(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.EmailOnHit = true
+	hashCache := &contentModerationTestHashCache{}
+	settingRepo := newContentModerationEmailSettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
+	emailSvc := newContentModerationEmailTestService(settingRepo)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+
+	first := newContentModerationFlaggedLog(1001)
+	first.InputHash = strings.Repeat("a", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, first, false)
+
+	second := newContentModerationFlaggedLog(1001)
+	second.InputHash = strings.Repeat("a", 64)
+	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, second, true)
+
+	require.True(t, first.EmailSent)
+	require.True(t, second.EmailSent)
+	require.Equal(t, int64(2), smtpServer.messageCount())
 }
 
 func TestContentModerationDeleteFlaggedInputHash_NormalizesAndDeletes(t *testing.T) {

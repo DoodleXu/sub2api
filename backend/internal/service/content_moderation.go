@@ -104,10 +104,15 @@ const (
 	contentModerationPolicyCacheTTL              = 30 * time.Second
 	contentModerationForcedWhitelistCacheTTL     = time.Minute
 	contentModerationLegacyAllowedHashImportKey  = "content_moderation.allowed_hash_legacy_redis_imported"
+	contentModerationEmailDedupeTTL              = time.Minute
 
 	contentModerationCleanupInterval = 24 * time.Hour
 	contentModerationCleanupTimeout  = 30 * time.Minute
 	contentModerationCleanupDelay    = 5 * time.Minute
+)
+
+const (
+	contentModerationEmailDedupeEventViolation = "violation"
 )
 
 var contentModerationCategoryOrder = []string{
@@ -613,6 +618,7 @@ type ContentModerationHashCache interface {
 	ClearAllowedInputHashes(ctx context.Context) (int64, error)
 	CountAllowedInputHashes(ctx context.Context) (int64, error)
 	ListAllowedInputHashes(ctx context.Context) ([]string, error)
+	TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error)
 }
 
 type ContentModerationService struct {
@@ -2365,20 +2371,50 @@ func (s *ContentModerationService) sendFlaggedNotificationSideEffects(ctx contex
 	}
 	emailSent := false
 	if cfg.EmailOnHit {
-		if err := s.sendViolationEmail(ctx, cfg, log); err != nil {
-			slog.Warn("content_moderation.email_failed", "user_id", *log.UserID, "email", log.UserEmail, "error", err)
+		if s.shouldSendViolationEmail(ctx, log) {
+			if err := s.sendViolationEmail(ctx, cfg, log); err != nil {
+				slog.Warn("content_moderation.email_failed", "user_id", contentModerationEmailUserID(log), "recipient_hash", notificationEmailHash(log.UserEmail), "error", err)
+			} else {
+				emailSent = true
+			}
 		} else {
-			emailSent = true
+			slog.Info("content_moderation.email_deduped",
+				"user_id", contentModerationEmailUserID(log),
+				"recipient_hash", notificationEmailHash(log.UserEmail),
+				"action", log.Action,
+				"input_hash", normalizeContentModerationHash(log.InputHash),
+				"deduped", true)
 		}
 	}
 	if autoBanJustApplied {
 		if err := s.sendAccountDisabledEmail(ctx, cfg, log); err != nil {
-			slog.Warn("content_moderation.ban_email_failed", "user_id", *log.UserID, "email", log.UserEmail, "error", err)
+			slog.Warn("content_moderation.ban_email_failed", "user_id", contentModerationEmailUserID(log), "recipient_hash", notificationEmailHash(log.UserEmail), "error", err)
 		} else {
 			emailSent = true
 		}
 	}
 	log.EmailSent = emailSent
+}
+
+func (s *ContentModerationService) shouldSendViolationEmail(ctx context.Context, log *ContentModerationLog) bool {
+	if s == nil || log == nil {
+		return true
+	}
+	key := contentModerationEmailDedupeKey(contentModerationEmailDedupeEventViolation, log)
+	if key == "" || s.hashCache == nil {
+		return true
+	}
+	acquired, err := s.hashCache.TryAcquireNotificationDedupe(ctx, key, contentModerationEmailDedupeTTL)
+	if err != nil {
+		slog.Warn("content_moderation.email_dedupe_failed",
+			"user_id", contentModerationEmailUserID(log),
+			"recipient_hash", notificationEmailHash(log.UserEmail),
+			"action", log.Action,
+			"input_hash", normalizeContentModerationHash(log.InputHash),
+			"error", err)
+		return true
+	}
+	return acquired
 }
 
 func (s *ContentModerationService) sendViolationEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {
@@ -2443,6 +2479,40 @@ func contentModerationEmailSourceID(log *ContentModerationLog) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", log.ID)
+}
+
+func contentModerationEmailDedupeKey(event string, log *ContentModerationLog) string {
+	event = strings.ToLower(strings.TrimSpace(event))
+	if event == "" || log == nil {
+		return ""
+	}
+	userPart := ""
+	if log.UserID != nil && *log.UserID > 0 {
+		userPart = fmt.Sprintf("uid:%d", *log.UserID)
+	} else if strings.TrimSpace(log.UserEmail) != "" {
+		userPart = "email:" + notificationEmailHash(log.UserEmail)
+	}
+	inputHash := contentModerationEmailDedupeInputHash(log)
+	if userPart == "" || inputHash == "" {
+		return ""
+	}
+	return fmt.Sprintf("content_moderation:email_dedupe:v1:%s:%s:%s", event, userPart, inputHash)
+}
+
+func contentModerationEmailDedupeInputHash(log *ContentModerationLog) string {
+	if log == nil {
+		return ""
+	}
+	if inputHash := normalizeContentModerationHash(log.InputHash); inputHash != "" {
+		return inputHash
+	}
+	identity := strings.Join([]string{
+		strings.TrimSpace(log.Action),
+		strings.TrimSpace(log.HighestCategory),
+		strings.TrimSpace(redactContentModerationSecrets(log.InputExcerpt)),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
 }
 
 func contentModerationEmailVariables(log *ContentModerationLog, cfg *ContentModerationConfig) map[string]string {

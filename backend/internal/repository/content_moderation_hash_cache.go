@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
@@ -134,4 +135,15 @@ func (c *contentModerationHashCache) ListAllowedInputHashes(ctx context.Context)
 		return nil, nil
 	}
 	return c.rdb.SMembers(ctx, contentModerationAllowedHashSetKey).Result()
+}
+
+func (c *contentModerationHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	key = strings.TrimSpace(key)
+	if c == nil || c.rdb == nil || key == "" {
+		return true, nil
+	}
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	return c.rdb.SetNX(ctx, key, "1", ttl).Result()
 }
