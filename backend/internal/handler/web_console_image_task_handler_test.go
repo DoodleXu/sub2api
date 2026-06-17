@@ -85,6 +85,24 @@ func TestWebConsoleHTTPClientOptionsDoNotCutOffSlowImageHeaders(t *testing.T) {
 	require.Equal(t, 8, opts.MaxConnsPerHost)
 }
 
+func TestApplyWebConsoleCodexRequestHeadersReusesGatewayCodexPath(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://api.example.com/v1/responses", nil)
+
+	applyWebConsoleCodexRequestHeaders(req)
+
+	require.Equal(t, webConsoleCodexUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, webConsoleCodexOriginator, req.Header.Get("originator"))
+	require.Equal(t, webConsoleCodexVersion, req.Header.Get("version"))
+	require.Equal(t, "responses=experimental", req.Header.Get("OpenAI-Beta"))
+	require.Equal(t, "application/json", req.Header.Get("Accept"))
+}
+
+func TestWebConsoleUpstreamErrorDetailPrefersStructuredMessage(t *testing.T) {
+	detail := webConsoleUpstreamErrorDetail([]byte(`{"error":{"type":"server_error","code":"bad_gateway","message":"upstream timed out"}}`))
+
+	require.Equal(t, "bad_gateway: upstream timed out", detail)
+}
+
 func webConsoleTestContext() *gin.Context {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

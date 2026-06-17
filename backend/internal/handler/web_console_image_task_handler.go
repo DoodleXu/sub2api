@@ -38,6 +38,9 @@ const (
 	webConsoleImageResponseHeaderTimeout      = 0
 	webConsoleImageRequestMaxIdleConnsPerHost = 4
 	webConsoleImageRequestMaxConnsPerHost     = 8
+	webConsoleCodexUserAgent                  = "codex_cli_rs/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color"
+	webConsoleCodexOriginator                 = "codex_cli_rs"
+	webConsoleCodexVersion                    = "0.125.0"
 )
 
 func NewWebConsoleImageTaskHandler(imageService *service.ImageGenerationArchiveService, apiKeyService *service.APIKeyService, settingService *service.SettingService) *WebConsoleImageTaskHandler {
@@ -517,6 +520,7 @@ func runWebConsoleImageRequests(ctx context.Context, req createWebConsoleImageTa
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
+		applyWebConsoleCodexRequestHeaders(httpReq)
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			return nil, err
@@ -527,6 +531,9 @@ func runWebConsoleImageRequests(ctx context.Context, req createWebConsoleImageTa
 			return nil, readErr
 		}
 		if resp.StatusCode >= 400 {
+			if detail := webConsoleUpstreamErrorDetail(body); detail != "" {
+				return nil, fmt.Errorf("image task upstream failed: status %d: %s", resp.StatusCode, detail)
+			}
 			return nil, fmt.Errorf("image task upstream failed: status %d", resp.StatusCode)
 		}
 		collected := collectWebConsoleImageValues(body)
@@ -547,6 +554,53 @@ func runWebConsoleImageRequests(ctx context.Context, req createWebConsoleImageTa
 		return nil, fmt.Errorf("Responses did not return any image")
 	}
 	return out, nil
+}
+
+func applyWebConsoleCodexRequestHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	req.Header.Set("User-Agent", webConsoleCodexUserAgent)
+	req.Header.Set("originator", webConsoleCodexOriginator)
+	req.Header.Set("version", webConsoleCodexVersion)
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	req.Header.Set("Accept", "application/json")
+}
+
+func webConsoleUpstreamErrorDetail(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return ""
+	}
+	var decoded struct {
+		Error struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		message := strings.TrimSpace(decoded.Error.Message)
+		code := strings.TrimSpace(decoded.Error.Code)
+		errorType := strings.TrimSpace(decoded.Error.Type)
+		switch {
+		case code != "" && message != "":
+			return code + ": " + message
+		case errorType != "" && message != "":
+			return errorType + ": " + message
+		case message != "":
+			return message
+		case code != "":
+			return code
+		case errorType != "":
+			return errorType
+		}
+	}
+	const maxDetailBytes = 2048
+	if len(trimmed) > maxDetailBytes {
+		return trimmed[:maxDetailBytes] + "..."
+	}
+	return trimmed
 }
 
 func webConsoleImageResponsesPayload(req createWebConsoleImageTaskRequest, options webConsoleImageTaskOptions) map[string]any {
