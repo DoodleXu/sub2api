@@ -49,6 +49,7 @@ type ImageGenerationArchiveRepository interface {
 	GetRecordByID(ctx context.Context, id int64) (*ImageGenerationRecord, []*ImageGenerationAsset, error)
 	ListRecords(ctx context.Context, params ImageGenerationRecordListParams) ([]*ImageGenerationRecord, *ImageGenerationRecordListResult, error)
 	ListDailyStats(ctx context.Context, params ImageGenerationRecordDailyStatsParams) ([]ImageGenerationDailyStat, error)
+	GetStorageStats(ctx context.Context) (ImageGenerationStorageStats, error)
 	CreateAsset(ctx context.Context, asset *ImageGenerationAsset) error
 	GetAssetByID(ctx context.Context, id int64) (*ImageGenerationAsset, *ImageGenerationRecord, error)
 	ListAssetsByRecordID(ctx context.Context, recordID int64) ([]*ImageGenerationAsset, error)
@@ -152,6 +153,10 @@ type ImageGenerationDailyStat struct {
 	RequestCount int64  `json:"request_count"`
 	ImageCount   int64  `json:"image_count"`
 	FailedCount  int64  `json:"failed_count"`
+}
+
+type ImageGenerationStorageStats struct {
+	TotalBytes int64 `json:"total_bytes"`
 }
 
 type ImageGenerationRecordDailyStatsParams struct {
@@ -509,6 +514,10 @@ func (s *ImageGenerationArchiveService) ListAssetsByRecordID(ctx context.Context
 
 func (s *ImageGenerationArchiveService) ListDailyStats(ctx context.Context, params ImageGenerationRecordDailyStatsParams) ([]ImageGenerationDailyStat, error) {
 	return s.repo.ListDailyStats(ctx, params)
+}
+
+func (s *ImageGenerationArchiveService) GetStorageStats(ctx context.Context) (ImageGenerationStorageStats, error) {
+	return s.repo.GetStorageStats(ctx)
 }
 
 func (s *ImageGenerationArchiveService) GetAssetByID(ctx context.Context, id int64) (*ImageGenerationAsset, *ImageGenerationRecord, error) {

@@ -240,6 +240,15 @@ func (r *imageGenerationArchiveRepository) ListDailyStats(ctx context.Context, p
 	return out, rows.Err()
 }
 
+func (r *imageGenerationArchiveRepository) GetStorageStats(ctx context.Context) (service.ImageGenerationStorageStats, error) {
+	var stats service.ImageGenerationStorageStats
+	query := `SELECT COALESCE(SUM(bytes), 0) FROM image_generation_assets`
+	if err := scanSingleRow(ctx, r.db, query, nil, &stats.TotalBytes); err != nil {
+		return service.ImageGenerationStorageStats{}, err
+	}
+	return stats, nil
+}
+
 func (r *imageGenerationArchiveRepository) CreateAsset(ctx context.Context, asset *service.ImageGenerationAsset) error {
 	if asset == nil {
 		return nil

@@ -154,6 +154,7 @@ func registerImageGenerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 	{
 		images.GET("", h.Admin.ImageGeneration.List)
 		images.GET("/stats/daily", h.Admin.ImageGeneration.DailyStats)
+		images.GET("/stats/storage", h.Admin.ImageGeneration.StorageStats)
 		images.GET("/assets/:asset_id", h.Admin.ImageGeneration.GetAsset)
 		images.GET("/:id", h.Admin.ImageGeneration.Get)
 	}

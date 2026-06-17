@@ -82,6 +82,15 @@ func (h *ImageGenerationHandler) DailyStats(c *gin.Context) {
 	response.Success(c, gin.H{"items": stats})
 }
 
+func (h *ImageGenerationHandler) StorageStats(c *gin.Context) {
+	stats, err := h.imageService.GetStorageStats(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
+}
+
 func (h *ImageGenerationHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -173,7 +182,7 @@ func writeAdminImageAssetReader(c *gin.Context, reader *service.ImageGenerationA
 	defer func() { _ = reader.Body.Close() }()
 	c.DataFromReader(http.StatusOK, reader.Size, reader.ContentType, reader.Body, map[string]string{
 		"Content-Disposition": "inline; filename=\"" + reader.Filename + "\"",
-		"Cache-Control":       "private, max-age=300",
+		"Cache-Control":       "private, max-age=86400",
 	})
 }
 

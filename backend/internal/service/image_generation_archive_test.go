@@ -81,6 +81,10 @@ func (r *imageArchiveRepoStub) ListDailyStats(context.Context, ImageGenerationRe
 	return nil, nil
 }
 
+func (r *imageArchiveRepoStub) GetStorageStats(context.Context) (ImageGenerationStorageStats, error) {
+	return ImageGenerationStorageStats{}, nil
+}
+
 func (r *imageArchiveRepoStub) CreateAsset(_ context.Context, asset *ImageGenerationAsset) error {
 	r.assets = append(r.assets, asset)
 	return nil

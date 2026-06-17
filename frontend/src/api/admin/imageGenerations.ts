@@ -46,6 +46,10 @@ export interface ImageGenerationDailyStat {
   failed_count: number
 }
 
+export interface ImageGenerationStorageStats {
+  total_bytes: number
+}
+
 export interface ImageArchiveStorageConfig {
   enabled: boolean
   type: 'local' | 's3'
@@ -76,6 +80,11 @@ export async function dailyStats(params: Record<string, unknown>) {
   return data.items
 }
 
+export async function storageStats() {
+  const { data } = await apiClient.get<ImageGenerationStorageStats>('/admin/image-generations/stats/storage')
+  return data
+}
+
 export async function getStorageConfig() {
   const { data } = await apiClient.get<ImageArchiveStorageConfig>('/admin/settings/image-archive-storage')
   return data
@@ -89,6 +98,7 @@ export async function updateStorageConfig(payload: ImageArchiveStorageConfig) {
 export const imageGenerationsAPI = {
   list,
   dailyStats,
+  storageStats,
   getStorageConfig,
   updateStorageConfig,
 }

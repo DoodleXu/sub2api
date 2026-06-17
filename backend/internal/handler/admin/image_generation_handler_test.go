@@ -52,6 +52,6 @@ func TestWriteAdminImageAssetReaderStreamsInlineWithPrivateCache(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "image/png", rec.Header().Get("Content-Type"))
 	require.Equal(t, `inline; filename="image-7.png"`, rec.Header().Get("Content-Disposition"))
-	require.Equal(t, "private, max-age=300", rec.Header().Get("Cache-Control"))
+	require.Equal(t, "private, max-age=86400", rec.Header().Get("Cache-Control"))
 	require.Equal(t, "png", rec.Body.String())
 }
