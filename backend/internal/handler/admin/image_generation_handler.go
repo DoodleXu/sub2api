@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -111,10 +112,7 @@ func (h *ImageGenerationHandler) GetAsset(c *gin.Context) {
 		response.NotFound(c, "image asset is not available")
 		return
 	}
-	defer func() { _ = reader.Body.Close() }()
-	c.DataFromReader(200, reader.Size, reader.ContentType, reader.Body, map[string]string{
-		"Content-Disposition": "inline; filename=\"" + reader.Filename + "\"",
-	})
+	writeAdminImageAssetReader(c, reader)
 }
 
 func (h *ImageGenerationHandler) GetStorageConfig(c *gin.Context) {
@@ -143,7 +141,12 @@ func (h *ImageGenerationHandler) UpdateStorageConfig(c *gin.Context) {
 func (h *ImageGenerationHandler) adminAssetResponses(assets []*service.ImageGenerationAsset) []gin.H {
 	out := make([]gin.H, 0, len(assets))
 	for _, asset := range assets {
-		url := "/api/v1/admin/image-generations/assets/" + strconv.FormatInt(asset.ID, 10)
+		adminURL := "/api/v1/admin/image-generations/assets/" + strconv.FormatInt(asset.ID, 10)
+		rawURL := "/api/v1/image-assets/" + strconv.FormatInt(asset.ID, 10)
+		url := rawURL
+		if h != nil && h.imageService != nil {
+			url = h.imageService.SignAssetURLPath(rawURL, asset.ID, service.ImageAssetScopeAdmin, time.Now().UTC())
+		}
 		out = append(out, gin.H{
 			"id":          asset.ID,
 			"record_id":   asset.RecordID,
@@ -155,11 +158,23 @@ func (h *ImageGenerationHandler) adminAssetResponses(assets []*service.ImageGene
 			"bytes":       asset.Bytes,
 			"sha256":      asset.SHA256,
 			"url":         url,
-			"admin_url":   url,
+			"admin_url":   adminURL,
 			"created_at":  asset.CreatedAt,
 		})
 	}
 	return out
+}
+
+func writeAdminImageAssetReader(c *gin.Context, reader *service.ImageGenerationAssetReader) {
+	if reader == nil || reader.Body == nil {
+		response.NotFound(c, "image asset is not available")
+		return
+	}
+	defer func() { _ = reader.Body.Close() }()
+	c.DataFromReader(http.StatusOK, reader.Size, reader.ContentType, reader.Body, map[string]string{
+		"Content-Disposition": "inline; filename=\"" + reader.Filename + "\"",
+		"Cache-Control":       "private, max-age=300",
+	})
 }
 
 func intQuery(c *gin.Context, key string, fallback int) int {

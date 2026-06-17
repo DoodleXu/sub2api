@@ -1495,6 +1495,9 @@ export default {
 
   // Admin
   admin: {
+    imageGenerations: {
+      description: '查看全站生图归档、每日统计和存储配置。'
+    },
     // Dashboard
     dashboard: {
       title: '管理控制台',

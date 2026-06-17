@@ -1491,6 +1491,9 @@ export default {
 
   // Admin
   admin: {
+    imageGenerations: {
+      description: 'View site-wide image generation archives, daily stats, and storage settings.'
+    },
     // Dashboard
     dashboard: {
       title: 'Admin Dashboard',

@@ -1,27 +1,6 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <section class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">生图管理</h1>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">查看全站生图归档、每日统计和存储配置。</p>
-        </div>
-        <div class="grid grid-cols-3 gap-3">
-          <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-            <div class="text-xs text-gray-500">今日请求</div>
-            <div class="mt-1 text-xl font-semibold">{{ today?.request_count || 0 }}</div>
-          </div>
-          <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-            <div class="text-xs text-gray-500">今日图片</div>
-            <div class="mt-1 text-xl font-semibold">{{ today?.image_count || 0 }}</div>
-          </div>
-          <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-            <div class="text-xs text-gray-500">今日失败</div>
-            <div class="mt-1 text-xl font-semibold">{{ today?.failed_count || 0 }}</div>
-          </div>
-        </div>
-      </section>
-
       <section class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
         <div class="grid gap-3 md:grid-cols-5">
           <input v-model="filters.model" class="input" placeholder="模型" @keyup.enter="loadRecords" />
@@ -39,26 +18,45 @@
         </div>
       </section>
 
-      <section class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-base font-semibold">存储设置</h2>
-          <button class="btn btn-secondary btn-sm" @click="saveStorage">保存</button>
+      <section class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+          <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-base font-semibold">存储设置</h2>
+            <button class="btn btn-secondary btn-sm" @click="saveStorage">保存</button>
+          </div>
+          <div class="grid gap-3 md:grid-cols-4">
+            <select v-model="storage.type" class="input">
+              <option value="local">本地存储</option>
+              <option value="s3">对象存储</option>
+            </select>
+            <input v-model="storage.local_dir" class="input md:col-span-3" placeholder="本地目录" />
+            <template v-if="storage.type === 's3'">
+              <input v-model="storage.s3_endpoint" class="input" placeholder="Endpoint" />
+              <input v-model="storage.s3_region" class="input" placeholder="Region" />
+              <input v-model="storage.s3_bucket" class="input" placeholder="Bucket" />
+              <input v-model="storage.s3_prefix" class="input" placeholder="Path prefix" />
+              <input v-model="storage.s3_access_key" class="input" placeholder="Access key" />
+              <input v-model="storage.s3_secret_key" class="input" placeholder="Secret key" type="password" />
+              <input v-model="storage.public_base_url" class="input md:col-span-2" placeholder="Public base URL" />
+            </template>
+          </div>
         </div>
-        <div class="grid gap-3 md:grid-cols-4">
-          <select v-model="storage.type" class="input">
-            <option value="local">本地存储</option>
-            <option value="s3">对象存储</option>
-          </select>
-          <input v-model="storage.local_dir" class="input md:col-span-3" placeholder="本地目录" />
-          <template v-if="storage.type === 's3'">
-            <input v-model="storage.s3_endpoint" class="input" placeholder="Endpoint" />
-            <input v-model="storage.s3_region" class="input" placeholder="Region" />
-            <input v-model="storage.s3_bucket" class="input" placeholder="Bucket" />
-            <input v-model="storage.s3_prefix" class="input" placeholder="Path prefix" />
-            <input v-model="storage.s3_access_key" class="input" placeholder="Access key" />
-            <input v-model="storage.s3_secret_key" class="input" placeholder="Secret key" type="password" />
-            <input v-model="storage.public_base_url" class="input md:col-span-2" placeholder="Public base URL" />
-          </template>
+        <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
+          <h2 class="text-base font-semibold">今日数据</h2>
+          <div class="mt-3 grid grid-cols-3 gap-3">
+            <div class="rounded-md bg-gray-50 p-3 dark:bg-dark-800">
+              <div class="text-xs text-gray-500">请求</div>
+              <div class="mt-1 text-xl font-semibold">{{ today?.request_count || 0 }}</div>
+            </div>
+            <div class="rounded-md bg-gray-50 p-3 dark:bg-dark-800">
+              <div class="text-xs text-gray-500">图片</div>
+              <div class="mt-1 text-xl font-semibold">{{ today?.image_count || 0 }}</div>
+            </div>
+            <div class="rounded-md bg-gray-50 p-3 dark:bg-dark-800">
+              <div class="text-xs text-gray-500">失败</div>
+              <div class="mt-1 text-xl font-semibold">{{ today?.failed_count || 0 }}</div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -72,7 +70,13 @@
             class="mb-4 break-inside-avoid overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900"
           >
             <button class="block w-full" @click="preview = item">
-              <img :src="item.asset.url" class="w-full bg-gray-100 object-cover dark:bg-dark-800" loading="lazy" />
+              <div class="flex aspect-square w-full items-center justify-center bg-gray-100 dark:bg-dark-800">
+                <img
+                  :src="item.asset.url"
+                  class="h-full w-full object-cover"
+                  loading="lazy"
+                />
+              </div>
             </button>
             <div class="space-y-1 p-3 text-xs text-gray-500 dark:text-gray-400">
               <div class="flex items-center justify-between gap-2">
@@ -97,7 +101,7 @@
             </div>
             <div class="flex gap-2">
               <a class="btn btn-secondary btn-sm" :href="preview.asset.url" target="_blank" rel="noopener">打开</a>
-              <a class="btn btn-primary btn-sm" :href="preview.asset.url" download>下载</a>
+              <a class="btn btn-primary btn-sm" :href="preview.asset.url" :download="assetFilename(preview.asset)">下载</a>
               <button class="btn btn-secondary btn-sm" @click="preview = null">关闭</button>
             </div>
           </div>
@@ -136,6 +140,11 @@ const today = computed(() => stats.value[stats.value.length - 1])
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString()
+}
+
+function assetFilename(asset: ImageGenerationAsset): string {
+  const ext = (asset.extension || asset.mime_type.split('/')[1] || 'png').replace(/^\./, '')
+  return `image-generation-${asset.id}.${ext}`
 }
 
 function params() {
@@ -180,6 +189,7 @@ async function saveStorage() {
 onMounted(async () => {
   await Promise.all([loadRecords(), loadStats(), loadStorage()])
 })
+
 </script>
 
 <style scoped>

@@ -639,7 +639,8 @@ const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       requiresAdmin: true,
       title: 'Image Generations',
-      titleKey: 'nav.imageGenerations'
+      titleKey: 'nav.imageGenerations',
+      descriptionKey: 'admin.imageGenerations.description'
     }
   },
   {
