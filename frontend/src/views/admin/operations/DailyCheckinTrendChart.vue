@@ -82,6 +82,7 @@ const chartData = computed(() => {
         pointBorderColor: '#10b981',
         pointBorderWidth: 2,
         pointHitRadius: 10,
+        clip: false as const,
         yAxisID: 'y1',
       },
     ],
@@ -92,6 +93,11 @@ const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   interaction: { intersect: false, mode: 'index' as const },
+  layout: {
+    padding: {
+      top: 12,
+    },
+  },
   plugins: {
     legend: {
       display: false,

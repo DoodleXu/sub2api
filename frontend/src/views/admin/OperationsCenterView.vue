@@ -1,27 +1,21 @@
 <template>
   <AppLayout>
     <div class="space-y-6 pb-12">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ t('admin.operations.title') }}</h1>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.operations.description') }}</p>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            v-for="option in rangeOptions"
-            :key="option.days"
-            type="button"
-            class="btn btn-secondary btn-sm"
-            :class="rangeDays === option.days ? 'border-blue-500 text-blue-600 dark:text-blue-400' : ''"
-            @click="setRange(option.days)"
-          >
-            {{ option.label }}
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
-            <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
-            {{ t('admin.operations.refresh') }}
-          </button>
-        </div>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <button
+          v-for="option in rangeOptions"
+          :key="option.days"
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :class="rangeDays === option.days ? 'border-blue-500 text-blue-600 dark:text-blue-400' : ''"
+          @click="setRange(option.days)"
+        >
+          {{ option.label }}
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
+          <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
+          {{ t('admin.operations.refresh') }}
+        </button>
       </div>
 
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -167,10 +161,12 @@
             <input v-model.number="recordFilters.reward_max" class="input" type="number" min="0" step="0.01" :placeholder="t('admin.operations.rewardMax')" />
             <Select v-model="recordFilters.crit_hit" :options="critFilterOptions" />
             <input v-model.number="recordFilters.streak_days" class="input" type="number" min="1" step="1" :placeholder="t('admin.operations.minStreakDays')" />
-            <button type="button" class="btn btn-secondary md:w-fit" @click="applyRecordFilters">{{ t('admin.operations.filters') }}</button>
-            <button type="button" class="btn btn-secondary md:w-fit" :disabled="exporting" @click="exportDataset('daily_checkin_records')">
-              {{ exporting ? t('admin.operations.exporting') : t('admin.operations.exportRecords') }}
-            </button>
+            <div class="flex flex-wrap items-center gap-2 md:col-span-3 xl:col-span-7">
+              <button type="button" class="btn btn-secondary" @click="applyRecordFilters">{{ t('admin.operations.filters') }}</button>
+              <button type="button" class="btn btn-secondary" :disabled="exporting" @click="exportDataset('daily_checkin_records')">
+                {{ exporting ? t('admin.operations.exporting') : t('admin.operations.exportRecords') }}
+              </button>
+            </div>
           </div>
         </div>
 
