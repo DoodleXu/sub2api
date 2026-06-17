@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,12 +36,13 @@ var (
 )
 
 const (
-	ImageArchiveMaxBytes          = 32 << 20
-	ImageAssetScopeAdmin          = "admin-image-generation"
-	ImageAssetScopeWebConsole     = "web-console-image-task"
-	imageArchiveAssetTokenTTL     = 15 * time.Minute
-	imageArchiveAssetTokenLeeway  = time.Minute
-	imageArchiveAssetTokenVersion = "v1"
+	ImageArchiveMaxBytes           = 32 << 20
+	ImageAssetScopeAdmin           = "admin-image-generation"
+	ImageAssetScopeWebConsole      = "web-console-image-task"
+	imageArchiveAssetTokenTTL      = 15 * time.Minute
+	imageArchiveAssetTokenLeeway   = time.Minute
+	imageArchiveAssetTokenVersion  = "v1"
+	imageArchiveStableTokenVersion = "v2"
 )
 
 type ImageGenerationArchiveRepository interface {
@@ -591,6 +593,27 @@ func (s *ImageGenerationArchiveService) SignAssetURLPath(path string, assetID in
 	return fmt.Sprintf("%s%sexpires=%d&scope=%s&sig=%s", path, sep, expires, scope, sig)
 }
 
+func (s *ImageGenerationArchiveService) SignStableAssetURLPath(path string, assetID int64, scope, version string) string {
+	if strings.TrimSpace(path) == "" || assetID <= 0 {
+		return path
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "asset"
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return s.SignAssetURLPath(path, assetID, scope, time.Now().UTC())
+	}
+	expires := time.Now().UTC().Add(imageArchiveAssetTokenTTL).Unix()
+	sig := s.signStableAssetToken(assetID, scope, version, expires)
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%sv=%s&expires=%d&scope=%s&sig=%s", path, sep, url.QueryEscape(version), expires, scope, sig)
+}
+
 func (s *ImageGenerationArchiveService) VerifyAssetToken(assetID int64, scope, expiresRaw, sig string, now time.Time) bool {
 	if assetID <= 0 || strings.TrimSpace(sig) == "" {
 		return false
@@ -610,12 +633,43 @@ func (s *ImageGenerationArchiveService) VerifyAssetToken(assetID int64, scope, e
 	return hmac.Equal([]byte(expected), []byte(strings.TrimSpace(sig)))
 }
 
+func (s *ImageGenerationArchiveService) VerifyStableAssetToken(assetID int64, scope, version, expiresRaw, sig string, now time.Time) bool {
+	if assetID <= 0 || strings.TrimSpace(sig) == "" {
+		return false
+	}
+	expires, err := strconv.ParseInt(strings.TrimSpace(expiresRaw), 10, 64)
+	if err != nil || expires <= 0 {
+		return false
+	}
+	if now.UTC().After(time.Unix(expires, 0).Add(imageArchiveAssetTokenLeeway)) {
+		return false
+	}
+	scope = strings.TrimSpace(scope)
+	version = strings.TrimSpace(version)
+	if scope == "" || version == "" {
+		return false
+	}
+	expected := s.signStableAssetToken(assetID, scope, version, expires)
+	return hmac.Equal([]byte(expected), []byte(strings.TrimSpace(sig)))
+}
+
 func (s *ImageGenerationArchiveService) signAssetToken(assetID int64, scope string, expires int64) string {
 	secret := "sub2api-image-archive-dev-secret"
 	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.JWT.Secret) != "" {
 		secret = strings.TrimSpace(s.cfg.JWT.Secret)
 	}
 	message := fmt.Sprintf("%s:%d:%s:%d", imageArchiveAssetTokenVersion, assetID, strings.TrimSpace(scope), expires)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *ImageGenerationArchiveService) signStableAssetToken(assetID int64, scope, version string, expires int64) string {
+	secret := "sub2api-image-archive-dev-secret"
+	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.JWT.Secret) != "" {
+		secret = strings.TrimSpace(s.cfg.JWT.Secret)
+	}
+	message := fmt.Sprintf("%s:%d:%s:%s:%d", imageArchiveStableTokenVersion, assetID, strings.TrimSpace(scope), strings.TrimSpace(version), expires)
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(message))
 	return hex.EncodeToString(mac.Sum(nil))

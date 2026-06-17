@@ -248,13 +248,23 @@ func (h *WebConsoleImageTaskHandler) GetSignedAsset(c *gin.Context) {
 		response.Unauthorized(c, "invalid image asset token")
 		return
 	}
-	if !h.imageService.VerifyAssetToken(id, scope, c.Query("expires"), c.Query("sig"), time.Now().UTC()) {
+	version := strings.TrimSpace(c.Query("v"))
+	if version != "" {
+		if !h.imageService.VerifyStableAssetToken(id, scope, version, c.Query("expires"), c.Query("sig"), time.Now().UTC()) {
+			response.Unauthorized(c, "invalid image asset token")
+			return
+		}
+	} else if !h.imageService.VerifyAssetToken(id, scope, c.Query("expires"), c.Query("sig"), time.Now().UTC()) {
 		response.Unauthorized(c, "invalid image asset token")
 		return
 	}
 	asset, _, err := h.imageService.GetAssetByID(c.Request.Context(), id)
 	if err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if version != "" && version != imageAssetVersion(asset) {
+		response.Unauthorized(c, "invalid image asset token")
 		return
 	}
 	reader, err := h.imageService.OpenAsset(c.Request.Context(), asset)
@@ -386,7 +396,7 @@ func (h *WebConsoleImageTaskHandler) failTask(ctx context.Context, task *service
 		return
 	}
 	task.Status = "failed"
-	task.ErrorMessage = err.Error()
+	task.ErrorMessage = webConsoleImageTaskErrorMessage(err)
 	completed := time.Now().UTC()
 	task.CompletedAt = &completed
 	_ = h.imageService.UpdateWebConsoleTask(ctx, task)
@@ -416,7 +426,7 @@ func (h *WebConsoleImageTaskHandler) userAssetResponses(recordID int64, assets [
 		rawURL := "/api/v1/image-assets/" + strconv.FormatInt(asset.ID, 10)
 		url := rawURL
 		if h != nil && h.imageService != nil {
-			url = h.imageService.SignAssetURLPath(rawURL, asset.ID, service.ImageAssetScopeWebConsole, time.Now().UTC())
+			url = h.imageService.SignStableAssetURLPath(rawURL, asset.ID, service.ImageAssetScopeWebConsole, imageAssetVersion(asset))
 		}
 		out = append(out, gin.H{
 			"id": asset.ID, "record_id": recordID, "asset_index": asset.AssetIndex, "mime_type": asset.MimeType,
@@ -425,6 +435,16 @@ func (h *WebConsoleImageTaskHandler) userAssetResponses(recordID int64, assets [
 		})
 	}
 	return out
+}
+
+func imageAssetVersion(asset *service.ImageGenerationAsset) string {
+	if asset == nil {
+		return ""
+	}
+	if strings.TrimSpace(asset.SHA256) != "" {
+		return strings.TrimSpace(asset.SHA256)
+	}
+	return strconv.FormatInt(asset.Bytes, 10) + "-" + asset.CreatedAt.UTC().Format(time.RFC3339Nano)
 }
 
 func webConsoleTaskSnapshot(task *service.WebConsoleImageTask) (webConsoleImageTaskSnapshot, error) {
@@ -499,7 +519,7 @@ func runWebConsoleImageRequests(ctx context.Context, req createWebConsoleImageTa
 	if options.Count > 4 {
 		options.Count = 4
 	}
-	client, err := webConsoleHTTPClient()
+	client, err := webConsoleHTTPClientFactory()
 	if err != nil {
 		return nil, err
 	}
@@ -507,53 +527,105 @@ func runWebConsoleImageRequests(ctx context.Context, req createWebConsoleImageTa
 	if err != nil {
 		return nil, err
 	}
-	out := make([]service.ArchivedImageBytesInput, 0, options.Count)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type imageRequestResult struct {
+		index  int
+		images []service.ArchivedImageBytesInput
+		err    error
+	}
+	results := make(chan imageRequestResult, options.Count)
 	for i := 0; i < options.Count; i++ {
-		payload := webConsoleImageResponsesPayload(req, options)
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
+		go func(index int) {
+			images, err := runSingleWebConsoleImageRequest(ctx, client, endpoint, req, options, apiKey)
+			results <- imageRequestResult{index: index, images: images, err: err}
+		}(i)
+	}
+	ordered := make([][]service.ArchivedImageBytesInput, options.Count)
+	for i := 0; i < options.Count; i++ {
+		result := <-results
+		if result.err != nil {
+			cancel()
+			return nil, result.err
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
-		if err != nil {
-			return nil, err
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-		httpReq.Header.Set("Content-Type", "application/json")
-		applyWebConsoleCodexRequestHeaders(httpReq)
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			return nil, err
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if resp.StatusCode >= 400 {
-			if detail := webConsoleUpstreamErrorDetail(body); detail != "" {
-				return nil, fmt.Errorf("image task upstream failed: status %d: %s", resp.StatusCode, detail)
-			}
-			return nil, fmt.Errorf("image task upstream failed: status %d", resp.StatusCode)
-		}
-		collected := collectWebConsoleImageValues(body)
-		for _, item := range collected {
-			imageBytes, mimeType, ext, err := imageValueToBytes(ctx, client, item)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, service.ArchivedImageBytesInput{
-				Index:     len(out),
-				Bytes:     imageBytes,
-				MimeType:  mimeType,
-				Extension: ext,
-			})
+		ordered[result.index] = result.images
+	}
+	out := make([]service.ArchivedImageBytesInput, 0, options.Count)
+	for _, batch := range ordered {
+		for _, image := range batch {
+			image.Index = len(out)
+			out = append(out, image)
 		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("Responses did not return any image")
 	}
 	return out, nil
+}
+
+func runSingleWebConsoleImageRequest(ctx context.Context, client *http.Client, endpoint string, req createWebConsoleImageTaskRequest, options webConsoleImageTaskOptions, apiKey string) ([]service.ArchivedImageBytesInput, error) {
+	payload := webConsoleImageResponsesPayload(req, options)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	applyWebConsoleCodexRequestHeaders(httpReq)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if resp.StatusCode >= 400 {
+		if detail := webConsoleUpstreamErrorDetail(body); detail != "" {
+			return nil, fmt.Errorf("image task upstream failed: status %d: %s", resp.StatusCode, detail)
+		}
+		return nil, fmt.Errorf("image task upstream failed: status %d", resp.StatusCode)
+	}
+	collected := collectWebConsoleImageValues(body)
+	out := make([]service.ArchivedImageBytesInput, 0, len(collected))
+	for _, item := range collected {
+		imageBytes, mimeType, ext, err := imageValueToBytes(ctx, client, item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, service.ArchivedImageBytesInput{
+			Index:     len(out),
+			Bytes:     imageBytes,
+			MimeType:  mimeType,
+			Extension: ext,
+		})
+	}
+	return out, nil
+}
+
+func webConsoleImageTaskErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "生图任务失败，请稍后重试。"
+	}
+	if strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "Client.Timeout exceeded") {
+		return "生图任务超时，请稍后重试或减少张数。"
+	}
+	if strings.Contains(message, "image task upstream failed") {
+		return "上游生图服务暂时不可用，请稍后重试。"
+	}
+	if strings.Contains(message, "Responses did not return any image") {
+		return "上游未返回图片，请稍后重试。"
+	}
+	return message
 }
 
 func applyWebConsoleCodexRequestHeaders(req *http.Request) {
@@ -632,6 +704,8 @@ func webConsoleImageResponsesPayload(req createWebConsoleImageTaskRequest, optio
 func webConsoleHTTPClient() (*http.Client, error) {
 	return httpclient.GetClient(webConsoleHTTPClientOptions())
 }
+
+var webConsoleHTTPClientFactory = webConsoleHTTPClient
 
 func webConsoleHTTPClientOptions() httpclient.Options {
 	return httpclient.Options{
