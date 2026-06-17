@@ -5081,6 +5081,7 @@ export default {
       exportFailed: '导出运营数据失败',
       todayCheckins: '今日签到',
       todayReward: '今日发放',
+      todayRewardPerCheckinUser: '日发放总数/当日签到人数',
       monthReward: '当月发放',
       averageReward: '平均奖励',
       dailyRemaining: '日预算剩余',

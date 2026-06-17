@@ -80,15 +80,16 @@
             :key="`${item.record.id}-${item.asset.id}`"
             class="mb-4 break-inside-avoid overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900"
           >
-            <button class="block w-full" @click="preview = item">
+            <button class="block w-full" @click="handleAssetCardClick(item)">
               <div class="flex aspect-square w-full items-center justify-center bg-gray-100 dark:bg-dark-800">
                 <img
-                  v-if="cachedImageSrc(item.asset)"
-                  :src="cachedImageSrc(item.asset)"
+                  v-if="assetImageSrc(item.asset)"
+                  :src="assetImageSrc(item.asset)"
                   class="h-full w-full object-cover"
                   loading="lazy"
                 />
-                <span v-else class="text-xs text-gray-400">缓存中...</span>
+                <span v-else-if="assetImageFailed(item.asset)" class="px-3 text-xs text-red-500">加载失败，点击重试</span>
+                <span v-else class="text-xs text-gray-400">加载中...</span>
               </div>
             </button>
             <div class="space-y-1 p-3 text-xs text-gray-500 dark:text-gray-400">
@@ -106,16 +107,18 @@
 
       <div v-if="preview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" @click.self="preview = null">
         <div class="max-h-[92vh] max-w-5xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-900">
-          <img v-if="cachedImageSrc(preview.asset)" :src="cachedImageSrc(preview.asset)" class="max-h-[72vh] w-full object-contain" />
-          <div v-else class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-gray-500">图片缓存中...</div>
+          <img v-if="assetImageSrc(preview.asset)" :src="assetImageSrc(preview.asset)" class="max-h-[72vh] w-full object-contain" />
+          <div v-else-if="assetImageFailed(preview.asset)" class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-red-500">图片加载失败</div>
+          <div v-else class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-gray-500">图片加载中...</div>
           <div class="flex items-center justify-between gap-3 p-4 text-sm">
             <div>
               <div class="font-medium">{{ preview.record.model }}</div>
               <div class="text-gray-500">{{ preview.record.prompt_excerpt }}</div>
             </div>
             <div class="flex gap-2">
-              <a class="btn btn-secondary btn-sm" :href="preview.asset.url" target="_blank" rel="noopener">打开</a>
-              <a class="btn btn-primary btn-sm" :href="preview.asset.url" :download="assetFilename(preview.asset)">下载</a>
+              <button v-if="assetImageFailed(preview.asset)" class="btn btn-secondary btn-sm" @click="retryAssetLoad(preview.asset)">重试</button>
+              <button class="btn btn-secondary btn-sm" @click="openAsset(preview.asset)">打开</button>
+              <button class="btn btn-primary btn-sm" @click="downloadAsset(preview.asset)">下载</button>
               <button class="btn btn-secondary btn-sm" @click="preview = null">关闭</button>
             </div>
           </div>
@@ -144,6 +147,7 @@ const stats = ref<ImageGenerationDailyStat[]>([])
 const storageStats = ref<ImageGenerationStorageStats>({ total_bytes: 0 })
 const preview = ref<{ record: ImageGenerationRecord; asset: ImageGenerationAsset } | null>(null)
 const cachedAssetURLs = ref<Record<number, string>>({})
+const failedAssetLoads = ref<Record<number, boolean>>({})
 const cacheRequests = new Map<number, Promise<void>>()
 const filters = reactive({ model: '', status: '', user_id: '', api_key_id: '' })
 const storage = reactive<ImageArchiveStorageConfig>({
@@ -158,8 +162,6 @@ const imageCards = computed(() =>
 const todayDateKey = computed(() => formatLocalDateKey(new Date()))
 const today = computed(() => stats.value.find((item) => item.date === todayDateKey.value))
 const formattedArchiveSize = computed(() => formatArchiveSize(storageStats.value.total_bytes))
-
-const IMAGE_CACHE_NAME = 'sub2api-admin-image-generations-v1'
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString()
@@ -191,13 +193,20 @@ function formatSizeNumber(value: number): string {
   return value.toFixed(2)
 }
 
-function imageCacheURL(asset: ImageGenerationAsset): string {
-  const version = asset.sha256 || `${asset.bytes}-${asset.created_at}`
-  return `${asset.admin_url}?v=${encodeURIComponent(version)}`
+function assetImageSrc(asset: ImageGenerationAsset): string {
+  return cachedAssetURLs.value[asset.id] || ''
 }
 
-function cachedImageSrc(asset: ImageGenerationAsset): string {
-  return cachedAssetURLs.value[asset.id] || ''
+function assetImageFailed(asset: ImageGenerationAsset): boolean {
+  return Boolean(failedAssetLoads.value[asset.id])
+}
+
+function adminAssetURL(asset: ImageGenerationAsset): string {
+  const baseURL = asset.admin_url
+  if (!baseURL) return ''
+  const version = asset.sha256 || `${asset.bytes}-${asset.created_at}`
+  const separator = baseURL.includes('?') ? '&' : '?'
+  return `${baseURL}${separator}v=${encodeURIComponent(version)}`
 }
 
 function authHeaders(): Record<string, string> {
@@ -205,41 +214,31 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function cacheImageAsset(asset: ImageGenerationAsset) {
+async function fetchAdminAssetBlob(asset: ImageGenerationAsset): Promise<Blob> {
+  const url = adminAssetURL(asset)
+  if (!url) throw new Error('admin image asset URL is not available')
+  const response = await fetch(url, { credentials: 'include', headers: authHeaders() })
+  if (!response.ok) throw new Error(`failed to load image asset ${asset.id}`)
+  return response.blob()
+}
+
+async function cacheImageAsset(asset: ImageGenerationAsset): Promise<void> {
   if (cachedAssetURLs.value[asset.id] || cacheRequests.has(asset.id)) return
   const request = (async () => {
-    const url = imageCacheURL(asset)
     try {
-      if ('caches' in window) {
-        const cache = await window.caches.open(IMAGE_CACHE_NAME)
-        const cached = await cache.match(url)
-        if (cached) {
-          cachedAssetURLs.value = {
-            ...cachedAssetURLs.value,
-            [asset.id]: URL.createObjectURL(await cached.blob()),
-          }
-          return
-        }
-        const response = await fetch(url, { credentials: 'include', headers: authHeaders() })
-        if (!response.ok) throw new Error(`failed to load image asset ${asset.id}`)
-        await cache.put(url, response.clone())
-        cachedAssetURLs.value = {
-          ...cachedAssetURLs.value,
-          [asset.id]: URL.createObjectURL(await response.blob()),
-        }
-        return
+      failedAssetLoads.value = {
+        ...failedAssetLoads.value,
+        [asset.id]: false,
       }
-
-      const response = await fetch(url, { credentials: 'include', headers: authHeaders() })
-      if (!response.ok) throw new Error(`failed to load image asset ${asset.id}`)
+      const blob = await fetchAdminAssetBlob(asset)
       cachedAssetURLs.value = {
         ...cachedAssetURLs.value,
-        [asset.id]: URL.createObjectURL(await response.blob()),
+        [asset.id]: URL.createObjectURL(blob),
       }
     } catch {
-      cachedAssetURLs.value = {
-        ...cachedAssetURLs.value,
-        [asset.id]: asset.url,
+      failedAssetLoads.value = {
+        ...failedAssetLoads.value,
+        [asset.id]: true,
       }
     } finally {
       cacheRequests.delete(asset.id)
@@ -248,10 +247,50 @@ async function cacheImageAsset(asset: ImageGenerationAsset) {
   cacheRequests.set(asset.id, request)
 }
 
-function warmImageCache(cards: Array<{ asset: ImageGenerationAsset }>) {
+function warmImageCache(cards: Array<{ asset: ImageGenerationAsset }>): void {
   for (const item of cards) {
     void cacheImageAsset(item.asset)
   }
+}
+
+function retryAssetLoad(asset: ImageGenerationAsset): void {
+  failedAssetLoads.value = {
+    ...failedAssetLoads.value,
+    [asset.id]: false,
+  }
+  void cacheImageAsset(asset)
+}
+
+function handleAssetCardClick(item: { record: ImageGenerationRecord; asset: ImageGenerationAsset }): void {
+  if (assetImageFailed(item.asset) && !assetImageSrc(item.asset)) {
+    retryAssetLoad(item.asset)
+    return
+  }
+  preview.value = item
+}
+
+function triggerDownload(url: string, filename: string): void {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.rel = 'noopener noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+async function openAsset(asset: ImageGenerationAsset): Promise<void> {
+  const blob = await fetchAdminAssetBlob(asset)
+  const objectURL = URL.createObjectURL(blob)
+  window.open(objectURL, '_blank', 'noopener')
+  window.setTimeout(() => URL.revokeObjectURL(objectURL), 60_000)
+}
+
+async function downloadAsset(asset: ImageGenerationAsset): Promise<void> {
+  const blob = await fetchAdminAssetBlob(asset)
+  const objectURL = URL.createObjectURL(blob)
+  triggerDownload(objectURL, assetFilename(asset))
+  window.setTimeout(() => URL.revokeObjectURL(objectURL), 60_000)
 }
 
 function params() {
@@ -305,9 +344,7 @@ watch(imageCards, (cards) => warmImageCache(cards), { immediate: true })
 
 onBeforeUnmount(() => {
   for (const url of Object.values(cachedAssetURLs.value)) {
-    if (url.startsWith('blob:')) {
-      URL.revokeObjectURL(url)
-    }
+    URL.revokeObjectURL(url)
   }
 })
 

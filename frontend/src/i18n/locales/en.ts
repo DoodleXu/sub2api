@@ -4928,6 +4928,7 @@ export default {
       exportFailed: 'Failed to export operations data',
       todayCheckins: 'Today Check-ins',
       todayReward: 'Today Rewards',
+      todayRewardPerCheckinUser: 'Daily Rewards / Check-in Users',
       monthReward: 'Month Rewards',
       averageReward: 'Average Reward',
       dailyRemaining: 'Daily Remaining',

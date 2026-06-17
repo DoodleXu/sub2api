@@ -248,6 +248,22 @@ describe('OperationsCenterView', () => {
     expect(listDailyCheckinRecords).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: expect.any(String), end_date: expect.any(String), timezone: expect.any(String) }))
   })
 
+  it('shows the daily reward total alongside today check-in users', async () => {
+    getDailyCheckinStats.mockResolvedValue({
+      ...baseStatsResponse,
+      today_checkins: 10,
+      today_reward_usd: 8.95,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.checkinAnalysis')?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.operations.todayRewardPerCheckinUser')
+    expect(wrapper.text()).toContain('$8.95 / 10')
+  })
+
   it('uses the same record query for listing and exporting check-in records', async () => {
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })

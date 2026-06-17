@@ -109,8 +109,8 @@
           <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
             <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.operations.rewardBudget') }}</h2>
             <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.todayReward') }}</div>
-              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.today_reward_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.todayRewardPerCheckinUser') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatRewardPerCheckinUser(stats?.today_reward_usd, stats?.today_checkins) }}</div>
               <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.dailyRemaining') }}</div>
               <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.daily_budget_usd, stats?.daily_remaining_usd) }}</div>
               <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthReward') }}</div>
@@ -512,6 +512,11 @@ function formatMultiplier(value: number | undefined | null): string {
 
 function formatBudget(limit: number | undefined | null, remaining: number | undefined | null): string {
   return Number(limit || 0) > 0 ? `${formatUSD(remaining)} / ${formatUSD(limit)}` : t('admin.operations.unlimited')
+}
+
+function formatRewardPerCheckinUser(reward: number | undefined | null, checkins: number | undefined | null): string {
+  const count = Number(checkins || 0)
+  return count > 0 ? `${formatUSD(reward)} / ${formatCount(count)}` : `${formatUSD(reward)} / -`
 }
 
 function formatDateTime(value: string): string {

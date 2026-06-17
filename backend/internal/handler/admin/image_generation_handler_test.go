@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImageGenerationAdminAssetResponsesUseSignedPreviewURL(t *testing.T) {
+func TestImageGenerationAdminAssetResponsesUseExpiringSignedPreviewURL(t *testing.T) {
 	imageService := service.NewImageGenerationArchiveService(nil, nil, nil, &config.Config{})
 	h := &ImageGenerationHandler{imageService: imageService}
 
 	assets := h.adminAssetResponses([]*service.ImageGenerationAsset{
-		{ID: 7, RecordID: 42, AssetIndex: 0, MimeType: "image/png", Extension: ".png"},
+		{ID: 7, RecordID: 42, AssetIndex: 0, MimeType: "image/png", Extension: ".png", SHA256: "abc123"},
 	})
 
 	require.Len(t, assets, 1)
@@ -32,6 +32,8 @@ func TestImageGenerationAdminAssetResponsesUseSignedPreviewURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/api/v1/image-assets/7", parsed.Path)
 	require.Equal(t, service.ImageAssetScopeAdmin, parsed.Query().Get("scope"))
+	require.Empty(t, parsed.Query().Get("v"))
+	require.NotEmpty(t, parsed.Query().Get("expires"))
 	require.NotEmpty(t, parsed.Query().Get("sig"))
 	require.True(t, imageService.VerifyAssetToken(7, parsed.Query().Get("scope"), parsed.Query().Get("expires"), parsed.Query().Get("sig"), time.Now().UTC()))
 	require.Equal(t, "/api/v1/admin/image-generations/assets/7", assets[0]["admin_url"])
