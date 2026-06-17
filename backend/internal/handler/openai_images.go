@@ -405,6 +405,14 @@ func (h *OpenAIGatewayHandler) submitImageArchiveTask(userID, apiKeyID int64, gr
 	inputs := append([]service.ArchivedImageInput(nil), result.ImageArchiveInputs...)
 	go func() {
 		ctx := context.Background()
+		enabled, err := h.imageArchiveService.IsArchiveEnabled(ctx)
+		if err != nil {
+			logger.L().With(zap.String("component", "handler.openai_gateway.images")).Warn("image_archive.check_enabled_failed", zap.Error(err))
+			return
+		}
+		if !enabled {
+			return
+		}
 		userIDCopy := userID
 		apiKeyIDCopy := apiKeyID
 		accountIDCopy := accountID

@@ -94,6 +94,15 @@ func (h *WebConsoleImageTaskHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "api_key_id, model and prompt are required")
 		return
 	}
+	enabled, err := h.imageService.IsArchiveEnabled(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if !enabled {
+		response.ErrorFrom(c, service.ErrImageArchiveDisabled)
+		return
+	}
 	resolvedEndpoint, err := h.authorizeWebConsoleEndpoint(c, req.Endpoint)
 	if err != nil {
 		response.BadRequest(c, err.Error())

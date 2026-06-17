@@ -24,6 +24,13 @@
             <h2 class="text-base font-semibold">存储设置</h2>
             <button class="btn btn-secondary btn-sm" @click="saveStorage">保存</button>
           </div>
+          <div class="mb-3 flex items-center justify-between rounded-md bg-gray-50 px-3 py-2 dark:bg-dark-800">
+            <div>
+              <div class="text-sm font-medium text-gray-800 dark:text-gray-100">启用归档</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">关闭后不再保存新的生图资产</div>
+            </div>
+            <Toggle v-model="storage.enabled" data-testid="image-archive-enabled" />
+          </div>
           <div class="grid gap-3 md:grid-cols-4">
             <select v-model="storage.type" class="input">
               <option value="local">本地存储</option>
@@ -114,6 +121,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import imageGenerationsAPI, {
   type ImageArchiveStorageConfig,
   type ImageGenerationAsset,
@@ -136,7 +144,8 @@ const storage = reactive<ImageArchiveStorageConfig>({
 const imageCards = computed(() =>
   items.value.flatMap((item) => item.assets.map((asset) => ({ record: item.record, asset })))
 )
-const today = computed(() => stats.value[stats.value.length - 1])
+const todayDateKey = computed(() => formatLocalDateKey(new Date()))
+const today = computed(() => stats.value.find((item) => item.date === todayDateKey.value))
 
 function formatTime(value: string): string {
   return new Date(value).toLocaleString()
@@ -145,6 +154,13 @@ function formatTime(value: string): string {
 function assetFilename(asset: ImageGenerationAsset): string {
   const ext = (asset.extension || asset.mime_type.split('/')[1] || 'png').replace(/^\./, '')
   return `image-generation-${asset.id}.${ext}`
+}
+
+function formatLocalDateKey(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function params() {

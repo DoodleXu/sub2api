@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import ImageGenerationsView from '../ImageGenerationsView.vue'
@@ -33,6 +33,8 @@ const signedAssetURL = '/api/v1/image-assets/7?expires=1800000000&scope=admin-im
 describe('ImageGenerationsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-17T12:00:00Z'))
     list.mockResolvedValue({
       items: [
         {
@@ -87,6 +89,10 @@ describe('ImageGenerationsView', () => {
     })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('renders admin image archive assets with signed image URLs', async () => {
     const wrapper = mount(ImageGenerationsView)
     await flushPromises()
@@ -99,5 +105,33 @@ describe('ImageGenerationsView', () => {
 
     const previewLinks = wrapper.findAll('a')
     expect(previewLinks.map((link) => link.attributes('href'))).toEqual([signedAssetURL, signedAssetURL])
+  })
+
+  it('saves archive enabled state and only shows stats for today', async () => {
+    dailyStats.mockResolvedValue([
+      { date: '2026-06-16', request_count: 9, image_count: 9, failed_count: 1 },
+    ])
+    getStorageConfig.mockResolvedValue({
+      enabled: false,
+      type: 'local',
+      local_dir: './data/image-archive',
+    })
+    updateStorageConfig.mockResolvedValue({
+      enabled: false,
+      type: 'local',
+      local_dir: './data/image-archive',
+    })
+
+    const wrapper = mount(ImageGenerationsView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('启用归档')
+    expect(wrapper.text()).toContain('请求')
+    expect(wrapper.text()).toContain('请求0图片0失败0')
+
+    await wrapper.find('[data-testid="image-archive-enabled"]').trigger('click')
+    await wrapper.find('button.btn-secondary').trigger('click')
+
+    expect(updateStorageConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
   })
 })

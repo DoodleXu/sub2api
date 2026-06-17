@@ -31,6 +31,7 @@ import (
 var (
 	ErrImageGenerationRecordNotFound = infraerrors.NotFound("IMAGE_GENERATION_RECORD_NOT_FOUND", "image generation record not found")
 	ErrWebConsoleImageTaskNotFound   = infraerrors.NotFound("WEB_CONSOLE_IMAGE_TASK_NOT_FOUND", "web console image task not found")
+	ErrImageArchiveDisabled          = infraerrors.Forbidden("IMAGE_ARCHIVE_DISABLED", "image archive storage is disabled")
 )
 
 const (
@@ -443,6 +444,14 @@ func (s *ImageGenerationArchiveService) UpdateStorageConfig(ctx context.Context,
 	return cfg, nil
 }
 
+func (s *ImageGenerationArchiveService) IsArchiveEnabled(ctx context.Context) (bool, error) {
+	cfg, err := s.GetStorageConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	return cfg.Enabled, nil
+}
+
 func (s *ImageGenerationArchiveService) storageFromConfig(ctx context.Context, cfg ImageArchiveStorageConfig) (ImageGenerationStorage, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
 	case "", "local":
@@ -735,6 +744,14 @@ func (s *ImageGenerationArchiveService) archiveBase64Images(ctx context.Context,
 func (s *ImageGenerationArchiveService) archiveImageBytes(ctx context.Context, record *ImageGenerationRecord, images []ArchivedImageBytesInput) error {
 	if len(images) == 0 {
 		return nil
+	}
+	enabled, err := s.IsArchiveEnabled(ctx)
+	if err != nil {
+		_ = s.appendError(ctx, record, err)
+		return err
+	}
+	if !enabled {
+		return ErrImageArchiveDisabled
 	}
 	storage, err := s.storageForCurrentConfig(ctx)
 	if err != nil {
