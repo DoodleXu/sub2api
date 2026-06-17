@@ -174,16 +174,6 @@ func (h *ImageGenerationHandler) adminAssetResponses(assets []*service.ImageGene
 	return out
 }
 
-func imageAssetVersion(asset *service.ImageGenerationAsset) string {
-	if asset == nil {
-		return ""
-	}
-	if strings.TrimSpace(asset.SHA256) != "" {
-		return strings.TrimSpace(asset.SHA256)
-	}
-	return strconv.FormatInt(asset.Bytes, 10) + "-" + asset.CreatedAt.UTC().Format(time.RFC3339Nano)
-}
-
 func writeAdminImageAssetReader(c *gin.Context, reader *service.ImageGenerationAssetReader) {
 	if reader == nil || reader.Body == nil {
 		response.NotFound(c, "image asset is not available")
