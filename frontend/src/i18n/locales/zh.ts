@@ -2846,6 +2846,8 @@ export default {
       nonHitRetentionDays: '未命中记录保留（天，最多 3 天）',
       violationCount: '{count} 次',
       emailSent: '已发邮件',
+      emailDeduped: '已去重',
+      emailLastSentAt: '最近发送 {time}',
       emailNotSent: '未发邮件',
       autoBanned: '已封禁',
 	      unbanUser: '解封',

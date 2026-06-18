@@ -689,24 +689,25 @@ func (c *contentModerationTestHashCache) ListAllowedInputHashes(ctx context.Cont
 	return hashes, nil
 }
 
-func (c *contentModerationTestHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+func (c *contentModerationTestHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, *time.Time, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.dedupeErr != nil {
-		return false, c.dedupeErr
+		return false, nil, c.dedupeErr
 	}
 	if c.dedupe == nil {
 		c.dedupe = map[string]time.Time{}
 	}
 	now := time.Now()
 	if expiresAt, ok := c.dedupe[key]; ok && now.Before(expiresAt) {
-		return false, nil
+		lastSentAt := expiresAt.Add(-ttl)
+		return false, &lastSentAt, nil
 	}
 	if ttl <= 0 {
 		ttl = time.Minute
 	}
 	c.dedupe[key] = now.Add(ttl)
-	return true, nil
+	return true, nil, nil
 }
 
 func (c *contentModerationTestHashCache) hasAllowedHash(inputHash string) bool {
@@ -2952,6 +2953,8 @@ func TestContentModerationViolationEmailDedupeSuppressesHashRetry(t *testing.T) 
 	first.Action = ContentModerationActionBlock
 	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, first, false)
 	require.True(t, first.EmailSent)
+	require.False(t, first.EmailDeduped)
+	require.NotNil(t, first.LastEmailSentAt)
 	require.Equal(t, int64(1), smtpServer.messageCount())
 
 	retry := newContentModerationFlaggedLog(userID)
@@ -2959,6 +2962,8 @@ func TestContentModerationViolationEmailDedupeSuppressesHashRetry(t *testing.T) 
 	retry.Action = ContentModerationActionHashBlock
 	svc.sendFlaggedNotificationSideEffects(context.Background(), cfg, retry, false)
 	require.False(t, retry.EmailSent)
+	require.True(t, retry.EmailDeduped)
+	require.NotNil(t, retry.LastEmailSentAt)
 	require.Equal(t, int64(1), smtpServer.messageCount())
 }
 
@@ -3039,6 +3044,8 @@ func TestContentModerationAccountDisabledEmailBypassesViolationDedupe(t *testing
 
 	require.True(t, first.EmailSent)
 	require.True(t, second.EmailSent)
+	require.True(t, second.EmailDeduped)
+	require.NotNil(t, second.LastEmailSentAt)
 	require.Equal(t, int64(2), smtpServer.messageCount())
 }
 

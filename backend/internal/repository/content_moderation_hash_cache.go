@@ -137,13 +137,26 @@ func (c *contentModerationHashCache) ListAllowedInputHashes(ctx context.Context)
 	return c.rdb.SMembers(ctx, contentModerationAllowedHashSetKey).Result()
 }
 
-func (c *contentModerationHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+func (c *contentModerationHashCache) TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, *time.Time, error) {
 	key = strings.TrimSpace(key)
 	if c == nil || c.rdb == nil || key == "" {
-		return true, nil
+		return true, nil, nil
 	}
 	if ttl <= 0 {
 		ttl = time.Minute
 	}
-	return c.rdb.SetNX(ctx, key, "1", ttl).Result()
+	now := time.Now().UTC()
+	acquired, err := c.rdb.SetNX(ctx, key, now.Format(time.RFC3339Nano), ttl).Result()
+	if err != nil || acquired {
+		return acquired, nil, err
+	}
+	raw, err := c.rdb.Get(ctx, key).Result()
+	if err != nil {
+		return false, nil, err
+	}
+	lastSentAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return false, nil, nil
+	}
+	return false, &lastSentAt, nil
 }

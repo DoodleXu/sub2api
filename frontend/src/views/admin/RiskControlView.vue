@@ -328,7 +328,8 @@
                         {{ userPolicyActionLabel(row.policy_action) }} · {{ row.error_code || 'content_policy_violation' }}
                       </div>
                       <div class="text-xs text-gray-400">
-                        {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
+                        {{ emailStatusText(row) }}
+                        <span v-if="emailLastSentText(row)"> · {{ t('admin.riskControl.emailLastSentAt', { time: emailLastSentText(row) }) }}</span>
                         <span v-if="row.auto_banned"> / {{ t('admin.riskControl.autoBanned') }}</span>
                       </div>
                       <button
@@ -3278,6 +3279,20 @@ function violationCountText(row: ContentModerationLog): string {
   if (!row.flagged) return '-'
   if (row.violation_count === 0) return t('admin.riskControl.violationNotCounted')
   return t('admin.riskControl.violationCount', { count: row.violation_count || 1 })
+}
+
+function emailStatusText(row: ContentModerationLog): string {
+  if (row.email_sent === true && row.email_deduped === true) {
+    return `${t('admin.riskControl.emailSent')} / ${t('admin.riskControl.emailDeduped')}`
+  }
+  if (row.email_deduped === true) return t('admin.riskControl.emailDeduped')
+  if (row.email_sent === true) return t('admin.riskControl.emailSent')
+  return t('admin.riskControl.emailNotSent')
+}
+
+function emailLastSentText(row: ContentModerationLog): string {
+  if (!row.last_email_sent_at) return ''
+  return formatDateTime(row.last_email_sent_at)
 }
 
 function normalizeDateTimeLocal(value: string): string | undefined {

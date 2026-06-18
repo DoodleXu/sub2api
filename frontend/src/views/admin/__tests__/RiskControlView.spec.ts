@@ -246,6 +246,8 @@ const moderationLog = (overrides: Partial<ContentModerationLog> = {}): ContentMo
   violation_count: 0,
   auto_banned: false,
   email_sent: false,
+  email_deduped: false,
+  last_email_sent_at: null,
   user_status: 'active',
   queue_delay_ms: null,
   created_at: '2026-06-05T03:43:09Z',
@@ -322,6 +324,73 @@ describe('admin RiskControlView', () => {
       api_key_masks: [],
       api_key_statuses: [],
     }))
+  })
+
+  it('renders legacy moderation logs without email dedupe fields', async () => {
+    const legacyLog = moderationLog({ flagged: true, violation_count: 1 })
+    delete (legacyLog as Partial<ContentModerationLog>).email_sent
+    delete (legacyLog as Partial<ContentModerationLog>).email_deduped
+    delete (legacyLog as Partial<ContentModerationLog>).last_email_sent_at
+    listLogs.mockResolvedValue({
+      items: [legacyLog],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.emailNotSent')
+    expect(wrapper.text()).not.toContain('Invalid Date')
+  })
+
+  it('shows deduped moderation email status with last send time', async () => {
+    listLogs.mockResolvedValue({
+      items: [
+        moderationLog({
+          flagged: true,
+          email_sent: false,
+          email_deduped: true,
+          last_email_sent_at: '2026-06-05T04:15:00Z',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.emailDeduped')
+    expect(wrapper.text()).toContain('admin.riskControl.emailLastSentAt')
+  })
+
+  it('shows sent and deduped moderation email status when ban email bypasses violation dedupe', async () => {
+    listLogs.mockResolvedValue({
+      items: [
+        moderationLog({
+          flagged: true,
+          email_sent: true,
+          email_deduped: true,
+          auto_banned: true,
+          last_email_sent_at: '2026-06-05T04:16:00Z',
+        }),
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mountRiskControlView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.riskControl.emailSent / admin.riskControl.emailDeduped')
+    expect(wrapper.text()).toContain('admin.riskControl.autoBanned')
   })
 
   it('shows matched keyword and full input for keyword-blocked logs', async () => {

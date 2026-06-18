@@ -2769,6 +2769,8 @@ export default {
       nonHitRetentionDays: 'Non-Hit Record Retention (days, max 3)',
       violationCount: '{count} hits',
       emailSent: 'Email sent',
+      emailDeduped: 'Deduped',
+      emailLastSentAt: 'last sent {time}',
       emailNotSent: 'No email',
       autoBanned: 'Banned',
       unbanUser: 'Unban',

@@ -66,19 +66,19 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 		    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
 		    category_scores, threshold_snapshot, input_excerpt, input_hash, matched_keyword, policy_id, policy_action,
 		    policy_snapshot, block_status, error_code, upstream_latency_ms, error,
-		    violation_count, auto_banned, email_sent, queue_delay_ms
+		    violation_count, auto_banned, email_sent, email_deduped, last_email_sent_at, queue_delay_ms
 		) VALUES (
 		    $1, $2, $3, $4, $5, $6, $7,
 		    $8, $9, $10, $11, $12, $13, $14, $15,
 		    $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22,
 		    $23::jsonb, $24, $25, $26, $27,
-		    $28, $29, $30, $31
+		    $28, $29, $30, $31, $32, $33
 		) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
 		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.InputHash, log.MatchedKeyword, policyID, log.PolicyAction,
 		string(policySnapshot), log.BlockStatus, log.ErrorCode, latency, log.Error,
-		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS),
+		log.ViolationCount, log.AutoBanned, log.EmailSent, log.EmailDeduped, nullableTimePtr(log.LastEmailSentAt), nullableIntPtr(log.QueueDelayMS),
 	).Scan(&log.ID, &log.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert content moderation log: %w", err)
@@ -113,7 +113,7 @@ SELECT
 		    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
 		    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.input_hash, l.matched_keyword,
 		    l.policy_id, l.policy_action, l.policy_snapshot, l.block_status, l.error_code, l.upstream_latency_ms, l.error,
-		    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
+		    l.violation_count, l.auto_banned, l.email_sent, l.email_deduped, l.last_email_sent_at, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
 FROM content_moderation_logs l
 LEFT JOIN users u ON u.id = l.user_id `+whereSQL+`
 ORDER BY l.created_at DESC, l.id DESC
@@ -129,6 +129,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	for rows.Next() {
 		var item service.ContentModerationLog
 		var userID, apiKeyID, groupID, policyID, latency, queueDelay sql.NullInt64
+		var lastEmailSentAt sql.NullTime
 		var scoresRaw, thresholdsRaw, policySnapshotRaw []byte
 		if err := rows.Scan(
 			&item.ID,
@@ -162,6 +163,8 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.ViolationCount,
 			&item.AutoBanned,
 			&item.EmailSent,
+			&item.EmailDeduped,
+			&lastEmailSentAt,
 			&item.UserStatus,
 			&queueDelay,
 			&item.CreatedAt,
@@ -191,6 +194,10 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		if queueDelay.Valid {
 			v := int(queueDelay.Int64)
 			item.QueueDelayMS = &v
+		}
+		if lastEmailSentAt.Valid {
+			v := lastEmailSentAt.Time
+			item.LastEmailSentAt = &v
 		}
 		item.CategoryScores = map[string]float64{}
 		_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
@@ -234,7 +241,14 @@ WHERE user_id = $1
 }
 
 func (r *contentModerationRepository) UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE content_moderation_logs SET email_sent = $1 WHERE id = $2`, sent, id)
+	_, err := r.db.ExecContext(ctx, `
+UPDATE content_moderation_logs
+SET email_sent = $1,
+    last_email_sent_at = CASE
+        WHEN $1 THEN COALESCE(last_email_sent_at, NOW())
+        ELSE last_email_sent_at
+    END
+WHERE id = $2`, sent, id)
 	if err != nil {
 		return fmt.Errorf("update content moderation log email_sent: %w", err)
 	}
@@ -629,6 +643,13 @@ func nullableInt64Ptr(value *int64) any {
 		return nil
 	}
 	return *value
+}
+
+func nullableTimePtr(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value
 }
 
 func nullableActorID(value int64) any {

@@ -444,6 +444,8 @@ type ContentModerationLog struct {
 	ViolationCount    int                `json:"violation_count"`
 	AutoBanned        bool               `json:"auto_banned"`
 	EmailSent         bool               `json:"email_sent"`
+	EmailDeduped      bool               `json:"email_deduped"`
+	LastEmailSentAt   *time.Time         `json:"last_email_sent_at,omitempty"`
 	UserStatus        string             `json:"user_status"`
 	QueueDelayMS      *int               `json:"queue_delay_ms,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
@@ -618,7 +620,7 @@ type ContentModerationHashCache interface {
 	ClearAllowedInputHashes(ctx context.Context) (int64, error)
 	CountAllowedInputHashes(ctx context.Context) (int64, error)
 	ListAllowedInputHashes(ctx context.Context) ([]string, error)
-	TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	TryAcquireNotificationDedupe(ctx context.Context, key string, ttl time.Duration) (bool, *time.Time, error)
 }
 
 type ContentModerationService struct {
@@ -2371,13 +2373,18 @@ func (s *ContentModerationService) sendFlaggedNotificationSideEffects(ctx contex
 	}
 	emailSent := false
 	if cfg.EmailOnHit {
-		if s.shouldSendViolationEmail(ctx, log) {
+		shouldSend, lastSentAt := s.shouldSendViolationEmail(ctx, log)
+		if shouldSend {
 			if err := s.sendViolationEmail(ctx, cfg, log); err != nil {
 				slog.Warn("content_moderation.email_failed", "user_id", contentModerationEmailUserID(log), "recipient_hash", notificationEmailHash(log.UserEmail), "error", err)
 			} else {
 				emailSent = true
+				now := time.Now().UTC()
+				lastSentAt = &now
 			}
 		} else {
+			log.EmailDeduped = true
+			log.LastEmailSentAt = lastSentAt
 			slog.Info("content_moderation.email_deduped",
 				"user_id", contentModerationEmailUserID(log),
 				"recipient_hash", notificationEmailHash(log.UserEmail),
@@ -2391,20 +2398,26 @@ func (s *ContentModerationService) sendFlaggedNotificationSideEffects(ctx contex
 			slog.Warn("content_moderation.ban_email_failed", "user_id", contentModerationEmailUserID(log), "recipient_hash", notificationEmailHash(log.UserEmail), "error", err)
 		} else {
 			emailSent = true
+			now := time.Now().UTC()
+			log.LastEmailSentAt = &now
 		}
 	}
 	log.EmailSent = emailSent
+	if emailSent && log.LastEmailSentAt == nil {
+		now := time.Now().UTC()
+		log.LastEmailSentAt = &now
+	}
 }
 
-func (s *ContentModerationService) shouldSendViolationEmail(ctx context.Context, log *ContentModerationLog) bool {
+func (s *ContentModerationService) shouldSendViolationEmail(ctx context.Context, log *ContentModerationLog) (bool, *time.Time) {
 	if s == nil || log == nil {
-		return true
+		return true, nil
 	}
 	key := contentModerationEmailDedupeKey(contentModerationEmailDedupeEventViolation, log)
 	if key == "" || s.hashCache == nil {
-		return true
+		return true, nil
 	}
-	acquired, err := s.hashCache.TryAcquireNotificationDedupe(ctx, key, contentModerationEmailDedupeTTL)
+	acquired, lastSentAt, err := s.hashCache.TryAcquireNotificationDedupe(ctx, key, contentModerationEmailDedupeTTL)
 	if err != nil {
 		slog.Warn("content_moderation.email_dedupe_failed",
 			"user_id", contentModerationEmailUserID(log),
@@ -2412,9 +2425,9 @@ func (s *ContentModerationService) shouldSendViolationEmail(ctx context.Context,
 			"action", log.Action,
 			"input_hash", normalizeContentModerationHash(log.InputHash),
 			"error", err)
-		return true
+		return true, nil
 	}
-	return acquired
+	return acquired, lastSentAt
 }
 
 func (s *ContentModerationService) sendViolationEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {

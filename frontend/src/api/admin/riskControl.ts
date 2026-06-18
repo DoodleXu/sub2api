@@ -204,7 +204,9 @@ export interface ContentModerationLog {
   error: string
   violation_count: number
   auto_banned: boolean
-  email_sent: boolean
+  email_sent?: boolean
+  email_deduped?: boolean
+  last_email_sent_at?: string | null
   user_status: string
   queue_delay_ms: number | null
   created_at: string
