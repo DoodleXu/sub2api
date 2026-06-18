@@ -73,7 +73,7 @@
 
       <section>
         <div v-if="loading" class="py-12 text-center text-gray-500">加载中...</div>
-        <div v-else-if="items.length === 0" class="py-12 text-center text-gray-500">暂无生图归档</div>
+        <div v-else-if="items.length === 0 || imageCards.length === 0" class="py-12 text-center text-gray-500">暂无生图资产</div>
         <div v-else class="image-masonry">
           <article
             v-for="item in imageCards"
@@ -81,7 +81,11 @@
             class="mb-4 break-inside-avoid overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900"
           >
             <button class="block w-full" @click="handleAssetCardClick(item)">
-              <div class="flex aspect-square w-full items-center justify-center bg-gray-100 dark:bg-dark-800">
+              <div
+                :ref="(element) => observeThumbnailElement(element, item.asset)"
+                :data-testid="`image-thumbnail-${item.asset.id}`"
+                class="flex aspect-square w-full items-center justify-center bg-gray-100 dark:bg-dark-800"
+              >
                 <img
                   v-if="assetImageSrc(item.asset)"
                   :src="assetImageSrc(item.asset)"
@@ -105,10 +109,10 @@
         </div>
       </section>
 
-      <div v-if="preview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" @click.self="preview = null">
+      <div v-if="preview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" @click.self="closePreview">
         <div class="max-h-[92vh] max-w-5xl overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-900">
-          <img v-if="assetImageSrc(preview.asset)" :src="assetImageSrc(preview.asset)" class="max-h-[72vh] w-full object-contain" />
-          <div v-else-if="assetImageFailed(preview.asset)" class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-red-500">图片加载失败</div>
+          <img v-if="previewImageURL" :src="previewImageURL" class="max-h-[72vh] w-full object-contain" />
+          <div v-else-if="previewImageFailed" class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-red-500">图片加载失败</div>
           <div v-else class="flex h-72 w-[min(90vw,48rem)] items-center justify-center text-sm text-gray-500">图片加载中...</div>
           <div class="flex items-center justify-between gap-3 p-4 text-sm">
             <div>
@@ -116,10 +120,10 @@
               <div class="text-gray-500">{{ preview.record.prompt_excerpt }}</div>
             </div>
             <div class="flex gap-2">
-              <button v-if="assetImageFailed(preview.asset)" class="btn btn-secondary btn-sm" @click="retryAssetLoad(preview.asset)">重试</button>
+              <button v-if="previewImageFailed" class="btn btn-secondary btn-sm" @click="retryPreviewLoad">重试</button>
               <button class="btn btn-secondary btn-sm" @click="openAsset(preview.asset)">打开</button>
               <button class="btn btn-primary btn-sm" @click="downloadAsset(preview.asset)">下载</button>
-              <button class="btn btn-secondary btn-sm" @click="preview = null">关闭</button>
+              <button class="btn btn-secondary btn-sm" @click="closePreview">关闭</button>
             </div>
           </div>
         </div>
@@ -129,7 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, type ComponentPublicInstance } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import imageGenerationsAPI, {
@@ -146,9 +150,15 @@ const items = ref<ImageGenerationListItem[]>([])
 const stats = ref<ImageGenerationDailyStat[]>([])
 const storageStats = ref<ImageGenerationStorageStats>({ total_bytes: 0 })
 const preview = ref<{ record: ImageGenerationRecord; asset: ImageGenerationAsset } | null>(null)
-const cachedAssetURLs = ref<Record<number, string>>({})
-const failedAssetLoads = ref<Record<number, boolean>>({})
-const cacheRequests = new Map<number, Promise<void>>()
+const previewImageURL = ref('')
+const previewImageFailed = ref(false)
+const thumbnailObjectURLs = ref<Record<number, string>>({})
+const failedThumbnailLoads = ref<Record<number, boolean>>({})
+const thumbnailRequests = new Map<number, Promise<void>>()
+const thumbnailElementsByAssetID = new Map<number, Element>()
+const thumbnailAssetsByElement = new WeakMap<Element, ImageGenerationAsset>()
+let thumbnailObserver: IntersectionObserver | null = null
+let previewLoadToken = 0
 const filters = reactive({ model: '', status: '', user_id: '', api_key_id: '' })
 const storage = reactive<ImageArchiveStorageConfig>({
   enabled: true,
@@ -194,11 +204,11 @@ function formatSizeNumber(value: number): string {
 }
 
 function assetImageSrc(asset: ImageGenerationAsset): string {
-  return cachedAssetURLs.value[asset.id] || ''
+  return thumbnailObjectURLs.value[asset.id] || ''
 }
 
 function assetImageFailed(asset: ImageGenerationAsset): boolean {
-  return Boolean(failedAssetLoads.value[asset.id])
+  return Boolean(failedThumbnailLoads.value[asset.id])
 }
 
 function adminAssetURL(asset: ImageGenerationAsset): string {
@@ -222,43 +232,74 @@ async function fetchAdminAssetBlob(asset: ImageGenerationAsset): Promise<Blob> {
   return response.blob()
 }
 
-async function cacheImageAsset(asset: ImageGenerationAsset): Promise<void> {
-  if (cachedAssetURLs.value[asset.id] || cacheRequests.has(asset.id)) return
+async function cacheThumbnailAsset(asset: ImageGenerationAsset): Promise<void> {
+  if (thumbnailObjectURLs.value[asset.id] || thumbnailRequests.has(asset.id)) return
   const request = (async () => {
     try {
-      failedAssetLoads.value = {
-        ...failedAssetLoads.value,
+      failedThumbnailLoads.value = {
+        ...failedThumbnailLoads.value,
         [asset.id]: false,
       }
       const blob = await fetchAdminAssetBlob(asset)
-      cachedAssetURLs.value = {
-        ...cachedAssetURLs.value,
+      thumbnailObjectURLs.value = {
+        ...thumbnailObjectURLs.value,
         [asset.id]: URL.createObjectURL(blob),
       }
     } catch {
-      failedAssetLoads.value = {
-        ...failedAssetLoads.value,
+      failedThumbnailLoads.value = {
+        ...failedThumbnailLoads.value,
         [asset.id]: true,
       }
     } finally {
-      cacheRequests.delete(asset.id)
+      thumbnailRequests.delete(asset.id)
     }
   })()
-  cacheRequests.set(asset.id, request)
+  thumbnailRequests.set(asset.id, request)
 }
 
-function warmImageCache(cards: Array<{ asset: ImageGenerationAsset }>): void {
-  for (const item of cards) {
-    void cacheImageAsset(item.asset)
+function ensureThumbnailObserver(): IntersectionObserver | null {
+  if (typeof IntersectionObserver === 'undefined') return null
+  if (!thumbnailObserver) {
+    thumbnailObserver = new IntersectionObserver((entries, observer) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        observer.unobserve(entry.target)
+        const asset = thumbnailAssetsByElement.get(entry.target)
+        if (asset) void cacheThumbnailAsset(asset)
+      }
+    }, { rootMargin: '240px 0px' })
   }
+  return thumbnailObserver
+}
+
+function observeThumbnailElement(element: Element | ComponentPublicInstance | null, asset: ImageGenerationAsset): void {
+  const existing = thumbnailElementsByAssetID.get(asset.id)
+  if (existing && existing !== element) {
+    thumbnailObserver?.unobserve(existing)
+    thumbnailAssetsByElement.delete(existing)
+    thumbnailElementsByAssetID.delete(asset.id)
+  }
+
+  if (!(element instanceof Element)) return
+  if (thumbnailObjectURLs.value[asset.id] || failedThumbnailLoads.value[asset.id] || thumbnailRequests.has(asset.id)) return
+
+  const observer = ensureThumbnailObserver()
+  if (!observer) {
+    void cacheThumbnailAsset(asset)
+    return
+  }
+
+  thumbnailAssetsByElement.set(element, asset)
+  thumbnailElementsByAssetID.set(asset.id, element)
+  observer.observe(element)
 }
 
 function retryAssetLoad(asset: ImageGenerationAsset): void {
-  failedAssetLoads.value = {
-    ...failedAssetLoads.value,
+  failedThumbnailLoads.value = {
+    ...failedThumbnailLoads.value,
     [asset.id]: false,
   }
-  void cacheImageAsset(asset)
+  void cacheThumbnailAsset(asset)
 }
 
 function handleAssetCardClick(item: { record: ImageGenerationRecord; asset: ImageGenerationAsset }): void {
@@ -267,6 +308,43 @@ function handleAssetCardClick(item: { record: ImageGenerationRecord; asset: Imag
     return
   }
   preview.value = item
+  void loadPreviewAsset(item.asset)
+}
+
+function revokePreviewObjectURL(): void {
+  if (!previewImageURL.value) return
+  URL.revokeObjectURL(previewImageURL.value)
+  previewImageURL.value = ''
+}
+
+async function loadPreviewAsset(asset: ImageGenerationAsset): Promise<void> {
+  const token = ++previewLoadToken
+  revokePreviewObjectURL()
+  previewImageFailed.value = false
+  try {
+    const blob = await fetchAdminAssetBlob(asset)
+    const objectURL = URL.createObjectURL(blob)
+    if (token !== previewLoadToken) {
+      URL.revokeObjectURL(objectURL)
+      return
+    }
+    previewImageURL.value = objectURL
+  } catch {
+    if (token === previewLoadToken) {
+      previewImageFailed.value = true
+    }
+  }
+}
+
+function retryPreviewLoad(): void {
+  if (preview.value) void loadPreviewAsset(preview.value.asset)
+}
+
+function closePreview(): void {
+  previewLoadToken += 1
+  revokePreviewObjectURL()
+  previewImageFailed.value = false
+  preview.value = null
 }
 
 function triggerDownload(url: string, filename: string): void {
@@ -309,9 +387,31 @@ async function loadRecords() {
   try {
     const data = await imageGenerationsAPI.list(params())
     items.value = data.items || []
+    pruneThumbnailAssets(items.value)
   } finally {
     loading.value = false
   }
+}
+
+function pruneThumbnailAssets(records: ImageGenerationListItem[]): void {
+  const visibleAssetIDs = new Set<number>()
+  for (const item of records) {
+    for (const asset of item.assets) {
+      visibleAssetIDs.add(asset.id)
+    }
+  }
+
+  const nextObjectURLs = { ...thumbnailObjectURLs.value }
+  for (const [assetID, objectURL] of Object.entries(thumbnailObjectURLs.value)) {
+    if (visibleAssetIDs.has(Number(assetID))) continue
+    URL.revokeObjectURL(objectURL)
+    delete nextObjectURLs[Number(assetID)]
+  }
+  thumbnailObjectURLs.value = nextObjectURLs
+
+  failedThumbnailLoads.value = Object.fromEntries(
+    Object.entries(failedThumbnailLoads.value).filter(([assetID]) => visibleAssetIDs.has(Number(assetID)))
+  )
 }
 
 async function loadStats() {
@@ -340,10 +440,11 @@ onMounted(async () => {
   await Promise.all([loadRecords(), loadStats(), loadStorageStats(), loadStorage()])
 })
 
-watch(imageCards, (cards) => warmImageCache(cards), { immediate: true })
-
 onBeforeUnmount(() => {
-  for (const url of Object.values(cachedAssetURLs.value)) {
+  thumbnailObserver?.disconnect()
+  thumbnailObserver = null
+  closePreview()
+  for (const url of Object.values(thumbnailObjectURLs.value)) {
     URL.revokeObjectURL(url)
   }
 })
