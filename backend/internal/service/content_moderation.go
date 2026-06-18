@@ -2379,8 +2379,6 @@ func (s *ContentModerationService) sendFlaggedNotificationSideEffects(ctx contex
 				slog.Warn("content_moderation.email_failed", "user_id", contentModerationEmailUserID(log), "recipient_hash", notificationEmailHash(log.UserEmail), "error", err)
 			} else {
 				emailSent = true
-				now := time.Now().UTC()
-				lastSentAt = &now
 			}
 		} else {
 			log.EmailDeduped = true
