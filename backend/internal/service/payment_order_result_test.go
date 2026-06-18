@@ -152,8 +152,8 @@ func TestBuildPaymentSubjectAppliesAffixToSubscriptionPlanProductName(t *testing
 	}
 
 	got := svc.buildPaymentSubject(plan, 0, cfg, nil)
-	if got != "PRE Claude Pro SUF" {
-		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Claude Pro SUF")
+	if got != "PRE Claude Pro" {
+		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Claude Pro")
 	}
 }
 
@@ -168,8 +168,20 @@ func TestBuildPaymentSubjectAppliesAffixToSubscriptionPlanDefaultName(t *testing
 	plan := &dbent.SubscriptionPlan{Name: "Team Monthly"}
 
 	got := svc.buildPaymentSubject(plan, 0, cfg, nil)
-	if got != "PRE Sub2API Subscription Team Monthly SUF" {
-		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Sub2API Subscription Team Monthly SUF")
+	if got != "PRE Team Monthly" {
+		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "PRE Team Monthly")
+	}
+}
+
+func TestBuildPaymentSubjectUsesSubscriptionPlanNameWithoutFixedDescription(t *testing.T) {
+	t.Parallel()
+
+	svc := &PaymentService{}
+	plan := &dbent.SubscriptionPlan{Name: "Team Monthly"}
+
+	got := svc.buildPaymentSubject(plan, 0, nil, nil)
+	if got != "Team Monthly" {
+		t.Fatalf("buildPaymentSubject() = %q, want %q", got, "Team Monthly")
 	}
 }
 

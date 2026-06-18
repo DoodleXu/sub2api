@@ -520,9 +520,9 @@ func (s *PaymentService) buildPaymentSubject(plan *dbent.SubscriptionPlan, limit
 	if plan != nil {
 		productName := plan.ProductName
 		if productName == "" {
-			productName = "Sub2API Subscription " + plan.Name
+			productName = plan.Name
 		}
-		return applyPaymentProductNameAffix(productName, cfg)
+		return applyPaymentProductNamePrefix(productName, cfg)
 	}
 	currency := payment.DefaultPaymentCurrency
 	if sel != nil {
@@ -551,6 +551,17 @@ func applyPaymentProductNameAffix(productName string, cfg *PaymentConfig) string
 	pf := strings.TrimSpace(cfg.ProductNamePrefix)
 	sf := strings.TrimSpace(cfg.ProductNameSuffix)
 	return strings.TrimSpace(pf + " " + productName + " " + sf)
+}
+
+func applyPaymentProductNamePrefix(productName string, cfg *PaymentConfig) string {
+	if cfg == nil {
+		return productName
+	}
+	pf := strings.TrimSpace(cfg.ProductNamePrefix)
+	if pf == "" {
+		return productName
+	}
+	return strings.TrimSpace(pf + " " + productName)
 }
 
 func (s *PaymentService) maybeBuildWeChatOAuthRequiredResponse(ctx context.Context, req CreateOrderRequest, amount, payAmount, feeRate float64) (*CreateOrderResponse, error) {
