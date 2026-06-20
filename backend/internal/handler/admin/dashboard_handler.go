@@ -118,6 +118,7 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"today_cost":                  stats.TodayCost,       // 今日标准计费
 		"today_actual_cost":           stats.TodayActualCost, // 今日实际扣除
 		"today_account_cost":          stats.TodayAccountCost,
+		"today_real_cost_cny":         stats.TodayRealCostCNY,
 
 		// 系统运行统计
 		"average_duration_ms": stats.AverageDurationMs,

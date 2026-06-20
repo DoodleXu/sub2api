@@ -1633,7 +1633,7 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 	if stats.TotalRequests > 0 {
 		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
 	}
-	if err := r.fillDashboardCostCNYStats(ctx, stats); err != nil {
+	if err := r.fillDashboardCostCNYStats(ctx, stats, todayUTC); err != nil {
 		return err
 	}
 
@@ -1826,7 +1826,7 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	if stats.TotalRequests > 0 {
 		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
 	}
-	if err := r.fillDashboardCostCNYStats(ctx, stats); err != nil {
+	if err := r.fillDashboardCostCNYStats(ctx, stats, todayUTC); err != nil {
 		return err
 	}
 
@@ -1853,8 +1853,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	return nil
 }
 
-func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats) error {
-	args := []any{service.PlatformAnthropic, service.PlatformOpenAI}
+func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats, todayStart time.Time) error {
+	todayEnd := todayStart.Add(24 * time.Hour)
+	args := []any{service.PlatformAnthropic, service.PlatformOpenAI, todayStart, todayEnd}
 
 	query := `
 		WITH cny_by_platform AS (
@@ -1866,28 +1867,46 @@ func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stat
 				AND a.total_cost_cny > 0
 			GROUP BY a.platform
 		),
-		account_cost_costed_by_platform AS (
-			SELECT
-				a.platform,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost
-			FROM usage_logs ul
-			JOIN accounts a ON a.id = ul.account_id
-			WHERE a.deleted_at IS NULL
-				AND a.total_cost_cny > 0
-			GROUP BY a.platform
-		)
+	account_cost_by_account AS (
 		SELECT
-			COALESCE(SUM(cny.total_cost_cny), 0) AS total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost), 0) AS costed_total_account_cost,
-			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
-			COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
-			COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost
-		FROM (SELECT 1) base
-		LEFT JOIN cny_by_platform cny ON TRUE
-		LEFT JOIN account_cost_costed_by_platform cost ON cost.platform = cny.platform
+			a.id,
+			a.platform,
+			a.total_cost_cny,
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost,
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
+				WHERE ul.created_at >= $3::timestamptz AND ul.created_at < $4::timestamptz
+			), 0) AS today_account_cost
+		FROM accounts a
+		LEFT JOIN usage_logs ul ON ul.account_id = a.id
+		WHERE a.deleted_at IS NULL
+			AND a.total_cost_cny > 0
+		GROUP BY a.id, a.platform, a.total_cost_cny
+	),
+	account_cost_costed_by_platform AS (
+		SELECT
+			platform,
+			COALESCE(SUM(total_account_cost), 0) AS total_account_cost
+		FROM account_cost_by_account
+		GROUP BY platform
+	),
+	today_real_cost AS (
+		SELECT COALESCE(SUM(today_account_cost * total_cost_cny / NULLIF(total_account_cost, 0)), 0) AS today_real_cost_cny
+		FROM account_cost_by_account
+		WHERE total_account_cost > 0
+	)
+	SELECT
+		COALESCE(SUM(cny.total_cost_cny), 0) AS total_cost_cny,
+		COALESCE(SUM(cost.total_account_cost), 0) AS costed_total_account_cost,
+		COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
+		COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
+		COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
+		COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost,
+		(SELECT today_real_cost_cny FROM today_real_cost) AS today_real_cost_cny
+	FROM (SELECT 1) base
+	LEFT JOIN cny_by_platform cny ON TRUE
+	LEFT JOIN account_cost_costed_by_platform cost ON cost.platform = cny.platform
 	`
-	var totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64
+	var totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY float64
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
@@ -1899,15 +1918,17 @@ func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stat
 		&anthropicAccountCost,
 		&openAICostCNY,
 		&openAIAccountCost,
+		&todayRealCostCNY,
 	); err != nil {
 		return err
 	}
-	applyDashboardCostCNYStats(stats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost)
+	applyDashboardCostCNYStats(stats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY)
 	return nil
 }
 
-func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost float64) {
+func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY float64) {
 	stats.TotalCostCNY = totalCostCNY
+	stats.TodayRealCostCNY = todayRealCostCNY
 	if costedTotalAccountCost > 0 {
 		stats.AverageCostCNYPerUSD = totalCostCNY / costedTotalAccountCost
 	}

@@ -1538,6 +1538,7 @@ export default {
       actual: 'Actual',
       standard: 'Standard',
       accountCost: 'Cost',
+      realCostCny: 'Real Cost',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
       viewModelDistribution: 'Model Distribution',

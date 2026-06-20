@@ -48,6 +48,6 @@ describe('DailyCheckinTrendChart', () => {
 
     expect(rateDataset.data).toEqual([100])
     expect(rateDataset.clip).toBe(false)
-    expect(config.options.layout.padding.top).toBeGreaterThan(0)
+    expect(config.options.layout.padding.top).toBeGreaterThanOrEqual(32)
   })
 })

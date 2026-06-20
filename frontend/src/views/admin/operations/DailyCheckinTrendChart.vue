@@ -95,7 +95,7 @@ const chartOptions = computed(() => ({
   interaction: { intersect: false, mode: 'index' as const },
   layout: {
     padding: {
-      top: 12,
+      top: 36,
     },
   },
   plugins: {
