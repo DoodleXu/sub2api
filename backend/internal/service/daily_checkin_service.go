@@ -774,11 +774,18 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
 		date := day.Format("2006-01-02")
 		qualifiedIDs := qualifiedByDate[date]
+		records := byDate[date]
+		if qualifiedIDs == nil {
+			qualifiedIDs = map[int64]struct{}{}
+			qualifiedByDate[date] = qualifiedIDs
+		}
+		for _, item := range records {
+			qualifiedIDs[item.UserID] = struct{}{}
+		}
 		qualifiedUsers := int64(len(qualifiedIDs))
 		for userID := range qualifiedIDs {
 			qualifiedUserSet[userID] = struct{}{}
 		}
-		records := byDate[date]
 		point := DailyCheckinAnalyticsPoint{
 			Date:           date,
 			QualifiedUsers: qualifiedUsers,

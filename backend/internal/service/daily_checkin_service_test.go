@@ -240,6 +240,47 @@ func TestDailyCheckinAnalyticsSummarizesQualityAndRules(t *testing.T) {
 	require.NotEmpty(t, res.RewardDistribution)
 }
 
+func TestDailyCheckinAnalyticsIncludesCheckedInUsersInQualifiedDenominator(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD: "1",
+		SettingKeyDailyCheckinRewardMinUSD:     "1",
+		SettingKeyDailyCheckinRewardMaxUSD:     "1",
+	})
+	ctx := context.Background()
+	start := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, balance, total_recharged, created_at, updated_at)
+		VALUES
+			(1, 'alpha', 'alpha@example.com', 0, 0, ?, ?),
+			(2, 'beta', 'beta@example.com', 0, 0, ?, ?)
+	`, start, start, start, start)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO usage_logs (user_id, actual_cost, created_at)
+		VALUES (1, 1.25, ?)
+	`, start.Add(1*time.Hour))
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at)
+		VALUES
+			(1, ?, 1.00, 1.25, ?),
+			(2, ?, 1.00, 1.50, ?)
+	`, start.Format("2006-01-02"), start.Add(2*time.Hour), start.Format("2006-01-02"), start.Add(3*time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetDailyCheckinAnalytics(ctx, start, end)
+	require.NoError(t, err)
+	require.Len(t, res.Points, 1)
+	require.Equal(t, int64(2), res.Points[0].QualifiedUsers)
+	require.Equal(t, int64(2), res.Points[0].CheckinUsers)
+	require.InDelta(t, 1.0, res.Points[0].CheckinRate, 0.0001)
+	require.Equal(t, int64(2), res.Summary.QualifiedUsers)
+	require.Equal(t, int64(2), res.Summary.CheckinUsers)
+	require.InDelta(t, 1.0, res.Summary.CheckinRate, 0.0001)
+}
+
 func TestDailyCheckinCanBeDisabled(t *testing.T) {
 	svc, db := newDailyCheckinTestService(t, map[string]string{
 		SettingKeyDailyCheckinEnabled: "false",
