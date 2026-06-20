@@ -3,9 +3,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -174,13 +179,198 @@ func TestApplyWebConsoleCodexRequestHeadersReusesGatewayCodexPath(t *testing.T) 
 	require.Equal(t, webConsoleCodexOriginator, req.Header.Get("originator"))
 	require.Equal(t, webConsoleCodexVersion, req.Header.Get("version"))
 	require.Equal(t, "responses=experimental", req.Header.Get("OpenAI-Beta"))
-	require.Equal(t, "application/json", req.Header.Get("Accept"))
+	require.Equal(t, "text/event-stream", req.Header.Get("Accept"))
+}
+
+func TestWebConsoleImageResponsesPayloadUsesConjureCompatibleResponsesShape(t *testing.T) {
+	payload := webConsoleImageResponsesPayload(createWebConsoleImageTaskRequest{
+		Model:  "gpt-5.5",
+		Prompt: "画一只猫",
+	}, webConsoleImageTaskOptions{
+		Size:         "1024x1024",
+		Quality:      "high",
+		Background:   "opaque",
+		OutputFormat: "webp",
+	})
+
+	require.Equal(t, "gpt-5.5", payload["model"])
+	require.Equal(t, true, payload["stream"])
+	require.Equal(t, false, payload["store"])
+	require.Equal(t, map[string]any{"type": "image_generation"}, payload["tool_choice"])
+	require.Equal(t, []any{
+		map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "画一只猫"},
+			},
+		},
+	}, payload["input"])
+	require.Equal(t, []any{
+		map[string]any{
+			"type":          "image_generation",
+			"action":        "generate",
+			"model":         "gpt-image-2",
+			"size":          "1024x1024",
+			"quality":       "high",
+			"background":    "opaque",
+			"output_format": "webp",
+		},
+	}, payload["tools"])
+}
+
+func TestWebConsoleImageResponsesPayloadSupportsEditReferencesAndMask(t *testing.T) {
+	source := webConsoleTestPNGDataURL(t, 2, 2, false)
+	mask := webConsoleTestPNGDataURL(t, 2, 2, true)
+	compression := 80
+
+	payload := webConsoleImageResponsesPayload(createWebConsoleImageTaskRequest{
+		Mode:   "edit",
+		Model:  "gpt-5.5",
+		Prompt: "把背景换成海边",
+		ReferenceImages: []webConsoleImageReference{{
+			DataURL: source,
+			Name:    "source.png",
+		}},
+		MaskImage: &webConsoleImageReference{DataURL: mask, Name: "mask.png"},
+	}, webConsoleImageTaskOptions{
+		Size:              "1536x1024",
+		Quality:           "medium",
+		OutputFormat:      "webp",
+		Ratio:             "16:9",
+		OutputCompression: &compression,
+		InputFidelity:     "high",
+	})
+
+	require.Equal(t, "gpt-5.5", payload["model"])
+	require.Equal(t, map[string]any{"type": "image_generation"}, payload["tool_choice"])
+	require.NotContains(t, payload, "parallel_tool_calls")
+	require.NotContains(t, payload, "instructions")
+	require.Equal(t, []any{
+		map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "把背景换成海边\n\n将宽高比设为 16:9"},
+				map[string]any{"type": "input_image", "image_url": source},
+			},
+		},
+	}, payload["input"])
+	require.Equal(t, []any{
+		map[string]any{
+			"type":               "image_generation",
+			"action":             "edit",
+			"model":              "gpt-image-2",
+			"size":               "1536x1024",
+			"quality":            "medium",
+			"output_format":      "webp",
+			"output_compression": 80,
+			"input_image_mask":   map[string]any{"image_url": mask},
+		},
+	}, payload["tools"])
+}
+
+func TestWebConsoleImageResponsesPayloadOmitsUnsupportedImageToolOptions(t *testing.T) {
+	compression := 80
+	payload := webConsoleImageResponsesPayload(createWebConsoleImageTaskRequest{
+		Model:  "gpt-5.5",
+		Prompt: "画一只猫",
+	}, webConsoleImageTaskOptions{
+		OutputFormat:      "png",
+		OutputCompression: &compression,
+		InputFidelity:     "high",
+	})
+
+	tools := payload["tools"].([]any)
+	imageTool := tools[0].(map[string]any)
+	require.NotContains(t, imageTool, "input_fidelity")
+	require.NotContains(t, imageTool, "output_compression")
+}
+
+func TestNormalizeWebConsoleImageTaskRequestValidatesEditInputs(t *testing.T) {
+	req := createWebConsoleImageTaskRequest{Mode: "edit"}
+	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "requires at least one reference image")
+
+	req = createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{DataURL: "data:text/plain;base64,ZmFrZQ=="}},
+	}
+	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "data:image")
+
+	req = createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{
+			DataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("source-image")),
+			Name:    " source.png ",
+		}},
+	}
+	require.NoError(t, normalizeWebConsoleImageTaskRequest(&req))
+	require.Equal(t, "edit", req.Mode)
+	require.Equal(t, "source.png", req.ReferenceImages[0].Name)
+}
+
+func TestNormalizeWebConsoleImageTaskRequestValidatesReferenceSizeAndMask(t *testing.T) {
+	tooLarge := "data:image/png;base64," + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, webConsoleImageReferenceMaxBytes+1))
+	req := createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{DataURL: tooLarge}},
+	}
+	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "exceeds max size")
+
+	source := webConsoleTestPNGDataURL(t, 2, 2, false)
+	alphaMask := webConsoleTestPNGDataURL(t, 2, 2, true)
+	req = createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{DataURL: source}},
+		MaskImage:       &webConsoleImageReference{DataURL: alphaMask},
+	}
+	require.NoError(t, normalizeWebConsoleImageTaskRequest(&req))
+
+	opaqueMask := webConsoleTestPNGDataURL(t, 2, 2, false)
+	req = createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{DataURL: source}},
+		MaskImage:       &webConsoleImageReference{DataURL: opaqueMask},
+	}
+	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "alpha channel")
+
+	mismatchedMask := webConsoleTestPNGDataURL(t, 3, 2, true)
+	req = createWebConsoleImageTaskRequest{
+		ReferenceImages: []webConsoleImageReference{{DataURL: source}},
+		MaskImage:       &webConsoleImageReference{DataURL: mismatchedMask},
+	}
+	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "same dimensions")
 }
 
 func TestWebConsoleUpstreamErrorDetailPrefersStructuredMessage(t *testing.T) {
 	detail := webConsoleUpstreamErrorDetail([]byte(`{"error":{"type":"server_error","code":"bad_gateway","message":"upstream timed out"}}`))
 
 	require.Equal(t, "bad_gateway: upstream timed out", detail)
+}
+
+func TestWebConsoleResponsesTerminalErrorDetailParsesFailedSSE(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"image_blocked","message":"policy rejected"}}}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	require.Equal(t, "image_blocked: policy rejected", webConsoleResponsesTerminalErrorDetail([]byte(body)))
+}
+
+func TestCollectWebConsoleImageValuesParsesResponsesSSEAndDedupes(t *testing.T) {
+	first := webConsoleTestBase64Image(1)
+	second := webConsoleTestBase64Image(2)
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"` + first + `"}}`,
+		"",
+		`data: {"type":"response.completed","response":{"output":[{"id":"ig_1","type":"image_generation_call","result":"` + first + `"},{"id":"ig_2","type":"image_generation_call","result":"` + second + `"}]}}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	values := collectWebConsoleImageValues([]byte(body))
+
+	require.Len(t, values, 2)
+	require.Equal(t, first, values[0].Base64)
+	require.Equal(t, second, values[1].Base64)
 }
 
 func TestRunWebConsoleImageRequestsRunsMultipleImagesConcurrently(t *testing.T) {
@@ -218,6 +408,52 @@ func TestRunWebConsoleImageRequestsRunsMultipleImagesConcurrently(t *testing.T) 
 	require.Less(t, time.Since(started), 400*time.Millisecond)
 }
 
+func TestRunWebConsoleImageRequestsPassesEditReferencesAndMask(t *testing.T) {
+	source := webConsoleTestPNGDataURL(t, 2, 2, false)
+	mask := webConsoleTestPNGDataURL(t, 2, 2, true)
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		received <- payload
+		_, _ = w.Write([]byte(`{"output":[{"type":"image_generation_call","b64_json":"` + webConsoleTestBase64Image(1) + `"}]}`))
+	}))
+	defer server.Close()
+	withWebConsoleHTTPClient(t, server.Client())
+
+	images, err := runWebConsoleImageRequests(context.Background(), createWebConsoleImageTaskRequest{
+		Mode:     "edit",
+		Model:    "gpt-5.5",
+		Prompt:   "replace the background",
+		Endpoint: server.URL + "/v1",
+		Options:  []byte(`{"count":1,"outputFormat":"png","inputFidelity":"high","outputCompression":80}`),
+		ReferenceImages: []webConsoleImageReference{{
+			DataURL: source,
+			Name:    "source.png",
+		}},
+		MaskImage: &webConsoleImageReference{
+			DataURL: mask,
+			Name:    "mask.png",
+		},
+	}, "sk-test")
+
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	payload := <-received
+	require.Equal(t, "gpt-5.5", payload["model"])
+	require.Equal(t, true, payload["stream"])
+	input := payload["input"].([]any)
+	content := input[0].(map[string]any)["content"].([]any)
+	require.Equal(t, map[string]any{"type": "input_text", "text": "replace the background"}, content[0])
+	require.Equal(t, map[string]any{"type": "input_image", "image_url": source}, content[1])
+	tools := payload["tools"].([]any)
+	imageTool := tools[0].(map[string]any)
+	require.Equal(t, "edit", imageTool["action"])
+	require.Equal(t, map[string]any{"image_url": mask}, imageTool["input_image_mask"])
+	require.NotContains(t, imageTool, "input_fidelity")
+	require.NotContains(t, imageTool, "output_compression")
+}
+
 func TestRunWebConsoleImageRequestsFailsFastOnUpstreamError(t *testing.T) {
 	var requestCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +476,7 @@ func TestRunWebConsoleImageRequestsFailsFastOnUpstreamError(t *testing.T) {
 	}, "sk-test")
 
 	require.ErrorContains(t, err, "image task upstream failed: status 502")
-	require.Equal(t, "上游生图服务暂时不可用，请稍后重试。", webConsoleImageTaskErrorMessage(err))
+	require.Equal(t, "上游生图服务暂时不可用：upstream_error: Upstream service temporarily unavailable", webConsoleImageTaskErrorMessage(err))
 }
 
 func TestWebConsoleImageTaskErrorMessageHandlesTimeout(t *testing.T) {
@@ -260,7 +496,7 @@ func TestFailTaskStoresUserFacingErrorMessage(t *testing.T) {
 
 	require.Equal(t, "failed", repo.updated.Status)
 	require.NotNil(t, repo.updated.CompletedAt)
-	require.Equal(t, "上游生图服务暂时不可用，请稍后重试。", repo.updated.ErrorMessage)
+	require.Equal(t, "上游生图服务暂时不可用：upstream_error: Upstream service temporarily unavailable", repo.updated.ErrorMessage)
 }
 
 func TestFailTaskStoresTimeoutErrorMessage(t *testing.T) {
@@ -293,6 +529,31 @@ func withWebConsoleHTTPClient(t *testing.T, client *http.Client) {
 
 func webConsoleTestBase64Image(index int32) string {
 	return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(fmt.Sprintf("%02d", index), 33)))
+}
+
+func webConsoleTestPNGDataURL(t *testing.T, width, height int, withAlpha bool) string {
+	t.Helper()
+	var img image.Image
+	if withAlpha {
+		rgba := image.NewNRGBA(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				rgba.SetNRGBA(x, y, color.NRGBA{R: 255, A: 128})
+			}
+		}
+		img = rgba
+	} else {
+		gray := image.NewGray(image.Rect(0, 0, width, height))
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				gray.SetGray(x, y, color.Gray{Y: 180})
+			}
+		}
+		img = gray
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 type webConsoleImageTaskRepoStub struct {

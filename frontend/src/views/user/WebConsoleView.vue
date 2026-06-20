@@ -5,7 +5,7 @@
         <div class="border-b border-gray-100 p-4 dark:border-dark-700">
           <button type="button" class="btn btn-primary w-full" @click="startSession(activeMode)">
             <Icon name="plus" size="sm" class="mr-2" />
-            {{ activeMode === 'image' ? '新生图会话' : '新对话' }}
+            {{ activeMode === 'image' ? '创建新会话' : '新对话' }}
           </button>
         </div>
         <div class="flex-1 space-y-1 overflow-y-auto p-3">
@@ -126,27 +126,105 @@
             </span>
             <span class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">{{ selectedKey.group?.platform || '未分组' }}</span>
           </div>
-          <div v-if="activeMode === 'image'" class="mt-3 grid grid-cols-2 gap-3 md:grid-cols-5">
-            <label class="block">
-              <span class="input-label">尺寸</span>
-              <Select v-model="imageSize" :options="imageSizeOptions" class="web-console-control" />
-            </label>
-            <label class="block">
-              <span class="input-label">质量</span>
-              <Select v-model="imageQuality" :options="imageQualityOptions" class="web-console-control" />
-            </label>
-            <label class="block">
-              <span class="input-label">背景</span>
-              <Select v-model="imageBackground" :options="imageBackgroundOptions" class="web-console-control" />
-            </label>
-            <label class="block">
-              <span class="input-label">格式</span>
-              <Select v-model="imageOutputFormat" :options="imageOutputFormatOptions" class="web-console-control" />
-            </label>
-            <label class="block">
-              <span class="input-label">张数</span>
-              <input v-model.number="imageCount" class="input web-console-control" type="number" min="1" max="4" step="1" @change="clampImageCount" />
-            </label>
+          <div v-if="activeMode === 'image'" class="mt-3 space-y-3">
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="flex rounded-lg border border-gray-200 p-1 dark:border-dark-700">
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-2 text-sm font-medium"
+                  :class="imageTaskMode === 'generate' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'"
+                  @click="setImageTaskMode('generate')"
+                >
+                  生成
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-2 text-sm font-medium"
+                  :class="imageTaskMode === 'edit' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'"
+                  @click="setImageTaskMode('edit')"
+                >
+                  编辑
+                </button>
+              </div>
+              <button type="button" class="btn btn-secondary h-[42px]" @click="referenceFileInput?.click()">
+                <Icon name="upload" size="sm" class="mr-2" />
+                添加参考图
+              </button>
+              <input ref="referenceFileInput" class="sr-only" type="file" accept="image/*" multiple @change="handleReferenceFilesChange" />
+              <button type="button" class="btn btn-secondary h-[42px]" @click="maskFileInput?.click()">
+                <Icon name="upload" size="sm" class="mr-2" />
+                上传蒙版
+              </button>
+              <input ref="maskFileInput" class="sr-only" type="file" accept="image/png" @change="handleMaskFileChange" />
+            </div>
+            <div v-if="referenceImages.length" class="flex gap-2 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-dark-700 dark:bg-dark-950">
+              <figure
+                v-for="(reference, referenceIndex) in referenceImages"
+                :key="`${reference.name || 'reference'}-${referenceIndex}-${reference.data_url.slice(0, 48)}`"
+                class="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900"
+                :title="reference.name || `参考图 ${referenceIndex + 1}`"
+              >
+                <img :src="reference.data_url" :alt="reference.name || `参考图 ${referenceIndex + 1}`" class="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  class="absolute right-1 top-1 rounded bg-black/60 p-1 text-white hover:bg-black/75"
+                  title="移除参考图"
+                  @click="removeReferenceImage(referenceIndex)"
+                >
+                  <Icon name="x" size="xs" />
+                </button>
+              </figure>
+            </div>
+            <div v-if="maskImage" class="flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-dark-700 dark:bg-dark-950">
+              <figure
+                class="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900"
+                :title="maskImage.name || '蒙版'"
+              >
+                <img :src="maskImage.data_url" :alt="maskImage.name || '蒙版'" class="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  class="absolute right-1 top-1 rounded bg-black/60 p-1 text-white hover:bg-black/75"
+                  title="移除蒙版"
+                  @click="removeMaskImage"
+                >
+                  <Icon name="x" size="xs" />
+                </button>
+              </figure>
+              <div class="min-w-0 text-sm">
+                <p class="font-medium text-gray-700 dark:text-gray-200">蒙版</p>
+                <p class="truncate text-xs text-gray-500 dark:text-gray-400">{{ maskImage.name || '未命名图片' }}</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+              <label class="block">
+                <span class="input-label">尺寸</span>
+                <Select v-model="imageSize" :options="imageSizeOptions" class="web-console-control" />
+              </label>
+              <label class="block">
+                <span class="input-label">比例</span>
+                <Select v-model="imageRatio" :options="imageRatioOptions" class="web-console-control" />
+              </label>
+              <label class="block">
+                <span class="input-label">质量</span>
+                <Select v-model="imageQuality" :options="imageQualityOptions" class="web-console-control" />
+              </label>
+              <label class="block">
+                <span class="input-label">背景</span>
+                <Select v-model="imageBackground" :options="imageBackgroundOptions" class="web-console-control" />
+              </label>
+              <label class="block">
+                <span class="input-label">格式</span>
+                <Select v-model="imageOutputFormat" :options="imageOutputFormatOptions" class="web-console-control" />
+              </label>
+              <label class="block">
+                <span class="input-label">压缩</span>
+                <input v-model.number="imageOutputCompression" class="input web-console-control" type="number" min="0" max="100" step="1" :disabled="imageOutputFormat === 'png'" @change="clampImageOutputCompression" />
+              </label>
+              <label class="block">
+                <span class="input-label">张数</span>
+                <input v-model.number="imageCount" class="input web-console-control" type="number" min="1" max="4" step="1" @change="clampImageCount" />
+              </label>
+            </div>
           </div>
         </div>
 
@@ -211,6 +289,14 @@
                       >
                         <Icon name="download" size="sm" />
                       </button>
+                      <button
+                        type="button"
+                        class="rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-dark-700 dark:hover:text-gray-100"
+                        title="用作参考图"
+                        @click="useImageAsReference(image, message, imageIndex)"
+                      >
+                        <Icon name="upload" size="sm" />
+                      </button>
                       <a
                         :href="image.url"
                         target="_blank"
@@ -247,12 +333,13 @@
             <textarea
               v-model="prompt"
               class="input h-[50px] min-h-[50px] flex-1 resize-none overflow-y-auto"
-              :placeholder="activeMode === 'image' ? '描述你想生成的图片...' : '输入消息...'"
+              :placeholder="activeMode === 'image' ? (imageTaskMode === 'edit' ? '描述你想怎样编辑参考图...' : '描述你想生成的图片...') : '输入消息...'"
               @keydown.enter.exact.prevent="submit"
+              @paste="handlePromptPaste"
             />
             <button type="submit" class="btn btn-primary h-[50px] self-center" :disabled="submitting || !canSubmit">
               <Icon :name="submitting ? 'refresh' : 'arrowRight'" size="md" :class="submitting ? 'mr-2 animate-spin' : 'mr-2'" />
-              {{ submitting ? '处理中' : activeMode === 'image' ? '生成' : '发送' }}
+              {{ submitting ? '处理中' : activeMode === 'image' ? (imageTaskMode === 'edit' ? '编辑' : '生成') : '发送' }}
             </button>
           </div>
         </form>
@@ -285,7 +372,9 @@ import {
 import type {
   WebConsoleImage,
   WebConsoleImageOptions,
+  WebConsoleImageReference,
   WebConsoleImageRequest,
+  WebConsoleImageTaskMode,
   WebConsoleMessage,
   WebConsoleMode,
   WebConsoleSession,
@@ -306,17 +395,30 @@ const selectedEndpoint = ref('')
 const chatModel = ref('gpt-5.5')
 const imageModelValue = ref('gpt-5.5')
 const activeMode = ref<WebConsoleMode>('chat')
+const imageTaskMode = ref<WebConsoleImageTaskMode>('generate')
 const imageSize = ref('')
+const imageRatio = ref('')
 const imageQuality = ref('')
 const imageBackground = ref('')
 const imageOutputFormat = ref('png')
+const imageOutputCompression = ref(80)
 const imageCount = ref(1)
+const referenceImages = ref<WebConsoleImageReference[]>([])
+const maskImage = ref<WebConsoleImageReference | null>(null)
 const prompt = ref('')
 const submitting = ref(false)
 const deletingSession = ref(false)
 const errorMessage = ref('')
 const messagePanel = ref<HTMLElement | null>(null)
+const referenceFileInput = ref<HTMLInputElement | null>(null)
+const maskFileInput = ref<HTMLInputElement | null>(null)
 const deletingSessionIds = new Set<string>()
+const pendingImageEditPayloads = new Map<string, {
+  referenceImages: WebConsoleImageReference[]
+  maskImage: WebConsoleImageReference | null
+}>()
+const IMAGE_REFERENCE_MAX_BYTES = 8 * 1024 * 1024
+const IMAGE_REFERENCE_TOTAL_MAX_BYTES = 32 * 1024 * 1024
 
 const publicSettings = computed(() => appStore.cachedPublicSettings)
 const endpointOptions = computed<EndpointOption[]>(() => {
@@ -403,7 +505,11 @@ const model = computed({
     }
   },
 })
-const canSubmit = computed(() => Boolean(prompt.value.trim() && selectedEndpoint.value && selectedKey.value && model.value.trim()))
+const canSubmit = computed(() => {
+  if (!prompt.value.trim() || !selectedEndpoint.value || !selectedKey.value || !model.value.trim()) return false
+  if (activeMode.value === 'image' && imageTaskMode.value === 'edit' && referenceImages.value.length === 0) return false
+  return true
+})
 const modelOptions: SelectOption[] = [
   { value: 'gpt-5.5', label: 'gpt-5.5' },
   { value: 'gpt-5.4', label: 'gpt-5.4' },
@@ -417,6 +523,20 @@ const imageSizeOptions: SelectOption[] = [
   { value: '2048x1152', label: '2048 x 1152' },
   { value: '3840x2160', label: '3840 x 2160' },
   { value: '2160x3840', label: '2160 x 3840' },
+]
+const imageRatioOptions: SelectOption[] = [
+  { value: '', label: '默认' },
+  { value: '1:1', label: '1:1' },
+  { value: '4:5', label: '4:5' },
+  { value: '5:4', label: '5:4' },
+  { value: '3:4', label: '3:4' },
+  { value: '4:3', label: '4:3' },
+  { value: '2:3', label: '2:3' },
+  { value: '3:2', label: '3:2' },
+  { value: '9:16', label: '9:16' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:21', label: '9:21' },
+  { value: '21:9', label: '21:9' },
 ]
 const imageQualityOptions: SelectOption[] = [
   { value: '', label: '默认' },
@@ -434,7 +554,6 @@ const imageOutputFormatOptions: SelectOption[] = [
   { value: 'jpeg', label: 'JPEG' },
   { value: 'webp', label: 'WebP' },
 ]
-
 function persistSessions(): void {
   saveWebConsoleSessions(sessions.value)
 }
@@ -478,7 +597,7 @@ function touchSession(session: WebConsoleSession, titlePrompt?: string): void {
   if (deletingSessionIds.has(session.id)) return
   session.updated_at = new Date().toISOString()
   if (titlePrompt && session.messages.length <= 1) {
-    session.title = titleFromPrompt(titlePrompt, session.mode === 'image' ? '新生图会话' : '新对话')
+    session.title = titleFromPrompt(titlePrompt, session.mode === 'image' ? '创建新会话' : '新对话')
   }
   sessions.value = [
     session,
@@ -506,6 +625,9 @@ async function deleteCurrentSession(): Promise<void> {
     deletingSession.value = false
   }
   const deletedMode = session.mode
+  for (const message of session.messages) {
+    pendingImageEditPayloads.delete(message.id)
+  }
   sessions.value = sessions.value.filter((item) => item.id !== session.id)
   const nextSession = sessions.value.find((item) => item.mode === deletedMode) || sessions.value[0]
   if (nextSession) {
@@ -525,14 +647,29 @@ function clampImageCount(): void {
   imageCount.value = Math.min(Math.max(Math.trunc(Number(imageCount.value) || 1), 1), 4)
 }
 
+function clampImageOutputCompression(): void {
+  imageOutputCompression.value = Math.min(Math.max(Math.trunc(Number(imageOutputCompression.value) || 80), 0), 100)
+}
+
+function setImageTaskMode(mode: WebConsoleImageTaskMode): void {
+  imageTaskMode.value = mode
+  if (mode === 'generate') {
+    referenceImages.value = []
+    maskImage.value = null
+  }
+}
+
 function currentImageOptions(): WebConsoleImageOptions {
   clampImageCount()
+  clampImageOutputCompression()
   return {
     size: imageSize.value,
     quality: imageQuality.value,
     background: imageBackground.value,
     outputFormat: imageOutputFormat.value,
     count: imageCount.value,
+    ratio: imageRatio.value,
+    outputCompression: imageOutputFormat.value === 'png' ? null : imageOutputCompression.value,
   }
 }
 
@@ -546,9 +683,141 @@ function defaultChatTools(): unknown[] {
 function createImageRequest(input: string): WebConsoleImageRequest {
   return {
     prompt: input,
+    mode: imageTaskMode.value,
     model: imageModelValue.value.trim(),
     options: currentImageOptions(),
+    referenceImages: [],
+    maskImage: null,
   }
+}
+
+function currentImageEditPayload(): { referenceImages: WebConsoleImageReference[]; maskImage: WebConsoleImageReference | null } {
+  if (imageTaskMode.value !== 'edit') {
+    return { referenceImages: [], maskImage: null }
+  }
+  return {
+    referenceImages: referenceImages.value.map((item) => ({ ...item })),
+    maskImage: maskImage.value ? { ...maskImage.value } : null,
+  }
+}
+
+function fileToDataURL(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(file.name)
+}
+
+function imageDataURLByteSize(dataURL: string): number {
+  const raw = dataURL.includes(',') ? dataURL.slice(dataURL.indexOf(',') + 1) : dataURL
+  const compact = raw.trim()
+  if (!compact) return 0
+  const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((compact.length * 3) / 4) - padding)
+}
+
+function imageReferenceTotalBytes(nextReferences = referenceImages.value, nextMask = maskImage.value): number {
+  return [
+    ...nextReferences.map((item) => item.data_url),
+    ...(nextMask ? [nextMask.data_url] : []),
+  ].reduce((sum, dataURL) => sum + imageDataURLByteSize(dataURL), 0)
+}
+
+function validateImageReferenceSize(byteSize: number): boolean {
+  if (byteSize > IMAGE_REFERENCE_MAX_BYTES) {
+    errorMessage.value = '单张参考图最大 8MiB。'
+    return false
+  }
+  if (imageReferenceTotalBytes() + byteSize > IMAGE_REFERENCE_TOTAL_MAX_BYTES) {
+    errorMessage.value = '参考图总大小最大 32MiB。'
+    return false
+  }
+  return true
+}
+
+function addReferenceImage(reference: WebConsoleImageReference, byteSize = imageDataURLByteSize(reference.data_url)): boolean {
+  if (!reference.data_url) return false
+  const exists = referenceImages.value.some((item) => item.data_url === reference.data_url)
+  if (exists) return true
+  if (!validateImageReferenceSize(byteSize)) return false
+  activeMode.value = 'image'
+  imageTaskMode.value = 'edit'
+  referenceImages.value.push(reference)
+  return true
+}
+
+async function addReferenceFiles(files: File[]): Promise<void> {
+  const imageFiles = files.filter(isImageFile)
+  if (imageFiles.length === 0) return
+  errorMessage.value = ''
+  for (const file of imageFiles.slice(0, 8 - referenceImages.value.length)) {
+    if (!validateImageReferenceSize(file.size)) return
+    addReferenceImage({
+      data_url: await fileToDataURL(file),
+      name: file.name,
+    }, file.size)
+  }
+}
+
+async function handleReferenceFilesChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  await addReferenceFiles(Array.from(input.files || []))
+  input.value = ''
+}
+
+async function handleMaskFileChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = Array.from(input.files || []).find(isImageFile)
+  input.value = ''
+  if (!file) return
+  if (file.type !== 'image/png' && !/\.png$/i.test(file.name)) {
+    errorMessage.value = '蒙版必须使用 PNG 图片。'
+    return
+  }
+  if (file.size > IMAGE_REFERENCE_MAX_BYTES) {
+    errorMessage.value = '单张参考图最大 8MiB。'
+    return
+  }
+  if (imageReferenceTotalBytes(referenceImages.value, null) + file.size > IMAGE_REFERENCE_TOTAL_MAX_BYTES) {
+    errorMessage.value = '参考图总大小最大 32MiB。'
+    return
+  }
+  errorMessage.value = ''
+  activeMode.value = 'image'
+  imageTaskMode.value = 'edit'
+  maskImage.value = {
+    data_url: await fileToDataURL(file),
+    name: file.name,
+  }
+}
+
+function removeReferenceImage(index: number): void {
+  referenceImages.value.splice(index, 1)
+  if (referenceImages.value.length === 0 && !maskImage.value && imageTaskMode.value === 'edit') {
+    imageTaskMode.value = 'generate'
+  }
+}
+
+function removeMaskImage(): void {
+  maskImage.value = null
+  if (referenceImages.value.length === 0 && imageTaskMode.value === 'edit') {
+    imageTaskMode.value = 'generate'
+  }
+}
+
+async function handlePromptPaste(event: ClipboardEvent): Promise<void> {
+  if (activeMode.value !== 'image') return
+  const files = Array.from(event.clipboardData?.files || []).filter(isImageFile)
+  if (files.length === 0) return
+  event.preventDefault()
+  await addReferenceFiles(files)
 }
 
 function formatSessionTime(value: string): string {
@@ -582,12 +851,21 @@ function isImageGenerationInProgress(message: WebConsoleMessage): boolean {
 
 async function createImageTaskForMessage(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!selectedKey.value || !message.imageRequest) return
+  const editPayload = message.imageRequest.mode === 'edit' ? pendingImageEditPayloads.get(message.id) : null
+  const referenceImagePayload = editPayload?.referenceImages || message.imageRequest.referenceImages || []
+  const maskImagePayload = editPayload ? editPayload.maskImage : (message.imageRequest.maskImage || null)
+  if (message.imageRequest.mode === 'edit' && referenceImagePayload.length === 0) {
+    throw new Error('该编辑请求的参考图只保存在本页内，刷新后无法重新生成，请重新添加参考图后再编辑。')
+  }
   const { task } = await webConsoleImageTasksAPI.create({
     api_key_id: selectedKey.value.id,
     endpoint: selectedEndpoint.value,
+    mode: message.imageRequest.mode || 'generate',
     model: message.imageRequest.model,
     prompt: message.imageRequest.prompt,
     options: message.imageRequest.options,
+    reference_images: referenceImagePayload,
+    mask_image: maskImagePayload,
     session_id: session.id,
     message_id: message.id,
   })
@@ -685,6 +963,23 @@ async function downloadImage(image: WebConsoleImage, message: WebConsoleMessage,
   }
 }
 
+async function useImageAsReference(image: WebConsoleImage, message: WebConsoleMessage, index: number): Promise<void> {
+  try {
+    let dataURL = image.url
+    if (!dataURL.startsWith('data:image/')) {
+      const response = await fetch(image.url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      dataURL = await fileToDataURL(await response.blob())
+    }
+    addReferenceImage({
+      data_url: dataURL,
+      name: `${imageLabel(message, index)}.${imageFileExtension(image, message.imageRequest)}`,
+    })
+  } catch (error) {
+    errorMessage.value = webConsoleErrorMessage(error)
+  }
+}
+
 async function regenerateImage(message: WebConsoleMessage): Promise<void> {
   if (submitting.value || !selectedKey.value || !message.imageRequest || isImageGenerationInProgress(message)) return
   errorMessage.value = ''
@@ -714,6 +1009,10 @@ async function submit(): Promise<void> {
     errorMessage.value = keyCompatibilityMessage.value || '当前端点没有可用 API Key。'
     return
   }
+  if (activeMode.value === 'image' && imageTaskMode.value === 'edit' && referenceImages.value.length === 0) {
+    errorMessage.value = '编辑模式需要至少添加一张参考图。'
+    return
+  }
   if (!canSubmit.value || submitting.value || !selectedKey.value) return
   const chatTools = activeMode.value === 'chat' ? defaultChatTools() : []
   const toolChoice = chatTools.length > 0 ? 'auto' : undefined
@@ -736,6 +1035,7 @@ async function submit(): Promise<void> {
   try {
     if (activeMode.value === 'image') {
       const imageRequest = createImageRequest(input)
+      const editPayload = currentImageEditPayload()
       const assistantMessage: WebConsoleMessage = {
         id: createWebConsoleMessageId(),
         role: 'assistant',
@@ -744,6 +1044,9 @@ async function submit(): Promise<void> {
         imageRequest,
         status: 'pending',
         created_at: new Date().toISOString(),
+      }
+      if (imageRequest.mode === 'edit') {
+        pendingImageEditPayloads.set(assistantMessage.id, editPayload)
       }
       session.messages.push(assistantMessage)
       touchSession(session)

@@ -1,12 +1,15 @@
 import { apiClient } from './client'
-import type { WebConsoleImageOptions } from '@/features/web-console/types'
+import type { WebConsoleImageOptions, WebConsoleImageReference, WebConsoleImageTaskMode } from '@/features/web-console/types'
 
 export interface CreateWebConsoleImageTaskRequest {
   api_key_id: number
   endpoint: string
+  mode?: WebConsoleImageTaskMode
   model: string
   prompt: string
   options: WebConsoleImageOptions
+  reference_images?: WebConsoleImageReference[]
+  mask_image?: WebConsoleImageReference | null
   session_id?: string
   message_id?: string
 }

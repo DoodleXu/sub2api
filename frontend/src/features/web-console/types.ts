@@ -2,7 +2,14 @@ export type WebConsoleRole = 'user' | 'assistant'
 
 export type WebConsoleMode = 'chat' | 'image'
 
+export type WebConsoleImageTaskMode = 'generate' | 'edit'
+
 export type WebConsoleResponseMode = 'responses'
+
+export interface WebConsoleImageReference {
+  data_url: string
+  name?: string
+}
 
 export interface WebConsoleImageOptions {
   size: string
@@ -10,6 +17,9 @@ export interface WebConsoleImageOptions {
   background: string
   outputFormat: string
   count: number
+  ratio?: string
+  outputCompression?: number | null
+  inputFidelity?: string
 }
 
 export interface WebConsoleImage {
@@ -62,6 +72,9 @@ export interface WebConsoleImageResult {
 
 export interface WebConsoleImageRequest {
   prompt: string
+  mode?: WebConsoleImageTaskMode
   model: string
   options: WebConsoleImageOptions
+  referenceImages?: WebConsoleImageReference[]
+  maskImage?: WebConsoleImageReference | null
 }

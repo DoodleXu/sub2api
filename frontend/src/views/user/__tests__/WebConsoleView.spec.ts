@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import WebConsoleView from '../WebConsoleView.vue'
-import { saveWebConsoleSessions } from '@/features/web-console/storage'
+import { loadWebConsoleSessions, saveWebConsoleSessions } from '@/features/web-console/storage'
 import type { WebConsoleSession } from '@/features/web-console/types'
 
 const keysListMock = vi.hoisted(() => vi.fn())
@@ -200,7 +200,7 @@ describe('WebConsoleView', () => {
 
     await openSelect(wrapper, '切换会话')
     const remainingSessions = selectOptionTexts().join('\n')
-    expect(remainingSessions).not.toContain('新生图会话')
+    expect(remainingSessions).not.toContain('创建新会话')
     expect(remainingSessions).toContain('海报会话')
     await wrapper.get('button[aria-label="切换会话"]').trigger('click')
   })
@@ -431,6 +431,176 @@ describe('WebConsoleView', () => {
       endpoint: 'https://api.example.com',
       model: 'gpt-5.5',
       prompt: '画一只猫',
+    }))
+  })
+
+  it('编辑模式上传参考图和蒙版后通过 Responses 任务接口提交 reference_images 与 mask_image', async () => {
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 101,
+        status: 'completed',
+        assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 101,
+      status: 'completed',
+      assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '编辑')!.trigger('click')
+    const fileInputs = wrapper.findAll('input[type="file"]')
+    const sourceFile = new File(['source-image'], 'source.png', { type: 'image/png' })
+    Object.defineProperty(fileInputs[0].element, 'files', { value: [sourceFile], configurable: true })
+    await fileInputs[0].trigger('change')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    const firstMaskFile = new File(['mask-image-old'], 'mask-old.png', { type: 'image/png' })
+    Object.defineProperty(fileInputs[1].element, 'files', { value: [firstMaskFile], configurable: true })
+    await fileInputs[1].trigger('change')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+    expect(wrapper.text()).toContain('mask-old.png')
+
+    await wrapper.get('button[title="移除蒙版"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('mask-old.png')
+
+    const maskFile = new File(['mask-image'], 'mask.png', { type: 'image/png' })
+    Object.defineProperty(fileInputs[1].element, 'files', { value: [maskFile], configurable: true })
+    await fileInputs[1].trigger('change')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('把背景换成海边')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'edit',
+      prompt: '把背景换成海边',
+      reference_images: [expect.objectContaining({
+        name: 'source.png',
+        data_url: expect.stringMatching(/^data:image\/png;base64,/),
+      })],
+      mask_image: expect.objectContaining({
+        name: 'mask.png',
+        data_url: expect.stringMatching(/^data:image\/png;base64,/),
+      }),
+      options: expect.objectContaining({
+        outputFormat: 'png',
+        outputCompression: null,
+      }),
+    }))
+    const saved = loadWebConsoleSessions()
+    const savedAssistant = saved[0].messages.find((message) => message.role === 'assistant')
+    expect(savedAssistant?.imageRequest?.mode).toBe('edit')
+    expect(savedAssistant?.imageRequest?.referenceImages).toEqual([])
+    expect(savedAssistant?.imageRequest?.maskImage).toBeNull()
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('c291cmNlLWltYWdl')
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('bWFzay1pbWFnZQ')
+  })
+
+  it('编辑模式没有参考图时阻止提交', async () => {
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '编辑')!.trigger('click')
+    await wrapper.get('textarea').setValue('只上传蒙版不应提交')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('编辑模式需要至少添加一张参考图。')
+    expect(createImageTaskMock).not.toHaveBeenCalled()
+  })
+
+  it('生图任务失败时展示上游失败提示', async () => {
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 103,
+        status: 'pending',
+        assets: [],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 103,
+      status: 'failed',
+      assets: [],
+      error_message: '上游生图服务暂时不可用：upstream_error: policy rejected',
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
+    await wrapper.get('textarea').setValue('画一张海报')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('生图失败：上游生图服务暂时不可用：upstream_error: policy rejected')
+  })
+
+  it('生成结果可以作为下一次编辑的参考图', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image',
+        title: '海报会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image',
+          role: 'assistant',
+          content: '已生成 1 张图片。',
+          images: [{ url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==', alt: '旧图' }],
+          imageRequest: {
+            prompt: '旧图',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'completed',
+          created_at: '2026-05-28T00:00:00.000Z',
+        }],
+      }),
+    ])
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 102,
+        status: 'completed',
+        assets: [{ url: 'data:image/png;base64,ZmFrZS0y', asset_index: 0 }],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 102,
+      status: 'completed',
+      assets: [{ url: 'data:image/png;base64,ZmFrZS0y', asset_index: 0 }],
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.get('button[title="用作参考图"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('改成夜景')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'edit',
+      prompt: '改成夜景',
+      reference_images: [expect.objectContaining({
+        data_url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==',
+      })],
     }))
   })
 

@@ -18,7 +18,7 @@ export function createWebConsoleSession(mode: WebConsoleMode): WebConsoleSession
   const now = nowIso()
   return {
     id: newId('session'),
-    title: mode === 'image' ? '新生图会话' : '新对话',
+    title: mode === 'image' ? '创建新会话' : '新对话',
     mode,
     messages: [],
     created_at: now,
@@ -38,6 +38,7 @@ export function loadWebConsoleSessions(): WebConsoleSession[] {
     if (!Array.isArray(parsed)) return []
     return parsed
       .filter((item) => typeof item?.id === 'string' && Array.isArray(item.messages))
+      .map(sanitizeSessionForStorage)
       .slice(0, MAX_SESSIONS)
   } catch {
     return []
@@ -47,12 +48,29 @@ export function loadWebConsoleSessions(): WebConsoleSession[] {
 export function saveWebConsoleSessions(sessions: WebConsoleSession[]): void {
   const normalized = sessions
     .map((session) => ({
-      ...session,
+      ...sanitizeSessionForStorage(session),
       updated_at: session.updated_at || nowIso(),
     }))
     .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
     .slice(0, MAX_SESSIONS)
   localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+}
+
+function sanitizeSessionForStorage(session: WebConsoleSession): WebConsoleSession {
+  return {
+    ...session,
+    messages: session.messages.map((message) => {
+      if (!message.imageRequest) return message
+      return {
+        ...message,
+        imageRequest: {
+          ...message.imageRequest,
+          referenceImages: [],
+          maskImage: null,
+        },
+      }
+    }),
+  }
 }
 
 export function titleFromPrompt(prompt: string, fallback: string): string {

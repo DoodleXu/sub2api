@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/png"
 	"io"
 	"mime"
 	"net/http"
@@ -41,6 +44,9 @@ const (
 	webConsoleCodexUserAgent                  = "codex_cli_rs/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color"
 	webConsoleCodexOriginator                 = "codex_cli_rs"
 	webConsoleCodexVersion                    = "0.125.0"
+	webConsoleImageReferenceMaxBytes          = 8 << 20
+	webConsoleImageReferenceTotalMaxBytes     = 32 << 20
+	webConsoleImageReferenceMaxCount          = 8
 )
 
 func NewWebConsoleImageTaskHandler(imageService *service.ImageGenerationArchiveService, apiKeyService *service.APIKeyService, settingService *service.SettingService) *WebConsoleImageTaskHandler {
@@ -48,33 +54,52 @@ func NewWebConsoleImageTaskHandler(imageService *service.ImageGenerationArchiveS
 }
 
 type createWebConsoleImageTaskRequest struct {
-	APIKeyID  int64           `json:"api_key_id"`
-	Model     string          `json:"model"`
-	Prompt    string          `json:"prompt"`
-	Options   json.RawMessage `json:"options"`
-	SessionID string          `json:"session_id"`
-	MessageID string          `json:"message_id"`
-	Endpoint  string          `json:"endpoint"`
+	APIKeyID        int64                      `json:"api_key_id"`
+	Mode            string                     `json:"mode"`
+	Model           string                     `json:"model"`
+	Prompt          string                     `json:"prompt"`
+	Options         json.RawMessage            `json:"options"`
+	SessionID       string                     `json:"session_id"`
+	MessageID       string                     `json:"message_id"`
+	Endpoint        string                     `json:"endpoint"`
+	ReferenceImages []webConsoleImageReference `json:"reference_images"`
+	MaskImage       *webConsoleImageReference  `json:"mask_image"`
+}
+
+type webConsoleImageReference struct {
+	DataURL string `json:"data_url"`
+	Name    string `json:"name,omitempty"`
 }
 
 type webConsoleImageTaskOptions struct {
-	Size         string `json:"size"`
-	Quality      string `json:"quality"`
-	Background   string `json:"background"`
-	OutputFormat string `json:"outputFormat"`
-	Count        int    `json:"count"`
+	Size              string `json:"size"`
+	Quality           string `json:"quality"`
+	Background        string `json:"background"`
+	OutputFormat      string `json:"outputFormat"`
+	Count             int    `json:"count"`
+	Ratio             string `json:"ratio"`
+	OutputCompression *int   `json:"outputCompression"`
+	InputFidelity     string `json:"inputFidelity"`
+}
+
+type webConsoleImageDataInfo struct {
+	MIMEType string
+	Bytes    []byte
 }
 
 type webConsoleImageTaskSnapshot struct {
-	Version          int             `json:"version"`
-	APIKeyID         int64           `json:"api_key_id"`
-	Model            string          `json:"model"`
-	Prompt           string          `json:"prompt"`
-	Options          json.RawMessage `json:"options,omitempty"`
-	SessionID        string          `json:"session_id,omitempty"`
-	MessageID        string          `json:"message_id,omitempty"`
-	Endpoint         string          `json:"endpoint"`
-	ResolvedEndpoint string          `json:"resolved_endpoint"`
+	Version          int                        `json:"version"`
+	APIKeyID         int64                      `json:"api_key_id"`
+	Mode             string                     `json:"mode,omitempty"`
+	Model            string                     `json:"model"`
+	Prompt           string                     `json:"prompt"`
+	Options          json.RawMessage            `json:"options,omitempty"`
+	SessionID        string                     `json:"session_id,omitempty"`
+	MessageID        string                     `json:"message_id,omitempty"`
+	Endpoint         string                     `json:"endpoint"`
+	ResolvedEndpoint string                     `json:"resolved_endpoint"`
+	ReferenceImages  []webConsoleImageReference `json:"reference_images,omitempty"`
+	MaskImage        *webConsoleImageReference  `json:"mask_image,omitempty"`
 }
 
 func (h *WebConsoleImageTaskHandler) Create(c *gin.Context) {
@@ -93,6 +118,10 @@ func (h *WebConsoleImageTaskHandler) Create(c *gin.Context) {
 	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.MessageID = strings.TrimSpace(req.MessageID)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
+	if err := normalizeWebConsoleImageTaskRequest(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	if req.APIKeyID <= 0 || req.Model == "" || req.Prompt == "" {
 		response.BadRequest(c, "api_key_id, model and prompt are required")
 		return
@@ -127,6 +156,7 @@ func (h *WebConsoleImageTaskHandler) Create(c *gin.Context) {
 	snapshot := webConsoleImageTaskSnapshot{
 		Version:          1,
 		APIKeyID:         req.APIKeyID,
+		Mode:             req.Mode,
 		Model:            req.Model,
 		Prompt:           req.Prompt,
 		Options:          normalizeWebConsoleOptionsRaw(req.Options),
@@ -134,6 +164,8 @@ func (h *WebConsoleImageTaskHandler) Create(c *gin.Context) {
 		MessageID:        req.MessageID,
 		Endpoint:         req.Endpoint,
 		ResolvedEndpoint: resolvedEndpoint,
+		ReferenceImages:  req.ReferenceImages,
+		MaskImage:        req.MaskImage,
 	}
 	requestJSON, err := json.Marshal(snapshot)
 	if err != nil {
@@ -342,13 +374,16 @@ func (h *WebConsoleImageTaskHandler) runWebConsoleImageTask(taskID, userID int64
 		return
 	}
 	req := createWebConsoleImageTaskRequest{
-		APIKeyID:  snapshot.APIKeyID,
-		Model:     snapshot.Model,
-		Prompt:    snapshot.Prompt,
-		Options:   snapshot.Options,
-		SessionID: snapshot.SessionID,
-		MessageID: snapshot.MessageID,
-		Endpoint:  snapshot.ResolvedEndpoint,
+		APIKeyID:        snapshot.APIKeyID,
+		Mode:            snapshot.Mode,
+		Model:           snapshot.Model,
+		Prompt:          snapshot.Prompt,
+		Options:         snapshot.Options,
+		SessionID:       snapshot.SessionID,
+		MessageID:       snapshot.MessageID,
+		Endpoint:        snapshot.ResolvedEndpoint,
+		ReferenceImages: snapshot.ReferenceImages,
+		MaskImage:       snapshot.MaskImage,
 	}
 	images, err := runWebConsoleImageRequests(ctx, req, apiKey.Key)
 	if err != nil {
@@ -468,6 +503,24 @@ func webConsoleTaskSnapshot(task *service.WebConsoleImageTask) (webConsoleImageT
 	snapshot.SessionID = strings.TrimSpace(snapshot.SessionID)
 	snapshot.MessageID = strings.TrimSpace(snapshot.MessageID)
 	snapshot.Options = normalizeWebConsoleOptionsRaw(snapshot.Options)
+	req := createWebConsoleImageTaskRequest{
+		APIKeyID:        snapshot.APIKeyID,
+		Mode:            snapshot.Mode,
+		Model:           snapshot.Model,
+		Prompt:          snapshot.Prompt,
+		Options:         snapshot.Options,
+		SessionID:       snapshot.SessionID,
+		MessageID:       snapshot.MessageID,
+		Endpoint:        snapshot.Endpoint,
+		ReferenceImages: snapshot.ReferenceImages,
+		MaskImage:       snapshot.MaskImage,
+	}
+	if err := normalizeWebConsoleImageTaskRequest(&req); err != nil {
+		return webConsoleImageTaskSnapshot{}, err
+	}
+	snapshot.Mode = req.Mode
+	snapshot.ReferenceImages = req.ReferenceImages
+	snapshot.MaskImage = req.MaskImage
 	return snapshot, nil
 }
 
@@ -478,6 +531,175 @@ func normalizeWebConsoleOptionsRaw(raw json.RawMessage) json.RawMessage {
 	copied := make(json.RawMessage, len(raw))
 	copy(copied, raw)
 	return copied
+}
+
+func normalizeWebConsoleImageTaskRequest(req *createWebConsoleImageTaskRequest) error {
+	if req == nil {
+		return fmt.Errorf("invalid image task request")
+	}
+	req.Mode = strings.TrimSpace(req.Mode)
+	switch req.Mode {
+	case "", "generate", "edit":
+	default:
+		return fmt.Errorf("mode must be generate or edit")
+	}
+	references, referenceInfos, err := normalizeWebConsoleImageReferences(req.ReferenceImages, "reference image")
+	if err != nil {
+		return err
+	}
+	req.ReferenceImages = references
+	totalBytes := webConsoleImageReferenceBytesTotal(referenceInfos)
+	var maskInfo *webConsoleImageDataInfo
+	if req.MaskImage != nil {
+		mask, maskInfos, err := normalizeWebConsoleImageReferences([]webConsoleImageReference{*req.MaskImage}, "mask image")
+		if err != nil {
+			return err
+		}
+		if len(mask) == 0 {
+			req.MaskImage = nil
+		} else {
+			req.MaskImage = &mask[0]
+			maskInfo = &maskInfos[0]
+			totalBytes += len(maskInfo.Bytes)
+		}
+	}
+	if totalBytes > webConsoleImageReferenceTotalMaxBytes {
+		return fmt.Errorf("reference images exceed max total size: %d bytes", totalBytes)
+	}
+	if req.Mode == "" {
+		req.Mode = "generate"
+	}
+	if len(req.ReferenceImages) > 0 || req.MaskImage != nil {
+		req.Mode = "edit"
+	}
+	if req.Mode == "edit" && len(req.ReferenceImages) == 0 {
+		return fmt.Errorf("edit mode requires at least one reference image")
+	}
+	if maskInfo != nil {
+		if err := validateWebConsoleMaskImage(referenceInfos[0], *maskInfo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeWebConsoleImageReferences(refs []webConsoleImageReference, label string) ([]webConsoleImageReference, []webConsoleImageDataInfo, error) {
+	if len(refs) > webConsoleImageReferenceMaxCount {
+		return nil, nil, fmt.Errorf("reference_images supports at most %d images", webConsoleImageReferenceMaxCount)
+	}
+	out := make([]webConsoleImageReference, 0, len(refs))
+	infos := make([]webConsoleImageDataInfo, 0, len(refs))
+	for _, ref := range refs {
+		ref.DataURL = strings.TrimSpace(ref.DataURL)
+		ref.Name = strings.TrimSpace(ref.Name)
+		if ref.DataURL == "" {
+			continue
+		}
+		info, err := decodeWebConsoleImageDataURL(ref.DataURL, label)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, ref)
+		infos = append(infos, info)
+	}
+	return out, infos, nil
+}
+
+func decodeWebConsoleImageDataURL(dataURL, label string) (webConsoleImageDataInfo, error) {
+	value := strings.TrimSpace(dataURL)
+	lower := strings.ToLower(value)
+	if !strings.HasPrefix(lower, "data:image/") {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s must be a data:image/* base64 URL", label)
+	}
+	comma := strings.Index(value, ",")
+	if comma < 0 {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s data URL is invalid", label)
+	}
+	meta := strings.ToLower(value[:comma])
+	if !strings.Contains(meta, ";base64") {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s must be base64 encoded", label)
+	}
+	mediaDescriptor := strings.TrimPrefix(strings.TrimSpace(meta), "data:")
+	mediaParts := strings.Split(mediaDescriptor, ";")
+	mimeType := strings.TrimSpace(mediaParts[0])
+	if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s must be a data:image/* base64 URL", label)
+	}
+	raw := strings.TrimSpace(value[comma+1:])
+	if raw == "" {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s data is empty", label)
+	}
+	raw = strings.TrimRight(raw, "=")
+	raw += strings.Repeat("=", (4-len(raw)%4)%4)
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s base64 is invalid", label)
+	}
+	if len(decoded) > webConsoleImageReferenceMaxBytes {
+		return webConsoleImageDataInfo{}, fmt.Errorf("%s exceeds max size: %d bytes", label, len(decoded))
+	}
+	return webConsoleImageDataInfo{MIMEType: mimeType, Bytes: decoded}, nil
+}
+
+func webConsoleImageReferenceBytesTotal(infos []webConsoleImageDataInfo) int {
+	total := 0
+	for _, info := range infos {
+		total += len(info.Bytes)
+	}
+	return total
+}
+
+func validateWebConsoleMaskImage(reference, mask webConsoleImageDataInfo) error {
+	if reference.MIMEType != "image/png" {
+		return fmt.Errorf("mask image requires the first reference image to be PNG")
+	}
+	if mask.MIMEType != "image/png" {
+		return fmt.Errorf("mask image must be PNG")
+	}
+	referenceConfig, referenceFormat, err := webConsoleDecodeImageConfig(reference.Bytes)
+	if err != nil {
+		return fmt.Errorf("reference image PNG is invalid")
+	}
+	maskConfig, maskFormat, err := webConsoleDecodeImageConfig(mask.Bytes)
+	if err != nil {
+		return fmt.Errorf("mask image PNG is invalid")
+	}
+	if referenceFormat != "png" || maskFormat != "png" {
+		return fmt.Errorf("mask image and first reference image must be PNG")
+	}
+	if referenceConfig.Width != maskConfig.Width || referenceConfig.Height != maskConfig.Height {
+		return fmt.Errorf("mask image must have the same dimensions as the first reference image")
+	}
+	if !webConsoleColorModelHasAlpha(maskConfig.ColorModel) {
+		return fmt.Errorf("mask image must include an alpha channel")
+	}
+	return nil
+}
+
+func webConsoleDecodeImageConfig(data []byte) (image.Config, string, error) {
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return image.Config{}, "", err
+	}
+	return config, strings.ToLower(strings.TrimSpace(format)), nil
+}
+
+func webConsoleColorModelHasAlpha(model color.Model) bool {
+	if model == nil {
+		return false
+	}
+	if palette, ok := model.(color.Palette); ok {
+		for _, entry := range palette {
+			_, _, _, alpha := entry.RGBA()
+			if alpha < 0xffff {
+				return true
+			}
+		}
+		return false
+	}
+	converted := model.Convert(color.NRGBA{R: 1, G: 2, B: 3, A: 0})
+	_, _, _, alpha := converted.RGBA()
+	return alpha == 0
 }
 
 func validateWebConsoleAPIKey(apiKey *service.APIKey) error {
@@ -591,6 +813,9 @@ func runSingleWebConsoleImageRequest(ctx context.Context, client *http.Client, e
 		}
 		return nil, fmt.Errorf("image task upstream failed: status %d", resp.StatusCode)
 	}
+	if detail := webConsoleResponsesTerminalErrorDetail(body); detail != "" {
+		return nil, fmt.Errorf("image task upstream failed: %s", detail)
+	}
 	collected := collectWebConsoleImageValues(body)
 	out := make([]service.ArchivedImageBytesInput, 0, len(collected))
 	for _, item := range collected {
@@ -620,12 +845,45 @@ func webConsoleImageTaskErrorMessage(err error) string {
 		return "生图任务超时，请稍后重试或减少张数。"
 	}
 	if strings.Contains(message, "image task upstream failed") {
+		if detail := webConsoleUserFacingUpstreamErrorDetail(message); detail != "" {
+			return "上游生图服务暂时不可用：" + detail
+		}
 		return "上游生图服务暂时不可用，请稍后重试。"
 	}
 	if strings.Contains(message, "Responses did not return any image") {
 		return "上游未返回图片，请稍后重试。"
 	}
 	return message
+}
+
+func webConsoleUserFacingUpstreamErrorDetail(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	const marker = "image task upstream failed:"
+	idx := strings.Index(message, marker)
+	if idx < 0 {
+		return ""
+	}
+	detail := strings.TrimSpace(message[idx+len(marker):])
+	if strings.HasPrefix(detail, "status ") {
+		parts := strings.SplitN(detail, ":", 2)
+		if len(parts) == 2 {
+			detail = strings.TrimSpace(parts[1])
+		} else {
+			return ""
+		}
+	}
+	if detail == "" {
+		return ""
+	}
+	const maxRunes = 180
+	runes := []rune(detail)
+	if len(runes) > maxRunes {
+		detail = string(runes[:maxRunes]) + "..."
+	}
+	return detail
 }
 
 func applyWebConsoleCodexRequestHeaders(req *http.Request) {
@@ -636,7 +894,7 @@ func applyWebConsoleCodexRequestHeaders(req *http.Request) {
 	req.Header.Set("originator", webConsoleCodexOriginator)
 	req.Header.Set("version", webConsoleCodexVersion)
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 }
 
 func webConsoleUpstreamErrorDetail(body []byte) string {
@@ -675,10 +933,109 @@ func webConsoleUpstreamErrorDetail(body []byte) string {
 	return trimmed
 }
 
+func webConsoleResponsesTerminalErrorDetail(body []byte) string {
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		return webConsoleTerminalErrorFromNode(decoded)
+	}
+	for _, event := range webConsoleSSEDataPayloads(body) {
+		if strings.EqualFold(event, "[DONE]") {
+			continue
+		}
+		var eventDecoded any
+		if err := json.Unmarshal([]byte(event), &eventDecoded); err != nil {
+			continue
+		}
+		if detail := webConsoleTerminalErrorFromNode(eventDecoded); detail != "" {
+			return detail
+		}
+	}
+	return ""
+}
+
+func webConsoleTerminalErrorFromNode(node any) string {
+	switch v := node.(type) {
+	case map[string]any:
+		eventType := strings.TrimSpace(fmt.Sprint(v["type"]))
+		switch eventType {
+		case "error":
+			if detail := webConsoleFormatErrorValue(v["error"]); detail != "" {
+				return detail
+			}
+			return strings.TrimSpace(fmt.Sprint(v["message"]))
+		case "response.failed", "response.incomplete":
+			if response, ok := v["response"].(map[string]any); ok {
+				if detail := webConsoleFormatErrorValue(response["error"]); detail != "" {
+					return detail
+				}
+				if status := strings.TrimSpace(fmt.Sprint(response["status"])); status != "" && status != "<nil>" {
+					return status
+				}
+			}
+			if detail := webConsoleFormatErrorValue(v["error"]); detail != "" {
+				return detail
+			}
+			return eventType
+		}
+		for _, child := range v {
+			if detail := webConsoleTerminalErrorFromNode(child); detail != "" {
+				return detail
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if detail := webConsoleTerminalErrorFromNode(child); detail != "" {
+				return detail
+			}
+		}
+	}
+	return ""
+}
+
+func webConsoleFormatErrorValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case map[string]any:
+		message := strings.TrimSpace(fmt.Sprint(v["message"]))
+		code := strings.TrimSpace(fmt.Sprint(v["code"]))
+		errorType := strings.TrimSpace(fmt.Sprint(v["type"]))
+		if message == "<nil>" {
+			message = ""
+		}
+		if code == "<nil>" {
+			code = ""
+		}
+		if errorType == "<nil>" {
+			errorType = ""
+		}
+		switch {
+		case code != "" && message != "":
+			return code + ": " + message
+		case errorType != "" && message != "":
+			return errorType + ": " + message
+		case message != "":
+			return message
+		case code != "":
+			return code
+		case errorType != "":
+			return errorType
+		}
+	}
+	return ""
+}
+
 func webConsoleImageResponsesPayload(req createWebConsoleImageTaskRequest, options webConsoleImageTaskOptions) map[string]any {
+	action := "generate"
+	if req.Mode == "edit" || len(req.ReferenceImages) > 0 || req.MaskImage != nil {
+		action = "edit"
+	}
+	prompt := appendWebConsoleRatioPromptInstruction(strings.TrimSpace(req.Prompt), options.Ratio)
 	tool := map[string]any{
-		"type":  "image_generation",
-		"model": "gpt-image-2",
+		"type":          "image_generation",
+		"action":        action,
+		"model":         "gpt-image-2",
+		"output_format": "png",
 	}
 	if strings.TrimSpace(options.Size) != "" {
 		tool["size"] = strings.TrimSpace(options.Size)
@@ -689,16 +1046,84 @@ func webConsoleImageResponsesPayload(req createWebConsoleImageTaskRequest, optio
 	if strings.TrimSpace(options.Background) != "" && strings.TrimSpace(options.Background) != "transparent" {
 		tool["background"] = strings.TrimSpace(options.Background)
 	}
-	if strings.TrimSpace(options.OutputFormat) != "" && strings.TrimSpace(options.OutputFormat) != "png" {
-		tool["output_format"] = strings.TrimSpace(options.OutputFormat)
+	outputFormat := strings.TrimSpace(options.OutputFormat)
+	if outputFormat != "" {
+		tool["output_format"] = outputFormat
 	}
-	return map[string]any{
-		"model":       strings.TrimSpace(req.Model),
-		"input":       strings.TrimSpace(req.Prompt),
-		"tools":       []any{tool},
-		"tool_choice": map[string]any{"type": "image_generation"},
-		"stream":      false,
+	if options.OutputCompression != nil && webConsoleImageFormatSupportsCompression(outputFormat) {
+		tool["output_compression"] = *options.OutputCompression
 	}
+	if req.MaskImage != nil && strings.TrimSpace(req.MaskImage.DataURL) != "" {
+		tool["input_image_mask"] = map[string]any{"image_url": strings.TrimSpace(req.MaskImage.DataURL)}
+	}
+
+	content := []any{
+		map[string]any{"type": "input_text", "text": prompt},
+	}
+	for _, image := range req.ReferenceImages {
+		if strings.TrimSpace(image.DataURL) == "" {
+			continue
+		}
+		content = append(content, map[string]any{
+			"type":      "input_image",
+			"image_url": strings.TrimSpace(image.DataURL),
+		})
+	}
+
+	tools := []any{tool}
+	var toolChoice any = map[string]any{"type": "image_generation"}
+	payload := map[string]any{
+		"model": strings.TrimSpace(req.Model),
+		"input": []any{
+			map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": content,
+			},
+		},
+		"tools":       tools,
+		"tool_choice": toolChoice,
+		"stream":      true,
+		"store":       false,
+	}
+	return payload
+}
+
+func webConsoleImageFormatSupportsCompression(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "jpeg", "jpg", "webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendWebConsoleRatioPromptInstruction(prompt, ratio string) string {
+	ratio = normalizeWebConsoleRatio(ratio)
+	if ratio == "" {
+		return prompt
+	}
+	instruction := "将宽高比设为 " + ratio
+	if strings.Contains(prompt, instruction) {
+		return strings.TrimSpace(prompt)
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return instruction
+	}
+	return strings.TrimSpace(prompt) + "\n\n" + instruction
+}
+
+func normalizeWebConsoleRatio(value string) string {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return ""
+	}
+	left, errLeft := strconv.Atoi(strings.TrimSpace(parts[0]))
+	right, errRight := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errLeft != nil || errRight != nil || left <= 0 || right <= 0 || left > 999 || right > 999 {
+		return ""
+	}
+	return strconv.Itoa(left) + ":" + strconv.Itoa(right)
 }
 
 func webConsoleHTTPClient() (*http.Client, error) {
@@ -849,13 +1274,73 @@ type webConsoleImageValue struct {
 }
 
 func collectWebConsoleImageValues(body []byte) []webConsoleImageValue {
-	var decoded any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil
+	seen := map[string]struct{}{}
+	addValues := func(values []webConsoleImageValue, out *[]webConsoleImageValue) {
+		for _, value := range values {
+			key := strings.TrimSpace(value.Base64)
+			if key == "" {
+				key = strings.TrimSpace(value.URL)
+			}
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			*out = append(*out, value)
+		}
 	}
 	out := make([]webConsoleImageValue, 0)
-	walkWebConsoleImageValues(decoded, &out)
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		values := make([]webConsoleImageValue, 0)
+		walkWebConsoleImageValues(decoded, &values)
+		addValues(values, &out)
+		return out
+	}
+	for _, event := range webConsoleSSEDataPayloads(body) {
+		if strings.EqualFold(event, "[DONE]") {
+			continue
+		}
+		var eventDecoded any
+		if err := json.Unmarshal([]byte(event), &eventDecoded); err != nil {
+			continue
+		}
+		values := make([]webConsoleImageValue, 0)
+		walkWebConsoleImageValues(eventDecoded, &values)
+		addValues(values, &out)
+	}
 	return out
+}
+
+func webConsoleSSEDataPayloads(body []byte) []string {
+	lines := strings.Split(string(body), "\n")
+	payloads := make([]string, 0)
+	current := make([]string, 0, 1)
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		payload := strings.TrimSpace(strings.Join(current, "\n"))
+		if payload != "" {
+			payloads = append(payloads, payload)
+		}
+		current = current[:0]
+	}
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "data:") {
+			current = append(current, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+		}
+	}
+	flush()
+	return payloads
 }
 
 func walkWebConsoleImageValues(node any, out *[]webConsoleImageValue) {
@@ -894,7 +1379,8 @@ func looksLikeBase64Image(s string) bool {
 	if idx := strings.Index(s, ","); idx >= 0 {
 		s = s[idx+1:]
 	}
-	s = strings.TrimRight(s, "=") + strings.Repeat("=", (4-len(s)%4)%4)
+	s = strings.TrimRight(s, "=")
+	s += strings.Repeat("=", (4-len(s)%4)%4)
 	_, err := base64.StdEncoding.DecodeString(s)
 	return err == nil
 }
@@ -905,7 +1391,8 @@ func imageValueToBytes(ctx context.Context, client *http.Client, value webConsol
 		if idx := strings.Index(raw, ","); idx >= 0 {
 			raw = raw[idx+1:]
 		}
-		raw = strings.TrimRight(raw, "=") + strings.Repeat("=", (4-len(raw)%4)%4)
+		raw = strings.TrimRight(raw, "=")
+		raw += strings.Repeat("=", (4-len(raw)%4)%4)
 		b, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
 			return nil, "", "", err
