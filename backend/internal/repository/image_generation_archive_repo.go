@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 type imageGenerationArchiveRepository struct {
@@ -175,6 +176,7 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 	query := `
 		WITH target_records AS (
 			SELECT id FROM image_generation_records
+			WHERE status IN ('completed', 'failed', 'skipped')
 		),
 		target_assets AS (
 			SELECT a.id, a.storage_key, r.storage_type
@@ -185,6 +187,7 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 		SELECT
 			(SELECT COUNT(*) FROM target_records) AS records_deleted,
 			(SELECT COUNT(*) FROM target_assets) AS assets_deleted,
+			COALESCE((SELECT json_agg(id) FROM target_records), '[]'::json) AS record_ids,
 			COALESCE(
 				(
 					SELECT json_agg(
@@ -199,10 +202,16 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 				'[]'::json
 			) AS asset_refs
 	`
+	var rawRecordIDs json.RawMessage
 	var rawRefs json.RawMessage
 	result := &service.ImageGenerationArchiveClearResult{}
-	if err := scanSingleRow(ctx, r.db, query, nil, &result.RecordsDeleted, &result.AssetsDeleted, &rawRefs); err != nil {
+	if err := scanSingleRow(ctx, r.db, query, nil, &result.RecordsDeleted, &result.AssetsDeleted, &rawRecordIDs, &rawRefs); err != nil {
 		return nil, err
+	}
+	if len(rawRecordIDs) > 0 {
+		if err := json.Unmarshal(rawRecordIDs, &result.RecordIDs); err != nil {
+			return nil, err
+		}
 	}
 	if len(rawRefs) > 0 {
 		if err := json.Unmarshal(rawRefs, &result.AssetRefs); err != nil {
@@ -212,16 +221,20 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 	return result, nil
 }
 
-func (r *imageGenerationArchiveRepository) DeleteAllArchiveRecords(ctx context.Context) (int64, error) {
+func (r *imageGenerationArchiveRepository) DeleteArchiveRecordsByID(ctx context.Context, recordIDs []int64) (int64, error) {
+	if len(recordIDs) == 0 {
+		return 0, nil
+	}
 	query := `
 		WITH deleted_records AS (
 			DELETE FROM image_generation_records
+			WHERE id = ANY($1)
 			RETURNING id
 		)
 		SELECT COUNT(*) FROM deleted_records
 	`
 	var deleted int64
-	if err := scanSingleRow(ctx, r.db, query, nil, &deleted); err != nil {
+	if err := scanSingleRow(ctx, r.db, query, []any{pq.Array(recordIDs)}, &deleted); err != nil {
 		return 0, err
 	}
 	return deleted, nil

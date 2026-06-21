@@ -51,7 +51,7 @@ type ImageGenerationArchiveRepository interface {
 	GetRecordByID(ctx context.Context, id int64) (*ImageGenerationRecord, []*ImageGenerationAsset, error)
 	ListRecords(ctx context.Context, params ImageGenerationRecordListParams) ([]*ImageGenerationRecord, *ImageGenerationRecordListResult, error)
 	ListAllArchiveStorageRefs(ctx context.Context) (*ImageGenerationArchiveClearResult, error)
-	DeleteAllArchiveRecords(ctx context.Context) (int64, error)
+	DeleteArchiveRecordsByID(ctx context.Context, recordIDs []int64) (int64, error)
 	ListDailyStats(ctx context.Context, params ImageGenerationRecordDailyStatsParams) ([]ImageGenerationDailyStat, error)
 	GetStorageStats(ctx context.Context) (ImageGenerationStorageStats, error)
 	CreateAsset(ctx context.Context, asset *ImageGenerationAsset) error
@@ -167,6 +167,7 @@ type ImageGenerationArchiveClearResult struct {
 	RecordsDeleted        int64                            `json:"records_deleted"`
 	AssetsDeleted         int64                            `json:"assets_deleted"`
 	StorageDeleteFailures int64                            `json:"storage_delete_failures"`
+	RecordIDs             []int64                          `json:"-"`
 	AssetRefs             []ImageGenerationAssetStorageRef `json:"-"`
 }
 
@@ -591,7 +592,7 @@ func (s *ImageGenerationArchiveService) ClearAllArchives(ctx context.Context) (*
 	if result.StorageDeleteFailures > 0 {
 		return result, nil
 	}
-	recordsDeleted, err := s.repo.DeleteAllArchiveRecords(ctx)
+	recordsDeleted, err := s.repo.DeleteArchiveRecordsByID(ctx, plan.RecordIDs)
 	if err != nil {
 		return nil, err
 	}

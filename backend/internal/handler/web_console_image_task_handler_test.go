@@ -628,7 +628,7 @@ func (r *webConsoleImageTaskRepoStub) ListAllArchiveStorageRefs(context.Context)
 	return &service.ImageGenerationArchiveClearResult{}, nil
 }
 
-func (r *webConsoleImageTaskRepoStub) DeleteAllArchiveRecords(context.Context) (int64, error) {
+func (r *webConsoleImageTaskRepoStub) DeleteArchiveRecordsByID(context.Context, []int64) (int64, error) {
 	return 0, nil
 }
 

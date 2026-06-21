@@ -58,6 +58,7 @@ type imageArchiveRepoStub struct {
 	records           []*ImageGenerationRecord
 	assets            []*ImageGenerationAsset
 	storageType       string
+	deletedRecordIDs  []int64
 	deleteRecordCalls int
 }
 
@@ -82,7 +83,19 @@ func (r *imageArchiveRepoStub) ListRecords(context.Context, ImageGenerationRecor
 
 func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*ImageGenerationArchiveClearResult, error) {
 	refs := make([]ImageGenerationAssetStorageRef, 0, len(r.assets))
+	targetRecordIDs := make(map[int64]struct{}, len(r.records))
+	recordIDs := make([]int64, 0, len(r.records))
+	for _, record := range r.records {
+		if record == nil || !isImageArchiveClearableStatus(record.Status) {
+			continue
+		}
+		targetRecordIDs[record.ID] = struct{}{}
+		recordIDs = append(recordIDs, record.ID)
+	}
 	for _, asset := range r.assets {
+		if _, ok := targetRecordIDs[asset.RecordID]; !ok {
+			continue
+		}
 		refs = append(refs, ImageGenerationAssetStorageRef{
 			ID:          asset.ID,
 			StorageKey:  asset.StorageKey,
@@ -90,18 +103,48 @@ func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*Imag
 		})
 	}
 	result := &ImageGenerationArchiveClearResult{
-		RecordsDeleted: int64(len(r.records)),
-		AssetsDeleted:  int64(len(r.assets)),
+		RecordsDeleted: int64(len(recordIDs)),
+		AssetsDeleted:  int64(len(refs)),
+		RecordIDs:      recordIDs,
 		AssetRefs:      refs,
 	}
 	return result, nil
 }
 
-func (r *imageArchiveRepoStub) DeleteAllArchiveRecords(context.Context) (int64, error) {
+func isImageArchiveClearableStatus(status string) bool {
+	switch status {
+	case "", "completed", "failed", "skipped":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *imageArchiveRepoStub) DeleteArchiveRecordsByID(_ context.Context, recordIDs []int64) (int64, error) {
 	r.deleteRecordCalls++
-	deleted := int64(len(r.records))
-	r.records = nil
-	r.assets = nil
+	r.deletedRecordIDs = append([]int64(nil), recordIDs...)
+	if len(recordIDs) == 0 {
+		return 0, nil
+	}
+	target := make(map[int64]struct{}, len(recordIDs))
+	for _, id := range recordIDs {
+		target[id] = struct{}{}
+	}
+	var remainingRecords []*ImageGenerationRecord
+	for _, record := range r.records {
+		if _, ok := target[record.ID]; !ok {
+			remainingRecords = append(remainingRecords, record)
+		}
+	}
+	var remainingAssets []*ImageGenerationAsset
+	for _, asset := range r.assets {
+		if _, ok := target[asset.RecordID]; !ok {
+			remainingAssets = append(remainingAssets, asset)
+		}
+	}
+	deleted := int64(len(r.records) - len(remainingRecords))
+	r.records = remainingRecords
+	r.assets = remainingAssets
 	return deleted, nil
 }
 
@@ -246,8 +289,8 @@ func TestClearAllArchivesDeletesRecordsAfterStorageCleanupSucceeds(t *testing.T)
 		records:     []*ImageGenerationRecord{{ID: 1}, {ID: 2}},
 		storageType: "local",
 		assets: []*ImageGenerationAsset{
-			{ID: 7, StorageKey: "2026/06/image-1.png"},
-			{ID: 8, StorageKey: "2026/06/image-2.png"},
+			{ID: 7, RecordID: 1, StorageKey: "2026/06/image-1.png"},
+			{ID: 8, RecordID: 2, StorageKey: "2026/06/image-2.png"},
 		},
 	}
 	storage := &imageArchiveStorageStub{}
@@ -262,6 +305,7 @@ func TestClearAllArchivesDeletesRecordsAfterStorageCleanupSucceeds(t *testing.T)
 	require.Zero(t, result.StorageDeleteFailures)
 	require.Equal(t, []string{"2026/06/image-1.png", "2026/06/image-2.png"}, storage.deleted)
 	require.Equal(t, 1, repo.deleteRecordCalls)
+	require.Equal(t, []int64{1, 2}, repo.deletedRecordIDs)
 	require.Empty(t, repo.records)
 	require.Empty(t, repo.assets)
 }
@@ -270,7 +314,7 @@ func TestClearAllArchivesKeepsRecordsWhenStorageCleanupFails(t *testing.T) {
 	repo := &imageArchiveRepoStub{
 		records:     []*ImageGenerationRecord{{ID: 1}},
 		storageType: "local",
-		assets:      []*ImageGenerationAsset{{ID: 7, StorageKey: "2026/06/image.png"}},
+		assets:      []*ImageGenerationAsset{{ID: 7, RecordID: 1, StorageKey: "2026/06/image.png"}},
 	}
 	storage := &imageArchiveStorageStub{deleteErr: errors.New("storage unavailable")}
 	svc := NewImageGenerationArchiveService(repo, &imageArchiveSettingRepoStub{}, nil, nil)
@@ -285,4 +329,33 @@ func TestClearAllArchivesKeepsRecordsWhenStorageCleanupFails(t *testing.T) {
 	require.Zero(t, repo.deleteRecordCalls)
 	require.Len(t, repo.records, 1)
 	require.Len(t, repo.assets, 1)
+}
+
+func TestClearAllArchivesSkipsRunningRecords(t *testing.T) {
+	repo := &imageArchiveRepoStub{
+		records: []*ImageGenerationRecord{
+			{ID: 1, Status: "completed"},
+			{ID: 2, Status: "running"},
+		},
+		storageType: "local",
+		assets: []*ImageGenerationAsset{
+			{ID: 7, RecordID: 1, StorageKey: "2026/06/done.png"},
+			{ID: 8, RecordID: 2, StorageKey: "2026/06/running.png"},
+		},
+	}
+	storage := &imageArchiveStorageStub{}
+	svc := NewImageGenerationArchiveService(repo, &imageArchiveSettingRepoStub{}, nil, nil)
+	svc.SetStorage(storage)
+
+	result, err := svc.ClearAllArchives(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.RecordsDeleted)
+	require.Equal(t, int64(1), result.AssetsDeleted)
+	require.Equal(t, []string{"2026/06/done.png"}, storage.deleted)
+	require.Equal(t, []int64{1}, repo.deletedRecordIDs)
+	require.Len(t, repo.records, 1)
+	require.Equal(t, int64(2), repo.records[0].ID)
+	require.Len(t, repo.assets, 1)
+	require.Equal(t, int64(8), repo.assets[0].ID)
 }

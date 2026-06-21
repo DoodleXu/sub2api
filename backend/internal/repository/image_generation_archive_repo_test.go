@@ -78,9 +78,9 @@ func TestImageGenerationArchiveRepositoryListAllArchiveStorageRefs(t *testing.T)
 	db, mock := newSQLMock(t)
 	repo := &imageGenerationArchiveRepository{db: db}
 
-	rows := sqlmock.NewRows([]string{"records_deleted", "assets_deleted", "asset_refs"}).
-		AddRow(int64(2), int64(1), []byte(`[{"id":7,"storage_key":"2026/06/image.png","storage_type":"local"}]`))
-	mock.ExpectQuery("WITH target_records AS").
+	rows := sqlmock.NewRows([]string{"records_deleted", "assets_deleted", "record_ids", "asset_refs"}).
+		AddRow(int64(2), int64(1), []byte(`[11,12]`), []byte(`[{"id":7,"storage_key":"2026/06/image.png","storage_type":"local"}]`))
+	mock.ExpectQuery("WHERE status IN \\('completed', 'failed', 'skipped'\\)").
 		WillReturnRows(rows)
 
 	result, err := repo.ListAllArchiveStorageRefs(context.Background())
@@ -88,23 +88,36 @@ func TestImageGenerationArchiveRepositoryListAllArchiveStorageRefs(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), result.RecordsDeleted)
 	require.Equal(t, int64(1), result.AssetsDeleted)
+	require.Equal(t, []int64{11, 12}, result.RecordIDs)
 	require.Equal(t, []service.ImageGenerationAssetStorageRef{
 		{ID: 7, StorageKey: "2026/06/image.png", StorageType: "local"},
 	}, result.AssetRefs)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestImageGenerationArchiveRepositoryDeleteAllArchiveRecords(t *testing.T) {
+func TestImageGenerationArchiveRepositoryDeleteArchiveRecordsByID(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &imageGenerationArchiveRepository{db: db}
 
 	rows := sqlmock.NewRows([]string{"count"}).AddRow(int64(2))
-	mock.ExpectQuery("WITH deleted_records AS").
+	mock.ExpectQuery("DELETE FROM image_generation_records\\s+WHERE id = ANY").
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
-	deleted, err := repo.DeleteAllArchiveRecords(context.Background())
+	deleted, err := repo.DeleteArchiveRecordsByID(context.Background(), []int64{11, 12})
 
 	require.NoError(t, err)
 	require.Equal(t, int64(2), deleted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageGenerationArchiveRepositoryDeleteArchiveRecordsByIDSkipsEmptyPlan(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &imageGenerationArchiveRepository{db: db}
+
+	deleted, err := repo.DeleteArchiveRecordsByID(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.Zero(t, deleted)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
