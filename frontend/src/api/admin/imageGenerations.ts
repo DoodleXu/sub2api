@@ -12,6 +12,8 @@ export interface ImageGenerationAsset {
   sha256: string
   url: string
   admin_url: string
+  thumbnail_url?: string
+  thumbnail_admin_url?: string
   created_at: string
 }
 
@@ -50,6 +52,12 @@ export interface ImageGenerationStorageStats {
   total_bytes: number
 }
 
+export interface ImageGenerationArchiveClearResult {
+  records_deleted: number
+  assets_deleted: number
+  storage_delete_failures: number
+}
+
 export interface ImageArchiveStorageConfig {
   enabled: boolean
   type: 'local' | 's3'
@@ -85,6 +93,11 @@ export async function storageStats() {
   return data
 }
 
+export async function clearAllArchives() {
+  const { data } = await apiClient.delete<ImageGenerationArchiveClearResult>('/admin/image-generations')
+  return data
+}
+
 export async function getStorageConfig() {
   const { data } = await apiClient.get<ImageArchiveStorageConfig>('/admin/settings/image-archive-storage')
   return data
@@ -99,6 +112,7 @@ export const imageGenerationsAPI = {
   list,
   dailyStats,
   storageStats,
+  clearAllArchives,
   getStorageConfig,
   updateStorageConfig,
 }

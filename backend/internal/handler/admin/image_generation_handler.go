@@ -91,6 +91,15 @@ func (h *ImageGenerationHandler) StorageStats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
+func (h *ImageGenerationHandler) ClearAll(c *gin.Context) {
+	result, err := h.imageService.ClearAllArchives(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 func (h *ImageGenerationHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -151,11 +160,6 @@ func (h *ImageGenerationHandler) adminAssetResponses(assets []*service.ImageGene
 	out := make([]gin.H, 0, len(assets))
 	for _, asset := range assets {
 		adminURL := "/api/v1/admin/image-generations/assets/" + strconv.FormatInt(asset.ID, 10)
-		rawURL := "/api/v1/image-assets/" + strconv.FormatInt(asset.ID, 10)
-		url := rawURL
-		if h != nil && h.imageService != nil {
-			url = h.imageService.SignAssetURLPath(rawURL, asset.ID, service.ImageAssetScopeAdmin, time.Now().UTC())
-		}
 		out = append(out, gin.H{
 			"id":          asset.ID,
 			"record_id":   asset.RecordID,
@@ -166,7 +170,7 @@ func (h *ImageGenerationHandler) adminAssetResponses(assets []*service.ImageGene
 			"height":      asset.Height,
 			"bytes":       asset.Bytes,
 			"sha256":      asset.SHA256,
-			"url":         url,
+			"url":         adminURL,
 			"admin_url":   adminURL,
 			"created_at":  asset.CreatedAt,
 		})

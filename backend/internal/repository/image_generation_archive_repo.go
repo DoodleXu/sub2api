@@ -171,6 +171,62 @@ func (r *imageGenerationArchiveRepository) ListRecords(ctx context.Context, para
 	return items, imageRecordListResult(total, page, pageSize), nil
 }
 
+func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context.Context) (*service.ImageGenerationArchiveClearResult, error) {
+	query := `
+		WITH target_records AS (
+			SELECT id FROM image_generation_records
+		),
+		target_assets AS (
+			SELECT a.id, a.storage_key, r.storage_type
+			FROM image_generation_assets a
+			JOIN image_generation_records r ON r.id = a.record_id
+			WHERE r.id IN (SELECT id FROM target_records)
+		)
+		SELECT
+			(SELECT COUNT(*) FROM target_records) AS records_deleted,
+			(SELECT COUNT(*) FROM target_assets) AS assets_deleted,
+			COALESCE(
+				(
+					SELECT json_agg(
+						json_build_object(
+							'id', target_assets.id,
+							'storage_key', target_assets.storage_key,
+							'storage_type', target_assets.storage_type
+						)
+					)
+					FROM target_assets
+				),
+				'[]'::json
+			) AS asset_refs
+	`
+	var rawRefs json.RawMessage
+	result := &service.ImageGenerationArchiveClearResult{}
+	if err := scanSingleRow(ctx, r.db, query, nil, &result.RecordsDeleted, &result.AssetsDeleted, &rawRefs); err != nil {
+		return nil, err
+	}
+	if len(rawRefs) > 0 {
+		if err := json.Unmarshal(rawRefs, &result.AssetRefs); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (r *imageGenerationArchiveRepository) DeleteAllArchiveRecords(ctx context.Context) (int64, error) {
+	query := `
+		WITH deleted_records AS (
+			DELETE FROM image_generation_records
+			RETURNING id
+		)
+		SELECT COUNT(*) FROM deleted_records
+	`
+	var deleted int64
+	if err := scanSingleRow(ctx, r.db, query, nil, &deleted); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func imageRecordWhere(params service.ImageGenerationRecordListParams) (string, []any) {
 	var clauses []string
 	var args []any

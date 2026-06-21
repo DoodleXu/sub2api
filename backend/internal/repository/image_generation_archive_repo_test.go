@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,6 +68,41 @@ func TestImageGenerationArchiveRepositoryMarkWebConsoleTasksUserDeletedBySession
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	deleted, err := repo.MarkWebConsoleTasksUserDeletedBySessionID(context.Background(), 7, " session-1 ")
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageGenerationArchiveRepositoryListAllArchiveStorageRefs(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &imageGenerationArchiveRepository{db: db}
+
+	rows := sqlmock.NewRows([]string{"records_deleted", "assets_deleted", "asset_refs"}).
+		AddRow(int64(2), int64(1), []byte(`[{"id":7,"storage_key":"2026/06/image.png","storage_type":"local"}]`))
+	mock.ExpectQuery("WITH target_records AS").
+		WillReturnRows(rows)
+
+	result, err := repo.ListAllArchiveStorageRefs(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), result.RecordsDeleted)
+	require.Equal(t, int64(1), result.AssetsDeleted)
+	require.Equal(t, []service.ImageGenerationAssetStorageRef{
+		{ID: 7, StorageKey: "2026/06/image.png", StorageType: "local"},
+	}, result.AssetRefs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageGenerationArchiveRepositoryDeleteAllArchiveRecords(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &imageGenerationArchiveRepository{db: db}
+
+	rows := sqlmock.NewRows([]string{"count"}).AddRow(int64(2))
+	mock.ExpectQuery("WITH deleted_records AS").
+		WillReturnRows(rows)
+
+	deleted, err := repo.DeleteAllArchiveRecords(context.Background())
 
 	require.NoError(t, err)
 	require.Equal(t, int64(2), deleted)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -54,8 +55,10 @@ func TestArchiveImageBytesSyncRespectsDisabledStorage(t *testing.T) {
 }
 
 type imageArchiveRepoStub struct {
-	records []*ImageGenerationRecord
-	assets  []*ImageGenerationAsset
+	records           []*ImageGenerationRecord
+	assets            []*ImageGenerationAsset
+	storageType       string
+	deleteRecordCalls int
 }
 
 func (r *imageArchiveRepoStub) CreateRecord(_ context.Context, record *ImageGenerationRecord) error {
@@ -75,6 +78,31 @@ func (r *imageArchiveRepoStub) GetRecordByID(_ context.Context, id int64) (*Imag
 
 func (r *imageArchiveRepoStub) ListRecords(context.Context, ImageGenerationRecordListParams) ([]*ImageGenerationRecord, *ImageGenerationRecordListResult, error) {
 	return r.records, &ImageGenerationRecordListResult{}, nil
+}
+
+func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*ImageGenerationArchiveClearResult, error) {
+	refs := make([]ImageGenerationAssetStorageRef, 0, len(r.assets))
+	for _, asset := range r.assets {
+		refs = append(refs, ImageGenerationAssetStorageRef{
+			ID:          asset.ID,
+			StorageKey:  asset.StorageKey,
+			StorageType: defaultString(r.storageType, "local"),
+		})
+	}
+	result := &ImageGenerationArchiveClearResult{
+		RecordsDeleted: int64(len(r.records)),
+		AssetsDeleted:  int64(len(r.assets)),
+		AssetRefs:      refs,
+	}
+	return result, nil
+}
+
+func (r *imageArchiveRepoStub) DeleteAllArchiveRecords(context.Context) (int64, error) {
+	r.deleteRecordCalls++
+	deleted := int64(len(r.records))
+	r.records = nil
+	r.assets = nil
+	return deleted, nil
 }
 
 func (r *imageArchiveRepoStub) ListDailyStats(context.Context, ImageGenerationRecordDailyStatsParams) ([]ImageGenerationDailyStat, error) {
@@ -188,6 +216,8 @@ func (r *imageArchiveSettingRepoStub) Delete(_ context.Context, key string) erro
 
 type imageArchiveStorageStub struct {
 	saveCalls int
+	deleteErr error
+	deleted   []string
 }
 
 func (s *imageArchiveStorageStub) Save(context.Context, []byte, StoredImageMeta) (*StoredImage, error) {
@@ -201,4 +231,58 @@ func (s *imageArchiveStorageStub) ResolveURL(context.Context, *StoredImage, bool
 
 func (s *imageArchiveStorageStub) Open(context.Context, string) (io.ReadCloser, string, error) {
 	return io.NopCloser(strings.NewReader("")), "image/png", nil
+}
+
+func (s *imageArchiveStorageStub) Delete(_ context.Context, storageKey string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	s.deleted = append(s.deleted, storageKey)
+	return nil
+}
+
+func TestClearAllArchivesDeletesRecordsAfterStorageCleanupSucceeds(t *testing.T) {
+	repo := &imageArchiveRepoStub{
+		records:     []*ImageGenerationRecord{{ID: 1}, {ID: 2}},
+		storageType: "local",
+		assets: []*ImageGenerationAsset{
+			{ID: 7, StorageKey: "2026/06/image-1.png"},
+			{ID: 8, StorageKey: "2026/06/image-2.png"},
+		},
+	}
+	storage := &imageArchiveStorageStub{}
+	svc := NewImageGenerationArchiveService(repo, &imageArchiveSettingRepoStub{}, nil, nil)
+	svc.SetStorage(storage)
+
+	result, err := svc.ClearAllArchives(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), result.RecordsDeleted)
+	require.Equal(t, int64(2), result.AssetsDeleted)
+	require.Zero(t, result.StorageDeleteFailures)
+	require.Equal(t, []string{"2026/06/image-1.png", "2026/06/image-2.png"}, storage.deleted)
+	require.Equal(t, 1, repo.deleteRecordCalls)
+	require.Empty(t, repo.records)
+	require.Empty(t, repo.assets)
+}
+
+func TestClearAllArchivesKeepsRecordsWhenStorageCleanupFails(t *testing.T) {
+	repo := &imageArchiveRepoStub{
+		records:     []*ImageGenerationRecord{{ID: 1}},
+		storageType: "local",
+		assets:      []*ImageGenerationAsset{{ID: 7, StorageKey: "2026/06/image.png"}},
+	}
+	storage := &imageArchiveStorageStub{deleteErr: errors.New("storage unavailable")}
+	svc := NewImageGenerationArchiveService(repo, &imageArchiveSettingRepoStub{}, nil, nil)
+	svc.SetStorage(storage)
+
+	result, err := svc.ClearAllArchives(context.Background())
+
+	require.NoError(t, err)
+	require.Zero(t, result.RecordsDeleted)
+	require.Zero(t, result.AssetsDeleted)
+	require.Equal(t, int64(1), result.StorageDeleteFailures)
+	require.Zero(t, repo.deleteRecordCalls)
+	require.Len(t, repo.records, 1)
+	require.Len(t, repo.assets, 1)
 }

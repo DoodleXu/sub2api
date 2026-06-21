@@ -6,10 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -17,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImageGenerationAdminAssetResponsesUseExpiringSignedPreviewURL(t *testing.T) {
+func TestImageGenerationAdminAssetResponsesUseDirectAdminAssetURL(t *testing.T) {
 	imageService := service.NewImageGenerationArchiveService(nil, nil, nil, &config.Config{})
 	h := &ImageGenerationHandler{imageService: imageService}
 
@@ -28,14 +26,7 @@ func TestImageGenerationAdminAssetResponsesUseExpiringSignedPreviewURL(t *testin
 	require.Len(t, assets, 1)
 	rawURL, ok := assets[0]["url"].(string)
 	require.True(t, ok)
-	parsed, err := url.Parse(rawURL)
-	require.NoError(t, err)
-	require.Equal(t, "/api/v1/image-assets/7", parsed.Path)
-	require.Equal(t, service.ImageAssetScopeAdmin, parsed.Query().Get("scope"))
-	require.Empty(t, parsed.Query().Get("v"))
-	require.NotEmpty(t, parsed.Query().Get("expires"))
-	require.NotEmpty(t, parsed.Query().Get("sig"))
-	require.True(t, imageService.VerifyAssetToken(7, parsed.Query().Get("scope"), parsed.Query().Get("expires"), parsed.Query().Get("sig"), time.Now().UTC()))
+	require.Equal(t, "/api/v1/admin/image-generations/assets/7", rawURL)
 	require.Equal(t, "/api/v1/admin/image-generations/assets/7", assets[0]["admin_url"])
 }
 

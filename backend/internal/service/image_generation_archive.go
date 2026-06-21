@@ -50,6 +50,8 @@ type ImageGenerationArchiveRepository interface {
 	UpdateRecord(ctx context.Context, record *ImageGenerationRecord) error
 	GetRecordByID(ctx context.Context, id int64) (*ImageGenerationRecord, []*ImageGenerationAsset, error)
 	ListRecords(ctx context.Context, params ImageGenerationRecordListParams) ([]*ImageGenerationRecord, *ImageGenerationRecordListResult, error)
+	ListAllArchiveStorageRefs(ctx context.Context) (*ImageGenerationArchiveClearResult, error)
+	DeleteAllArchiveRecords(ctx context.Context) (int64, error)
 	ListDailyStats(ctx context.Context, params ImageGenerationRecordDailyStatsParams) ([]ImageGenerationDailyStat, error)
 	GetStorageStats(ctx context.Context) (ImageGenerationStorageStats, error)
 	CreateAsset(ctx context.Context, asset *ImageGenerationAsset) error
@@ -161,6 +163,19 @@ type ImageGenerationStorageStats struct {
 	TotalBytes int64 `json:"total_bytes"`
 }
 
+type ImageGenerationArchiveClearResult struct {
+	RecordsDeleted        int64                            `json:"records_deleted"`
+	AssetsDeleted         int64                            `json:"assets_deleted"`
+	StorageDeleteFailures int64                            `json:"storage_delete_failures"`
+	AssetRefs             []ImageGenerationAssetStorageRef `json:"-"`
+}
+
+type ImageGenerationAssetStorageRef struct {
+	ID          int64  `json:"id"`
+	StorageKey  string `json:"storage_key"`
+	StorageType string `json:"storage_type"`
+}
+
 type ImageGenerationRecordDailyStatsParams struct {
 	StartDate time.Time
 	EndDate   time.Time
@@ -170,6 +185,7 @@ type ImageGenerationStorage interface {
 	Save(ctx context.Context, imageBytes []byte, meta StoredImageMeta) (*StoredImage, error)
 	ResolveURL(ctx context.Context, stored *StoredImage, download bool) string
 	Open(ctx context.Context, storageKey string) (io.ReadCloser, string, error)
+	Delete(ctx context.Context, storageKey string) error
 }
 
 type StoredImageMeta struct {
@@ -256,6 +272,17 @@ func (s *localImageArchiveStorage) Open(_ context.Context, storageKey string) (i
 	return file, mime.TypeByExtension(filepath.Ext(path)), nil
 }
 
+func (s *localImageArchiveStorage) Delete(_ context.Context, storageKey string) error {
+	path, err := safeLocalImageArchivePath(s.baseDir, storageKey)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 type s3ImageArchiveStorage struct {
 	client        *s3.Client
 	bucket        string
@@ -338,6 +365,21 @@ func (s *s3ImageArchiveStorage) Open(ctx context.Context, storageKey string) (io
 		contentType = strings.TrimSpace(*out.ContentType)
 	}
 	return out.Body, contentType, nil
+}
+
+func (s *s3ImageArchiveStorage) Delete(ctx context.Context, storageKey string) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("s3 image archive storage is not configured")
+	}
+	key := strings.TrimLeft(strings.TrimSpace(storageKey), "/")
+	if key == "" || strings.Contains(key, "..") {
+		return fmt.Errorf("invalid s3 image archive key")
+	}
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	return err
 }
 
 func (s *s3ImageArchiveStorage) publicURLForKey(key string) string {
@@ -520,6 +562,42 @@ func (s *ImageGenerationArchiveService) ListDailyStats(ctx context.Context, para
 
 func (s *ImageGenerationArchiveService) GetStorageStats(ctx context.Context) (ImageGenerationStorageStats, error) {
 	return s.repo.GetStorageStats(ctx)
+}
+
+func (s *ImageGenerationArchiveService) ClearAllArchives(ctx context.Context) (*ImageGenerationArchiveClearResult, error) {
+	plan, err := s.repo.ListAllArchiveStorageRefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return &ImageGenerationArchiveClearResult{}, nil
+	}
+	result := &ImageGenerationArchiveClearResult{}
+	for _, ref := range plan.AssetRefs {
+		if strings.TrimSpace(ref.StorageKey) == "" {
+			continue
+		}
+		storage, err := s.storageForType(ctx, ref.StorageType)
+		if err != nil {
+			result.StorageDeleteFailures++
+			continue
+		}
+		if err := storage.Delete(ctx, ref.StorageKey); err != nil {
+			result.StorageDeleteFailures++
+			continue
+		}
+		result.AssetsDeleted++
+	}
+	if result.StorageDeleteFailures > 0 {
+		return result, nil
+	}
+	recordsDeleted, err := s.repo.DeleteAllArchiveRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result.RecordsDeleted = recordsDeleted
+	result.AssetsDeleted = plan.AssetsDeleted
+	return result, nil
 }
 
 func (s *ImageGenerationArchiveService) GetAssetByID(ctx context.Context, id int64) (*ImageGenerationAsset, *ImageGenerationRecord, error) {
@@ -733,6 +811,29 @@ func (s *ImageGenerationArchiveService) storageForCurrentConfig(ctx context.Cont
 		return nil, err
 	}
 	return storage, nil
+}
+
+func (s *ImageGenerationArchiveService) storageForType(ctx context.Context, storageType string) (ImageGenerationStorage, error) {
+	if s == nil {
+		return nil, fmt.Errorf("image archive service is not configured")
+	}
+	cfg, err := s.GetStorageConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	requestedType := strings.ToLower(strings.TrimSpace(storageType))
+	if requestedType == "" {
+		requestedType = "local"
+	}
+	currentType := strings.ToLower(strings.TrimSpace(cfg.Type))
+	if currentType == "" {
+		currentType = "local"
+	}
+	if s.storage != nil && requestedType == currentType {
+		return s.storage, nil
+	}
+	cfg.Type = requestedType
+	return s.storageFromConfig(ctx, cfg)
 }
 
 func (s *ImageGenerationArchiveService) CreateWebConsoleTask(ctx context.Context, task *WebConsoleImageTask) error {
