@@ -581,6 +581,119 @@ describe('WebConsoleView', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
   })
 
+  it('进入创作台时只恢复当前会话图片且切回不重复创建 blob URL', async () => {
+    const cachedResponse = () => new Response(new Blob(['cached-png'], { type: 'image/png' }), {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    })
+    const cacheMatch = vi.fn().mockImplementation((key: string) => Promise.resolve(
+      key.includes('/7?') ? cachedResponse() : null
+    ))
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: cacheMatch,
+        put: vi.fn(),
+      }),
+    })
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const createObjectURL = vi.fn(() => 'blob:web-console-current-image')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true })
+    saveWebConsoleSessions([
+      session({
+        id: 'session-current',
+        title: '当前海报',
+        mode: 'image',
+        updated_at: '2026-05-28T00:02:00.000Z',
+        messages: [{
+          id: 'message-current',
+          role: 'assistant',
+          content: '已生成 1 张图片。',
+          created_at: '2026-05-28T00:00:00.000Z',
+          status: 'completed',
+          imageRequest: {
+            prompt: '当前图片',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          images: [{
+            url: '',
+            alt: '当前图片',
+            assetId: 7,
+            cacheKey: '/__sub2api_web_console_image_cache__/7?v=hash',
+          }],
+        }],
+      }),
+      session({
+        id: 'session-old',
+        title: '旧海报',
+        mode: 'image',
+        updated_at: '2026-05-28T00:01:00.000Z',
+        messages: [{
+          id: 'message-old',
+          role: 'assistant',
+          content: '已生成 1 张图片。',
+          created_at: '2026-05-28T00:00:00.000Z',
+          status: 'completed',
+          imageRequest: {
+            prompt: '旧图片',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          images: [{
+            url: '',
+            alt: '旧图片',
+            assetId: 8,
+            cacheKey: '/__sub2api_web_console_image_cache__/8?v=hash',
+          }],
+        }],
+      }),
+    ])
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(cacheMatch).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/7?v=hash')
+    expect(cacheMatch).not.toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/8?v=hash')
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-current-image')
+
+    await openSelect(wrapper, '切换会话')
+    Array.from(document.body.querySelectorAll('[role="option"]'))
+      .find((option) => option.textContent?.trim() === '旧海报')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    await openSelect(wrapper, '切换会话')
+    Array.from(document.body.querySelectorAll('[role="option"]'))
+      .find((option) => option.textContent?.trim() === '当前海报')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    await flushPromises()
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:web-console-current-image')
+    Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectURL, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
+  })
+
   it('浏览器图片缓存写入失败时仍展示当前生成结果', async () => {
     const cachePut = vi.fn().mockRejectedValue(new Error('quota exceeded'))
     vi.stubGlobal('caches', {

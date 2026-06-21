@@ -407,6 +407,7 @@ const referenceFileInput = ref<HTMLInputElement | null>(null)
 const maskFileInput = ref<HTMLInputElement | null>(null)
 const deletingSessionIds = new Set<string>()
 const pollingImageTaskIds = new Set<number>()
+const restoringImageSessionIds = new Set<string>()
 const pendingImageEditPayloads = new Map<string, {
   referenceImages: WebConsoleImageReference[]
   maskImage: WebConsoleImageReference | null
@@ -755,11 +756,29 @@ function trackImageObjectURL(url: string): string {
   return url
 }
 
+function isTrackedRuntimeImageObjectURL(url?: string): boolean {
+  return Boolean(url && runtimeImageObjectURLs.has(url))
+}
+
+function revokeRuntimeImageObjectURL(url?: string): void {
+  if (!url || !runtimeImageObjectURLs.delete(url)) return
+  URL.revokeObjectURL(url)
+}
+
 function revokeRuntimeImageObjectURLs(): void {
   for (const url of runtimeImageObjectURLs) {
     URL.revokeObjectURL(url)
   }
   runtimeImageObjectURLs.clear()
+}
+
+function replaceMessageImages(message: WebConsoleMessage, images: WebConsoleImage[]): void {
+  const nextURLs = new Set(images.map((image) => image.url).filter(Boolean))
+  for (const image of message.images || []) {
+    if (nextURLs.has(image.url)) continue
+    revokeRuntimeImageObjectURL(image.url)
+  }
+  message.images = images
 }
 
 async function openImageCache(): Promise<Cache | null> {
@@ -836,6 +855,7 @@ async function materializeImageAsset(asset: WebConsoleImageTaskAsset, alt?: stri
 
 async function restoreCachedImage(image: WebConsoleImage): Promise<WebConsoleImage> {
   if (!image.cacheKey) return image
+  if (isTrackedRuntimeImageObjectURL(image.url) && !image.unavailable) return image
   const cached = await readCachedImage(image.cacheKey)
   if (!cached) {
     return { ...image, url: '', unavailable: true }
@@ -872,23 +892,23 @@ async function materializeTaskImages(assets: WebConsoleImageTaskAsset[], alt?: s
 }
 
 async function restoreCachedImagesForSession(session: WebConsoleSession): Promise<void> {
+  if (restoringImageSessionIds.has(session.id)) return
+  restoringImageSessionIds.add(session.id)
   let changed = false
-  for (const message of session.messages) {
-    if (!message.images?.length) continue
-    const restored = await Promise.all(message.images.map(restoreCachedImage))
-    if (restored.some((image, index) => image.url !== message.images?.[index]?.url || image.unavailable !== message.images?.[index]?.unavailable)) {
-      message.images = restored
-      changed = true
+  try {
+    for (const message of session.messages) {
+      if (!message.images?.length) continue
+      const restored = await Promise.all(message.images.map(restoreCachedImage))
+      if (restored.some((image, index) => image.url !== message.images?.[index]?.url || image.unavailable !== message.images?.[index]?.unavailable)) {
+        replaceMessageImages(message, restored)
+        changed = true
+      }
     }
-  }
-  if (changed) {
-    persistSessions()
-  }
-}
-
-async function restoreCachedImagesForAllSessions(): Promise<void> {
-  for (const session of sessions.value) {
-    await restoreCachedImagesForSession(session)
+    if (changed) {
+      persistSessions()
+    }
+  } finally {
+    restoringImageSessionIds.delete(session.id)
   }
 }
 
@@ -1044,8 +1064,9 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
       if (!task) return
       message.status = task.status
       if (task.status === 'completed') {
-        message.images = await materializeTaskImages(task.assets, message.imageRequest?.prompt)
-        message.content = assistantImageContent({ images: message.images })
+        const images = await materializeTaskImages(task.assets, message.imageRequest?.prompt)
+        replaceMessageImages(message, images)
+        message.content = assistantImageContent({ images })
         touchSession(session)
         await scrollToBottom()
         return
@@ -1184,7 +1205,7 @@ async function regenerateImage(message: WebConsoleMessage): Promise<void> {
 
   try {
     message.content = pendingImageContent()
-    message.images = []
+    replaceMessageImages(message, [])
     message.status = 'pending'
     message.imageTaskId = undefined
     message.created_at = new Date().toISOString()
@@ -1332,7 +1353,9 @@ onMounted(async () => {
   }
   applyDefaultEndpoint()
   await loadApiKeys()
-  await restoreCachedImagesForAllSessions()
+  if (currentSession.value) {
+    await restoreCachedImagesForSession(currentSession.value)
+  }
   resumeImageTasks()
 })
 
