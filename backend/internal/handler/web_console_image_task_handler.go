@@ -212,13 +212,20 @@ func (h *WebConsoleImageTaskHandler) Get(c *gin.Context) {
 		response.ErrorFrom(c, service.ErrWebConsoleImageTaskNotFound)
 		return
 	}
-	h.resumeWebConsoleImageTaskIfNeeded(task)
 	assets := []gin.H{}
 	if task.RecordID != nil {
 		if _, imageAssets, err := h.imageService.GetRecordByID(c.Request.Context(), *task.RecordID); err == nil {
+			if len(imageAssets) > 0 && task.Status != "completed" {
+				task.Status = "completed"
+				completed := time.Now().UTC()
+				task.CompletedAt = &completed
+				task.ErrorMessage = ""
+				_ = h.imageService.UpdateWebConsoleTask(c.Request.Context(), task)
+			}
 			assets = h.userAssetResponses(*task.RecordID, imageAssets)
 		}
 	}
+	h.resumeWebConsoleImageTaskIfNeeded(task)
 	response.Success(c, webConsoleTaskResponse(task, assets))
 }
 
@@ -276,7 +283,7 @@ func (h *WebConsoleImageTaskHandler) GetSignedAsset(c *gin.Context) {
 		return
 	}
 	scope := strings.TrimSpace(c.Query("scope"))
-	if scope != service.ImageAssetScopeWebConsole && scope != service.ImageAssetScopeAdmin {
+	if scope != service.ImageAssetScopeAdmin {
 		response.Unauthorized(c, "invalid image asset token")
 		return
 	}
@@ -458,11 +465,7 @@ func webConsoleTaskResponse(task *service.WebConsoleImageTask, assets []gin.H) g
 func (h *WebConsoleImageTaskHandler) userAssetResponses(recordID int64, assets []*service.ImageGenerationAsset) []gin.H {
 	out := make([]gin.H, 0, len(assets))
 	for _, asset := range assets {
-		rawURL := "/api/v1/image-assets/" + strconv.FormatInt(asset.ID, 10)
-		url := rawURL
-		if h != nil && h.imageService != nil {
-			url = h.imageService.SignStableAssetURLPath(rawURL, asset.ID, service.ImageAssetScopeWebConsole, imageAssetVersion(asset))
-		}
+		url := "/api/v1/web-console/image-tasks/assets/" + strconv.FormatInt(asset.ID, 10)
 		out = append(out, gin.H{
 			"id": asset.ID, "record_id": recordID, "asset_index": asset.AssetIndex, "mime_type": asset.MimeType,
 			"extension": asset.Extension, "width": asset.Width, "height": asset.Height, "bytes": asset.Bytes,

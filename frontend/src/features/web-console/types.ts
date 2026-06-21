@@ -25,6 +25,12 @@ export interface WebConsoleImageOptions {
 export interface WebConsoleImage {
   url: string
   alt?: string
+  assetId?: number
+  cacheKey?: string
+  sha256?: string
+  mimeType?: string
+  extension?: string
+  unavailable?: boolean
 }
 
 export interface WebConsoleMessage {

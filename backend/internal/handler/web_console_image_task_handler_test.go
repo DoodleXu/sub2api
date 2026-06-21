@@ -22,6 +22,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestWebConsoleAuthorizeEndpointRejectsRelativeAndCredentialURLs(t *testing.
 	require.ErrorContains(t, err, "credentials")
 }
 
-func TestWebConsoleUserAssetResponsesUseSignedPublicAssetURL(t *testing.T) {
+func TestWebConsoleUserAssetResponsesUseAuthenticatedAssetURL(t *testing.T) {
 	imageService := service.NewImageGenerationArchiveService(nil, nil, nil, &config.Config{})
 	h := &WebConsoleImageTaskHandler{imageService: imageService}
 
@@ -79,14 +80,7 @@ func TestWebConsoleUserAssetResponsesUseSignedPublicAssetURL(t *testing.T) {
 	require.Len(t, assets, 1)
 	rawURL, ok := assets[0]["url"].(string)
 	require.True(t, ok)
-	parsed, err := url.Parse(rawURL)
-	require.NoError(t, err)
-	require.Equal(t, "/api/v1/image-assets/7", parsed.Path)
-	require.Equal(t, service.ImageAssetScopeWebConsole, parsed.Query().Get("scope"))
-	require.Equal(t, "abc123", parsed.Query().Get("v"))
-	require.NotEmpty(t, parsed.Query().Get("expires"))
-	require.NotEmpty(t, parsed.Query().Get("sig"))
-	require.True(t, imageService.VerifyStableAssetToken(7, parsed.Query().Get("scope"), parsed.Query().Get("v"), parsed.Query().Get("expires"), parsed.Query().Get("sig"), time.Now().UTC()))
+	require.Equal(t, "/api/v1/web-console/image-tasks/assets/7", rawURL)
 }
 
 func TestGetSignedAssetRejectsBadStableTokenBeforeAssetLookup(t *testing.T) {
@@ -109,7 +103,7 @@ func TestGetSignedAssetRejectsBadStableTokenBeforeAssetLookup(t *testing.T) {
 func TestGetSignedAssetRejectsExpiredStableTokenBeforeAssetLookup(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	imageService := service.NewImageGenerationArchiveService(nil, nil, nil, &config.Config{})
-	signedURL := imageService.SignStableAssetURLPath("/api/v1/image-assets/7", 7, service.ImageAssetScopeWebConsole, "abc123")
+	signedURL := imageService.SignStableAssetURLPath("/api/v1/image-assets/7", 7, service.ImageAssetScopeAdmin, "abc123")
 	parsed, err := url.Parse(signedURL)
 	require.NoError(t, err)
 	query := parsed.Query()
@@ -133,7 +127,7 @@ func TestGetSignedAssetRejectsExpiredStableTokenBeforeAssetLookup(t *testing.T) 
 func TestGetSignedAssetVerifiesStableTokenVersionAfterAssetLookup(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	imageService := service.NewImageGenerationArchiveService(nil, nil, nil, &config.Config{})
-	signedURL := imageService.SignStableAssetURLPath("/api/v1/image-assets/7", 7, service.ImageAssetScopeWebConsole, "oldhash")
+	signedURL := imageService.SignStableAssetURLPath("/api/v1/image-assets/7", 7, service.ImageAssetScopeAdmin, "oldhash")
 	parsed, err := url.Parse(signedURL)
 	require.NoError(t, err)
 	repo := &webConsoleImageTaskRepoStub{
@@ -513,6 +507,51 @@ func TestFailTaskStoresTimeoutErrorMessage(t *testing.T) {
 	require.Equal(t, "生图任务超时，请稍后重试或减少张数。", repo.updated.ErrorMessage)
 }
 
+func TestWebConsoleGetTreatsArchivedAssetsAsCompleted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recordID := int64(55)
+	repo := &webConsoleImageTaskRepoStub{
+		task: &service.WebConsoleImageTask{
+			ID:           44,
+			UserID:       9,
+			Status:       "failed",
+			RecordID:     &recordID,
+			ErrorMessage: "previous polling error",
+		},
+		record: &service.ImageGenerationRecord{ID: recordID, UserID: ptrInt64ForWebConsoleTest(9)},
+		assets: []*service.ImageGenerationAsset{{
+			ID:         7,
+			RecordID:   recordID,
+			AssetIndex: 0,
+			MimeType:   "image/png",
+			Extension:  ".png",
+			SHA256:     "hash",
+		}},
+	}
+	h := &WebConsoleImageTaskHandler{
+		imageService: service.NewImageGenerationArchiveService(repo, nil, nil, &config.Config{}),
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Params = gin.Params{{Key: "id", Value: "44"}}
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/web-console/image-tasks/44", nil)
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 9})
+
+	h.Get(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, "completed", repo.updated.Status)
+	require.Empty(t, repo.updated.ErrorMessage)
+	require.NotNil(t, repo.updated.CompletedAt)
+	require.Contains(t, rec.Body.String(), `"/api/v1/web-console/image-tasks/assets/7"`)
+	require.Contains(t, rec.Body.String(), `"status":"completed"`)
+}
+
+func ptrInt64ForWebConsoleTest(v int64) *int64 {
+	return &v
+}
+
 func webConsoleTestContext() *gin.Context {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -559,6 +598,9 @@ func webConsoleTestPNGDataURL(t *testing.T, width, height int, withAlpha bool) s
 type webConsoleImageTaskRepoStub struct {
 	mu            sync.Mutex
 	updated       *service.WebConsoleImageTask
+	task          *service.WebConsoleImageTask
+	record        *service.ImageGenerationRecord
+	assets        []*service.ImageGenerationAsset
 	asset         *service.ImageGenerationAsset
 	getAssetCalls int
 }
@@ -571,12 +613,23 @@ func (r *webConsoleImageTaskRepoStub) UpdateRecord(context.Context, *service.Ima
 	return nil
 }
 
-func (r *webConsoleImageTaskRepoStub) GetRecordByID(context.Context, int64) (*service.ImageGenerationRecord, []*service.ImageGenerationAsset, error) {
+func (r *webConsoleImageTaskRepoStub) GetRecordByID(_ context.Context, id int64) (*service.ImageGenerationRecord, []*service.ImageGenerationAsset, error) {
+	if r.record != nil && r.record.ID == id {
+		return r.record, r.assets, nil
+	}
 	return nil, nil, service.ErrImageGenerationRecordNotFound
 }
 
 func (r *webConsoleImageTaskRepoStub) ListRecords(context.Context, service.ImageGenerationRecordListParams) ([]*service.ImageGenerationRecord, *service.ImageGenerationRecordListResult, error) {
 	return nil, nil, nil
+}
+
+func (r *webConsoleImageTaskRepoStub) ListAllArchiveStorageRefs(context.Context) (*service.ImageGenerationArchiveClearResult, error) {
+	return &service.ImageGenerationArchiveClearResult{}, nil
+}
+
+func (r *webConsoleImageTaskRepoStub) DeleteAllArchiveRecords(context.Context) (int64, error) {
+	return 0, nil
 }
 
 func (r *webConsoleImageTaskRepoStub) ListDailyStats(context.Context, service.ImageGenerationRecordDailyStatsParams) ([]service.ImageGenerationDailyStat, error) {
@@ -599,7 +652,10 @@ func (r *webConsoleImageTaskRepoStub) GetAssetByID(context.Context, int64) (*ser
 	return nil, nil, service.ErrImageGenerationRecordNotFound
 }
 
-func (r *webConsoleImageTaskRepoStub) ListAssetsByRecordID(context.Context, int64) ([]*service.ImageGenerationAsset, error) {
+func (r *webConsoleImageTaskRepoStub) ListAssetsByRecordID(_ context.Context, id int64) ([]*service.ImageGenerationAsset, error) {
+	if r.record != nil && r.record.ID == id {
+		return r.assets, nil
+	}
 	return nil, nil
 }
 
@@ -611,7 +667,11 @@ func (r *webConsoleImageTaskRepoStub) ClaimWebConsoleTask(context.Context, int64
 	return nil, false, nil
 }
 
-func (r *webConsoleImageTaskRepoStub) GetWebConsoleTaskByID(context.Context, int64) (*service.WebConsoleImageTask, error) {
+func (r *webConsoleImageTaskRepoStub) GetWebConsoleTaskByID(_ context.Context, id int64) (*service.WebConsoleImageTask, error) {
+	if r.task != nil && r.task.ID == id {
+		copied := *r.task
+		return &copied, nil
+	}
 	return nil, service.ErrWebConsoleImageTaskNotFound
 }
 

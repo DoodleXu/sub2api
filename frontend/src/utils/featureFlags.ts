@@ -107,7 +107,7 @@ export const FeatureFlags = {
   webConsole: defineFlag({
     key: 'web_console_enabled',
     mode: 'opt-in',
-    label: 'Web Console',
+    label: 'Creation Studio',
   }),
   payment: defineFlag({
     key: 'payment_enabled',

@@ -244,7 +244,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Web Console',
+      title: 'Creation Studio',
       titleKey: 'webConsole.title',
       descriptionKey: 'webConsole.description',
       requiresWebConsole: true

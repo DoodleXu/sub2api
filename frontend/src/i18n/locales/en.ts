@@ -394,7 +394,7 @@ export default {
     groups: 'Groups',
     channels: 'Channels',
     availableChannels: 'Available Channels',
-    webConsole: 'Web Console',
+    webConsole: 'Creation Studio',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
     proxies: 'Proxies',
@@ -1134,7 +1134,7 @@ export default {
   },
 
   webConsole: {
-    title: 'Web Console',
+    title: 'Creation Studio',
     description: 'Chat and generate images with your current API keys, subscription quota, or balance'
   },
 
@@ -5788,13 +5788,13 @@ export default {
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
         },
         webConsole: {
-          title: 'Web Console',
-          description: 'Allow users to chat and generate images in the browser with their own API key, subscription quota, or wallet balance. Sessions stay local to the browser.',
-          enabled: 'Enable Web Console',
+          title: 'Creation Studio',
+          description: 'Allow users to chat and generate images in the browser with their own API key, subscription quota, or wallet balance. Sessions and user-side image previews stay local to the browser.',
+          enabled: 'Enable Creation Studio',
           enabledHint: 'When off, the sidebar entry is hidden. Existing local sessions are not removed.',
           defaultEndpoint: 'Default API endpoint',
           defaultEndpointAuto: 'Auto-select the first available endpoint',
-          defaultEndpointHint: 'Preselects this endpoint in the Web Console. Users can still switch endpoints inside the page.',
+          defaultEndpointHint: 'Preselects this endpoint in the Creation Studio. Users can still switch endpoints inside the page.',
           primaryEndpoint: 'Primary endpoint',
           currentEndpoint: 'Current saved value - {endpoint}',
         },

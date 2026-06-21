@@ -46,7 +46,7 @@ function endpointUrl(base: string, path: string): string {
   const normalized = base.trim().replace(/\/+$/, '')
   if (!normalized) return path
   if (!isWebConsoleOpenAICompatibleEndpoint(normalized)) {
-    throw new WebConsoleRequestError('网页工作台当前只支持 OpenAI-compatible /v1 端点。请选择主端点或 /v1 兼容端点。', 400)
+    throw new WebConsoleRequestError('创作台当前只支持 OpenAI-compatible /v1 端点。请选择主端点或 /v1 兼容端点。', 400)
   }
   if (normalized.endsWith('/v1')) return `${normalized}${path}`
   return `${normalized}/v1${path}`

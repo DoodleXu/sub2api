@@ -394,7 +394,7 @@ export default {
     groups: '分组管理',
     channels: '渠道管理',
     availableChannels: '可用渠道',
-    webConsole: '网页工作台',
+    webConsole: '创作台',
     subscriptions: '订阅管理',
     accounts: '账号管理',
     proxies: 'IP管理',
@@ -1138,7 +1138,7 @@ export default {
   },
 
   webConsole: {
-    title: '网页工作台',
+    title: '创作台',
     description: '使用当前账户的 API Key、订阅额度或余额进行对话与生图'
   },
 
@@ -5948,13 +5948,13 @@ export default {
           enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。',
         },
         webConsole: {
-          title: '网页工作台',
-          description: '允许用户在网页端使用自己的 API Key、订阅额度或账户余额进行对话与生图。会话只保存在浏览器本地。',
-          enabled: '启用网页工作台',
+          title: '创作台',
+          description: '允许用户在网页端使用自己的 API Key、订阅额度或账户余额进行对话与生图。会话和用户侧图片预览只保存在浏览器本地。',
+          enabled: '启用创作台',
           enabledHint: '关闭后用户侧边栏入口隐藏，已有本地会话不会被删除。',
           defaultEndpoint: '默认 API 端点',
           defaultEndpointAuto: '自动选择第一个可用端点',
-          defaultEndpointHint: '用户进入网页工作台时默认选中的端点，仍可在页面内手动切换。',
+          defaultEndpointHint: '用户进入创作台时默认选中的端点，仍可在页面内手动切换。',
           primaryEndpoint: '主端点',
           currentEndpoint: '当前保存值 - {endpoint}',
         },

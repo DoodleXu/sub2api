@@ -60,9 +60,17 @@ function sanitizeSessionForStorage(session: WebConsoleSession): WebConsoleSessio
   return {
     ...session,
     messages: session.messages.map((message) => {
-      if (!message.imageRequest) return message
-      return {
+      const sanitized = {
         ...message,
+        images: message.images?.map((image) => ({
+          ...image,
+          url: image.cacheKey ? '' : image.url,
+          unavailable: image.cacheKey ? false : image.unavailable,
+        })),
+      }
+      if (!message.imageRequest) return sanitized
+      return {
+        ...sanitized,
         imageRequest: {
           ...message.imageRequest,
           referenceImages: [],

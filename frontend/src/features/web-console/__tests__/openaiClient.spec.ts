@@ -66,7 +66,7 @@ describe('web console openai client', () => {
       model: 'gpt-5.4',
       prompt: '你好',
       history: [],
-    })).rejects.toThrow('网页工作台当前只支持 OpenAI-compatible /v1 端点')
+    })).rejects.toThrow('创作台当前只支持 OpenAI-compatible /v1 端点')
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
