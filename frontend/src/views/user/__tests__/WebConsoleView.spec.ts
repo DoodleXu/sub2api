@@ -759,6 +759,13 @@ describe('WebConsoleView', () => {
   })
 
   it('编辑模式上传参考图和蒙版后通过 Responses 任务接口提交 reference_images 与 mask_image', async () => {
+    const cachePut = vi.fn()
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: vi.fn().mockResolvedValue(null),
+        put: cachePut,
+      }),
+    })
     createImageTaskMock.mockResolvedValue({
       task: {
         id: 101,
@@ -824,10 +831,160 @@ describe('WebConsoleView', () => {
     const saved = loadWebConsoleSessions()
     const savedAssistant = saved[0].messages.find((message) => message.role === 'assistant')
     expect(savedAssistant?.imageRequest?.mode).toBe('edit')
-    expect(savedAssistant?.imageRequest?.referenceImages).toEqual([])
-    expect(savedAssistant?.imageRequest?.maskImage).toBeNull()
+    expect(savedAssistant?.imageRequest?.referenceImages).toEqual([expect.objectContaining({
+      name: 'source.png',
+      data_url: '',
+      cacheKey: expect.stringContaining('/edit-references/'),
+    })])
+    expect(savedAssistant?.imageRequest?.maskImage).toEqual(expect.objectContaining({
+      name: 'mask.png',
+      data_url: '',
+      cacheKey: expect.stringContaining('/edit-references/'),
+    }))
+    expect(cachePut).toHaveBeenCalledWith(expect.stringContaining('/edit-references/'), expect.any(Response))
     expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('c291cmNlLWltYWdl')
     expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('bWFzay1pbWFnZQ')
+  })
+
+  it('刷新后可从浏览器缓存恢复编辑参考图并重新生成', async () => {
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: vi.fn(async (cacheKey: string) => {
+          if (cacheKey.includes('/reference/')) {
+            return new Response('source-image', { headers: { 'Content-Type': 'image/png' } })
+          }
+          if (cacheKey.includes('/mask/')) {
+            return new Response('mask-image', { headers: { 'Content-Type': 'image/png' } })
+          }
+          return null
+        }),
+        put: vi.fn(),
+      }),
+    })
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image',
+        title: '海报会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-refresh-retry',
+          role: 'assistant',
+          content: '生图失败：上游临时不可用',
+          images: [],
+          imageRequest: {
+            prompt: '把背景换成海边',
+            mode: 'edit',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+            referenceImages: [{
+              name: 'source.png',
+              data_url: '',
+              cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-refresh-retry/reference/0?name=source.png',
+            }],
+            maskImage: {
+              name: 'mask.png',
+              data_url: '',
+              cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-refresh-retry/mask/0?name=mask.png',
+            },
+          },
+          status: 'failed',
+          created_at: '2026-05-28T00:00:00.000Z',
+        }],
+      }),
+    ])
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 109,
+        status: 'completed',
+        assets: [{ url: 'data:image/png;base64,ZmFrZS0z', asset_index: 0 }],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 109,
+      status: 'completed',
+      assets: [{ url: 'data:image/png;base64,ZmFrZS0z', asset_index: 0 }],
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text().includes('重新生成'))!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+    await flushPromises()
+
+    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'edit',
+      prompt: '把背景换成海边',
+      reference_images: [expect.objectContaining({
+        name: 'source.png',
+        data_url: 'data:image/png;base64,c291cmNlLWltYWdl',
+      })],
+      mask_image: expect.objectContaining({
+        name: 'mask.png',
+        data_url: 'data:image/png;base64,bWFzay1pbWFnZQ==',
+      }),
+    }))
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('c291cmNlLWltYWdl')
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('bWFzay1pbWFnZQ')
+  })
+
+  it('刷新后编辑参考图缓存失效时不创建重新生成任务', async () => {
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: vi.fn().mockResolvedValue(null),
+        put: vi.fn(),
+      }),
+    })
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image',
+        title: '海报会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-cache-miss',
+          role: 'assistant',
+          content: '生图失败：上游临时不可用',
+          images: [],
+          imageRequest: {
+            prompt: '把背景换成海边',
+            mode: 'edit',
+            model: 'gpt-5.5',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+            referenceImages: [{
+              name: 'source.png',
+              data_url: '',
+              cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-cache-miss/reference/0?name=source.png',
+            }],
+            maskImage: null,
+          },
+          status: 'failed',
+          created_at: '2026-05-28T00:00:00.000Z',
+        }],
+      }),
+    ])
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text().includes('重新生成'))!.trigger('click')
+    await flushPromises()
+
+    expect(createImageTaskMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('该编辑请求的参考图缓存已失效，请重新添加参考图后再编辑。')
+    expect(wrapper.text()).toContain('生图失败：上游临时不可用')
   })
 
   it('编辑模式没有参考图时阻止提交', async () => {

@@ -9,6 +9,7 @@ export type WebConsoleResponseMode = 'responses'
 export interface WebConsoleImageReference {
   data_url: string
   name?: string
+  cacheKey?: string
 }
 
 export interface WebConsoleImageOptions {

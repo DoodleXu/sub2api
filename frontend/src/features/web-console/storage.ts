@@ -73,11 +73,19 @@ function sanitizeSessionForStorage(session: WebConsoleSession): WebConsoleSessio
         ...sanitized,
         imageRequest: {
           ...message.imageRequest,
-          referenceImages: [],
-          maskImage: null,
+          referenceImages: message.imageRequest.referenceImages?.map(sanitizeImageReferenceForStorage) || [],
+          maskImage: message.imageRequest.maskImage ? sanitizeImageReferenceForStorage(message.imageRequest.maskImage) : null,
         },
       }
     }),
+  }
+}
+
+function sanitizeImageReferenceForStorage(reference: { data_url: string; name?: string; cacheKey?: string }): { data_url: string; name?: string; cacheKey?: string } {
+  return {
+    name: reference.name,
+    cacheKey: reference.cacheKey,
+    data_url: '',
   }
 }
 

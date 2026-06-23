@@ -25,10 +25,12 @@ function imageSession(): WebConsoleSession {
         referenceImages: [{
           name: 'source.png',
           data_url: 'data:image/png;base64,c291cmNlLWltYWdl',
+          cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-image/reference/0?name=source.png',
         }],
         maskImage: {
           name: 'mask.png',
           data_url: 'data:image/png;base64,bWFzay1pbWFnZQ',
+          cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-image/mask/0?name=mask.png',
         },
       },
       status: 'pending',
@@ -54,7 +56,15 @@ describe('web console storage', () => {
     const [restored] = loadWebConsoleSessions()
     const imageRequest = restored.messages[0].imageRequest
     expect(imageRequest?.mode).toBe('edit')
-    expect(imageRequest?.referenceImages).toEqual([])
-    expect(imageRequest?.maskImage).toBeNull()
+    expect(imageRequest?.referenceImages).toEqual([{
+      name: 'source.png',
+      data_url: '',
+      cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-image/reference/0?name=source.png',
+    }])
+    expect(imageRequest?.maskImage).toEqual({
+      name: 'mask.png',
+      data_url: '',
+      cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-image/mask/0?name=mask.png',
+    })
   })
 })

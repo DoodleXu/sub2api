@@ -331,6 +331,41 @@ func TestNormalizeWebConsoleImageTaskRequestValidatesReferenceSizeAndMask(t *tes
 	require.ErrorContains(t, normalizeWebConsoleImageTaskRequest(&req), "same dimensions")
 }
 
+func TestWebConsoleTaskSnapshotRestoresEditReferencesAndMask(t *testing.T) {
+	source := webConsoleTestPNGDataURL(t, 2, 2, false)
+	mask := webConsoleTestPNGDataURL(t, 2, 2, true)
+	raw, err := json.Marshal(webConsoleImageTaskSnapshot{
+		Version:          1,
+		APIKeyID:         11,
+		Mode:             "edit",
+		Model:            "gpt-5.5",
+		Prompt:           "把背景换成海边",
+		Endpoint:         "https://api.example.com/v1",
+		ResolvedEndpoint: "https://api.example.com/v1",
+		ReferenceImages: []webConsoleImageReference{{
+			DataURL: source,
+			Name:    " source.png ",
+		}},
+		MaskImage: &webConsoleImageReference{
+			DataURL: mask,
+			Name:    " mask.png ",
+		},
+	})
+	require.NoError(t, err)
+
+	snapshot, err := webConsoleTaskSnapshot(&service.WebConsoleImageTask{
+		RequestJSON: raw,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "edit", snapshot.Mode)
+	require.Equal(t, "source.png", snapshot.ReferenceImages[0].Name)
+	require.Equal(t, source, snapshot.ReferenceImages[0].DataURL)
+	require.NotNil(t, snapshot.MaskImage)
+	require.Equal(t, "mask.png", snapshot.MaskImage.Name)
+	require.Equal(t, mask, snapshot.MaskImage.DataURL)
+}
+
 func TestWebConsoleUpstreamErrorDetailPrefersStructuredMessage(t *testing.T) {
 	detail := webConsoleUpstreamErrorDetail([]byte(`{"error":{"type":"server_error","code":"bad_gateway","message":"upstream timed out"}}`))
 

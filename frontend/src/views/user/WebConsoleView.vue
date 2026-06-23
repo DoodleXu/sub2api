@@ -416,6 +416,7 @@ const IMAGE_REFERENCE_MAX_BYTES = 8 * 1024 * 1024
 const IMAGE_REFERENCE_TOTAL_MAX_BYTES = 32 * 1024 * 1024
 const IMAGE_CACHE_NAME = 'sub2api-web-console-images-v1'
 const IMAGE_CACHE_KEY_PREFIX = '/__sub2api_web_console_image_cache__'
+const IMAGE_EDIT_REFERENCE_CACHE_PREFIX = `${IMAGE_CACHE_KEY_PREFIX}/edit-references`
 const runtimeImageObjectURLs = new Set<string>()
 
 const publicSettings = computed(() => appStore.cachedPublicSettings)
@@ -688,6 +689,93 @@ function createImageRequest(input: string): WebConsoleImageRequest {
     referenceImages: [],
     maskImage: null,
   }
+}
+
+function dataURLToBlob(dataURL: string): { blob: Blob; mimeType: string } | null {
+  const match = dataURL.match(/^data:([^;,]+);base64,(.*)$/)
+  if (!match) return null
+  try {
+    const mimeType = match[1]
+    const binary = atob(match[2])
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index)
+    }
+    return { blob: new Blob([bytes], { type: mimeType }), mimeType }
+  } catch {
+    return null
+  }
+}
+
+function imageEditReferenceCacheKey(sessionId: string, messageId: string, kind: 'reference' | 'mask', index: number, name?: string): string {
+  const encodedName = encodeURIComponent((name || 'image').slice(0, 120))
+  return `${IMAGE_EDIT_REFERENCE_CACHE_PREFIX}/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/${kind}/${index}?name=${encodedName}`
+}
+
+async function cacheImageEditReference(sessionId: string, messageId: string, kind: 'reference' | 'mask', index: number, reference: WebConsoleImageReference): Promise<WebConsoleImageReference> {
+  if (!reference.data_url?.startsWith('data:image/')) {
+    return { ...reference, data_url: '' }
+  }
+  const cacheKey = reference.cacheKey || imageEditReferenceCacheKey(sessionId, messageId, kind, index, reference.name)
+  const parsed = dataURLToBlob(reference.data_url)
+  if (parsed) {
+    await writeCachedImage(cacheKey, parsed.blob, parsed.mimeType)
+  }
+  return {
+    name: reference.name,
+    cacheKey,
+    data_url: '',
+  }
+}
+
+async function cacheImageEditPayloadForStorage(sessionId: string, messageId: string, payload: { referenceImages: WebConsoleImageReference[]; maskImage: WebConsoleImageReference | null }): Promise<{ referenceImages: WebConsoleImageReference[]; maskImage: WebConsoleImageReference | null }> {
+  const referenceImages: WebConsoleImageReference[] = []
+  for (const [index, reference] of payload.referenceImages.entries()) {
+    referenceImages.push(await cacheImageEditReference(sessionId, messageId, 'reference', index, reference))
+  }
+  return {
+    referenceImages,
+    maskImage: payload.maskImage ? await cacheImageEditReference(sessionId, messageId, 'mask', 0, payload.maskImage) : null,
+  }
+}
+
+async function imageReferenceForRequest(reference: WebConsoleImageReference): Promise<WebConsoleImageReference | null> {
+  if (reference.data_url?.startsWith('data:image/')) return { ...reference }
+  if (!reference.cacheKey) return null
+  const cached = await readCachedImage(reference.cacheKey)
+  if (!cached) return null
+  return {
+    name: reference.name,
+    cacheKey: reference.cacheKey,
+    data_url: await fileToDataURL(cached),
+  }
+}
+
+async function resolveImageEditPayloadForRequest(message: WebConsoleMessage): Promise<{ referenceImages: WebConsoleImageReference[]; maskImage: WebConsoleImageReference | null }> {
+  const request = message.imageRequest
+  if (!request || request.mode !== 'edit') {
+    return { referenceImages: [], maskImage: null }
+  }
+  const pending = pendingImageEditPayloads.get(message.id)
+  if (pending) return pending
+  const referenceImages: WebConsoleImageReference[] = []
+  for (const reference of request.referenceImages || []) {
+    const resolved = await imageReferenceForRequest(reference)
+    if (resolved) {
+      referenceImages.push(resolved)
+    }
+  }
+  const maskImage = request.maskImage ? await imageReferenceForRequest(request.maskImage) : null
+  return { referenceImages, maskImage }
+}
+
+async function ensureRecoverableImageEditPayload(message: WebConsoleMessage): Promise<void> {
+  if (message.imageRequest?.mode !== 'edit') return
+  const editPayload = await resolveImageEditPayloadForRequest(message)
+  if (editPayload.referenceImages.length === 0) {
+    throw new Error('该编辑请求的参考图缓存已失效，请重新添加参考图后再编辑。')
+  }
+  pendingImageEditPayloads.set(message.id, editPayload)
 }
 
 function currentImageEditPayload(): { referenceImages: WebConsoleImageReference[]; maskImage: WebConsoleImageReference | null } {
@@ -1021,11 +1109,11 @@ function isImageGenerationInProgress(message: WebConsoleMessage): boolean {
 
 async function createImageTaskForMessage(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!selectedKey.value || !message.imageRequest) return
-  const editPayload = message.imageRequest.mode === 'edit' ? pendingImageEditPayloads.get(message.id) : null
-  const referenceImagePayload = editPayload?.referenceImages || message.imageRequest.referenceImages || []
-  const maskImagePayload = editPayload ? editPayload.maskImage : (message.imageRequest.maskImage || null)
+  const editPayload = await resolveImageEditPayloadForRequest(message)
+  const referenceImagePayload = message.imageRequest.mode === 'edit' ? editPayload.referenceImages : []
+  const maskImagePayload = message.imageRequest.mode === 'edit' ? editPayload.maskImage : null
   if (message.imageRequest.mode === 'edit' && referenceImagePayload.length === 0) {
-    throw new Error('该编辑请求的参考图只保存在本页内，刷新后无法重新生成，请重新添加参考图后再编辑。')
+    throw new Error('该编辑请求的参考图缓存已失效，请重新添加参考图后再编辑。')
   }
   const { task } = await webConsoleImageTasksAPI.create({
     api_key_id: selectedKey.value.id,
@@ -1204,6 +1292,7 @@ async function regenerateImage(message: WebConsoleMessage): Promise<void> {
   submitting.value = true
 
   try {
+    await ensureRecoverableImageEditPayload(message)
     message.content = pendingImageContent()
     replaceMessageImages(message, [])
     message.status = 'pending'
@@ -1264,6 +1353,12 @@ async function submit(): Promise<void> {
         created_at: new Date().toISOString(),
       }
       if (imageRequest.mode === 'edit') {
+        const cachedPayload = await cacheImageEditPayloadForStorage(session.id, assistantMessage.id, editPayload)
+        assistantMessage.imageRequest = {
+          ...imageRequest,
+          referenceImages: cachedPayload.referenceImages,
+          maskImage: cachedPayload.maskImage,
+        }
         pendingImageEditPayloads.set(assistantMessage.id, editPayload)
       }
       session.messages.push(assistantMessage)
