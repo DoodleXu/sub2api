@@ -184,9 +184,15 @@ func writeAdminImageAssetReader(c *gin.Context, reader *service.ImageGenerationA
 		return
 	}
 	defer func() { _ = reader.Body.Close() }()
+	disposition := "attachment"
+	if reader.Inline {
+		disposition = "inline"
+	}
 	c.DataFromReader(http.StatusOK, reader.Size, reader.ContentType, reader.Body, map[string]string{
-		"Content-Disposition": "inline; filename=\"" + reader.Filename + "\"",
-		"Cache-Control":       "private, max-age=86400",
+		"Content-Disposition":          disposition + "; filename=\"" + reader.Filename + "\"",
+		"Cache-Control":                "private, max-age=86400",
+		"X-Content-Type-Options":       "nosniff",
+		"Cross-Origin-Resource-Policy": "same-origin",
 	})
 }
 

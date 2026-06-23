@@ -11,6 +11,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,6 +82,63 @@ func TestWebConsoleUserAssetResponsesUseAuthenticatedAssetURL(t *testing.T) {
 	rawURL, ok := assets[0]["url"].(string)
 	require.True(t, ok)
 	require.Equal(t, "/api/v1/web-console/image-tasks/assets/7", rawURL)
+}
+
+func TestWriteImageAssetReaderUsesNosniffAndAttachmentsForUnsafeTypes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	writeImageAssetReader(c, &service.ImageGenerationAssetReader{
+		Body:        io.NopCloser(strings.NewReader("<!doctype html><script>alert(1)</script>")),
+		ContentType: "application/octet-stream",
+		Size:        40,
+		Filename:    "image-7.bin",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+	require.Equal(t, `attachment; filename="image-7.bin"`, rec.Header().Get("Content-Disposition"))
+	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+	require.Equal(t, "same-origin", rec.Header().Get("Cross-Origin-Resource-Policy"))
+}
+
+func TestImageValueToBytesRejectsBase64HTML(t *testing.T) {
+	raw := base64.StdEncoding.EncodeToString([]byte("<!doctype html><script>alert(1)</script>"))
+
+	_, _, _, err := imageValueToBytes(context.Background(), http.DefaultClient, webConsoleImageValue{
+		Base64: raw,
+		Mime:   "text/html",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a supported image")
+}
+
+func TestImageValueToBytesRejectsURLHTMLDisguisedAsImage(t *testing.T) {
+	client := &http.Client{Transport: webConsoleImageRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, "assets.example.com", req.URL.Host)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(strings.NewReader("<!doctype html><script>alert(1)</script>")),
+			Request:    req,
+		}, nil
+	})}
+
+	_, _, _, err := imageValueToBytes(context.Background(), client, webConsoleImageValue{
+		URL:  "https://assets.example.com/asset.png",
+		Mime: "image/png",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a supported image")
+}
+
+type webConsoleImageRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f webConsoleImageRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestGetSignedAssetRejectsBadStableTokenBeforeAssetLookup(t *testing.T) {
@@ -602,7 +660,13 @@ func withWebConsoleHTTPClient(t *testing.T, client *http.Client) {
 }
 
 func webConsoleTestBase64Image(index int32) string {
-	return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(fmt.Sprintf("%02d", index), 33)))
+	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	img.SetNRGBA(0, 0, color.NRGBA{R: uint8(index), G: 120, B: 200, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
 }
 
 func webConsoleTestPNGDataURL(t *testing.T, width, height int, withAlpha bool) string {

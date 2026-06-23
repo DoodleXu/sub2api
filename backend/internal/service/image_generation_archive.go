@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -634,6 +635,7 @@ type ImageGenerationAssetReader struct {
 	ContentType string
 	Size        int64
 	Filename    string
+	Inline      bool
 }
 
 func (s *ImageGenerationArchiveService) OpenAsset(ctx context.Context, asset *ImageGenerationAsset) (*ImageGenerationAssetReader, error) {
@@ -648,15 +650,56 @@ func (s *ImageGenerationArchiveService) OpenAsset(ctx context.Context, asset *Im
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(contentType) == "" {
+	sniffed, restoredBody, err := sniffImageAssetBody(body)
+	if err != nil {
+		return nil, err
+	}
+	body = restoredBody
+	if IsSafeImageContentType(sniffed) {
+		contentType = sniffed
+	} else if strings.TrimSpace(contentType) == "" {
 		contentType = resolveImageMimeType(asset.MimeType, asset.Extension)
 	}
-	filename := fmt.Sprintf("image-%d%s", asset.ID, ensureExt(asset.Extension, contentType))
+	if !IsSafeImageContentType(sniffed) {
+		contentType = "application/octet-stream"
+	}
+	contentType, inline := SafeImageAssetContentType(contentType)
+	filename := fmt.Sprintf("image-%d%s", asset.ID, ensureSafeImageExt(asset.Extension, contentType, inline))
 	return &ImageGenerationAssetReader{
 		Body:        body,
 		ContentType: contentType,
 		Size:        asset.Bytes,
 		Filename:    filename,
+		Inline:      inline,
+	}, nil
+}
+
+type imageAssetReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *imageAssetReadCloser) Close() error {
+	if r == nil || r.closer == nil {
+		return nil
+	}
+	return r.closer.Close()
+}
+
+func sniffImageAssetBody(body io.ReadCloser) (string, io.ReadCloser, error) {
+	if body == nil {
+		return "", nil, fmt.Errorf("image asset body is not available")
+	}
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(body, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		_ = body.Close()
+		return "", nil, err
+	}
+	buf = buf[:n]
+	return detectArchivedImageMimeType(buf), &imageAssetReadCloser{
+		Reader: io.MultiReader(bytes.NewReader(buf), body),
+		closer: body,
 	}, nil
 }
 
@@ -942,6 +985,13 @@ func (s *ImageGenerationArchiveService) archiveImageBytes(ctx context.Context, r
 			_ = s.appendError(ctx, record, fmt.Errorf("image exceeds max archive size: %d bytes", len(image.Bytes)))
 			continue
 		}
+		normalizedMimeType, normalizedExt, err := NormalizeArchivedImageBytes(image.Bytes, mimeType, ext)
+		if err != nil {
+			_ = s.appendError(ctx, record, err)
+			continue
+		}
+		mimeType = normalizedMimeType
+		ext = normalizedExt
 		stored, err := storage.Save(ctx, image.Bytes, StoredImageMeta{
 			RecordID:   record.ID,
 			AssetIndex: image.Index,
@@ -1045,8 +1095,10 @@ func decodeArchivedImage(image ArchivedImageInput) ([]byte, string, string, erro
 	if len(b) > ImageArchiveMaxBytes {
 		return nil, "", "", fmt.Errorf("image exceeds max archive size: %d bytes", len(b))
 	}
-	mimeType := resolveImageMimeType(image.MimeType, image.Extension)
-	ext := ensureExt(image.Extension, mimeType)
+	mimeType, ext, err := NormalizeArchivedImageBytes(b, image.MimeType, image.Extension)
+	if err != nil {
+		return nil, "", "", err
+	}
 	return b, mimeType, ext, nil
 }
 
@@ -1061,7 +1113,7 @@ func normalizeBase64Padding(raw string) string {
 
 func resolveImageMimeType(mimeType, ext string) string {
 	if strings.TrimSpace(mimeType) != "" {
-		return strings.TrimSpace(mimeType)
+		return normalizeMediaType(mimeType)
 	}
 	if ext != "" {
 		if m := mime.TypeByExtension(ext); m != "" {
@@ -1069,6 +1121,62 @@ func resolveImageMimeType(mimeType, ext string) string {
 		}
 	}
 	return "image/png"
+}
+
+func NormalizeArchivedImageBytes(imageBytes []byte, mimeType, ext string) (string, string, error) {
+	detected := detectArchivedImageMimeType(imageBytes)
+	if !IsSafeImageContentType(detected) {
+		return "", "", fmt.Errorf("archived image content type is not a supported image: %s", detected)
+	}
+	// Trust bytes over metadata; upstream-compatible APIs sometimes send a generic
+	// MIME, but executable or mismatched metadata must not control the response.
+	return detected, ensureSafeImageExt(ext, detected, true), nil
+}
+
+func SafeImageAssetContentType(contentType string) (string, bool) {
+	normalized := normalizeMediaType(contentType)
+	if IsSafeImageContentType(normalized) {
+		return normalized, true
+	}
+	return "application/octet-stream", false
+}
+
+func IsSafeImageContentType(contentType string) bool {
+	switch normalizeMediaType(contentType) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeMediaType(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return ""
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err == nil {
+		return strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	if idx := strings.Index(contentType, ";"); idx >= 0 {
+		contentType = contentType[:idx]
+	}
+	return strings.ToLower(strings.TrimSpace(contentType))
+}
+
+func detectArchivedImageMimeType(imageBytes []byte) string {
+	if len(imageBytes) >= 12 && string(imageBytes[0:4]) == "RIFF" && string(imageBytes[8:12]) == "WEBP" {
+		return "image/webp"
+	}
+	return normalizeMediaType(http.DetectContentType(imageBytes))
+}
+
+func ensureSafeImageExt(ext, mimeType string, inline bool) string {
+	if !inline {
+		return ".bin"
+	}
+	return ensureExt("", mimeType)
 }
 
 func ensureExt(ext, mimeType string) string {

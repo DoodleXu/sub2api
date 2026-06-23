@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,13 +17,15 @@ import (
 )
 
 func TestDecodeArchivedImageAcceptsPaddedBase64(t *testing.T) {
+	pngBytes := tinyPNGBytes(t)
+	pngBase64 := base64.StdEncoding.EncodeToString(pngBytes)
 	tests := []struct {
 		name string
 		raw  string
 	}{
-		{name: "padded", raw: "aW1hZ2UtMQ=="},
-		{name: "unpadded", raw: "aW1hZ2UtMQ"},
-		{name: "data-url", raw: "data:image/png;base64,aW1hZ2UtMQ=="},
+		{name: "padded", raw: pngBase64},
+		{name: "unpadded", raw: strings.TrimRight(pngBase64, "=")},
+		{name: "data-url", raw: "data:image/png;base64," + pngBase64},
 	}
 
 	for _, tt := range tests {
@@ -27,11 +33,83 @@ func TestDecodeArchivedImageAcceptsPaddedBase64(t *testing.T) {
 			b, mimeType, ext, err := decodeArchivedImage(ArchivedImageInput{B64JSON: tt.raw})
 
 			require.NoError(t, err)
-			require.Equal(t, []byte("image-1"), b)
+			require.Equal(t, pngBytes, b)
 			require.Equal(t, "image/png", mimeType)
 			require.Equal(t, ".png", ext)
 		})
 	}
+}
+
+func TestDecodeArchivedImageRejectsHTMLPayload(t *testing.T) {
+	raw := base64.StdEncoding.EncodeToString([]byte("<!doctype html><script>alert(1)</script>"))
+
+	_, _, _, err := decodeArchivedImage(ArchivedImageInput{
+		B64JSON:   raw,
+		MimeType:  "text/html",
+		Extension: ".html",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a supported image")
+}
+
+func TestDecodeArchivedImageIgnoresUntrustedMetadata(t *testing.T) {
+	pngBytes := tinyPNGBytes(t)
+	pngBase64 := base64.StdEncoding.EncodeToString(pngBytes)
+
+	_, mimeType, ext, err := decodeArchivedImage(ArchivedImageInput{
+		B64JSON:   "data:text/html;base64," + pngBase64,
+		MimeType:  "text/html",
+		Extension: ".html",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "image/png", mimeType)
+	require.Equal(t, ".png", ext)
+}
+
+func TestOpenAssetServesMismatchedStoredBytesAsAttachment(t *testing.T) {
+	tmpDir := t.TempDir()
+	storageKey := filepath.Join("2026", "06", "asset.png")
+	absPath := filepath.Join(tmpDir, storageKey)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o755))
+	raw := "<!doctype html><script>alert(1)</script>"
+	require.NoError(t, os.WriteFile(absPath, []byte(raw), 0o644))
+
+	cfg, err := json.Marshal(ImageArchiveStorageConfig{
+		Enabled:  true,
+		Type:     "local",
+		LocalDir: tmpDir,
+	})
+	require.NoError(t, err)
+	svc := NewImageGenerationArchiveService(nil, &imageArchiveSettingRepoStub{
+		values: map[string]string{imageArchiveStorageSettingKey: string(cfg)},
+	}, nil, nil)
+
+	reader, err := svc.OpenAsset(context.Background(), &ImageGenerationAsset{
+		ID:         7,
+		StorageKey: storageKey,
+		MimeType:   "image/png",
+		Extension:  ".png",
+		Bytes:      int64(len(raw)),
+	})
+	require.NoError(t, err)
+	defer func() { _ = reader.Body.Close() }()
+
+	body, err := io.ReadAll(reader.Body)
+	require.NoError(t, err)
+	require.Equal(t, raw, string(body))
+	require.Equal(t, "application/octet-stream", reader.ContentType)
+	require.False(t, reader.Inline)
+	require.Equal(t, "image-7.bin", reader.Filename)
+}
+
+func tinyPNGBytes(t *testing.T) []byte {
+	t.Helper()
+	const raw = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGJgYPgPAAEDAQD3K8C8AAAAAElFTkSuQmCC"
+	b, err := base64.StdEncoding.DecodeString(raw)
+	require.NoError(t, err)
+	return b
 }
 
 func TestArchiveImageBytesSyncRespectsDisabledStorage(t *testing.T) {

@@ -40,11 +40,33 @@ func TestWriteAdminImageAssetReaderStreamsInlineWithPrivateCache(t *testing.T) {
 		ContentType: "image/png",
 		Size:        3,
 		Filename:    "image-7.png",
+		Inline:      true,
 	})
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "image/png", rec.Header().Get("Content-Type"))
 	require.Equal(t, `inline; filename="image-7.png"`, rec.Header().Get("Content-Disposition"))
 	require.Equal(t, "private, max-age=86400", rec.Header().Get("Cache-Control"))
+	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+	require.Equal(t, "same-origin", rec.Header().Get("Cross-Origin-Resource-Policy"))
 	require.Equal(t, "png", rec.Body.String())
+}
+
+func TestWriteAdminImageAssetReaderServesUnsafeTypeAsAttachment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	writeAdminImageAssetReader(c, &service.ImageGenerationAssetReader{
+		Body:        io.NopCloser(strings.NewReader("<script>alert(1)</script>")),
+		ContentType: "application/octet-stream",
+		Size:        25,
+		Filename:    "image-7.bin",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+	require.Equal(t, `attachment; filename="image-7.bin"`, rec.Header().Get("Content-Disposition"))
+	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+	require.Equal(t, "same-origin", rec.Header().Get("Cross-Origin-Resource-Policy"))
 }

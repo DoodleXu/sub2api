@@ -727,9 +727,15 @@ func writeImageAssetReader(c *gin.Context, reader *service.ImageGenerationAssetR
 		return
 	}
 	defer func() { _ = reader.Body.Close() }()
+	disposition := "attachment"
+	if reader.Inline {
+		disposition = "inline"
+	}
 	c.DataFromReader(http.StatusOK, reader.Size, reader.ContentType, reader.Body, map[string]string{
-		"Content-Disposition": "inline; filename=\"" + reader.Filename + "\"",
-		"Cache-Control":       "private, max-age=300",
+		"Content-Disposition":          disposition + "; filename=\"" + reader.Filename + "\"",
+		"Cache-Control":                "private, max-age=300",
+		"X-Content-Type-Options":       "nosniff",
+		"Cross-Origin-Resource-Policy": "same-origin",
 	})
 }
 
@@ -1403,11 +1409,11 @@ func imageValueToBytes(ctx context.Context, client *http.Client, value webConsol
 		if len(b) > service.ImageArchiveMaxBytes {
 			return nil, "", "", fmt.Errorf("image exceeds max archive size: %d bytes", len(b))
 		}
-		mimeType := strings.TrimSpace(value.Mime)
-		if mimeType == "" {
-			mimeType = "image/png"
+		mimeType, ext, err := service.NormalizeArchivedImageBytes(b, value.Mime, "")
+		if err != nil {
+			return nil, "", "", err
 		}
-		return b, mimeType, extFromMime(mimeType), nil
+		return b, mimeType, ext, nil
 	}
 	if strings.TrimSpace(value.URL) == "" {
 		return nil, "", "", fmt.Errorf("image output is empty")
@@ -1442,10 +1448,11 @@ func imageValueToBytes(ctx context.Context, client *http.Client, value webConsol
 	if mimeType == "" {
 		mimeType = strings.TrimSpace(value.Mime)
 	}
-	if mimeType == "" {
-		mimeType = "image/png"
+	mimeType, ext, err := service.NormalizeArchivedImageBytes(b, mimeType, extFromMimeOrURL(mimeType, value.URL))
+	if err != nil {
+		return nil, "", "", err
 	}
-	return b, mimeType, extFromMimeOrURL(mimeType, value.URL), nil
+	return b, mimeType, ext, nil
 }
 
 func extFromMime(mimeType string) string {
