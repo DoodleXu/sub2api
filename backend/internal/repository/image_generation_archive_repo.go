@@ -178,6 +178,10 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 			SELECT id FROM image_generation_records
 			WHERE status IN ('completed', 'failed', 'skipped')
 		),
+		active_records AS (
+			SELECT id FROM image_generation_records
+			WHERE status IN ('pending', 'running')
+		),
 		target_assets AS (
 			SELECT a.id, a.storage_key, r.storage_type
 			FROM image_generation_assets a
@@ -187,6 +191,8 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 		SELECT
 			(SELECT COUNT(*) FROM target_records) AS records_deleted,
 			(SELECT COUNT(*) FROM target_assets) AS assets_deleted,
+			(SELECT COUNT(*) FROM active_records) AS skipped_records,
+			(SELECT COUNT(*) FROM active_records) AS active_records,
 			COALESCE((SELECT json_agg(id) FROM target_records), '[]'::json) AS record_ids,
 			COALESCE(
 				(
@@ -205,7 +211,7 @@ func (r *imageGenerationArchiveRepository) ListAllArchiveStorageRefs(ctx context
 	var rawRecordIDs json.RawMessage
 	var rawRefs json.RawMessage
 	result := &service.ImageGenerationArchiveClearResult{}
-	if err := scanSingleRow(ctx, r.db, query, nil, &result.RecordsDeleted, &result.AssetsDeleted, &rawRecordIDs, &rawRefs); err != nil {
+	if err := scanSingleRow(ctx, r.db, query, nil, &result.RecordsDeleted, &result.AssetsDeleted, &result.SkippedRecords, &result.ActiveRecords, &rawRecordIDs, &rawRefs); err != nil {
 		return nil, err
 	}
 	if len(rawRecordIDs) > 0 {

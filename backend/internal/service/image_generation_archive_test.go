@@ -85,8 +85,16 @@ func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*Imag
 	refs := make([]ImageGenerationAssetStorageRef, 0, len(r.assets))
 	targetRecordIDs := make(map[int64]struct{}, len(r.records))
 	recordIDs := make([]int64, 0, len(r.records))
+	activeRecords := int64(0)
 	for _, record := range r.records {
-		if record == nil || !isImageArchiveClearableStatus(record.Status) {
+		if record == nil {
+			continue
+		}
+		if isImageArchiveActiveStatus(record.Status) {
+			activeRecords++
+			continue
+		}
+		if !isImageArchiveClearableStatus(record.Status) {
 			continue
 		}
 		targetRecordIDs[record.ID] = struct{}{}
@@ -105,6 +113,8 @@ func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*Imag
 	result := &ImageGenerationArchiveClearResult{
 		RecordsDeleted: int64(len(recordIDs)),
 		AssetsDeleted:  int64(len(refs)),
+		SkippedRecords: activeRecords,
+		ActiveRecords:  activeRecords,
 		RecordIDs:      recordIDs,
 		AssetRefs:      refs,
 	}
@@ -114,6 +124,15 @@ func (r *imageArchiveRepoStub) ListAllArchiveStorageRefs(context.Context) (*Imag
 func isImageArchiveClearableStatus(status string) bool {
 	switch status {
 	case "", "completed", "failed", "skipped":
+		return true
+	default:
+		return false
+	}
+}
+
+func isImageArchiveActiveStatus(status string) bool {
+	switch status {
+	case "pending", "running":
 		return true
 	default:
 		return false
@@ -336,11 +355,13 @@ func TestClearAllArchivesSkipsRunningRecords(t *testing.T) {
 		records: []*ImageGenerationRecord{
 			{ID: 1, Status: "completed"},
 			{ID: 2, Status: "running"},
+			{ID: 3, Status: "pending"},
 		},
 		storageType: "local",
 		assets: []*ImageGenerationAsset{
 			{ID: 7, RecordID: 1, StorageKey: "2026/06/done.png"},
 			{ID: 8, RecordID: 2, StorageKey: "2026/06/running.png"},
+			{ID: 9, RecordID: 3, StorageKey: "2026/06/pending.png"},
 		},
 	}
 	storage := &imageArchiveStorageStub{}
@@ -352,10 +373,14 @@ func TestClearAllArchivesSkipsRunningRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), result.RecordsDeleted)
 	require.Equal(t, int64(1), result.AssetsDeleted)
+	require.Equal(t, int64(2), result.SkippedRecords)
+	require.Equal(t, int64(2), result.ActiveRecords)
 	require.Equal(t, []string{"2026/06/done.png"}, storage.deleted)
 	require.Equal(t, []int64{1}, repo.deletedRecordIDs)
-	require.Len(t, repo.records, 1)
+	require.Len(t, repo.records, 2)
 	require.Equal(t, int64(2), repo.records[0].ID)
-	require.Len(t, repo.assets, 1)
+	require.Equal(t, int64(3), repo.records[1].ID)
+	require.Len(t, repo.assets, 2)
 	require.Equal(t, int64(8), repo.assets[0].ID)
+	require.Equal(t, int64(9), repo.assets[1].ID)
 }

@@ -171,6 +171,8 @@ describe('ImageGenerationsView', () => {
       records_deleted: 1,
       assets_deleted: 1,
       storage_delete_failures: 0,
+      skipped_records: 0,
+      active_records: 0,
     })
     getStorageConfig.mockResolvedValue({
       enabled: true,
@@ -375,7 +377,7 @@ describe('ImageGenerationsView', () => {
     await flushPromises()
     await revealThumbnail(wrapper)
 
-    await wrapper.findAll('button').find((button) => button.text() === '清空所有归档')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '清空终态归档')!.trigger('click')
     await flushPromises()
 
     expect(abortSignals[0].aborted).toBe(true)
@@ -453,18 +455,26 @@ describe('ImageGenerationsView', () => {
     await flushPromises()
     await revealThumbnail(wrapper)
 
-    await wrapper.findAll('button').find((button) => button.text() === '清空所有归档')!.trigger('click')
+    clearAllArchives.mockResolvedValueOnce({
+      records_deleted: 1,
+      assets_deleted: 1,
+      storage_delete_failures: 0,
+      skipped_records: 2,
+      active_records: 2,
+    })
+
+    await wrapper.findAll('button').find((button) => button.text() === '清空终态归档')!.trigger('click')
     await flushPromises()
     await flushPromises()
 
-    expect(window.confirm).toHaveBeenCalledWith('确定要清空所有生图归档吗？该操作不可撤销。')
+    expect(window.confirm).toHaveBeenCalledWith('确定要清空已完成、失败、跳过的终态生图归档吗？等待和归档中的记录会保留，该操作不可撤销。')
     expect(clearAllArchives).toHaveBeenCalledTimes(1)
     expect(list).toHaveBeenCalledTimes(2)
     expect(dailyStats).toHaveBeenCalledTimes(2)
     expect(storageStats).toHaveBeenCalledTimes(2)
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:admin-image-asset-1')
     expect(wrapper.text()).toContain('暂无生图资产')
-    expect(showSuccess).toHaveBeenCalledWith('已清空 1 条归档记录、1 个资产')
+    expect(showSuccess).toHaveBeenCalledWith('已清空 1 条终态归档记录、1 个资产；已保留 2 条等待或归档中的记录')
   })
 
   it('keeps archive records retryable when storage cleanup partially fails', async () => {
@@ -472,18 +482,20 @@ describe('ImageGenerationsView', () => {
       records_deleted: 0,
       assets_deleted: 1,
       storage_delete_failures: 2,
+      skipped_records: 1,
+      active_records: 1,
     })
 
     const wrapper = mount(ImageGenerationsView)
     await flushPromises()
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '清空所有归档')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '清空终态归档')!.trigger('click')
     await flushPromises()
     await flushPromises()
 
     expect(clearAllArchives).toHaveBeenCalledTimes(1)
-    expect(showWarning).toHaveBeenCalledWith('有 2 个存储对象清理失败，归档记录已保留，可稍后重试；本次已清理 1 个存储对象')
+    expect(showWarning).toHaveBeenCalledWith('有 2 个存储对象清理失败，终态归档记录已保留，可稍后重试；本次已清理 1 个存储对象；已保留 1 条等待或归档中的记录')
     expect(showSuccess).not.toHaveBeenCalled()
   })
 

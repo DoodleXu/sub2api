@@ -56,6 +56,8 @@ export interface ImageGenerationArchiveClearResult {
   records_deleted: number
   assets_deleted: number
   storage_delete_failures: number
+  skipped_records: number
+  active_records: number
 }
 
 export interface ImageArchiveStorageConfig {

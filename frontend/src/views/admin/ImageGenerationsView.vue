@@ -16,7 +16,7 @@
           <input v-model="filters.api_key_id" class="input" placeholder="API Key ID" @keyup.enter="applyFilters" />
           <button class="btn btn-primary" type="button" @click="applyFilters">筛选</button>
           <button class="btn btn-danger" type="button" :disabled="clearingArchives" @click="clearAllArchives">
-            {{ clearingArchives ? '清空中...' : '清空所有归档' }}
+            {{ clearingArchives ? '清空中...' : '清空终态归档' }}
           </button>
         </div>
       </section>
@@ -618,7 +618,7 @@ function abortThumbnailRequests(): void {
 
 async function clearAllArchives() {
   if (clearingArchives.value) return
-  if (!window.confirm('确定要清空所有生图归档吗？该操作不可撤销。')) return
+  if (!window.confirm('确定要清空已完成、失败、跳过的终态生图归档吗？等待和归档中的记录会保留，该操作不可撤销。')) return
   clearingArchives.value = true
   try {
     const result = await imageGenerationsAPI.clearAllArchives()
@@ -627,15 +627,20 @@ async function clearAllArchives() {
     pagination.page = 1
     await Promise.all([loadRecords(), loadStats(), loadStorageStats()])
     if (result.storage_delete_failures > 0) {
-      appStore.showWarning(`有 ${result.storage_delete_failures} 个存储对象清理失败，归档记录已保留，可稍后重试；本次已清理 ${result.assets_deleted} 个存储对象`)
+      appStore.showWarning(`有 ${result.storage_delete_failures} 个存储对象清理失败，终态归档记录已保留，可稍后重试；本次已清理 ${result.assets_deleted} 个存储对象${formatActiveArchiveSuffix(result)}`)
     } else {
-      appStore.showSuccess(`已清空 ${result.records_deleted} 条归档记录、${result.assets_deleted} 个资产`)
+      appStore.showSuccess(`已清空 ${result.records_deleted} 条终态归档记录、${result.assets_deleted} 个资产${formatActiveArchiveSuffix(result)}`)
     }
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, '清空归档失败'))
   } finally {
     clearingArchives.value = false
   }
+}
+
+function formatActiveArchiveSuffix(result: { active_records?: number; skipped_records?: number }): string {
+  const activeRecords = result.active_records ?? result.skipped_records ?? 0
+  return activeRecords > 0 ? `；已保留 ${activeRecords} 条等待或归档中的记录` : ''
 }
 
 async function loadStats() {

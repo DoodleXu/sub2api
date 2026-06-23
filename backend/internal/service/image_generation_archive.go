@@ -167,6 +167,8 @@ type ImageGenerationArchiveClearResult struct {
 	RecordsDeleted        int64                            `json:"records_deleted"`
 	AssetsDeleted         int64                            `json:"assets_deleted"`
 	StorageDeleteFailures int64                            `json:"storage_delete_failures"`
+	SkippedRecords        int64                            `json:"skipped_records"`
+	ActiveRecords         int64                            `json:"active_records"`
 	RecordIDs             []int64                          `json:"-"`
 	AssetRefs             []ImageGenerationAssetStorageRef `json:"-"`
 }
@@ -573,7 +575,10 @@ func (s *ImageGenerationArchiveService) ClearAllArchives(ctx context.Context) (*
 	if plan == nil {
 		return &ImageGenerationArchiveClearResult{}, nil
 	}
-	result := &ImageGenerationArchiveClearResult{}
+	result := &ImageGenerationArchiveClearResult{
+		SkippedRecords: plan.SkippedRecords,
+		ActiveRecords:  plan.ActiveRecords,
+	}
 	for _, ref := range plan.AssetRefs {
 		if strings.TrimSpace(ref.StorageKey) == "" {
 			continue

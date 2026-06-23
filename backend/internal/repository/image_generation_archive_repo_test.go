@@ -78,9 +78,9 @@ func TestImageGenerationArchiveRepositoryListAllArchiveStorageRefs(t *testing.T)
 	db, mock := newSQLMock(t)
 	repo := &imageGenerationArchiveRepository{db: db}
 
-	rows := sqlmock.NewRows([]string{"records_deleted", "assets_deleted", "record_ids", "asset_refs"}).
-		AddRow(int64(2), int64(1), []byte(`[11,12]`), []byte(`[{"id":7,"storage_key":"2026/06/image.png","storage_type":"local"}]`))
-	mock.ExpectQuery("WHERE status IN \\('completed', 'failed', 'skipped'\\)").
+	rows := sqlmock.NewRows([]string{"records_deleted", "assets_deleted", "skipped_records", "active_records", "record_ids", "asset_refs"}).
+		AddRow(int64(2), int64(1), int64(2), int64(2), []byte(`[11,12]`), []byte(`[{"id":7,"storage_key":"2026/06/image.png","storage_type":"local"}]`))
+	mock.ExpectQuery("WHERE status IN \\('completed', 'failed', 'skipped'\\)[\\s\\S]+WHERE status IN \\('pending', 'running'\\)").
 		WillReturnRows(rows)
 
 	result, err := repo.ListAllArchiveStorageRefs(context.Background())
@@ -88,6 +88,8 @@ func TestImageGenerationArchiveRepositoryListAllArchiveStorageRefs(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), result.RecordsDeleted)
 	require.Equal(t, int64(1), result.AssetsDeleted)
+	require.Equal(t, int64(2), result.SkippedRecords)
+	require.Equal(t, int64(2), result.ActiveRecords)
 	require.Equal(t, []int64{11, 12}, result.RecordIDs)
 	require.Equal(t, []service.ImageGenerationAssetStorageRef{
 		{ID: 7, StorageKey: "2026/06/image.png", StorageType: "local"},
