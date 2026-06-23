@@ -417,6 +417,9 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	if o.SubscriptionGroupID == nil || o.SubscriptionDays == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "missing subscription info")
 	}
+	if s.hasAuditLog(ctx, oid, "SUBSCRIPTION_SUCCESS") {
+		return s.markCompletedFromExistingAudit(ctx, o)
+	}
 	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(oid), paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed)).SetStatus(OrderStatusRecharging).Save(ctx)
 	if err != nil {
 		return fmt.Errorf("lock: %w", err)
@@ -427,6 +430,22 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	if err := s.doSub(ctx, o); err != nil {
 		s.markFailed(ctx, oid, err)
 		return err
+	}
+	return nil
+}
+
+func (s *PaymentService) markCompletedFromExistingAudit(ctx context.Context, o *dbent.PaymentOrder) error {
+	if o == nil {
+		return nil
+	}
+	now := time.Now()
+	_, err := s.entClient.PaymentOrder.Update().
+		Where(paymentorder.IDEQ(o.ID), paymentorder.StatusNEQ(OrderStatusCompleted)).
+		SetStatus(OrderStatusCompleted).
+		SetCompletedAt(now).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("mark completed from existing audit: %w", err)
 	}
 	return nil
 }
