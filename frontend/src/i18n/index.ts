@@ -72,44 +72,36 @@ export async function setLocale(locale: string): Promise<void> {
   // 同步更新浏览器页签标题和 SEO 元信息，使其跟随语言切换
   const {
     applyRouteSEO,
-    resolveCustomPageSEO,
-    resolveDocumentTitle,
-    resolveLegalDocumentSEO,
-    resolvePageDescription,
+    resolveRouteSEO,
   } = await import('@/router/title')
   const { default: router } = await import('@/router')
   const { useAppStore } = await import('@/stores/app')
+  const { useAuthStore } = await import('@/stores/auth')
+  const { useAdminSettingsStore } = await import('@/stores/adminSettings')
   const route = router.currentRoute.value
   const appStore = useAppStore()
   const siteName = appStore.siteName || 'Sub2API'
   const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
-  let title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
-  let description = resolvePageDescription(route.meta.descriptionKey as string | undefined, siteSubtitle)
-  let indexable: boolean | undefined
-
-  if (route.name === 'CustomPage') {
-    const id = route.params.id as string
-    const item = appStore.cachedPublicSettings?.custom_menu_items?.find((menuItem) => menuItem.id === id)
-    const seo = resolveCustomPageSEO(item, siteName, siteSubtitle)
-    title = seo.title
-    description = seo.description
-    indexable = seo.indexable
-  } else if (route.name === 'LegalDocument') {
-    const id = route.params.documentId as string
-    const document = appStore.cachedPublicSettings?.login_agreement_documents?.find((doc) => doc.id === id)
-    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
-    title = seo.title
-    description = seo.description
-    indexable = seo.indexable
-  }
+  const authStore = useAuthStore()
+  const adminSettingsStore = useAdminSettingsStore()
+  const customMenuItems = [
+    ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
+    ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
+  ]
+  const seo = resolveRouteSEO(route, {
+    siteName,
+    siteSubtitle,
+    customMenuItems,
+    loginAgreementDocuments: appStore.cachedPublicSettings?.login_agreement_documents ?? [],
+  })
 
   applyRouteSEO({
     path: route.path,
-    title,
-    description,
+    title: seo.title,
+    description: seo.description,
     siteName,
     image: appStore.siteLogo || '/logo.png',
-    indexable,
+    indexable: seo.indexable,
   })
 }
 

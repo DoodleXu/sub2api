@@ -6,6 +6,8 @@ import {
   resolveDocumentTitle,
   resolveLegalDocumentSEO,
   resolvePageDescription,
+  resolveRouteDocumentTitle,
+  resolveRouteSEO,
 } from '@/router/title'
 
 describe('resolveDocumentTitle', () => {
@@ -126,5 +128,59 @@ describe('applyRouteSEO', () => {
     expect(document.title).toBe('开发文档 - My Site')
     expect(document.head.querySelector<HTMLMetaElement>('meta[name="robots"]')?.content).toBe('index, follow')
     expect(document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href).toBe('http://localhost:3000/custom/docs')
+  })
+})
+
+describe('resolveRouteDocumentTitle', () => {
+  it('自定义页面菜单加载后，使用菜单名称作为标题', () => {
+    const route = {
+      name: 'CustomPage',
+      params: { id: 'scheduler' },
+      meta: {
+        title: 'Custom Page'
+      }
+    }
+
+    expect(resolveRouteDocumentTitle(route, 'EzouAPI')).toBe('Custom Page - EzouAPI')
+    expect(resolveRouteDocumentTitle(route, 'EzouAPI', [
+      {
+        id: 'scheduler',
+        label: '账号调度器',
+        icon_svg: '',
+        url: 'https://example.com',
+        visibility: 'admin',
+        sort_order: 0
+      }
+    ])).toBe('账号调度器 - EzouAPI')
+  })
+})
+
+describe('resolveRouteSEO', () => {
+  it('自定义页面菜单加载后，使用菜单名称作为 SEO 标题', () => {
+    const route = {
+      name: 'CustomPage',
+      path: '/custom/scheduler',
+      params: { id: 'scheduler' },
+      meta: {
+        title: 'Custom Page'
+      }
+    }
+
+    const seo = resolveRouteSEO(route, {
+      siteName: 'EzouAPI',
+      customMenuItems: [
+        {
+          id: 'scheduler',
+          label: '账号调度器',
+          icon_svg: '',
+          url: 'https://example.com',
+          visibility: 'admin',
+          sort_order: 0
+        }
+      ]
+    })
+
+    expect(seo.title).toBe('账号调度器 - EzouAPI')
+    expect(seo.indexable).toBe(false)
   })
 })

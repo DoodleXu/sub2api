@@ -6,14 +6,12 @@ import NavigationProgress from '@/components/common/NavigationProgress.vue'
 import AdminComplianceDialog from '@/components/admin/AdminComplianceDialog.vue'
 import {
   applyRouteSEO,
-  resolveCustomPageSEO,
-  resolveDocumentTitle,
-  resolveLegalDocumentSEO,
-  resolvePageDescription,
+  resolveRouteSEO,
 } from '@/router/title'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useAdminComplianceStore } from '@/stores/adminCompliance'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { getSetupStatus } from '@/api/setup'
 import { updateFavicon } from '@/utils/favicon'
 
@@ -23,6 +21,7 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const adminComplianceStore = useAdminComplianceStore()
 const AnnouncementPopup = defineAsyncComponent(() => import('@/components/common/AnnouncementPopup.vue'))
+const adminSettingsStore = useAdminSettingsStore()
 
 type SubscriptionStore = Awaited<ReturnType<typeof import('@/stores/subscriptions')['useSubscriptionStore']>>
 type AnnouncementStore = Awaited<ReturnType<typeof import('@/stores/announcements')['useAnnouncementStore']>>
@@ -165,33 +164,24 @@ onBeforeUnmount(() => {
 function applyCurrentRouteSEO() {
   const siteName = appStore.siteName || 'Sub2API'
   const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
-  let title = resolveDocumentTitle(route.meta.title, appStore.siteName, route.meta.titleKey as string)
-  let description = resolvePageDescription(route.meta.descriptionKey as string | undefined, siteSubtitle)
-  let indexable: boolean | undefined
-
-  if (route.name === 'CustomPage') {
-    const id = route.params.id as string
-    const item = appStore.cachedPublicSettings?.custom_menu_items?.find((menuItem) => menuItem.id === id)
-    const seo = resolveCustomPageSEO(item, siteName, siteSubtitle)
-    title = seo.title
-    description = seo.description
-    indexable = seo.indexable
-  } else if (route.name === 'LegalDocument') {
-    const id = route.params.documentId as string
-    const document = appStore.cachedPublicSettings?.login_agreement_documents?.find((doc) => doc.id === id)
-    const seo = resolveLegalDocumentSEO(document, siteName, siteSubtitle)
-    title = seo.title
-    description = seo.description
-    indexable = seo.indexable
-  }
+  const customMenuItems = [
+    ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
+    ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
+  ]
+  const seo = resolveRouteSEO(route, {
+    siteName,
+    siteSubtitle,
+    customMenuItems,
+    loginAgreementDocuments: appStore.cachedPublicSettings?.login_agreement_documents ?? [],
+  })
 
   applyRouteSEO({
     path: route.path,
-    title,
-    description,
+    title: seo.title,
+    description: seo.description,
     siteName,
     image: appStore.siteLogo || '/logo.png',
-    indexable,
+    indexable: seo.indexable,
   })
 }
 
@@ -256,12 +246,25 @@ onMounted(() => {
 })
 
 watch(
-  () => route.fullPath,
+  [
+    () => route.fullPath,
+    () => route.meta.title,
+    () => route.meta.titleKey,
+    () => route.meta.descriptionKey,
+    () => appStore.siteName,
+    () => appStore.siteLogo,
+    () => appStore.cachedPublicSettings?.site_subtitle,
+    () => appStore.cachedPublicSettings?.custom_menu_items,
+    () => appStore.cachedPublicSettings?.login_agreement_documents,
+    () => authStore.isAdmin,
+    () => adminSettingsStore.customMenuItems,
+  ],
   () => {
     if (appStore.publicSettingsLoaded) {
       applyCurrentRouteSEO()
     }
-  }
+  },
+  { deep: true }
 )
 </script>
 

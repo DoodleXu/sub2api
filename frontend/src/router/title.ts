@@ -1,8 +1,11 @@
 import { i18n } from '@/i18n'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import type { CustomMenuItem, LoginAgreementDocument } from '@/types'
 
 const DEFAULT_DESCRIPTION =
   'Sub2API is an AI API gateway for unified model access, account routing, usage billing, and API key management.'
+
+type RouteSEOTarget = Pick<RouteLocationNormalizedLoaded, 'name' | 'params' | 'meta'> & Partial<Pick<RouteLocationNormalizedLoaded, 'path'>>
 
 /**
  * 统一生成页面标题，避免多处写入 document.title 产生覆盖冲突。
@@ -114,4 +117,46 @@ export function applyRouteSEO(options: {
   setMetaContent('meta[name="twitter:title"]', title)
   setMetaContent('meta[name="twitter:description"]', description)
   setCanonical(canonical)
+}
+
+export function resolveRouteDocumentTitle(
+  route: RouteSEOTarget,
+  siteName: string | undefined,
+  customMenuItems: CustomMenuItem[] = [],
+): string {
+  return resolveRouteSEO(route, { siteName, customMenuItems }).title
+}
+
+export function resolveRouteSEO(
+  route: RouteSEOTarget,
+  options: {
+    siteName?: string
+    siteSubtitle?: string
+    customMenuItems?: CustomMenuItem[]
+    loginAgreementDocuments?: LoginAgreementDocument[]
+  } = {}
+): { title: string; description: string; indexable?: boolean } {
+  const siteName = options.siteName
+  const normalizedSiteName = normalizeSiteName(siteName)
+  let title = resolveDocumentTitle(route.meta.title, siteName, route.meta.titleKey as string)
+  let description = resolvePageDescription(route.meta.descriptionKey as string | undefined, options.siteSubtitle)
+  let indexable: boolean | undefined
+
+  if (route.name === 'CustomPage') {
+    const id = typeof route.params.id === 'string' ? route.params.id : ''
+    const menuItem = id ? options.customMenuItems?.find((item) => item.id === id) : undefined
+    const seo = resolveCustomPageSEO(menuItem, normalizedSiteName, options.siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  } else if (route.name === 'LegalDocument') {
+    const id = typeof route.params.documentId === 'string' ? route.params.documentId : ''
+    const document = id ? options.loginAgreementDocuments?.find((item) => item.id === id) : undefined
+    const seo = resolveLegalDocumentSEO(document, normalizedSiteName, options.siteSubtitle)
+    title = seo.title
+    description = seo.description
+    indexable = seo.indexable
+  }
+
+  return { title, description, indexable }
 }
