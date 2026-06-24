@@ -143,18 +143,19 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
-	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(requestCtx)
-	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(requestCtx)
+	experimentalScheduler := h.gatewayService.IsOpenAIAccountExperimentalSchedulerEnabled(requestCtx)
+	experimentalRetryLimit := h.gatewayService.OpenAIAccountExperimentalRetryCount(requestCtx)
 
 	for {
 		reqLog.Debug("openai.images.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		var selection *service.AccountSelectionResult
 		var scheduleDecision service.OpenAIAccountScheduleDecision
 		var err error
-		if strictPriority {
-			selection, scheduleDecision, err = h.gatewayService.SelectAccountStrictPriorityForImages(
+		if experimentalScheduler {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountExperimentalSchedulerForImages(
 				requestCtx,
 				apiKey.GroupID,
+				sessionHash,
 				requestModel,
 				failedAccountIDs,
 				parsed.RequiredCapability,
@@ -214,8 +215,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		forwardStart := time.Now()
 		writerSizeBeforeForward := c.Writer.Size()
 		forwardCtx := requestCtx
-		if strictPriority {
-			forwardCtx = service.WithOpenAIStrictPriorityNoPenalty(forwardCtx)
+		if experimentalScheduler {
+			forwardCtx = service.WithOpenAIExperimentalSchedulerFailoverMode(forwardCtx)
 		}
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -246,7 +247,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				var imageUpstreamErr *service.OpenAIImagesUpstreamError
 				if errors.As(err, &imageUpstreamErr) {
 					retryableServerError := service.IsOpenAIImagesRetryableUpstreamError(imageUpstreamErr)
-					h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, !retryableServerError, nil)
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, !retryableServerError, nil)
 					logEvent := "openai.images.upstream_user_error"
 					if retryableServerError {
 						logEvent = "openai.images.upstream_server_error_after_flush"
@@ -262,7 +263,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				}
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
-					h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 					if c.Writer.Size() != writerSizeBeforeForward {
 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
 							zap.Int64("account_id", account.ID),
@@ -271,10 +272,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
-					if strictPriority || failoverErr.RetryableOnSameAccount {
+					if experimentalScheduler || failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
-						if strictPriority {
-							retryLimit = strictRetryLimit
+						if experimentalScheduler {
+							retryLimit = experimentalRetryLimit
 						}
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
@@ -292,25 +293,25 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 							continue
 						}
 					}
-					h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
+					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
 					failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
-					if !strictPriority && switchCount >= maxAccountSwitches {
+					if !experimentalScheduler && switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if !strictPriority && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if !experimentalScheduler && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					reqLog.Warn("openai.images.upstream_failover_switching",
-						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
+						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, experimentalScheduler, failoverAttempts)...,
 					)
 					continue
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -334,11 +335,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			if account.Type == service.AccountTypeOAuth {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
-			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 		} else {
-			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
 		}
-		if strictPriority && !h.gatewayService.ShouldRecordOpenAIAccountStrictRecoveredUpstream(c.Request.Context()) {
+		if experimentalScheduler && !h.gatewayService.ShouldRecordOpenAIAccountExperimentalRecoveredUpstream(c.Request.Context()) {
 			service.MarkOpsSkipRecoveredUpstream(c)
 		}
 

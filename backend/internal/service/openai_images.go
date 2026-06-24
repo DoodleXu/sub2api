@@ -593,14 +593,14 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, err
 	}
 	upstreamReq, err := s.buildOpenAIImagesRequest(upstreamCtx, c, account, forwardBody, forwardContentType, token, parsed.Endpoint)
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, err
@@ -614,21 +614,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
-			Kind:               "request_error",
-			Message:            safeErr,
-		})
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
-			return nil, failoverErr
-		}
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
@@ -655,7 +641,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
-		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, upstreamModel)

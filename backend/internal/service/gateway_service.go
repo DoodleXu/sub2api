@@ -586,12 +586,12 @@ func (e *UpstreamFailoverError) Error() string {
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
 }
 
-func newOpenAIStrictPriorityFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
-	return newOpenAIStrictPriorityFailoverHTTPError(ctx, statusCode, message, nil, nil)
+func newOpenAIExperimentalSchedulerFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
+	return newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, statusCode, message, nil, nil)
 }
 
-func newOpenAIStrictPriorityFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
-	if !IsOpenAIStrictPriorityNoPenalty(ctx) {
+func newOpenAIExperimentalSchedulerFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
+	if !IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
 		return nil
 	}
 	if statusCode <= 0 {
@@ -3429,10 +3429,14 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				// 检查账号分组归属和平台匹配（确保粘性会话不会跨分组或跨平台）
 				if err == nil {
 					clearSticky := shouldClearStickySession(account, requestedModel)
-					if clearSticky {
+					restrictedSticky := false
+					if !clearSticky && s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
+						restrictedSticky = true
+					}
+					if clearSticky || restrictedSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
-					if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
+					if !clearSticky && !restrictedSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
 						return account, nil
 					}
 				}

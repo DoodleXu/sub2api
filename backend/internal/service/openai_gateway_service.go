@@ -1363,7 +1363,7 @@ func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, re
 	return true
 }
 
-func isOpenAIAccountStrictPriorityEligible(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+func isOpenAIAccountExperimentalSchedulerEligible(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
 	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		return false
 	}
@@ -2241,12 +2241,12 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	return latest
 }
 
-func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
+func (s *OpenAIGatewayService) recheckExperimentalSchedulerAccountFromDB(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
 	if account == nil {
 		return nil
 	}
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAIAccountStrictPriorityEligible(ctx, account, requestedModel, requireCompact, requiredCapability) {
+		if !isOpenAIAccountExperimentalSchedulerEligible(ctx, account, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
 		if !accountSupportsOpenAICapabilities(account, requiredCapability, requiredImageCapability) {
@@ -2259,7 +2259,7 @@ func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
-	if !isOpenAIAccountStrictPriorityEligible(ctx, latest, requestedModel, requireCompact, requiredCapability) {
+	if !isOpenAIAccountExperimentalSchedulerEligible(ctx, latest, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if !accountSupportsOpenAICapabilities(latest, requiredCapability, requiredImageCapability) {
@@ -2413,7 +2413,7 @@ func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, responseBody []byte, requestedModel ...string) {
-	if IsOpenAIStrictPriorityNoPenalty(ctx) {
+	if IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
 		return
 	}
 	if len(requestedModel) > 0 {
@@ -3028,7 +3028,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, reqStream, promptCacheKey, isCodexCLI)
 		releaseUpstreamCtx()
 		if err != nil {
-			if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+			if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 				return nil, failoverErr
 			}
 			return nil, err
@@ -3104,7 +3104,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 				}
 			}
-			if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+			if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
 				return nil, failoverErr
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
@@ -3322,7 +3322,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, err
@@ -3332,7 +3332,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	upstreamReq, err := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
 	releaseUpstreamCtx()
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, err
@@ -3366,13 +3366,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		respBody := []byte(nil)
 		upstreamMsg := resp.Status
-		if IsOpenAIStrictPriorityNoPenalty(ctx) {
+		if IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
 			respBody = s.readUpstreamErrorBody(resp)
 			if msg := strings.TrimSpace(extractUpstreamErrorMessage(respBody)); msg != "" {
 				upstreamMsg = sanitizeUpstreamErrorMessage(msg)
 			}
 		}
-		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)

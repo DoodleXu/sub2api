@@ -43,7 +43,7 @@ func TestOpenAICompatErrorResponse_UsesStrictNoPenaltyContext(t *testing.T) {
 	}
 
 	_, err := svc.handleCompatErrorResponse(
-		WithOpenAIStrictPriorityNoPenalty(context.Background()),
+		WithOpenAIExperimentalSchedulerFailoverMode(context.Background()),
 		resp,
 		c,
 		account,

@@ -218,7 +218,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, fmt.Errorf("get access token: %w", err)
@@ -229,7 +229,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 	releaseUpstreamCtx()
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -247,21 +247,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
-		})
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+		failoverErr := s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		if _, ok := failoverErr.(*UpstreamFailoverError); ok {
 			return nil, failoverErr
 		}
 		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		return nil, failoverErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -310,7 +301,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
 		}
-		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return s.handleChatCompletionsErrorResponse(ctx, resp, c, account, billingModel)

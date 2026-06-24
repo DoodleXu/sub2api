@@ -1250,6 +1250,80 @@ type openAIWSUsageHandlerChannelRepoStub struct {
 	groupPlatforms map[int64]string
 }
 
+type openAIWSBalanceSequenceCache struct {
+	mu       sync.Mutex
+	balances []float64
+	calls    int
+}
+
+func (s *openAIWSBalanceSequenceCache) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if len(s.balances) == 0 {
+		return 0, nil
+	}
+	balance := s.balances[0]
+	if len(s.balances) > 1 {
+		s.balances = s.balances[1:]
+	}
+	return balance, nil
+}
+func (s *openAIWSBalanceSequenceCache) SetUserBalance(ctx context.Context, userID int64, balance float64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) DeductUserBalance(ctx context.Context, userID int64, amount float64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) InvalidateUserBalance(ctx context.Context, userID int64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) GetSubscriptionCache(ctx context.Context, userID, groupID int64) (*service.SubscriptionCacheData, error) {
+	return nil, nil
+}
+func (s *openAIWSBalanceSequenceCache) SetSubscriptionCache(ctx context.Context, userID, groupID int64, data *service.SubscriptionCacheData) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) GetAPIKeyRateLimit(ctx context.Context, keyID int64) (*service.APIKeyRateLimitCacheData, error) {
+	return nil, nil
+}
+func (s *openAIWSBalanceSequenceCache) SetAPIKeyRateLimit(ctx context.Context, keyID int64, data *service.APIKeyRateLimitCacheData) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) InvalidateAPIKeyRateLimit(ctx context.Context, keyID int64) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) GetUserPlatformQuotaCache(ctx context.Context, userID int64, platform string) (*service.UserPlatformQuotaCacheEntry, bool, error) {
+	return nil, false, nil
+}
+func (s *openAIWSBalanceSequenceCache) SetUserPlatformQuotaCache(ctx context.Context, userID int64, platform string, entry *service.UserPlatformQuotaCacheEntry, ttl time.Duration) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) DeleteUserPlatformQuotaCache(ctx context.Context, userID int64, platform string) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) IncrUserPlatformQuotaUsageCache(ctx context.Context, userID int64, platform string, cost float64, ttl time.Duration, markDirty bool) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) PopDirtyUserPlatformQuotaKeys(ctx context.Context, n int) ([]service.UserPlatformQuotaKey, error) {
+	return nil, nil
+}
+func (s *openAIWSBalanceSequenceCache) ReaddDirtyUserPlatformQuotaKeys(ctx context.Context, keys []service.UserPlatformQuotaKey) error {
+	return nil
+}
+func (s *openAIWSBalanceSequenceCache) BatchGetUserPlatformQuotaCache(ctx context.Context, keys []service.UserPlatformQuotaKey) ([]*service.UserPlatformQuotaCacheEntry, error) {
+	return nil, nil
+}
+
 type openAIHandlerHTTPUpstreamFunc func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
 
 func (f openAIHandlerHTTPUpstreamFunc) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
@@ -1260,13 +1334,13 @@ func (f openAIHandlerHTTPUpstreamFunc) DoWithTLS(req *http.Request, proxyURL str
 	return f.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
-func enableOpenAIStrictPriorityForTest(t *testing.T, settingSvc *service.SettingService) {
+func enableOpenAIExperimentalSchedulerForTest(t *testing.T, settingSvc *service.SettingService) {
 	t.Helper()
 	require.NoError(t, settingSvc.UpdateSettings(context.Background(), &service.SystemSettings{
-		OpenAIAdvancedSchedulerEnabled:             true,
-		OpenAIAccountSchedulerStrategy:             service.OpenAIAccountSchedulerStrategyStrict,
-		OpenAIAccountStrictRetryCount:              0,
-		OpenAIAccountStrictRecordRecoveredUpstream: false,
+		OpenAIAdvancedSchedulerEnabled:                   true,
+		OpenAIAccountSchedulerStrategy:                   service.OpenAIAccountSchedulerStrategyExperimental,
+		OpenAIAccountExperimentalRetryCount:              0,
+		OpenAIAccountExperimentalRecordRecoveredUpstream: false,
 	}))
 }
 
@@ -1293,13 +1367,13 @@ func (s *openAIWSUsageHandlerChannelRepoStub) GetGroupPlatforms(ctx context.Cont
 	return out, nil
 }
 
-func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches(t *testing.T) {
+func TestOpenAIChatCompletions_ExperimentalSchedulerTriesAllCandidatesBeyondMaxSwitches(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var hitMu sync.Mutex
 	hits := map[int]int{}
-	strictOKBody := strings.Join([]string{
-		`data: {"type":"response.completed","response":{"id":"resp_strict_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_strict_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	experimentalOKBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_experimental_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_experimental_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -1314,10 +1388,10 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 		case 9912:
 			hits[2]++
 			return &http.Response{
-				StatusCode: http.StatusTooManyRequests,
-				Status:     "429 Too Many Requests",
+				StatusCode: http.StatusBadRequest,
+				Status:     "400 Bad Request",
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit_error","message":"second account limited"}}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"second account rejected"}}`)),
 			}, nil
 		case 9913:
 			hits[3]++
@@ -1325,7 +1399,7 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 				StatusCode: http.StatusOK,
 				Status:     "200 OK",
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(strings.NewReader(strictOKBody)),
+				Body:       io.NopCloser(strings.NewReader(experimentalOKBody)),
 			}, nil
 		default:
 			return nil, errors.New("unexpected account")
@@ -1337,7 +1411,7 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 	accounts := []service.Account{
 		{
 			ID:          9911,
-			Name:        "strict-priority-first",
+			Name:        "experimental-first",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeAPIKey,
 			Status:      service.StatusActive,
@@ -1349,7 +1423,7 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 		},
 		{
 			ID:          9912,
-			Name:        "strict-priority-second",
+			Name:        "experimental-second",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeAPIKey,
 			Status:      service.StatusActive,
@@ -1361,7 +1435,7 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 		},
 		{
 			ID:          9913,
-			Name:        "strict-priority-third",
+			Name:        "experimental-third",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeAPIKey,
 			Status:      service.StatusActive,
@@ -1381,12 +1455,12 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 	cfg.Gateway.MaxAccountSwitches = 1
 
 	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
-		"openai_account_scheduler_strategy":               service.OpenAIAccountSchedulerStrategyStrict,
-		"openai_account_strict_retry_count":               "0",
-		"openai_account_strict_record_recovered_upstream": "false",
+		"openai_account_scheduler_strategy":                     service.OpenAIAccountSchedulerStrategyExperimental,
+		"openai_account_experimental_retry_count":               "0",
+		"openai_account_experimental_record_recovered_upstream": "false",
 	}}
 	settingSvc := service.NewSettingService(settingRepo, cfg)
-	enableOpenAIStrictPriorityForTest(t, settingSvc)
+	enableOpenAIExperimentalSchedulerForTest(t, settingSvc)
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 	rateLimitSvc.SetSettingService(settingSvc)
@@ -1426,7 +1500,7 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 		}), SSEPingFormatNone, time.Second),
 		maxAccountSwitches: 1,
 	}
-	require.True(t, gatewaySvc.IsOpenAIAccountStrictPrioritySchedulerEnabled(context.Background()))
+	require.True(t, gatewaySvc.IsOpenAIAccountExperimentalSchedulerEnabled(context.Background()))
 
 	apiKey := &service.APIKey{
 		ID:      1803,
@@ -1461,13 +1535,13 @@ func TestOpenAIChatCompletions_StrictPriorityTriesAllCandidatesBeyondMaxSwitches
 	require.Equal(t, 1, hits[3])
 }
 
-func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testing.T) {
+func TestOpenAIChatCompletions_ExperimentalSchedulerIgnoresOAuth429StormAndTriesAllCandidates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var hitMu sync.Mutex
 	hits := map[int]int{}
-	strictOKBody := strings.Join([]string{
-		`data: {"type":"response.completed","response":{"id":"resp_oauth_strict_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_oauth_strict_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	experimentalOKBody := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_oauth_experimental_ok","object":"response","model":"gpt-5.1","status":"completed","output":[{"type":"message","id":"msg_oauth_experimental_ok","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -1498,7 +1572,7 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 				StatusCode: http.StatusOK,
 				Status:     "200 OK",
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(strings.NewReader(strictOKBody)),
+				Body:       io.NopCloser(strings.NewReader(experimentalOKBody)),
 			}, nil
 		default:
 			return nil, errors.New("unexpected account")
@@ -1509,7 +1583,7 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 	accounts := []service.Account{
 		{
 			ID:          9921,
-			Name:        "strict-oauth-first",
+			Name:        "experimental-oauth-first",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
@@ -1520,7 +1594,7 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 		},
 		{
 			ID:          9922,
-			Name:        "strict-oauth-second",
+			Name:        "experimental-oauth-second",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
@@ -1531,7 +1605,7 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 		},
 		{
 			ID:          9923,
-			Name:        "strict-oauth-third",
+			Name:        "experimental-oauth-third",
 			Platform:    service.PlatformOpenAI,
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
@@ -1548,12 +1622,12 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 	cfg.Gateway.MaxAccountSwitches = 1
 
 	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
-		"openai_account_scheduler_strategy":               service.OpenAIAccountSchedulerStrategyStrict,
-		"openai_account_strict_retry_count":               "0",
-		"openai_account_strict_record_recovered_upstream": "false",
+		"openai_account_scheduler_strategy":                     service.OpenAIAccountSchedulerStrategyExperimental,
+		"openai_account_experimental_retry_count":               "0",
+		"openai_account_experimental_record_recovered_upstream": "false",
 	}}
 	settingSvc := service.NewSettingService(settingRepo, cfg)
-	enableOpenAIStrictPriorityForTest(t, settingSvc)
+	enableOpenAIExperimentalSchedulerForTest(t, settingSvc)
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 	rateLimitSvc.SetSettingService(settingSvc)
@@ -1594,7 +1668,7 @@ func TestOpenAIChatCompletions_StrictPriorityBypassesOAuth429StormStop(t *testin
 		}), SSEPingFormatNone, time.Second),
 		maxAccountSwitches: 1,
 	}
-	require.True(t, gatewaySvc.IsOpenAIAccountStrictPrioritySchedulerEnabled(context.Background()))
+	require.True(t, gatewaySvc.IsOpenAIAccountExperimentalSchedulerEnabled(context.Background()))
 
 	apiKey := &service.APIKey{
 		ID:      1804,
@@ -1822,6 +1896,175 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 		t.Fatal("等待第二个上游收到重放首帧超时")
 	}
 	require.Equal(t, []int64{int64(9902)}, accountRepo.rateLimitedIDs)
+}
+
+func TestOpenAIResponsesWebSocket_RechecksBillingBeforeFollowupTurn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	secondUpstreamPayloadCh := make(chan []byte, 1)
+	upstreamErrCh := make(chan error, 1)
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		_, _, err = conn.Read(readCtx)
+		cancelRead()
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		writeCtx, cancelWrite := context.WithTimeout(r.Context(), 3*time.Second)
+		err = conn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`))
+		cancelWrite()
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+
+		readCtx, cancelRead = context.WithTimeout(r.Context(), 500*time.Millisecond)
+		_, payload, err := conn.Read(readCtx)
+		cancelRead()
+		if err == nil {
+			secondUpstreamPayloadCh <- payload
+		}
+		upstreamErrCh <- nil
+	}))
+	defer upstreamServer.Close()
+
+	groupID := int64(4202)
+	account := service.Account{
+		ID:          9903,
+		Name:        "openai-ws-per-turn-billing",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": upstreamServer.URL,
+		},
+		Extra: map[string]any{
+			"openai_apikey_responses_websockets_v2_enabled": true,
+			"openai_apikey_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
+		},
+	}
+	cfg := &config.Config{}
+	cfg.RunMode = config.RunModeStandard
+	cfg.Default.RateMultiplier = 1
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
+	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 1)}
+	balanceCache := &openAIWSBalanceSequenceCache{balances: []float64{1, 0}}
+	billingCacheSvc := service.NewBillingCacheService(balanceCache, nil, nil, nil, nil, nil, cfg, nil)
+	gatewaySvc := service.NewOpenAIGatewayService(
+		accountRepo,
+		usageRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		service.NewBillingService(cfg, nil),
+		nil,
+		billingCacheSvc,
+		nil,
+		&service.DeferredService{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	cache := &concurrencyCacheMock{
+		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+			return true, nil
+		},
+		acquireAccountSlotFn: func(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
+			return true, nil
+		},
+	}
+	h := &OpenAIGatewayHandler{
+		gatewayService:      gatewaySvc,
+		billingCacheService: billingCacheSvc,
+		apiKeyService:       &service.APIKeyService{},
+		concurrencyHelper:   NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second),
+	}
+
+	apiKey := &service.APIKey{
+		ID:      1804,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1704, Status: service.StatusActive},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
+		c.Next()
+	})
+	router.GET("/openai/v1/responses", h.ResponsesWebSocket)
+	handlerServer := httptest.NewServer(router)
+	defer handlerServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(
+		dialCtx,
+		"ws"+strings.TrimPrefix(handlerServer.URL, "http")+"/openai/v1/responses",
+		&coderws.DialOptions{CompressionMode: coderws.CompressionContextTakeover},
+	)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, _, err = clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, err)
+
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_first"}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead = context.WithTimeout(context.Background(), 3*time.Second)
+	_, _, err = clientConn.Read(readCtx)
+	cancelRead()
+	require.Error(t, err)
+	var closeErr coderws.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+	require.Contains(t, strings.ToLower(closeErr.Reason), "billing")
+
+	select {
+	case payload := <-secondUpstreamPayloadCh:
+		t.Fatalf("second turn reached upstream before billing rejection: %s", string(payload))
+	case <-time.After(700 * time.Millisecond):
+	}
+	require.GreaterOrEqual(t, balanceCache.calls, 2)
+	require.NoError(t, <-upstreamErrCh)
 }
 
 func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSUsageLogCase) openAIResponsesWSUsageLogResult {

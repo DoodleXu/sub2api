@@ -48,7 +48,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 
 	apiKey := account.GetOpenAIApiKey()
 	if apiKey == "" {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, "missing api_key"); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, "missing api_key"); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
@@ -59,7 +59,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, fmt.Errorf("invalid base_url: %w", err)
@@ -70,7 +70,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(upstreamBody))
 	releaseUpstreamCtx()
 	if err != nil {
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
 			return nil, failoverErr
 		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -97,21 +97,12 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
-		})
-		if failoverErr := newOpenAIStrictPriorityFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
+		failoverErr := s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		if _, ok := failoverErr.(*UpstreamFailoverError); ok {
 			return nil, failoverErr
 		}
 		writeOpenAIEmbeddingsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		return nil, failoverErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -149,7 +140,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
-		if failoverErr := newOpenAIStrictPriorityFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
+		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
 			return nil, failoverErr
 		}
 		writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)

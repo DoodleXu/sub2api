@@ -291,3 +291,62 @@ func TestIsUpstreamModelRestrictedByChannel_UnsupportedModel(t *testing.T) {
 	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "totally-unknown-model"),
 		"unmappable model → upstream model empty → not restricted (account filter handles this)")
 }
+
+func TestSelectAccountForModelWithExclusions_StickyRestrictedUpstreamFallsBack(t *testing.T) {
+	t.Parallel()
+
+	groupID := int64(10)
+	channelSvc := newTestChannelService(makeStandardRepo(Channel{
+		ID:                 1,
+		Status:             StatusActive,
+		GroupIDs:           []int64{groupID},
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformAntigravity, Models: []string{"claude-opus-4-6"}},
+		},
+	}, map[int64]string{groupID: PlatformAntigravity}))
+
+	accountRepo := &mockAccountRepoForPlatform{
+		accounts: []Account{
+			{
+				ID:          1,
+				Platform:    PlatformAntigravity,
+				Status:      StatusActive,
+				Schedulable: true,
+				Priority:    10,
+			},
+			{
+				ID:          2,
+				Platform:    PlatformAntigravity,
+				Status:      StatusActive,
+				Schedulable: true,
+				Priority:    20,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-opus-4-6"},
+				},
+			},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range accountRepo.accounts {
+		accountRepo.accountsByID[accountRepo.accounts[i].ID] = &accountRepo.accounts[i]
+	}
+	cache := &stubGatewayCache{
+		sessionBindings: map[string]int64{"sticky-session": 1},
+	}
+	svc := &GatewayService{
+		accountRepo:    accountRepo,
+		groupRepo:      &mockGroupRepoForGateway{groups: map[int64]*Group{groupID: {ID: groupID, Platform: PlatformAntigravity, Status: StatusActive, Hydrated: true}}},
+		channelService: channelSvc,
+		cache:          cache,
+		cfg:            testConfig(),
+	}
+
+	account, err := svc.SelectAccountForModelWithExclusions(context.Background(), &groupID, "sticky-session", "claude-sonnet-4-6", nil)
+	require.NoError(t, err)
+	require.NotNil(t, account)
+	require.Equal(t, int64(2), account.ID)
+	require.Equal(t, 1, cache.deletedSessions["sticky-session"])
+	require.Equal(t, int64(2), cache.sessionBindings["sticky-session"])
+}

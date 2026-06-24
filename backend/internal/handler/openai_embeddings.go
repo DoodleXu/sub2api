@@ -106,17 +106,19 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		maxAccountSwitches = 3
 	}
 	sameAccountRetryCount := make(map[int64]int)
-	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(c.Request.Context())
-	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(c.Request.Context())
+	experimentalScheduler := h.gatewayService.IsOpenAIAccountExperimentalSchedulerEnabled(c.Request.Context())
+	experimentalRetryLimit := h.gatewayService.OpenAIAccountExperimentalRetryCount(c.Request.Context())
 	routingStart := time.Now()
 
 	for {
 		var selection *service.AccountSelectionResult
 		var err error
-		if strictPriority {
-			selection, _, err = h.gatewayService.SelectAccountStrictPriorityForCapability(
+		if experimentalScheduler {
+			selection, _, err = h.gatewayService.SelectAccountExperimentalSchedulerForCapability(
 				c.Request.Context(),
 				apiKey.GroupID,
+				"",
+				"",
 				reqModel,
 				failedAccountIDs,
 				service.OpenAIUpstreamTransportHTTPSSE,
@@ -174,8 +176,8 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		}
 		writerSizeBeforeForward := c.Writer.Size()
 		forwardCtx := c.Request.Context()
-		if strictPriority {
-			forwardCtx = service.WithOpenAIStrictPriorityNoPenalty(forwardCtx)
+		if experimentalScheduler {
+			forwardCtx = service.WithOpenAIExperimentalSchedulerFailoverMode(forwardCtx)
 		}
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -201,14 +203,14 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 					h.handleFailoverExhausted(c, failoverErr, true)
 					return
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
-				if strictPriority {
-					if sameAccountRetryCount[account.ID] < strictRetryLimit {
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+				if experimentalScheduler {
+					if sameAccountRetryCount[account.ID] < experimentalRetryLimit {
 						sameAccountRetryCount[account.ID]++
-						reqLog.Warn("openai_embeddings.strict_priority_same_account_retry",
+						reqLog.Warn("openai_embeddings.experimental_scheduler_same_account_retry",
 							zap.Int64("account_id", account.ID),
 							zap.Int("upstream_status", failoverErr.StatusCode),
-							zap.Int("retry_limit", strictRetryLimit),
+							zap.Int("retry_limit", experimentalRetryLimit),
 							zap.Int("retry_count", sameAccountRetryCount[account.ID]),
 						)
 						select {
@@ -219,21 +221,25 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 						continue
 					}
 				}
-				h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
+				h.gatewayService.RecordOpenAIAccountSwitch()
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
 				failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
-				if !strictPriority && switchCount >= maxAccountSwitches {
+				if !experimentalScheduler && switchCount >= maxAccountSwitches {
 					h.handleFailoverExhausted(c, failoverErr, false)
 					return
 				}
 				switchCount++
+				if !experimentalScheduler && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					h.handleFailoverExhausted(c, failoverErr, false)
+					return
+				}
 				reqLog.Warn("openai_embeddings.upstream_failover_switching",
-					openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
+					openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, experimentalScheduler, failoverAttempts)...,
 				)
 				continue
 			}
-			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 			if c.Writer.Size() == writerSizeBeforeForward {
 				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 			}
@@ -244,8 +250,8 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			return
 		}
 
-		h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, nil)
-		if strictPriority && !h.gatewayService.ShouldRecordOpenAIAccountStrictRecoveredUpstream(c.Request.Context()) {
+		h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+		if experimentalScheduler && !h.gatewayService.ShouldRecordOpenAIAccountExperimentalRecoveredUpstream(c.Request.Context()) {
 			service.MarkOpsSkipRecoveredUpstream(c)
 		}
 		userAgent := c.GetHeader("User-Agent")
