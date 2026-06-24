@@ -1363,31 +1363,6 @@ func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, re
 	return true
 }
 
-func isOpenAIAccountExperimentalSchedulerEligible(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
-	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
-		return false
-	}
-	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-		slog.Debug("account_auto_paused_by_quota",
-			"account_id", account.ID,
-			"window", reason.window,
-			"threshold", reason.threshold,
-			"utilization", reason.utilization,
-		)
-		return false
-	}
-	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
-		return false
-	}
-	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
-		return false
-	}
-	if requireCompact && openAICompactSupportTier(account) == 0 {
-		return false
-	}
-	return true
-}
-
 type openAIQuotaAutoPauseDecision struct {
 	window      string
 	threshold   float64
@@ -2236,33 +2211,6 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 		return nil
 	}
 	if s.isOpenAIAccountRuntimeBlocked(latest) {
-		return nil
-	}
-	return latest
-}
-
-func (s *OpenAIGatewayService) recheckExperimentalSchedulerAccountFromDB(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
-	if account == nil {
-		return nil
-	}
-	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAIAccountExperimentalSchedulerEligible(ctx, account, requestedModel, requireCompact, requiredCapability) {
-			return nil
-		}
-		if !accountSupportsOpenAICapabilities(account, requiredCapability, requiredImageCapability) {
-			return nil
-		}
-		return account
-	}
-
-	latest, err := s.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil {
-		return nil
-	}
-	if !isOpenAIAccountExperimentalSchedulerEligible(ctx, latest, requestedModel, requireCompact, requiredCapability) {
-		return nil
-	}
-	if !accountSupportsOpenAICapabilities(latest, requiredCapability, requiredImageCapability) {
 		return nil
 	}
 	return latest

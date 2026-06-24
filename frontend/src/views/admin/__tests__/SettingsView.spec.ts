@@ -852,16 +852,16 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(getProviders).toHaveBeenCalledTimes(2);
   });
 
-  it("renders advanced scheduler copy as local experimental gateway policy", async () => {
+  it("renders advanced scheduler copy as the original advanced scheduler switch", async () => {
     const wrapper = mountView();
 
     await flushPromises();
 
-    expect(wrapper.text()).toContain("OpenAI 实验调度策略");
+    expect(wrapper.text()).toContain("OpenAI 高级调度");
     expect(wrapper.text()).toContain(
-      "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
+      "保留原版高级调度开关。仅在老调度方案下启用原有的高级调度行为",
     );
-    expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+    expect(wrapper.text()).not.toContain("OpenAI 实验调度策略");
   });
 
   it("passes translated upload and remove labels to the payment help image uploader", async () => {

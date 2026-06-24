@@ -194,7 +194,7 @@ func (s *OpenAIUpstreamBalanceService) doGET(ctx context.Context, endpoint, apiK
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("GET %s failed: status=%d body=%s", endpoint, resp.StatusCode, truncateText(string(body), openAIUpstreamBalanceErrorMaxText))
