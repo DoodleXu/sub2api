@@ -19,6 +19,25 @@ func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionS
 	return APIKeyAuthMiddleware(apiKeyAuthWithSubscription(apiKeyService, subscriptionService, cfg))
 }
 
+func checkAPIKeyIPRestriction(c *gin.Context, apiKey *service.APIKey, cfg *config.Config) (string, bool) {
+	if apiKey == nil || len(apiKey.IPWhitelist) == 0 && len(apiKey.IPBlacklist) == 0 {
+		return "", true
+	}
+	clientIP := ip.GetTrustedClientIP(c)
+	if cfg != nil && cfg.TrustForwardedIPForAPIKeyACL() {
+		clientIP = ip.GetClientIP(c)
+	}
+	allowed, _ := ip.CheckIPRestrictionWithCompiledRules(clientIP, apiKey.CompiledIPWhitelist, apiKey.CompiledIPBlacklist)
+	if allowed {
+		return clientIP, true
+	}
+	if clientIP == "" {
+		clientIP = "unknown"
+	}
+	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonIPRestriction)
+	return clientIP, false
+}
+
 // apiKeyAuthWithSubscription API Key认证中间件（支持订阅验证）
 //
 // 中间件职责分为两层：
@@ -93,20 +112,9 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		// 检查 IP 限制（白名单/黑名单）
 		// 注意：错误信息故意模糊，避免暴露具体的 IP 限制机制
-		if len(apiKey.IPWhitelist) > 0 || len(apiKey.IPBlacklist) > 0 {
-			clientIP := ip.GetTrustedClientIP(c)
-			if cfg.TrustForwardedIPForAPIKeyACL() {
-				clientIP = ip.GetClientIP(c)
-			}
-			allowed, _ := ip.CheckIPRestrictionWithCompiledRules(clientIP, apiKey.CompiledIPWhitelist, apiKey.CompiledIPBlacklist)
-			if !allowed {
-				if clientIP == "" {
-					clientIP = "unknown"
-				}
-				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonIPRestriction)
-				AbortWithError(c, 403, "ACCESS_DENIED", fmt.Sprintf("Access denied. Your IP is %s", clientIP))
-				return
-			}
+		if clientIP, ok := checkAPIKeyIPRestriction(c, apiKey, cfg); !ok {
+			AbortWithError(c, 403, "ACCESS_DENIED", fmt.Sprintf("Access denied. Your IP is %s", clientIP))
+			return
 		}
 
 		// 检查关联的用户
