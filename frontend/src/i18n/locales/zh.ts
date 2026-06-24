@@ -3422,6 +3422,8 @@ export default {
         weight: '权重',
         status: '状态',
         schedulable: '调度',
+        routingPriority: '质量评分',
+        upstreamBalance: '上游状态/余额',
         todayStats: '今日统计',
         groups: '分组',
         usageWindows: '用量窗口',
@@ -3430,6 +3432,64 @@ export default {
         createdAt: '创建时间',
         expiresAt: '过期时间',
         actions: '操作'
+      },
+      upstreamBalance: {
+        refresh: '刷新余额',
+        failed: '刷新失败',
+        unknown: '未刷新',
+        realRate: '真实倍率 {rate}x',
+        baseRate: '基础倍率 {rate}x',
+        updatedAt: '更新于 {time}'
+      },
+      routingPriority: {
+        modal: {
+          title: 'OpenAI 试验性调度解释',
+          empty: '暂无可显示的调度解释'
+        },
+        status: {
+          candidate: '可调度',
+          skipped: '不可调度',
+          schedulable: '可调度',
+          blocked: '不可调度'
+        },
+        score: {
+          total: '综合分',
+          quality: '质量',
+          price: '价格',
+          latency: '响应',
+          error_rate: '错误率',
+          priority: '优先级',
+          load: '负载',
+          queue: '队列'
+        },
+        sections: {
+          score: '分项评分',
+          blockReasons: '阻塞原因',
+          topCandidates: 'Top 候选'
+        },
+        summary: {
+          low_price_high_quality: '低价且质量稳定',
+          high_quality: '高质量中等价格',
+          cost_advantage: '价格优势明显',
+          balanced: '综合表现均衡',
+          balanced_quality_cost: '低价且质量稳定',
+          high_quality_mid_price: '高质量中等价格',
+          expensive_or_slow: '成本或响应偏高',
+          blocked: '当前不可调度',
+          inactive: '账号未启用',
+          archived: '账号已归档',
+          manual_unschedulable: '手动关闭调度',
+          error_status: '账号错误状态',
+          expired: '账号已过期',
+          rate_limited: '限流冷却中',
+          overloaded: '过载冷却中',
+          overload_cooldown: '过载冷却中',
+          temp_unschedulable: '临时不可调度',
+          runtime_blocked: '运行时短期降级',
+          group_mismatch: '分组不匹配',
+          model_unsupported: '模型或能力不匹配',
+          model_mismatch: '模型或能力不匹配'
+        }
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
       allPrivacyModes: '全部Privacy状态',
@@ -7136,19 +7196,19 @@ export default {
         sourceHint: '启用后必须明确选择一个来源；未配置状态不会对外展示该支付方式。',
         sourceRequiredError: '{title} 已启用，请先选择支付来源。'
       },
-      openaiExperimentalScheduler: {
-        title: 'OpenAI 实验调度策略',
-        description: '默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。'
+      openaiAdvancedScheduler: {
+        title: 'OpenAI 高级调度',
+        description: '保留原版高级调度开关。仅在老调度方案下启用原有的高级调度行为；试验性调度由下方调度方案独立控制。'
       },
       openaiAccountScheduler: {
         strategy: 'OpenAI HTTP 账号调度方案',
-        strategyHint: '仅影响 OpenAI HTTP 网关入口；Responses WebSocket v2 / WS mode 仍固定走老调度。老调度保持原有 sticky、负载和高级调度行为；严格优先级会按账号优先级逐级尝试。',
+        strategyHint: '仅影响 OpenAI HTTP 网关入口；Responses WebSocket v2 / WS mode 仍固定走老调度。老调度保持原有 sticky、负载和高级调度行为；试验性调度会综合价格、质量、延迟、错误率和优先级选择账号。',
         legacy: '老调度方案',
-        strictPriority: '严格优先级',
-        strictRetryCount: '严格优先级重试次数',
-        strictRetryCountHint: '仅严格优先级方案生效。每个账号失败后先原地重试，达到上限后再切换账号；0 表示不原地重试。',
+        experimentalScheduler: '试验性调度',
+        experimentalRetryCount: '同账号重试次数',
+        experimentalRetryCountHint: '仅试验性调度方案生效。每个账号失败后先原地重试，达到上限后再切换账号；0 表示不原地重试。',
         recordRecoveredUpstream: '记录恢复前上游错误',
-        recordRecoveredUpstreamHint: '仅严格优先级方案生效。开启后，请求最终成功时，前面账号的 429/5xx 等失败尝试仍会进入 Ops 错误记录。'
+        recordRecoveredUpstreamHint: '仅试验性调度方案生效。开启后，请求最终成功时，前面账号的 429/5xx 等失败尝试仍会进入 Ops 错误记录。'
       },
       usageRecords: {
         title: '使用记录',

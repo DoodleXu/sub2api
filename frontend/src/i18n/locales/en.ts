@@ -6981,19 +6981,19 @@ export default {
         sourceHint: 'Choose an explicit source before enabling the method. Not configured methods are not exposed.',
         sourceRequiredError: 'Select a payment source before enabling {title}.'
       },
-      openaiExperimentalScheduler: {
-        title: 'OpenAI experimental scheduler policy',
-        description: "Disabled by default. When enabled, this only changes the gateway's experimental account-selection policy for OpenAI traffic; it does not indicate an upstream OpenAI capability."
+      openaiAdvancedScheduler: {
+        title: 'OpenAI advanced scheduler',
+        description: 'Keeps the original advanced scheduler switch. It only enables the existing advanced scheduler behavior for the legacy scheduler; the experimental scheduler is controlled independently below.'
       },
       openaiAccountScheduler: {
         strategy: 'OpenAI HTTP account scheduler',
-        strategyHint: 'Only affects OpenAI HTTP gateway endpoints. Responses WebSocket v2 / WS mode always uses the legacy scheduler. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Strict priority tries accounts by priority tier.',
+        strategyHint: 'Only affects OpenAI HTTP gateway endpoints. Responses WebSocket v2 / WS mode always uses the legacy scheduler. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
         legacy: 'Legacy scheduler',
-        strictPriority: 'Strict priority',
-        strictRetryCount: 'Strict retry count',
-        strictRetryCountHint: 'Only applies to strict priority. Each account is retried before switching; 0 disables same-account retries.',
+        experimentalScheduler: 'Experimental scheduler',
+        experimentalRetryCount: 'Experimental retry count',
+        experimentalRetryCountHint: 'Only applies to experimental scheduler. Each account is retried before switching; 0 disables same-account retries.',
         recordRecoveredUpstream: 'Record recovered upstream errors',
-        recordRecoveredUpstreamHint: 'Only applies to strict priority. When enabled, failed attempts from earlier accounts still enter Ops error records even if the final request succeeds.'
+        recordRecoveredUpstreamHint: 'Only applies to experimental scheduler. When enabled, failed attempts from earlier accounts still enter Ops error records even if the final request succeeds.'
       },
       usageRecords: {
         title: 'Usage Records',

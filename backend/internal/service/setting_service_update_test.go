@@ -318,14 +318,14 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		PaymentVisibleMethodAlipaySource:           "alipay",
-		PaymentVisibleMethodWxpaySource:            "easypay",
-		PaymentVisibleMethodAlipayEnabled:          true,
-		PaymentVisibleMethodWxpayEnabled:           false,
-		OpenAIAdvancedSchedulerEnabled:             true,
-		OpenAIAccountSchedulerStrategy:             OpenAIAccountSchedulerStrategyStrict,
-		OpenAIAccountStrictRetryCount:              99,
-		OpenAIAccountStrictRecordRecoveredUpstream: true,
+		PaymentVisibleMethodAlipaySource:                 "alipay",
+		PaymentVisibleMethodWxpaySource:                  "easypay",
+		PaymentVisibleMethodAlipayEnabled:                true,
+		PaymentVisibleMethodWxpayEnabled:                 false,
+		OpenAIAdvancedSchedulerEnabled:                   true,
+		OpenAIAccountSchedulerStrategy:                   OpenAIAccountSchedulerStrategyExperimental,
+		OpenAIAccountExperimentalRetryCount:              99,
+		OpenAIAccountExperimentalRecordRecoveredUpstream: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, VisibleMethodSourceOfficialAlipay, repo.updates[SettingPaymentVisibleMethodAlipaySource])
@@ -333,9 +333,9 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "true", repo.updates[SettingPaymentVisibleMethodAlipayEnabled])
 	require.Equal(t, "false", repo.updates[SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
-	require.Equal(t, OpenAIAccountSchedulerStrategyStrict, repo.updates[openAIAccountSchedulerStrategySettingKey])
-	require.Equal(t, "10", repo.updates[openAIAccountStrictRetryCountSettingKey])
-	require.Equal(t, "true", repo.updates[openAIAccountStrictRecordRecoveredSettingKey])
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, repo.updates[openAIAccountSchedulerStrategySettingKey])
+	require.Equal(t, "10", repo.updates[openAIAccountExperimentalRetryCountSettingKey])
+	require.Equal(t, "true", repo.updates[openAIAccountExperimentalRecordRecoveredSettingKey])
 }
 
 func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T) {

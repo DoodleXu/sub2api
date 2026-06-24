@@ -918,8 +918,8 @@ func TestAPIContracts(t *testing.T) {
 						"payment_visible_method_wxpay_enabled": false,
 							"openai_advanced_scheduler_enabled": true,
 							"openai_account_scheduler_strategy": "legacy",
-							"openai_account_strict_retry_count": 3,
-							"openai_account_strict_record_recovered_upstream": false,
+							"openai_account_experimental_retry_count": 3,
+							"openai_account_experimental_record_recovered_upstream": false,
 							"openai_codex_user_agent":           "",
 					"openai_allow_claude_code_codex_plugin": false,
 					"openai_fast_policy_settings": {
@@ -1165,8 +1165,8 @@ func TestAPIContracts(t *testing.T) {
 						"payment_visible_method_wxpay_enabled": false,
 							"openai_advanced_scheduler_enabled": false,
 							"openai_account_scheduler_strategy": "legacy",
-							"openai_account_strict_retry_count": 3,
-							"openai_account_strict_record_recovered_upstream": false,
+							"openai_account_experimental_retry_count": 3,
+							"openai_account_experimental_record_recovered_upstream": false,
 							"openai_codex_user_agent":           "",
 					"openai_allow_claude_code_codex_plugin": false,
 					"openai_fast_policy_settings": {
@@ -1461,7 +1461,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil, dailyCheckinService)
-	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
