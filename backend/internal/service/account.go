@@ -781,6 +781,28 @@ func (a *Account) GetExtraString(key string) string {
 	return ""
 }
 
+func (a *Account) GetExtraFloat64(key string) (float64, bool) {
+	if a == nil || a.Extra == nil {
+		return 0, false
+	}
+	switch v := a.Extra[key].(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
 func (a *Account) GetClaudeUserID() string {
 	if v := strings.TrimSpace(a.GetExtraString("claude_user_id")); v != "" {
 		return v

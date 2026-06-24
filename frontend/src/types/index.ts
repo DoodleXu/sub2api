@@ -839,6 +839,18 @@ export interface Account {
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
+    upstream_balance_provider?: string
+    upstream_balance_remaining?: number
+    upstream_balance_unit?: string
+    upstream_balance_updated_at?: string
+    upstream_balance_status?: string
+    upstream_balance_error?: string
+    upstream_group?: string
+    upstream_group_id?: number
+    upstream_key_id?: number
+    upstream_group_rate_multiplier?: number
+    upstream_effective_rate_multiplier?: number
+    upstream_rate_source?: string
   } & Record<string, unknown>)
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null
@@ -848,6 +860,7 @@ export interface Account {
   current_concurrency?: number // Real-time concurrency count from Redis
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
+  routing_priority?: OpenAIRoutingSummary
   total_cost_cny?: number
   total_account_cost?: number
   cost_cny_per_usd?: number
@@ -928,6 +941,45 @@ export interface Account {
   current_window_cost?: number | null // 当前窗口费用
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
+}
+
+export interface OpenAIRoutingScoreBreakdown {
+  total: number
+  quality: number
+  price: number
+  latency: number
+  error_rate: number
+  priority: number
+  load: number
+  queue: number
+}
+
+export interface OpenAIRoutingSummary {
+  account_id: number
+  account_name: string
+  rank?: number
+  quality_score: number
+  quality_grade: string
+  tier: string
+  score: OpenAIRoutingScoreBreakdown
+  status_label: string
+  summary_reason: string
+  summary_reasons: string[]
+  is_schedulable_now: boolean
+  block_reasons?: string[]
+  snapshot_at: string
+}
+
+export interface OpenAIRoutingRankingResponse {
+  items: OpenAIRoutingSummary[]
+  source: string
+  snapshot_at: string
+}
+
+export interface OpenAIRoutingAccountExplain {
+  account: OpenAIRoutingSummary
+  top: OpenAIRoutingSummary[]
+  notes: string[]
 }
 
 // Account Usage types

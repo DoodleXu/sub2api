@@ -58,6 +58,8 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	upstreamBalanceService  *service.OpenAIUpstreamBalanceService
+	openAIGatewayService    *service.OpenAIGatewayService
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -75,6 +77,8 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	upstreamBalanceService *service.OpenAIUpstreamBalanceService,
+	openAIGatewayService *service.OpenAIGatewayService,
 ) *AccountHandler {
 	return &AccountHandler{
 		adminService:            adminService,
@@ -90,6 +94,8 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
+		upstreamBalanceService:  upstreamBalanceService,
+		openAIGatewayService:    openAIGatewayService,
 	}
 }
 
@@ -470,6 +476,114 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// RefreshUpstreamBalance refreshes upstream balance metadata for OpenAI API Key accounts.
+// POST /api/v1/admin/accounts/:id/upstream-balance/refresh
+func (h *AccountHandler) RefreshUpstreamBalance(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.upstreamBalanceService == nil {
+		response.InternalError(c, "upstream balance service not configured")
+		return
+	}
+	account, err := h.upstreamBalanceService.Refresh(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+func (h *AccountHandler) GetOpenAIRoutingRanking(c *gin.Context) {
+	if h.openAIGatewayService == nil {
+		response.InternalError(c, "openai gateway service not configured")
+		return
+	}
+	params, err := parseOpenAIRoutingExplainParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.openAIGatewayService.ExplainOpenAIRouting(c.Request.Context(), params)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *AccountHandler) GetOpenAIRoutingAccountExplain(c *gin.Context) {
+	if h.openAIGatewayService == nil {
+		response.InternalError(c, "openai gateway service not configured")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	params, err := parseOpenAIRoutingExplainParams(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.openAIGatewayService.ExplainOpenAIRoutingForAccount(c.Request.Context(), accountID, params)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func parseOpenAIRoutingExplainParams(c *gin.Context) (service.OpenAIRoutingExplainParams, error) {
+	var groupID *int64
+	if raw := strings.TrimSpace(c.Query("group_id")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed >= 0 {
+			groupID = &parsed
+		}
+	}
+	accountIDs, accountIDsProvided, err := parseOpenAIRoutingAccountIDs(c)
+	if err != nil {
+		return service.OpenAIRoutingExplainParams{}, err
+	}
+	return service.OpenAIRoutingExplainParams{
+		GroupID:            groupID,
+		Model:              strings.TrimSpace(c.Query("model")),
+		AccountIDs:         accountIDs,
+		AccountIDsProvided: accountIDsProvided,
+	}, nil
+}
+
+func parseOpenAIRoutingAccountIDs(c *gin.Context) ([]int64, bool, error) {
+	values := append([]string{}, c.QueryArray("account_ids")...)
+	values = append(values, c.QueryArray("account_ids[]")...)
+	if len(values) == 0 {
+		return nil, false, nil
+	}
+	seen := make(map[int64]struct{}, len(values))
+	ids := make([]int64, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := strconv.ParseInt(part, 10, 64)
+			if err != nil || id <= 0 {
+				return nil, true, fmt.Errorf("invalid account_ids")
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids, true, nil
 }
 
 // CheckMixedChannel handles checking mixed channel risk for account-group binding.

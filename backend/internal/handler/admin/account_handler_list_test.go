@@ -16,9 +16,21 @@ func setupAccountListRouter() (*gin.Engine, *stubAdminService) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	adminSvc := newStubAdminService()
-	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.GET("/api/v1/admin/accounts", handler.List)
 	return router, adminSvc
+}
+
+func TestParseOpenAIRoutingExplainParamsRejectsMalformedAccountIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/?account_ids=1,nope", nil)
+
+	params, err := parseOpenAIRoutingExplainParams(c)
+
+	require.Error(t, err)
+	require.Empty(t, params.AccountIDs)
 }
 
 func TestAccountHandlerListIncludesCreatedAt(t *testing.T) {

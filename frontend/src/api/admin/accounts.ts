@@ -19,7 +19,9 @@ import type {
   CodexSessionImportRequest,
   CodexSessionImportResult,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse
+  CheckMixedChannelResponse,
+  OpenAIRoutingAccountExplain,
+  OpenAIRoutingRankingResponse
 } from '@/types'
 
 /**
@@ -208,6 +210,28 @@ export async function testAccount(id: number): Promise<{
  */
 export async function refreshCredentials(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/refresh`)
+  return data
+}
+
+export async function refreshUpstreamBalance(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/upstream-balance/refresh`)
+  return data
+}
+
+export async function getOpenAIRoutingRanking(params?: {
+  group_id?: number
+  model?: string
+  account_ids?: string
+}): Promise<OpenAIRoutingRankingResponse> {
+  const { data } = await apiClient.get<OpenAIRoutingRankingResponse>('/admin/openai-scheduler/ranking', { params })
+  return data
+}
+
+export async function getOpenAIRoutingAccountExplain(
+  id: number,
+  params?: { group_id?: number; model?: string }
+): Promise<OpenAIRoutingAccountExplain> {
+  const { data } = await apiClient.get<OpenAIRoutingAccountExplain>(`/admin/openai-scheduler/accounts/${id}/explain`, { params })
   return data
 }
 
@@ -798,6 +822,9 @@ export const accountsAPI = {
   toggleStatus,
   testAccount,
   refreshCredentials,
+  refreshUpstreamBalance,
+  getOpenAIRoutingRanking,
+  getOpenAIRoutingAccountExplain,
   applyOAuthCredentials,
   getStats,
   clearError,
