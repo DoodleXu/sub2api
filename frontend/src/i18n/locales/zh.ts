@@ -7203,13 +7203,14 @@ export default {
       },
       openaiAccountScheduler: {
         strategy: 'OpenAI HTTP 账号调度方案',
-        strategyHint: '仅影响 OpenAI HTTP 网关入口；Responses WebSocket v2 / WS mode 仍固定走老调度。老调度保持原有 sticky、负载和高级调度行为；试验性调度会综合价格、质量、延迟、错误率和优先级选择账号。',
+        strategyHint: '仅影响 OpenAI HTTP 网关入口；Responses WebSocket v2 / WS mode 仍固定走老调度。老调度保持原有 sticky、负载和高级调度行为；试验性调度会综合价格、质量、延迟、错误率和优先级选择账号；严格优先级调度只在最高优先级层内失败切换。',
         legacy: '老调度方案',
         experimentalScheduler: '试验性调度',
-        experimentalRetryCount: '同账号重试次数',
-        experimentalRetryCountHint: '仅试验性调度方案生效。每个账号失败后先原地重试，达到上限后再切换账号；0 表示不原地重试。',
+        strictPriority: '严格优先级调度',
+        retryCount: '同账号重试次数',
+        retryCountHint: '仅试验性调度和严格优先级调度生效。每个账号失败后先原地重试，达到上限后再切换账号；0 表示不原地重试。',
         recordRecoveredUpstream: '记录恢复前上游错误',
-        recordRecoveredUpstreamHint: '仅试验性调度方案生效。开启后，请求最终成功时，前面账号的 429/5xx 等失败尝试仍会进入 Ops 错误记录。'
+        recordRecoveredUpstreamHint: '仅试验性调度和严格优先级调度生效。开启后，请求最终成功时，前面账号的 429/5xx 等失败尝试仍会进入 Ops 错误记录。'
       },
       usageRecords: {
         title: '使用记录',

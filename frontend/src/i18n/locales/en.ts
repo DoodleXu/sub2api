@@ -6997,13 +6997,14 @@ export default {
       },
       openaiAccountScheduler: {
         strategy: 'OpenAI HTTP account scheduler',
-        strategyHint: 'Only affects OpenAI HTTP gateway endpoints. Responses WebSocket v2 / WS mode always uses the legacy scheduler. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
+        strategyHint: 'Only affects OpenAI HTTP gateway endpoints. Responses WebSocket v2 / WS mode always uses the legacy scheduler. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load. Strict priority only fails over within the highest priority tier.',
         legacy: 'Legacy scheduler',
         experimentalScheduler: 'Experimental scheduler',
-        experimentalRetryCount: 'Experimental retry count',
-        experimentalRetryCountHint: 'Only applies to experimental scheduler. Each account is retried before switching; 0 disables same-account retries.',
+        strictPriority: 'Strict priority scheduler',
+        retryCount: 'Same-account retry count',
+        retryCountHint: 'Only applies to experimental and strict priority schedulers. Each account is retried before switching; 0 disables same-account retries.',
         recordRecoveredUpstream: 'Record recovered upstream errors',
-        recordRecoveredUpstreamHint: 'Only applies to experimental scheduler. When enabled, failed attempts from earlier accounts still enter Ops error records even if the final request succeeds.'
+        recordRecoveredUpstreamHint: 'Only applies to experimental and strict priority schedulers. When enabled, failed attempts from earlier accounts still enter Ops error records even if the final request succeeds.'
       },
       usageRecords: {
         title: 'Usage Records',

@@ -205,6 +205,8 @@ type SystemSettings struct {
 	OpenAIAccountSchedulerStrategy                   string `json:"openai_account_scheduler_strategy"`
 	OpenAIAccountExperimentalRetryCount              int    `json:"openai_account_experimental_retry_count"`
 	OpenAIAccountExperimentalRecordRecoveredUpstream bool   `json:"openai_account_experimental_record_recovered_upstream"`
+	OpenAIAccountStrictRetryCount                    int    `json:"openai_account_strict_retry_count"`
+	OpenAIAccountStrictRecordRecoveredUpstream       bool   `json:"openai_account_strict_record_recovered_upstream"`
 
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`

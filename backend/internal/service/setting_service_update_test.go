@@ -326,6 +326,8 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 		OpenAIAccountSchedulerStrategy:                   OpenAIAccountSchedulerStrategyExperimental,
 		OpenAIAccountExperimentalRetryCount:              99,
 		OpenAIAccountExperimentalRecordRecoveredUpstream: true,
+		OpenAIAccountStrictRetryCount:                    99,
+		OpenAIAccountStrictRecordRecoveredUpstream:       true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, VisibleMethodSourceOfficialAlipay, repo.updates[SettingPaymentVisibleMethodAlipaySource])
@@ -336,6 +338,8 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, repo.updates[openAIAccountSchedulerStrategySettingKey])
 	require.Equal(t, "10", repo.updates[openAIAccountExperimentalRetryCountSettingKey])
 	require.Equal(t, "true", repo.updates[openAIAccountExperimentalRecordRecoveredSettingKey])
+	require.Equal(t, "10", repo.updates[openAIAccountStrictRetryCountSettingKey])
+	require.Equal(t, "true", repo.updates[openAIAccountStrictRecordRecoveredSettingKey])
 }
 
 func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T) {

@@ -3784,19 +3784,19 @@
 
                 <div>
                   <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.openaiAccountScheduler.experimentalRetryCount") }}
+                    {{ t("admin.settings.openaiAccountScheduler.retryCount") }}
                   </label>
                   <input
-                    v-model.number="form.openai_account_experimental_retry_count"
+                    v-model.number="activeOpenAIAccountSchedulerRetryCount"
                     type="number"
                     min="0"
                     max="10"
                     step="1"
-                    :disabled="form.openai_account_scheduler_strategy !== 'experimental_scheduler'"
+                    :disabled="form.openai_account_scheduler_strategy === 'legacy'"
                     class="input"
                   />
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.openaiAccountScheduler.experimentalRetryCountHint") }}
+                    {{ t("admin.settings.openaiAccountScheduler.retryCountHint") }}
                   </p>
                 </div>
               </div>
@@ -3813,8 +3813,8 @@
                   </p>
                 </div>
                 <Toggle
-                  v-model="form.openai_account_experimental_record_recovered_upstream"
-                  :disabled="form.openai_account_scheduler_strategy !== 'experimental_scheduler'"
+                  v-model="activeOpenAIAccountSchedulerRecordRecoveredUpstream"
+                  :disabled="form.openai_account_scheduler_strategy === 'legacy'"
                 />
               </div>
             </div>
@@ -8380,9 +8380,11 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
-  openai_account_scheduler_strategy: "legacy" | "experimental_scheduler";
+  openai_account_scheduler_strategy: "legacy" | "experimental_scheduler" | "strict_priority";
   openai_account_experimental_retry_count: number;
   openai_account_experimental_record_recovered_upstream: boolean;
+  openai_account_strict_retry_count: number;
+  openai_account_strict_record_recovered_upstream: boolean;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
 };
@@ -8578,6 +8580,8 @@ const form = reactive<SettingsForm>({
   openai_account_scheduler_strategy: "legacy",
   openai_account_experimental_retry_count: 3,
   openai_account_experimental_record_recovered_upstream: false,
+  openai_account_strict_retry_count: 3,
+  openai_account_strict_record_recovered_upstream: false,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -8665,11 +8669,18 @@ const openaiAccountSchedulerStrategyOptions = computed(() => [
     value: "experimental_scheduler",
     label: t("admin.settings.openaiAccountScheduler.experimentalScheduler"),
   },
+  {
+    value: "strict_priority",
+    label: t("admin.settings.openaiAccountScheduler.strictPriority"),
+  },
 ]);
 
 function normalizeOpenAIAccountSchedulerStrategy(value: unknown) {
   if (value === "experimental_scheduler") {
     return "experimental_scheduler";
+  }
+  if (value === "strict_priority") {
+    return "strict_priority";
   }
   return "legacy";
 }
@@ -8678,6 +8689,39 @@ function handleOpenAIAccountSchedulerStrategyChange(value: unknown) {
   const strategy = normalizeOpenAIAccountSchedulerStrategy(value);
   form.openai_account_scheduler_strategy = strategy;
 }
+
+const activeOpenAIAccountSchedulerRetryCount = computed({
+  get() {
+    return form.openai_account_scheduler_strategy === "strict_priority"
+      ? form.openai_account_strict_retry_count
+      : form.openai_account_experimental_retry_count;
+  },
+  set(value: number) {
+    const normalized = Number.isFinite(Number(value))
+      ? Math.max(0, Math.min(10, Number(value)))
+      : 3;
+    if (form.openai_account_scheduler_strategy === "strict_priority") {
+      form.openai_account_strict_retry_count = normalized;
+      return;
+    }
+    form.openai_account_experimental_retry_count = normalized;
+  },
+});
+
+const activeOpenAIAccountSchedulerRecordRecoveredUpstream = computed({
+  get() {
+    return form.openai_account_scheduler_strategy === "strict_priority"
+      ? form.openai_account_strict_record_recovered_upstream
+      : form.openai_account_experimental_record_recovered_upstream;
+  },
+  set(value: boolean) {
+    if (form.openai_account_scheduler_strategy === "strict_priority") {
+      form.openai_account_strict_record_recovered_upstream = Boolean(value);
+      return;
+    }
+    form.openai_account_experimental_record_recovered_upstream = Boolean(value);
+  },
+});
 
 const notificationBarkLevelOptions = computed(() => [
   { value: "active", label: t("admin.settings.notifications.barkLevels.active") },
@@ -10005,10 +10049,20 @@ async function saveSettings() {
         ),
       openai_account_experimental_retry_count:
         Number.isFinite(Number(form.openai_account_experimental_retry_count))
-          ? Math.max(0, Math.min(10, Number(form.openai_account_experimental_retry_count)))
+          ? Math.max(
+              0,
+              Math.min(10, Number(form.openai_account_experimental_retry_count)),
+            )
           : 3,
       openai_account_experimental_record_recovered_upstream:
         form.openai_account_experimental_record_recovered_upstream,
+      openai_account_strict_retry_count: Number.isFinite(
+        Number(form.openai_account_strict_retry_count),
+      )
+        ? Math.max(0, Math.min(10, Number(form.openai_account_strict_retry_count)))
+        : 3,
+      openai_account_strict_record_recovered_upstream:
+        form.openai_account_strict_record_recovered_upstream,
       // 余额、订阅到期与账号限额通知
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

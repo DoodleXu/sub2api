@@ -289,6 +289,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAIAccountSchedulerStrategy:                   settings.OpenAIAccountSchedulerStrategy,
 		OpenAIAccountExperimentalRetryCount:              settings.OpenAIAccountExperimentalRetryCount,
 		OpenAIAccountExperimentalRecordRecoveredUpstream: settings.OpenAIAccountExperimentalRecordRecoveredUpstream,
+		OpenAIAccountStrictRetryCount:                    settings.OpenAIAccountStrictRetryCount,
+		OpenAIAccountStrictRecordRecoveredUpstream:       settings.OpenAIAccountStrictRecordRecoveredUpstream,
 		BalanceLowNotifyEnabled:                          settings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                        settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                      settings.BalanceLowNotifyRechargeURL,
@@ -1140,6 +1142,8 @@ type UpdateSettingsRequest struct {
 	OpenAIAccountSchedulerStrategy                   *string `json:"openai_account_scheduler_strategy"`
 	OpenAIAccountExperimentalRetryCount              *int    `json:"openai_account_experimental_retry_count"`
 	OpenAIAccountExperimentalRecordRecoveredUpstream *bool   `json:"openai_account_experimental_record_recovered_upstream"`
+	OpenAIAccountStrictRetryCount                    *int    `json:"openai_account_strict_retry_count"`
+	OpenAIAccountStrictRecordRecoveredUpstream       *bool   `json:"openai_account_strict_record_recovered_upstream"`
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
@@ -2317,6 +2321,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAIAccountExperimentalRecordRecoveredUpstream
 		}(),
+		OpenAIAccountStrictRetryCount: func() int {
+			if req.OpenAIAccountStrictRetryCount != nil {
+				return service.NormalizeOpenAIAccountStrictRetryCount(*req.OpenAIAccountStrictRetryCount)
+			}
+			return previousSettings.OpenAIAccountStrictRetryCount
+		}(),
+		OpenAIAccountStrictRecordRecoveredUpstream: func() bool {
+			if req.OpenAIAccountStrictRecordRecoveredUpstream != nil {
+				return *req.OpenAIAccountStrictRecordRecoveredUpstream
+			}
+			return previousSettings.OpenAIAccountStrictRecordRecoveredUpstream
+		}(),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled
@@ -2808,6 +2824,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAccountSchedulerStrategy:                   updatedSettings.OpenAIAccountSchedulerStrategy,
 		OpenAIAccountExperimentalRetryCount:              updatedSettings.OpenAIAccountExperimentalRetryCount,
 		OpenAIAccountExperimentalRecordRecoveredUpstream: updatedSettings.OpenAIAccountExperimentalRecordRecoveredUpstream,
+		OpenAIAccountStrictRetryCount:                    updatedSettings.OpenAIAccountStrictRetryCount,
+		OpenAIAccountStrictRecordRecoveredUpstream:       updatedSettings.OpenAIAccountStrictRecordRecoveredUpstream,
 		BalanceLowNotifyEnabled:                          updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                        updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                      updatedSettings.BalanceLowNotifyRechargeURL,
@@ -3333,6 +3351,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAIAccountExperimentalRecordRecoveredUpstream != after.OpenAIAccountExperimentalRecordRecoveredUpstream {
 		changed = append(changed, "openai_account_experimental_record_recovered_upstream")
+	}
+	if before.OpenAIAccountStrictRetryCount != after.OpenAIAccountStrictRetryCount {
+		changed = append(changed, "openai_account_strict_retry_count")
+	}
+	if before.OpenAIAccountStrictRecordRecoveredUpstream != after.OpenAIAccountStrictRecordRecoveredUpstream {
+		changed = append(changed, "openai_account_strict_record_recovered_upstream")
 	}
 	// 余额、订阅到期与账号限额通知
 	if before.BalanceLowNotifyEnabled != after.BalanceLowNotifyEnabled {

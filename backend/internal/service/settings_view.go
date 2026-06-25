@@ -241,6 +241,8 @@ type SystemSettings struct {
 	OpenAIAccountSchedulerStrategy                   string
 	OpenAIAccountExperimentalRetryCount              int
 	OpenAIAccountExperimentalRecordRecoveredUpstream bool
+	OpenAIAccountStrictRetryCount                    int
+	OpenAIAccountStrictRecordRecoveredUpstream       bool
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled     bool

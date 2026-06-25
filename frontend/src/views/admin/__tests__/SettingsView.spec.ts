@@ -427,6 +427,8 @@ const baseSettingsResponse = {
   openai_account_scheduler_strategy: "legacy",
   openai_account_experimental_retry_count: 3,
   openai_account_experimental_record_recovered_upstream: false,
+  openai_account_strict_retry_count: 3,
+  openai_account_strict_record_recovered_upstream: false,
   balance_low_notify_enabled: false,
   balance_low_notify_threshold: 0,
   balance_low_notify_recharge_url: "",

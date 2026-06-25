@@ -705,6 +705,8 @@ func NormalizeOpenAIAccountSchedulerStrategy(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case OpenAIAccountSchedulerStrategyExperimental:
 		return OpenAIAccountSchedulerStrategyExperimental
+	case OpenAIAccountSchedulerStrategyStrictPriority:
+		return OpenAIAccountSchedulerStrategyStrictPriority
 	default:
 		return OpenAIAccountSchedulerStrategyLegacy
 	}
@@ -716,6 +718,16 @@ func NormalizeOpenAIAccountExperimentalRetryCount(value int) int {
 	}
 	if value > MaxOpenAIAccountExperimentalRetryCount {
 		return MaxOpenAIAccountExperimentalRetryCount
+	}
+	return value
+}
+
+func NormalizeOpenAIAccountStrictRetryCount(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > MaxOpenAIAccountStrictRetryCount {
+		return MaxOpenAIAccountStrictRetryCount
 	}
 	return value
 }
@@ -1961,6 +1973,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	settings.PaymentVisibleMethodWxpaySource = wxpaySource
 	settings.OpenAIAccountSchedulerStrategy = NormalizeOpenAIAccountSchedulerStrategy(settings.OpenAIAccountSchedulerStrategy)
 	settings.OpenAIAccountExperimentalRetryCount = NormalizeOpenAIAccountExperimentalRetryCount(settings.OpenAIAccountExperimentalRetryCount)
+	settings.OpenAIAccountStrictRetryCount = NormalizeOpenAIAccountStrictRetryCount(settings.OpenAIAccountStrictRetryCount)
 	settings.WeChatConnectAppID = strings.TrimSpace(settings.WeChatConnectAppID)
 	settings.WeChatConnectAppSecret = strings.TrimSpace(settings.WeChatConnectAppSecret)
 	settings.WeChatConnectOpenAppID = strings.TrimSpace(firstNonEmpty(settings.WeChatConnectOpenAppID, settings.WeChatConnectAppID))
@@ -2292,6 +2305,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[openAIAccountSchedulerStrategySettingKey] = NormalizeOpenAIAccountSchedulerStrategy(settings.OpenAIAccountSchedulerStrategy)
 	updates[openAIAccountExperimentalRetryCountSettingKey] = strconv.Itoa(NormalizeOpenAIAccountExperimentalRetryCount(settings.OpenAIAccountExperimentalRetryCount))
 	updates[openAIAccountExperimentalRecordRecoveredSettingKey] = strconv.FormatBool(settings.OpenAIAccountExperimentalRecordRecoveredUpstream)
+	updates[openAIAccountStrictRetryCountSettingKey] = strconv.Itoa(NormalizeOpenAIAccountStrictRetryCount(settings.OpenAIAccountStrictRetryCount))
+	updates[openAIAccountStrictRecordRecoveredSettingKey] = strconv.FormatBool(settings.OpenAIAccountStrictRecordRecoveredUpstream)
 
 	// 余额、订阅到期与账号限额通知
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -2443,10 +2458,12 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	openAIAccountSchedulerStrategySettingSF.Forget(openAIAccountSchedulerStrategySettingKey)
 	openAIAccountSchedulerStrategySettingCache.Store(&cachedOpenAIAccountSchedulerStrategySetting{
-		strategy:        NormalizeOpenAIAccountSchedulerStrategy(settings.OpenAIAccountSchedulerStrategy),
-		retry:           NormalizeOpenAIAccountExperimentalRetryCount(settings.OpenAIAccountExperimentalRetryCount),
-		recordRecovered: settings.OpenAIAccountExperimentalRecordRecoveredUpstream,
-		expiresAt:       time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
+		strategy:                    NormalizeOpenAIAccountSchedulerStrategy(settings.OpenAIAccountSchedulerStrategy),
+		experimentalRetry:           NormalizeOpenAIAccountExperimentalRetryCount(settings.OpenAIAccountExperimentalRetryCount),
+		experimentalRecordRecovered: settings.OpenAIAccountExperimentalRecordRecoveredUpstream,
+		strictRetry:                 NormalizeOpenAIAccountStrictRetryCount(settings.OpenAIAccountStrictRetryCount),
+		strictRecordRecovered:       settings.OpenAIAccountStrictRecordRecoveredUpstream,
+		expiresAt:                   time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
 	})
 	// Invalidate the quota auto-pause cache and let the next read trigger a fresh load.
 	// We can't know from here whether ops_advanced_settings was also touched, so be
@@ -3870,6 +3887,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAIAccountExperimentalRetryCount = NormalizeOpenAIAccountExperimentalRetryCount(v)
 	}
 	result.OpenAIAccountExperimentalRecordRecoveredUpstream = settings[openAIAccountExperimentalRecordRecoveredSettingKey] == "true"
+	result.OpenAIAccountStrictRetryCount = DefaultOpenAIAccountStrictRetryCount
+	if v, err := strconv.Atoi(strings.TrimSpace(settings[openAIAccountStrictRetryCountSettingKey])); err == nil {
+		result.OpenAIAccountStrictRetryCount = NormalizeOpenAIAccountStrictRetryCount(v)
+	}
+	result.OpenAIAccountStrictRecordRecoveredUpstream = settings[openAIAccountStrictRecordRecoveredSettingKey] == "true"
 
 	// 余额、订阅到期与账号限额通知
 	result.BalanceLowNotifyEnabled = settings[SettingKeyBalanceLowNotifyEnabled] == "true"

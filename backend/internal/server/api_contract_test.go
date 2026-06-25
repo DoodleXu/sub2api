@@ -920,6 +920,8 @@ func TestAPIContracts(t *testing.T) {
 							"openai_account_scheduler_strategy": "legacy",
 							"openai_account_experimental_retry_count": 3,
 							"openai_account_experimental_record_recovered_upstream": false,
+							"openai_account_strict_retry_count": 3,
+							"openai_account_strict_record_recovered_upstream": false,
 							"openai_codex_user_agent":           "",
 					"openai_allow_claude_code_codex_plugin": false,
 					"openai_fast_policy_settings": {
@@ -1167,6 +1169,8 @@ func TestAPIContracts(t *testing.T) {
 							"openai_account_scheduler_strategy": "legacy",
 							"openai_account_experimental_retry_count": 3,
 							"openai_account_experimental_record_recovered_upstream": false,
+							"openai_account_strict_retry_count": 3,
+							"openai_account_strict_record_recovered_upstream": false,
 							"openai_codex_user_agent":           "",
 					"openai_allow_claude_code_codex_plugin": false,
 					"openai_fast_policy_settings": {
