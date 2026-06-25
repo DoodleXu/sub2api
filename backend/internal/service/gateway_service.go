@@ -586,12 +586,12 @@ func (e *UpstreamFailoverError) Error() string {
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
 }
 
-func newOpenAIExperimentalSchedulerFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
-	return newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, statusCode, message, nil, nil)
+func newOpenAISchedulerNoPenaltyFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
+	return newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx, statusCode, message, nil, nil)
 }
 
-func newOpenAIExperimentalSchedulerFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
-	if !IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
+func newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
+	if !IsOpenAISchedulerNoPenaltyFailoverMode(ctx) {
 		return nil
 	}
 	if statusCode <= 0 {
@@ -613,6 +613,14 @@ func newOpenAIExperimentalSchedulerFailoverHTTPError(ctx context.Context, status
 		ResponseBody:    responseBody,
 		ResponseHeaders: headers,
 	}
+}
+
+func newOpenAIExperimentalSchedulerFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
+	return newOpenAISchedulerNoPenaltyFailoverError(ctx, statusCode, message)
+}
+
+func newOpenAIExperimentalSchedulerFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
+	return newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx, statusCode, message, responseBody, responseHeaders)
 }
 
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。

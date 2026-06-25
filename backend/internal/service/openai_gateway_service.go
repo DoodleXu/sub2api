@@ -2361,7 +2361,7 @@ func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, responseBody []byte, requestedModel ...string) {
-	if IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
+	if IsOpenAISchedulerNoPenaltyFailoverMode(ctx) {
 		return
 	}
 	if len(requestedModel) > 0 {
@@ -3314,7 +3314,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		respBody := []byte(nil)
 		upstreamMsg := resp.Status
-		if IsOpenAIExperimentalSchedulerFailoverMode(ctx) {
+		if IsOpenAISchedulerNoPenaltyFailoverMode(ctx) {
 			respBody = s.readUpstreamErrorBody(resp)
 			if msg := strings.TrimSpace(extractUpstreamErrorMessage(respBody)); msg != "" {
 				upstreamMsg = sanitizeUpstreamErrorMessage(msg)

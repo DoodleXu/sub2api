@@ -134,13 +134,26 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	var failoverAttempts []openAIFailoverAttemptLog
 	experimentalScheduler := h.gatewayService.IsOpenAIAccountExperimentalSchedulerEnabled(c.Request.Context())
 	experimentalRetryLimit := h.gatewayService.OpenAIAccountExperimentalRetryCount(c.Request.Context())
+	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(c.Request.Context())
+	strictRetryLimit := h.gatewayService.OpenAIAccountStrictRetryCount(c.Request.Context())
+	exhaustiveScheduler := experimentalScheduler || strictPriority
 
 	for {
 		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		var selection *service.AccountSelectionResult
 		var scheduleDecision service.OpenAIAccountScheduleDecision
 		var err error
-		if experimentalScheduler {
+		if strictPriority {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountStrictPriorityForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+			)
+		} else if experimentalScheduler {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountExperimentalSchedulerForCapability(
 				c.Request.Context(),
 				apiKey.GroupID,
@@ -207,7 +220,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		writerSizeBeforeForward := c.Writer.Size()
 		forwardCtx := c.Request.Context()
-		if experimentalScheduler {
+		if strictPriority {
+			forwardCtx = service.WithOpenAIStrictPriorityNoPenalty(forwardCtx)
+		} else if experimentalScheduler {
 			forwardCtx = service.WithOpenAIExperimentalSchedulerFailoverMode(forwardCtx)
 		}
 		result, err := func() (*service.OpenAIForwardResult, error) {
@@ -248,12 +263,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
-					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
-					// Pool mode: retry on the same account; experimental scheduling uses the global retry count.
-					if experimentalScheduler || failoverErr.RetryableOnSameAccount {
+					h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
+					// Pool mode: retry on the same account; priority schedulers use the global retry count.
+					if exhaustiveScheduler || failoverErr.RetryableOnSameAccount {
 						retryLimit := account.GetPoolModeRetryCount()
 						if experimentalScheduler {
 							retryLimit = experimentalRetryLimit
+						} else if strictPriority {
+							retryLimit = strictRetryLimit
 						}
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
@@ -271,25 +288,25 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 							continue
 						}
 					}
-					h.gatewayService.RecordOpenAIAccountSwitch()
+					h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
 					failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
-					if !experimentalScheduler && switchCount >= maxAccountSwitches {
+					if !exhaustiveScheduler && switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
-					if !experimentalScheduler && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+					if !exhaustiveScheduler && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					reqLog.Warn("openai_chat_completions.upstream_failover_switching",
-						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, experimentalScheduler, failoverAttempts)...,
+						openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, exhaustiveScheduler, failoverAttempts)...,
 					)
 					continue
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
@@ -305,11 +322,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}
 		}
 		if result != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, result.FirstTokenMs)
 		} else {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, nil)
 		}
 		if experimentalScheduler && !h.gatewayService.ShouldRecordOpenAIAccountExperimentalRecoveredUpstream(c.Request.Context()) {
+			service.MarkOpsSkipRecoveredUpstream(c)
+		}
+		if strictPriority && !h.gatewayService.ShouldRecordOpenAIAccountStrictRecoveredUpstream(c.Request.Context()) {
 			service.MarkOpsSkipRecoveredUpstream(c)
 		}
 
