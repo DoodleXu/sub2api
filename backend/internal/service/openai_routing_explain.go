@@ -144,7 +144,7 @@ func (s *OpenAIGatewayService) ExplainOpenAIRoutingForAccount(ctx context.Contex
 			break
 		}
 	}
-	notes := []string{"experimental_scheduler", "price_uses_upstream_effective_rate_multiplier_then_account_rate_multiplier"}
+	notes := []string{"experimental_scheduler", "price_uses_account_rate_multiplier_upstream_group_rate_display_only"}
 	return &OpenAIRoutingAccountExplain{Account: *selected, Top: top, Notes: notes}, nil
 }
 

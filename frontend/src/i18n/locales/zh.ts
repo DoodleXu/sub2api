@@ -3436,9 +3436,10 @@ export default {
       upstreamBalance: {
         refresh: '刷新余额',
         failed: '刷新失败',
+        errorHint: '请稍后重试',
         unknown: '未刷新',
-        realRate: '真实倍率 {rate}x',
-        baseRate: '基础倍率 {rate}x',
+        realRate: '上游分组倍率 {rate}x（仅展示）',
+        baseRate: '上游基础倍率 {rate}x（仅展示）',
         updatedAt: '更新于 {time}'
       },
       routingPriority: {

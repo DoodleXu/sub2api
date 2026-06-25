@@ -11,7 +11,7 @@
       <span class="truncate">{{ groupLabel }}</span>
     </div>
     <div v-if="rateLabel" class="text-[11px] text-gray-500 dark:text-gray-400">{{ rateLabel }}</div>
-    <div v-if="errorText" class="max-w-[180px] truncate text-[11px] text-red-500" :title="errorText">{{ errorText }}</div>
+    <div v-if="showErrorHint" class="text-[11px] text-red-500">{{ t('admin.accounts.upstreamBalance.errorHint') }}</div>
     <div v-else-if="updatedAtLabel" class="text-[11px] text-gray-400">{{ updatedAtLabel }}</div>
   </div>
   <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
@@ -64,7 +64,7 @@ const updatedAtLabel = computed(() => {
 })
 
 const amountClass = computed(() => status.value === 'error' ? 'text-red-500' : 'text-gray-800 dark:text-gray-100')
-const errorText = computed(() => localError.value || String(extra.value.upstream_balance_error ?? '').trim())
+const showErrorHint = computed(() => status.value === 'error' || Boolean(localError.value || extra.value.upstream_balance_error))
 
 async function refresh() {
   if (loading.value) return

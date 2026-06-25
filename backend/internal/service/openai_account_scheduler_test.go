@@ -536,26 +536,28 @@ func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_PrefersLowPrice
 	groupID := int64(10112)
 	fastTTFT := 400
 	slowTTFT := 8000
+	expensiveAccountRate := 2.0
+	cheapAccountRate := 0.1
 	accounts := []Account{
 		{
-			ID:          36051,
-			Platform:    PlatformOpenAI,
-			Type:        AccountTypeAPIKey,
-			Status:      StatusActive,
-			Schedulable: true,
-			Concurrency: 1,
-			Priority:    0,
-			Extra:       map[string]any{"upstream_effective_rate_multiplier": 2.0},
+			ID:             36051,
+			Platform:       PlatformOpenAI,
+			Type:           AccountTypeAPIKey,
+			Status:         StatusActive,
+			Schedulable:    true,
+			Concurrency:    1,
+			Priority:       0,
+			RateMultiplier: &expensiveAccountRate,
 		},
 		{
-			ID:          36052,
-			Platform:    PlatformOpenAI,
-			Type:        AccountTypeAPIKey,
-			Status:      StatusActive,
-			Schedulable: true,
-			Concurrency: 1,
-			Priority:    5,
-			Extra:       map[string]any{"upstream_effective_rate_multiplier": 0.1},
+			ID:             36052,
+			Platform:       PlatformOpenAI,
+			Type:           AccountTypeAPIKey,
+			Status:         StatusActive,
+			Schedulable:    true,
+			Concurrency:    1,
+			Priority:       5,
+			RateMultiplier: &cheapAccountRate,
 		},
 	}
 	svc := &OpenAIGatewayService{
