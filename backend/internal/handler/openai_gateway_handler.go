@@ -73,6 +73,16 @@ func newOpenAIModelMappedBodyCache(body []byte, replace openAIModelBodyReplaceFu
 	}
 }
 
+func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
+	if apiKey != nil && apiKey.Group != nil {
+		switch strings.TrimSpace(apiKey.Group.Platform) {
+		case service.PlatformGrok:
+			return service.PlatformGrok
+		}
+	}
+	return service.PlatformOpenAI
+}
+
 func usageRecordContext(parent context.Context, base context.Context) context.Context {
 	if base == nil {
 		base = context.Background()
@@ -278,6 +288,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	requestPlatform := openAICompatibleRequestPlatform(apiKey)
+
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -372,6 +384,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				requiredCapability,
 				requireCompact,
+				requestPlatform,
 			)
 		}
 		if err != nil {
@@ -848,6 +861,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	// 解析渠道级模型映射
 	channelMappingMsg, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
+	requestPlatform := openAICompatibleRequestPlatform(apiKey)
 
 	// 绑定错误透传服务，允许 service 层在非 failover 错误场景复用规则。
 	if h.errorPassthroughService != nil {
@@ -939,6 +953,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		}
 		if err != nil {
@@ -1530,6 +1545,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(ctx)
+	requestPlatform := openAICompatibleRequestPlatform(apiKey)
 
 	for {
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
@@ -1557,6 +1573,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				service.OpenAIUpstreamTransportResponsesWebsocketV2,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		}
 		if err != nil {

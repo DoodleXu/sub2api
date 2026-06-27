@@ -135,10 +135,23 @@ func (h *PaymentHandler) PreviewRefund(c *gin.Context) {
 
 type adminPaymentOrderResponse struct {
 	*dbent.PaymentOrder
+	Currency                          string     `json:"currency,omitempty"`
 	SubscriptionRemainingDays         int        `json:"subscription_remaining_days,omitempty"`
 	SubscriptionExpiresAt             *time.Time `json:"subscription_expires_at,omitempty"`
 	SuggestedRefundAmount             float64    `json:"suggested_refund_amount,omitempty"`
 	SuggestedSubscriptionDaysToDeduct int        `json:"suggested_subscription_days_to_deduct,omitempty"`
+}
+
+func sanitizeAdminPaymentOrderForResponse(order *dbent.PaymentOrder) *adminPaymentOrderResponse {
+	if order == nil {
+		return nil
+	}
+	cloned := *order
+	cloned.ProviderSnapshot = nil
+	return &adminPaymentOrderResponse{
+		PaymentOrder: &cloned,
+		Currency:     service.PaymentOrderCurrency(order),
+	}
 }
 
 func (h *PaymentHandler) adminPaymentOrdersForResponse(ctx context.Context, orders []*dbent.PaymentOrder) []*adminPaymentOrderResponse {
@@ -161,6 +174,7 @@ func (h *PaymentHandler) adminPaymentOrderForResponse(ctx context.Context, order
 	preview := h.paymentService.BuildRefundPreview(ctx, &cloned)
 	return &adminPaymentOrderResponse{
 		PaymentOrder:                      &cloned,
+		Currency:                          service.PaymentOrderCurrency(order),
 		SubscriptionRemainingDays:         preview.SubscriptionRemainingDays,
 		SubscriptionExpiresAt:             preview.SubscriptionExpiresAt,
 		SuggestedRefundAmount:             preview.SuggestedRefundAmount,

@@ -919,18 +919,20 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
-      mode: 'edit',
-      prompt: '把背景换成海边',
-      reference_images: [expect.objectContaining({
-        name: 'source.png',
-        data_url: 'data:image/png;base64,c291cmNlLWltYWdl',
-      })],
-      mask_image: expect.objectContaining({
-        name: 'mask.png',
-        data_url: 'data:image/png;base64,bWFzay1pbWFnZQ==',
-      }),
-    }))
+    await vi.waitFor(() => {
+      expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+        mode: 'edit',
+        prompt: '把背景换成海边',
+        reference_images: [expect.objectContaining({
+          name: 'source.png',
+          data_url: 'data:image/png;base64,c291cmNlLWltYWdl',
+        })],
+        mask_image: expect.objectContaining({
+          name: 'mask.png',
+          data_url: 'data:image/png;base64,bWFzay1pbWFnZQ==',
+        }),
+      }))
+    })
     expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('c291cmNlLWltYWdl')
     expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('bWFzay1pbWFnZQ')
   })
@@ -980,6 +982,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
 
     await wrapper.findAll('button').find((button) => button.text().includes('重新生成'))!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
     await flushPromises()
 
     expect(createImageTaskMock).not.toHaveBeenCalled()
