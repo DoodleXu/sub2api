@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -41,6 +42,29 @@ func (r openAIRoutingExplainTestRepo) GetByID(ctx context.Context, id int64) (*A
 	return nil, nil
 }
 
+func setOpenAIRoutingExplainStrategyForTest(t *testing.T, strategy string) {
+	t.Helper()
+	previous, hadPrevious := openAIAccountSchedulerStrategySettingCache.Load().(*cachedOpenAIAccountSchedulerStrategySetting)
+	openAIAccountSchedulerStrategySettingCache.Store(&cachedOpenAIAccountSchedulerStrategySetting{
+		strategy:                    NormalizeOpenAIAccountSchedulerStrategy(strategy),
+		experimentalRetry:           DefaultOpenAIAccountExperimentalRetryCount,
+		experimentalRecordRecovered: false,
+		strictRetry:                 DefaultOpenAIAccountStrictRetryCount,
+		strictRecordRecovered:       false,
+		expiresAt:                   time.Now().Add(time.Hour).UnixNano(),
+	})
+	t.Cleanup(func() {
+		if hadPrevious && previous != nil {
+			openAIAccountSchedulerStrategySettingCache.Store(previous)
+			return
+		}
+		openAIAccountSchedulerStrategySettingCache.Store(&cachedOpenAIAccountSchedulerStrategySetting{
+			strategy:  OpenAIAccountSchedulerStrategyLegacy,
+			expiresAt: 0,
+		})
+	})
+}
+
 func TestOpenAIGatewayService_ExplainOpenAIRoutingForAccount_NotFound(t *testing.T) {
 	svc := &OpenAIGatewayService{
 		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
@@ -53,6 +77,138 @@ func TestOpenAIGatewayService_ExplainOpenAIRoutingForAccount_NotFound(t *testing
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.True(t, infraerrors.IsNotFound(err))
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRouting_StrictPriorityMarksLowerPriorityLayer(t *testing.T) {
+	setOpenAIRoutingExplainStrategyForTest(t, OpenAIAccountSchedulerStrategyStrictPriority)
+	svc := &OpenAIGatewayService{
+		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+			{ID: 74031, Name: "disabled-high", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusDisabled, Schedulable: false, Priority: 1, Concurrency: 1},
+			{ID: 74032, Name: "active-top", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 5, Concurrency: 1},
+			{ID: 74033, Name: "active-lower", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 20, Concurrency: 1},
+		}},
+	}
+
+	result, err := svc.ExplainOpenAIRouting(context.Background(), OpenAIRoutingExplainParams{})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, OpenAIAccountSchedulerStrategyStrictPriority, result.SchedulerStrategy)
+	require.Equal(t, "strict_priority_snapshot", result.Source)
+	require.True(t, result.StrictPriority.Enabled)
+	require.NotNil(t, result.StrictPriority.CurrentAvailablePriority)
+	require.Equal(t, 5, *result.StrictPriority.CurrentAvailablePriority)
+	require.Equal(t, 2, result.StrictPriority.CandidateCount)
+	require.Len(t, result.StrictPriority.ExcludedAccounts, 1)
+	require.Equal(t, int64(74033), result.StrictPriority.ExcludedAccounts[0].AccountID)
+	require.Equal(t, 20, result.StrictPriority.ExcludedAccounts[0].Priority)
+	require.Equal(t, 5, result.StrictPriority.ExcludedAccounts[0].CurrentPriority)
+	require.Contains(t, result.StrictPriority.ExcludedAccounts[0].Reasons, "strict_priority_lower_tier")
+
+	byID := map[int64]OpenAIRoutingSummary{}
+	for _, item := range result.Items {
+		byID[item.AccountID] = item
+	}
+	require.True(t, byID[74032].IsSchedulableNow)
+	require.Equal(t, 1, byID[74032].Rank)
+	require.False(t, byID[74033].IsSchedulableNow)
+	require.Equal(t, "strict_priority_lower_tier", byID[74033].SummaryReason)
+	require.Contains(t, byID[74033].BlockReasons, "strict_priority_lower_tier")
+	require.False(t, byID[74031].IsSchedulableNow)
+	require.Contains(t, byID[74031].BlockReasons, "status_disabled")
+	require.NotContains(t, byID[74031].BlockReasons, "strict_priority_lower_tier")
+
+	accountExplain, err := svc.ExplainOpenAIRoutingForAccount(context.Background(), 74033, OpenAIRoutingExplainParams{})
+	require.NoError(t, err)
+	require.NotNil(t, accountExplain)
+	require.Equal(t, OpenAIAccountSchedulerStrategyStrictPriority, accountExplain.SchedulerStrategy)
+	require.Equal(t, "strict_priority_lower_tier", accountExplain.Account.SummaryReason)
+	require.True(t, accountExplain.StrictPriority.Enabled)
+	require.Len(t, accountExplain.Top, 1)
+	require.Equal(t, int64(74032), accountExplain.Top[0].AccountID)
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRouting_StrictPriorityRanksTopLayerByLastUsed(t *testing.T) {
+	setOpenAIRoutingExplainStrategyForTest(t, OpenAIAccountSchedulerStrategyStrictPriority)
+	older := time.Date(2026, 6, 27, 8, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 6, 27, 9, 0, 0, 0, time.UTC)
+	svc := &OpenAIGatewayService{
+		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+			{ID: 74051, Name: "top-newer", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 1, Concurrency: 1, LastUsedAt: &newer},
+			{ID: 74052, Name: "top-never", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 1, Concurrency: 1},
+			{ID: 74053, Name: "top-older", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 1, Concurrency: 1, LastUsedAt: &older},
+			{ID: 74054, Name: "lower-never", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 5, Concurrency: 1},
+		}},
+	}
+
+	result, err := svc.ExplainOpenAIRouting(context.Background(), OpenAIRoutingExplainParams{})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 4)
+	require.Equal(t, int64(74052), result.Items[0].AccountID)
+	require.Equal(t, "strict_priority_top_tier", result.Items[0].SummaryReason)
+	require.Contains(t, result.Items[0].SummaryReasons, "strict_priority_never_used_first")
+	require.Equal(t, 1, result.Items[0].Rank)
+	require.Equal(t, int64(74053), result.Items[1].AccountID)
+	require.Contains(t, result.Items[1].SummaryReasons, "strict_priority_least_recently_used")
+	require.Equal(t, 2, result.Items[1].Rank)
+	require.Equal(t, int64(74051), result.Items[2].AccountID)
+	require.Equal(t, 3, result.Items[2].Rank)
+	require.Equal(t, int64(74054), result.Items[3].AccountID)
+	require.False(t, result.Items[3].IsSchedulableNow)
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRoutingForAccount_StrictPriorityNotesAndTopCandidates(t *testing.T) {
+	setOpenAIRoutingExplainStrategyForTest(t, OpenAIAccountSchedulerStrategyStrictPriority)
+	older := time.Date(2026, 6, 27, 8, 0, 0, 0, time.UTC)
+	svc := &OpenAIGatewayService{
+		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+			{ID: 74061, Name: "top-old", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 0, Concurrency: 1, LastUsedAt: &older},
+			{ID: 74062, Name: "top-never", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 0, Concurrency: 1},
+			{ID: 74063, Name: "lower", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 3, Concurrency: 1},
+		}},
+	}
+
+	result, err := svc.ExplainOpenAIRoutingForAccount(context.Background(), 74063, OpenAIRoutingExplainParams{})
+
+	require.NoError(t, err)
+	require.Equal(t, OpenAIAccountSchedulerStrategyStrictPriority, result.SchedulerStrategy)
+	require.Equal(t, int64(74063), result.Account.AccountID)
+	require.False(t, result.Account.IsSchedulableNow)
+	require.ElementsMatch(t, []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}, result.Notes)
+	require.NotContains(t, result.Notes, "experimental_scheduler")
+	require.NotContains(t, result.Notes, "price_uses_account_rate_multiplier_upstream_group_rate_display_only")
+	require.Len(t, result.Top, 2)
+	require.Equal(t, int64(74062), result.Top[0].AccountID)
+	require.Equal(t, int64(74061), result.Top[1].AccountID)
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRouting_LegacyAndExperimentalDoNotApplyStrictLayer(t *testing.T) {
+	for _, strategy := range []string{OpenAIAccountSchedulerStrategyLegacy, OpenAIAccountSchedulerStrategyExperimental} {
+		t.Run(strategy, func(t *testing.T) {
+			setOpenAIRoutingExplainStrategyForTest(t, strategy)
+			svc := &OpenAIGatewayService{
+				accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+					{ID: 74041, Name: "active-top", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 5, Concurrency: 1},
+					{ID: 74042, Name: "active-lower", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 20, Concurrency: 1},
+				}},
+			}
+
+			result, err := svc.ExplainOpenAIRouting(context.Background(), OpenAIRoutingExplainParams{})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, strategy, result.SchedulerStrategy)
+			require.False(t, result.StrictPriority.Enabled)
+			require.Nil(t, result.StrictPriority.CurrentAvailablePriority)
+			require.Empty(t, result.StrictPriority.ExcludedAccounts)
+			require.Len(t, result.Items, 2)
+			for _, item := range result.Items {
+				require.True(t, item.IsSchedulableNow)
+				require.NotContains(t, item.BlockReasons, "strict_priority_lower_tier")
+			}
+		})
+	}
 }
 
 func TestOpenAIGatewayService_ExplainOpenAIRouting_FiltersRequestedAccountIDs(t *testing.T) {

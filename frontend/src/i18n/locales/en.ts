@@ -3404,6 +3404,86 @@ export default {
         baseRate: 'Upstream base rate {rate}x (display only)',
         updatedAt: 'Updated at {time}'
       },
+      routingPriority: {
+        modal: {
+          title: 'OpenAI Routing Explanation',
+          experimentalTitle: 'OpenAI Experimental Scheduler Explanation',
+          strictTitle: 'OpenAI Strict Priority Explanation',
+          empty: 'No routing explanation available'
+        },
+        status: {
+          candidate: 'Schedulable',
+          skipped: 'Skipped',
+          schedulable: 'Schedulable',
+          blocked: 'Blocked'
+        },
+        score: {
+          total: 'Total',
+          quality: 'Quality',
+          price: 'Price',
+          latency: 'Latency',
+          error_rate: 'Error rate',
+          priority: 'Priority',
+          load: 'Load',
+          queue: 'Queue'
+        },
+        sections: {
+          score: 'Score breakdown',
+          selectionBasis: 'Selection basis',
+          blockReasons: 'Block reasons',
+          strictPriority: 'Strict priority diagnostics',
+          notes: 'Notes',
+          topCandidates: 'Top candidates'
+        },
+        strict: {
+          badge: 'P{priority}',
+          priorityLabel: 'Priority layer',
+          lastUsed: 'Last used',
+          neverUsed: 'Never used',
+          currentLayer: 'Current layer basis',
+          currentPriority: 'Current highest available priority layer: P{priority}',
+          noCurrentPriority: 'No available strict priority candidate layer right now',
+          candidateCount: 'Base schedulable candidates: {count}',
+          priority: 'P{priority}',
+          excludedReason: 'Priority P{priority} is below current highest available layer P{current}; this whole layer is excluded for this round'
+        },
+        notes: {
+          experimental_scheduler: 'Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
+          price_uses_account_rate_multiplier_upstream_group_rate_display_only: 'Price scoring uses account and upstream rate multipliers; upstream group rate is display-only.',
+          strict_priority: 'Strict Priority only selects accounts inside the current highest available priority layer.',
+          strict_priority_top_tier_only: 'Lower priority layers do not join this round of top candidates unless no higher-priority layer is available.',
+          strict_priority_same_tier_last_used: 'Within the same priority layer, never-used or least-recently-used accounts are preferred; exact ties are spread to avoid hotspots.',
+          legacy_scheduler: 'Legacy scheduling selects accounts by priority and last-used order.',
+          priority_last_used_order: 'For the same priority, never-used or least-recently-used accounts are preferred.'
+        },
+        summary: {
+          low_price_high_quality: 'Low price and stable quality',
+          high_quality: 'High quality',
+          cost_advantage: 'Cost advantage',
+          balanced: 'Balanced',
+          balanced_quality_cost: 'Low price and stable quality',
+          high_quality_mid_price: 'High quality, medium price',
+          expensive_or_slow: 'Cost or latency is high',
+          blocked: 'Currently blocked',
+          inactive: 'Account inactive',
+          archived: 'Account archived',
+          manual_unschedulable: 'Scheduling disabled manually',
+          error_status: 'Account in error status',
+          expired: 'Account expired',
+          rate_limited: 'Rate-limit cooldown',
+          overloaded: 'Overload cooldown',
+          overload_cooldown: 'Overload cooldown',
+          temp_unschedulable: 'Temporarily unschedulable',
+          runtime_blocked: 'Runtime degraded briefly',
+          group_mismatch: 'Group mismatch',
+          model_unsupported: 'Model or capability mismatch',
+          model_mismatch: 'Model or capability mismatch',
+          strict_priority_lower_tier: 'Below highest available priority layer',
+          strict_priority_top_tier: 'Current highest available priority layer',
+          strict_priority_never_used_first: 'Same layer: never-used first',
+          strict_priority_least_recently_used: 'Same layer: least recently used first'
+        }
+      },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',
@@ -6996,8 +7076,8 @@ export default {
         description: 'Keeps the original advanced scheduler switch. It only enables the existing advanced scheduler behavior for the legacy scheduler; the experimental scheduler is controlled independently below.'
       },
       openaiAccountScheduler: {
-        strategy: 'OpenAI HTTP account scheduler',
-        strategyHint: 'Only affects OpenAI HTTP gateway endpoints. Responses WebSocket v2 / WS mode always uses the legacy scheduler. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load. Strict priority only fails over within the highest priority tier.',
+        strategy: 'OpenAI account scheduler',
+        strategyHint: 'OpenAI HTTP gateway endpoints use the selected scheduler. Responses WebSocket v2 / WS mode follows strict priority only when strict priority is selected; legacy and experimental keep the existing WS legacy scheduler behavior. Legacy keeps the existing sticky, load-aware, and advanced scheduler behavior. Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load. Strict priority only fails over within the highest priority tier.',
         legacy: 'Legacy scheduler',
         experimentalScheduler: 'Experimental scheduler',
         strictPriority: 'Strict priority scheduler',

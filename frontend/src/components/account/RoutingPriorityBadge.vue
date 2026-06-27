@@ -7,6 +7,9 @@
     @click="$emit('open')"
   >
     <span class="font-semibold">{{ summary.is_schedulable_now && summary.rank ? `#${summary.rank}` : statusText }}</span>
+    <span v-if="showStrictPriority" class="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
+      {{ t('admin.accounts.routingPriority.strict.badge', { priority: summary.priority }) }}
+    </span>
     <span class="rounded bg-white/70 px-1 py-0.5 text-[10px] font-medium dark:bg-dark-900/40">{{ summary.quality_score }}</span>
     <span class="truncate">{{ reasonText }}</span>
   </button>
@@ -37,4 +40,5 @@ const badgeClass = computed(() => {
 
 const statusText = computed(() => props.summary ? translate('admin.accounts.routingPriority.status', props.summary.status_label) : '')
 const reasonText = computed(() => props.summary ? translate('admin.accounts.routingPriority.summary', props.summary.summary_reason) : '')
+const showStrictPriority = computed(() => props.summary?.summary_reason === 'strict_priority_lower_tier')
 </script>

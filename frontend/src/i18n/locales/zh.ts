@@ -3444,7 +3444,9 @@ export default {
       },
       routingPriority: {
         modal: {
-          title: 'OpenAI 试验性调度解释',
+          title: 'OpenAI 调度解释',
+          experimentalTitle: 'OpenAI 试验性调度解释',
+          strictTitle: 'OpenAI Strict Priority 调度解释',
           empty: '暂无可显示的调度解释'
         },
         status: {
@@ -3465,8 +3467,32 @@ export default {
         },
         sections: {
           score: '分项评分',
+          selectionBasis: '选择依据',
           blockReasons: '阻塞原因',
+          strictPriority: 'Strict Priority 排障',
+          notes: '说明',
           topCandidates: 'Top 候选'
+        },
+        strict: {
+          badge: 'P{priority}',
+          priorityLabel: '优先级层',
+          lastUsed: 'LastUsed',
+          neverUsed: '从未使用',
+          currentLayer: '当前层内依据',
+          currentPriority: '当前最高可用优先级层：P{priority}',
+          noCurrentPriority: '当前没有可用的 strict priority 候选层',
+          candidateCount: '基础可调度候选：{count} 个',
+          priority: 'P{priority}',
+          excludedReason: '优先级 P{priority} 低于当前最高可用层 P{current}，本轮被整层排除'
+        },
+        notes: {
+          experimental_scheduler: '试验性调度按价格、质量、响应、错误率、优先级和负载综合排序。',
+          price_uses_account_rate_multiplier_upstream_group_rate_display_only: '价格评分会结合账号倍率和上游倍率；上游分组倍率仅用于展示。',
+          strict_priority: 'Strict Priority 只在当前最高可用优先级层内选择账号。',
+          strict_priority_top_tier_only: '低优先级层不会参与本轮 Top 候选，除非更高优先级层没有可用账号。',
+          strict_priority_same_tier_last_used: '同一优先级层内优先使用从未使用或最久未使用的账号；完全相同时会打散以避免热点。',
+          legacy_scheduler: '传统调度按优先级和 LastUsed 选择账号。',
+          priority_last_used_order: '同优先级时从未使用或最久未使用的账号优先。'
         },
         summary: {
           low_price_high_quality: '低价且质量稳定',
@@ -3489,7 +3515,11 @@ export default {
           runtime_blocked: '运行时短期降级',
           group_mismatch: '分组不匹配',
           model_unsupported: '模型或能力不匹配',
-          model_mismatch: '模型或能力不匹配'
+          model_mismatch: '模型或能力不匹配',
+          strict_priority_lower_tier: '低于最高可用优先级层',
+          strict_priority_top_tier: '当前最高可用优先级层',
+          strict_priority_never_used_first: '同层从未使用优先',
+          strict_priority_least_recently_used: '同层最久未使用优先'
         }
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
@@ -7202,8 +7232,8 @@ export default {
         description: '保留原版高级调度开关。仅在老调度方案下启用原有的高级调度行为；试验性调度由下方调度方案独立控制。'
       },
       openaiAccountScheduler: {
-        strategy: 'OpenAI HTTP 账号调度方案',
-        strategyHint: '仅影响 OpenAI HTTP 网关入口；Responses WebSocket v2 / WS mode 仍固定走老调度。老调度保持原有 sticky、负载和高级调度行为；试验性调度会综合价格、质量、延迟、错误率和优先级选择账号；严格优先级调度只在最高优先级层内失败切换。',
+        strategy: 'OpenAI 账号调度方案',
+        strategyHint: 'OpenAI HTTP 网关入口会按所选方案调度；Responses WebSocket v2 / WS mode 仅在选择严格优先级调度时同步生效，其余方案保持既有 WS 老调度行为。老调度保持原有 sticky、负载和高级调度行为；试验性调度会综合价格、质量、延迟、错误率和优先级选择账号；严格优先级调度只在最高优先级层内失败切换。',
         legacy: '老调度方案',
         experimentalScheduler: '试验性调度',
         strictPriority: '严格优先级调度',

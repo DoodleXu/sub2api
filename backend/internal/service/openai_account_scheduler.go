@@ -1626,11 +1626,6 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 	candidates := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
-		if excludedIDs != nil {
-			if _, excluded := excludedIDs[acc.ID]; excluded {
-				continue
-			}
-		}
 		if !isOpenAIAccountStrictPriorityEligible(ctx, acc, requestedModel, requireCompact, requiredCapability) {
 			continue
 		}
@@ -1660,7 +1655,18 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 		if acc.Priority != highestPriority {
 			break
 		}
+		if excludedIDs != nil {
+			if _, excluded := excludedIDs[acc.ID]; excluded {
+				continue
+			}
+		}
 		topTierCandidates = append(topTierCandidates, acc)
+	}
+	if len(topTierCandidates) == 0 {
+		if requireCompact {
+			return nil, decision, ErrNoAvailableCompactAccounts
+		}
+		return nil, decision, ErrNoAvailableAccounts
 	}
 	if requireCompact {
 		topTierCandidates = prioritizeOpenAICompactAccounts(topTierCandidates)

@@ -26,6 +26,8 @@ type OpenAIRoutingSummary struct {
 	AccountID        int64                       `json:"account_id"`
 	AccountName      string                      `json:"account_name"`
 	Rank             int                         `json:"rank,omitempty"`
+	Priority         int                         `json:"priority"`
+	LastUsedAt       *time.Time                  `json:"last_used_at,omitempty"`
 	QualityScore     int                         `json:"quality_score"`
 	QualityGrade     string                      `json:"quality_grade"`
 	Tier             string                      `json:"tier"`
@@ -38,6 +40,21 @@ type OpenAIRoutingSummary struct {
 	SnapshotAt       time.Time                   `json:"snapshot_at"`
 }
 
+type OpenAIRoutingStrictPriorityExcludedAccount struct {
+	AccountID       int64    `json:"account_id"`
+	AccountName     string   `json:"account_name"`
+	Priority        int      `json:"priority"`
+	CurrentPriority int      `json:"current_priority"`
+	Reasons         []string `json:"reasons"`
+}
+
+type OpenAIRoutingStrictPriorityExplain struct {
+	Enabled                  bool                                         `json:"enabled"`
+	CurrentAvailablePriority *int                                         `json:"current_available_priority,omitempty"`
+	CandidateCount           int                                          `json:"candidate_count"`
+	ExcludedAccounts         []OpenAIRoutingStrictPriorityExcludedAccount `json:"excluded_accounts"`
+}
+
 type OpenAIRoutingExplainParams struct {
 	GroupID            *int64
 	Model              string
@@ -46,21 +63,35 @@ type OpenAIRoutingExplainParams struct {
 }
 
 type OpenAIRoutingExplainResponse struct {
-	Items      []OpenAIRoutingSummary `json:"items"`
-	Source     string                 `json:"source"`
-	SnapshotAt time.Time              `json:"snapshot_at"`
+	Items             []OpenAIRoutingSummary             `json:"items"`
+	Source            string                             `json:"source"`
+	SchedulerStrategy string                             `json:"scheduler_strategy"`
+	StrictPriority    OpenAIRoutingStrictPriorityExplain `json:"strict_priority"`
+	SnapshotAt        time.Time                          `json:"snapshot_at"`
 }
 
 type OpenAIRoutingAccountExplain struct {
-	Account OpenAIRoutingSummary   `json:"account"`
-	Top     []OpenAIRoutingSummary `json:"top"`
-	Notes   []string               `json:"notes"`
+	Account           OpenAIRoutingSummary               `json:"account"`
+	Top               []OpenAIRoutingSummary             `json:"top"`
+	Notes             []string                           `json:"notes"`
+	SchedulerStrategy string                             `json:"scheduler_strategy"`
+	StrictPriority    OpenAIRoutingStrictPriorityExplain `json:"strict_priority"`
 }
 
 func (s *OpenAIGatewayService) ExplainOpenAIRouting(ctx context.Context, params OpenAIRoutingExplainParams) (*OpenAIRoutingExplainResponse, error) {
 	now := time.Now().UTC()
+	strategy := OpenAIAccountSchedulerStrategyLegacy
+	if s != nil {
+		strategy = NormalizeOpenAIAccountSchedulerStrategy(s.openAIAccountSchedulerStrategy(ctx))
+	}
 	if s == nil || s.accountRepo == nil {
-		return &OpenAIRoutingExplainResponse{Items: []OpenAIRoutingSummary{}, Source: "empty", SnapshotAt: now}, nil
+		return &OpenAIRoutingExplainResponse{
+			Items:             []OpenAIRoutingSummary{},
+			Source:            "empty",
+			SchedulerStrategy: strategy,
+			StrictPriority:    openAIRoutingEmptyStrictPriorityExplain(strategy == OpenAIAccountSchedulerStrategyStrictPriority),
+			SnapshotAt:        now,
+		}, nil
 	}
 
 	accounts, err := s.listOpenAIRoutingExplainAccounts(ctx, params)
@@ -74,10 +105,17 @@ func (s *OpenAIGatewayService) ExplainOpenAIRouting(ctx context.Context, params 
 		if !account.IsOpenAI() {
 			continue
 		}
-		summaries = append(summaries, s.explainOpenAIRoutingAccount(ctx, account, loadMap[account.ID], params, now))
+		summaries = append(summaries, s.explainOpenAIRoutingAccount(ctx, account, loadMap[account.ID], params, now, strategy))
 	}
-	s.rankOpenAIRoutingSummaries(summaries)
-	return &OpenAIRoutingExplainResponse{Items: summaries, Source: "scheduler_snapshot", SnapshotAt: now}, nil
+	strictPriority := applyOpenAIRoutingStrictPriorityExplain(summaries, strategy == OpenAIAccountSchedulerStrategyStrictPriority)
+	s.rankOpenAIRoutingSummaries(strategy, summaries)
+	return &OpenAIRoutingExplainResponse{
+		Items:             summaries,
+		Source:            openAIRoutingExplainSource(strategy),
+		SchedulerStrategy: strategy,
+		StrictPriority:    strictPriority,
+		SnapshotAt:        now,
+	}, nil
 }
 
 func (s *OpenAIGatewayService) listOpenAIRoutingExplainAccounts(ctx context.Context, params OpenAIRoutingExplainParams) ([]Account, error) {
@@ -132,24 +170,22 @@ func (s *OpenAIGatewayService) ExplainOpenAIRoutingForAccount(ctx context.Contex
 			return nil, infraerrors.NotFound("OPENAI_ROUTING_ACCOUNT_NOT_FOUND", "OpenAI account not found")
 		}
 		loadMap := s.openAIRoutingLoadMap(ctx, []Account{*account})
-		fallback := s.explainOpenAIRoutingAccount(ctx, account, loadMap[account.ID], params, ranking.SnapshotAt)
+		fallback := s.explainOpenAIRoutingAccount(ctx, account, loadMap[account.ID], params, ranking.SnapshotAt, ranking.SchedulerStrategy)
 		selected = &fallback
 	}
-	top := make([]OpenAIRoutingSummary, 0, 5)
-	for _, item := range ranking.Items {
-		if item.IsSchedulableNow {
-			top = append(top, item)
-		}
-		if len(top) >= 5 {
-			break
-		}
-	}
-	notes := []string{"experimental_scheduler", "price_uses_account_rate_multiplier_upstream_group_rate_display_only"}
-	return &OpenAIRoutingAccountExplain{Account: *selected, Top: top, Notes: notes}, nil
+	top := openAIRoutingTopCandidates(ranking.SchedulerStrategy, ranking.Items)
+	notes := openAIRoutingNotes(ranking.SchedulerStrategy)
+	return &OpenAIRoutingAccountExplain{
+		Account:           *selected,
+		Top:               top,
+		Notes:             notes,
+		SchedulerStrategy: ranking.SchedulerStrategy,
+		StrictPriority:    ranking.StrictPriority,
+	}, nil
 }
 
-func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, account *Account, loadInfo *AccountLoadInfo, params OpenAIRoutingExplainParams, now time.Time) OpenAIRoutingSummary {
-	reasons := s.openAIRoutingBlockReasons(ctx, account, params, now)
+func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, account *Account, loadInfo *AccountLoadInfo, params OpenAIRoutingExplainParams, now time.Time, strategy string) OpenAIRoutingSummary {
+	reasons := s.openAIRoutingBlockReasons(ctx, account, params, now, strategy)
 	errorRate, ttft, hasTTFT := 0.0, 0.0, false
 	if s != nil && s.openaiAccountStats != nil && account != nil {
 		errorRate, ttft, hasTTFT = s.openaiAccountStats.snapshot(account.ID)
@@ -164,6 +200,8 @@ func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, 
 	return OpenAIRoutingSummary{
 		AccountID:        account.ID,
 		AccountName:      account.Name,
+		Priority:         account.Priority,
+		LastUsedAt:       account.LastUsedAt,
 		QualityScore:     qualityScore,
 		QualityGrade:     openAIRoutingQualityGrade(qualityScore),
 		Tier:             openAIRoutingTier(qualityScore, len(reasons) == 0),
@@ -177,7 +215,58 @@ func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, 
 	}
 }
 
-func (s *OpenAIGatewayService) openAIRoutingBlockReasons(ctx context.Context, account *Account, params OpenAIRoutingExplainParams, now time.Time) []string {
+func openAIRoutingEmptyStrictPriorityExplain(enabled bool) OpenAIRoutingStrictPriorityExplain {
+	return OpenAIRoutingStrictPriorityExplain{
+		Enabled:          enabled,
+		ExcludedAccounts: []OpenAIRoutingStrictPriorityExcludedAccount{},
+	}
+}
+
+func applyOpenAIRoutingStrictPriorityExplain(items []OpenAIRoutingSummary, enabled bool) OpenAIRoutingStrictPriorityExplain {
+	diagnostic := openAIRoutingEmptyStrictPriorityExplain(enabled)
+	if !enabled {
+		return diagnostic
+	}
+
+	currentPrioritySet := false
+	currentPriority := 0
+	for i := range items {
+		if !items[i].IsSchedulableNow {
+			continue
+		}
+		diagnostic.CandidateCount++
+		if !currentPrioritySet || items[i].Priority < currentPriority {
+			currentPriority = items[i].Priority
+			currentPrioritySet = true
+		}
+	}
+	if !currentPrioritySet {
+		return diagnostic
+	}
+	diagnostic.CurrentAvailablePriority = &currentPriority
+
+	for i := range items {
+		if !items[i].IsSchedulableNow || items[i].Priority <= currentPriority {
+			continue
+		}
+		items[i].IsSchedulableNow = false
+		items[i].StatusLabel = "skipped"
+		items[i].Tier = "skipped"
+		items[i].SummaryReason = "strict_priority_lower_tier"
+		items[i].SummaryReasons = append([]string{"strict_priority_lower_tier"}, items[i].SummaryReasons...)
+		items[i].BlockReasons = append(items[i].BlockReasons, "strict_priority_lower_tier")
+		diagnostic.ExcludedAccounts = append(diagnostic.ExcludedAccounts, OpenAIRoutingStrictPriorityExcludedAccount{
+			AccountID:       items[i].AccountID,
+			AccountName:     items[i].AccountName,
+			Priority:        items[i].Priority,
+			CurrentPriority: currentPriority,
+			Reasons:         []string{"strict_priority_lower_tier"},
+		})
+	}
+	return diagnostic
+}
+
+func (s *OpenAIGatewayService) openAIRoutingBlockReasons(ctx context.Context, account *Account, params OpenAIRoutingExplainParams, now time.Time, strategy string) []string {
 	if account == nil {
 		return []string{"account_missing"}
 	}
@@ -203,7 +292,7 @@ func (s *OpenAIGatewayService) openAIRoutingBlockReasons(ctx context.Context, ac
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		reasons = append(reasons, "temp_unschedulable")
 	}
-	if s != nil && s.isOpenAIAccountRuntimeBlocked(account) {
+	if strategy != OpenAIAccountSchedulerStrategyStrictPriority && s != nil && s.isOpenAIAccountRuntimeBlocked(account) {
 		reasons = append(reasons, "runtime_blocked")
 	}
 	if params.GroupID != nil && !openAIStickyAccountMatchesGroup(account, params.GroupID) {
@@ -230,7 +319,11 @@ func (s *OpenAIGatewayService) openAIRoutingLoadMap(ctx context.Context, account
 	return loadMap
 }
 
-func (s *OpenAIGatewayService) rankOpenAIRoutingSummaries(items []OpenAIRoutingSummary) {
+func (s *OpenAIGatewayService) rankOpenAIRoutingSummaries(strategy string, items []OpenAIRoutingSummary) {
+	if strategy == OpenAIAccountSchedulerStrategyStrictPriority {
+		rankOpenAIRoutingStrictPrioritySummaries(items)
+		return
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		a, b := items[i], items[j]
 		if a.IsSchedulableNow != b.IsSchedulableNow {
@@ -247,6 +340,92 @@ func (s *OpenAIGatewayService) rankOpenAIRoutingSummaries(items []OpenAIRoutingS
 			items[i].Rank = rank
 			rank++
 		}
+	}
+}
+
+func rankOpenAIRoutingStrictPrioritySummaries(items []OpenAIRoutingSummary) {
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if a.IsSchedulableNow != b.IsSchedulableNow {
+			return a.IsSchedulableNow
+		}
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		if openAIRoutingLastUsedEarlier(a.LastUsedAt, b.LastUsedAt) {
+			return true
+		}
+		if openAIRoutingLastUsedEarlier(b.LastUsedAt, a.LastUsedAt) {
+			return false
+		}
+		return a.AccountID < b.AccountID
+	})
+
+	rank := 1
+	for i := range items {
+		if items[i].IsSchedulableNow {
+			items[i].Rank = rank
+			items[i].Tier = "primary"
+			items[i].SummaryReason = "strict_priority_top_tier"
+			items[i].SummaryReasons = []string{"strict_priority_top_tier", openAIRoutingStrictPriorityTieReason(items[i])}
+			rank++
+		}
+	}
+}
+
+func openAIRoutingLastUsedEarlier(left, right *time.Time) bool {
+	switch {
+	case left == nil && right != nil:
+		return true
+	case left != nil && right == nil:
+		return false
+	case left == nil && right == nil:
+		return false
+	default:
+		return left.Before(*right)
+	}
+}
+
+func openAIRoutingStrictPriorityTieReason(item OpenAIRoutingSummary) string {
+	if item.LastUsedAt == nil {
+		return "strict_priority_never_used_first"
+	}
+	return "strict_priority_least_recently_used"
+}
+
+func openAIRoutingTopCandidates(strategy string, items []OpenAIRoutingSummary) []OpenAIRoutingSummary {
+	top := make([]OpenAIRoutingSummary, 0, 5)
+	for _, item := range items {
+		if !item.IsSchedulableNow {
+			continue
+		}
+		top = append(top, item)
+		if len(top) >= 5 {
+			break
+		}
+	}
+	return top
+}
+
+func openAIRoutingExplainSource(strategy string) string {
+	switch strategy {
+	case OpenAIAccountSchedulerStrategyExperimental:
+		return "experimental_scheduler_snapshot"
+	case OpenAIAccountSchedulerStrategyStrictPriority:
+		return "strict_priority_snapshot"
+	default:
+		return "scheduler_snapshot"
+	}
+}
+
+func openAIRoutingNotes(strategy string) []string {
+	switch strategy {
+	case OpenAIAccountSchedulerStrategyExperimental:
+		return []string{"experimental_scheduler", "price_uses_account_rate_multiplier_upstream_group_rate_display_only"}
+	case OpenAIAccountSchedulerStrategyStrictPriority:
+		return []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}
+	default:
+		return []string{"legacy_scheduler", "priority_last_used_order"}
 	}
 }
 

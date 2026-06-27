@@ -416,6 +416,71 @@ func TestOpenAIGatewayService_SelectAccountStrictPriority_WaitsWithinTopTierInst
 	require.Equal(t, 3, decision.CandidateCount)
 }
 
+func TestOpenAIGatewayService_SelectAccountStrictPriority_ExcludedTopTierDoesNotFallBackLowerPriority(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10119)
+	accounts := []Account{
+		{
+			ID:          36201,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    1,
+		},
+		{
+			ID:          36202,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    1,
+		},
+		{
+			ID:          36203,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    2,
+		},
+	}
+	var acquireCalls []int64
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:            &schedulerTestGatewayCache{},
+		cfg:              &config.Config{},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{
+				36203: true,
+			},
+			acquireCalls: &acquireCalls,
+		}),
+	}
+
+	selection, decision, err := svc.SelectAccountStrictPriorityForCapability(
+		ctx,
+		&groupID,
+		"gpt-5.1",
+		map[int64]struct{}{36201: {}, 36202: {}},
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Empty(t, acquireCalls)
+	require.Equal(t, OpenAIAccountSchedulerStrategyStrictPriority, decision.Layer)
+	require.Equal(t, 3, decision.CandidateCount)
+}
+
 func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_PicksHighestPriorityWithoutStickyOrLoadPenalty(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 

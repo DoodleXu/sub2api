@@ -1528,24 +1528,40 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	var lastFailoverErr *service.UpstreamFailoverError
+	var failoverAttempts []openAIFailoverAttemptLog
+	strictPriority := h.gatewayService.IsOpenAIAccountStrictPrioritySchedulerEnabled(ctx)
 
 	for {
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			ctx,
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-			reqModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportResponsesWebsocketV2,
-			service.OpenAIEndpointCapabilityChatCompletions,
-			false,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		var err error
+		if strictPriority {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountStrictPriorityForCapability(
+				ctx,
+				apiKey.GroupID,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportResponsesWebsocketV2,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				ctx,
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportResponsesWebsocketV2,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+			)
+		}
 		if err != nil {
 			reqLog.Warn("openai.websocket_account_select_failed",
-				zap.Error(err),
-				zap.Int("excluded_account_count", len(failedAccountIDs)),
+				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
@@ -1701,7 +1717,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if account.Type == service.AccountTypeOAuth {
 					h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+				h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, true, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
@@ -1752,28 +1768,30 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// WebSocket 首包可能很大，hash 必须在 hooks 外算成字符串，避免 AfterTurn 闭包保活请求体。
 		requestPayloadHash = service.HashUsageRequestPayload(wsFirstMessage)
 
-		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
+		proxyCtx := ctx
+		if strictPriority {
+			proxyCtx = service.WithOpenAIStrictPriorityNoPenalty(proxyCtx)
+		}
+		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(proxyCtx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
 				releaseAccountSlot()
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
-				if switchCount >= maxAccountSwitches {
+				failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
+				if !strictPriority && switchCount >= maxAccountSwitches {
 					closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
 					return
 				}
 				switchCount++
-				if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
+				if !strictPriority && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount) {
 					closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
 					return
 				}
-				h.gatewayService.RecordOpenAIAccountSwitch()
+				h.gatewayService.RecordOpenAIAccountSwitchForStrategy(strictPriority)
 				reqLog.Warn("openai.websocket_upstream_failover_switching",
-					zap.Int64("account_id", account.ID),
-					zap.Int("upstream_status", failoverErr.StatusCode),
-					zap.Int("switch_count", switchCount),
-					zap.Int("max_switches", maxAccountSwitches),
+					openAIFailoverSwitchLogFields(account.ID, failoverErr.StatusCode, switchCount, maxAccountSwitches, strictPriority, failoverAttempts)...,
 				)
 				if !ensureUserSlotHeld() {
 					return
@@ -1781,7 +1799,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				continue
 			}
 
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResultForStrategy(strictPriority, account.ID, false, nil)
 			closeStatus, closeReason := summarizeWSCloseErrorForLog(err)
 			reqLog.Warn("openai.websocket_proxy_failed",
 				zap.Int64("account_id", account.ID),

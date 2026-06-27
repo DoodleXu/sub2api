@@ -958,6 +958,8 @@ export interface OpenAIRoutingSummary {
   account_id: number
   account_name: string
   rank?: number
+  priority: number
+  last_used_at?: string | null
   quality_score: number
   quality_grade: string
   tier: string
@@ -970,9 +972,26 @@ export interface OpenAIRoutingSummary {
   snapshot_at: string
 }
 
+export interface OpenAIRoutingStrictPriorityExcludedAccount {
+  account_id: number
+  account_name: string
+  priority: number
+  current_priority: number
+  reasons: string[]
+}
+
+export interface OpenAIRoutingStrictPriorityExplain {
+  enabled: boolean
+  current_available_priority?: number | null
+  candidate_count: number
+  excluded_accounts: OpenAIRoutingStrictPriorityExcludedAccount[]
+}
+
 export interface OpenAIRoutingRankingResponse {
   items: OpenAIRoutingSummary[]
   source: string
+  scheduler_strategy: string
+  strict_priority: OpenAIRoutingStrictPriorityExplain
   snapshot_at: string
 }
 
@@ -980,6 +999,8 @@ export interface OpenAIRoutingAccountExplain {
   account: OpenAIRoutingSummary
   top: OpenAIRoutingSummary[]
   notes: string[]
+  scheduler_strategy: string
+  strict_priority: OpenAIRoutingStrictPriorityExplain
 }
 
 // Account Usage types
