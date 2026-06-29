@@ -1482,8 +1482,13 @@ func (s *OpenAIGatewayService) SelectAccountExperimentalSchedulerForCapability(
 	requiredTransport OpenAIUpstreamTransport,
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
+	platformOverride ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	return s.selectAccountWithSchedulerMode(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, true)
+	platform := PlatformOpenAI
+	if len(platformOverride) > 0 {
+		platform = platformOverride[0]
+	}
+	return s.selectAccountWithSchedulerMode(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, true, platform)
 }
 
 func (s *OpenAIGatewayService) SelectAccountExperimentalSchedulerForImages(
@@ -1512,8 +1517,13 @@ func (s *OpenAIGatewayService) SelectAccountStrictPriorityForCapability(
 	requiredTransport OpenAIUpstreamTransport,
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
+	platformOverride ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	return s.selectAccountStrictPriority(ctx, groupID, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact)
+	platform := PlatformOpenAI
+	if len(platformOverride) > 0 {
+		platform = platformOverride[0]
+	}
+	return s.selectAccountStrictPriority(ctx, groupID, platform, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact)
 }
 
 func (s *OpenAIGatewayService) SelectAccountStrictPriorityForImages(
@@ -1523,12 +1533,12 @@ func (s *OpenAIGatewayService) SelectAccountStrictPriorityForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	selection, decision, err := s.selectAccountStrictPriority(ctx, groupID, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false)
+	selection, decision, err := s.selectAccountStrictPriority(ctx, groupID, PlatformOpenAI, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false)
 	if err == nil && selection != nil && selection.Account != nil {
 		return selection, decision, nil
 	}
 	if requiredCapability == OpenAIImagesCapabilityNative {
-		return s.selectAccountStrictPriority(ctx, groupID, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", OpenAIImagesCapabilityBasic, false)
+		return s.selectAccountStrictPriority(ctx, groupID, PlatformOpenAI, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", OpenAIImagesCapabilityBasic, false)
 	}
 	return selection, decision, err
 }
@@ -1549,37 +1559,16 @@ func openAIAccountOlderLastUsed(a, b *Account) bool {
 	return a.ID < b.ID
 }
 
-func isOpenAIAccountStrictPriorityEligible(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
-	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
-		return false
-	}
-	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-		slog.Debug("account_auto_paused_by_quota",
-			"account_id", account.ID,
-			"window", reason.window,
-			"threshold", reason.threshold,
-			"utilization", reason.utilization,
-		)
-		return false
-	}
-	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
-		return false
-	}
-	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
-		return false
-	}
-	if requireCompact && openAICompactSupportTier(account) == 0 {
-		return false
-	}
-	return true
+func isOpenAIAccountStrictPriorityEligible(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+	return isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability)
 }
 
-func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
+func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
 	if account == nil {
 		return nil
 	}
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAIAccountStrictPriorityEligible(ctx, account, requestedModel, requireCompact, requiredCapability) {
+		if !isOpenAIAccountStrictPriorityEligible(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
 		if !accountSupportsOpenAICapabilities(account, requiredCapability, requiredImageCapability) {
@@ -1592,7 +1581,7 @@ func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
-	if !isOpenAIAccountStrictPriorityEligible(ctx, latest, requestedModel, requireCompact, requiredCapability) {
+	if !isOpenAIAccountStrictPriorityEligible(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
 	if !accountSupportsOpenAICapabilities(latest, requiredCapability, requiredImageCapability) {
@@ -1604,6 +1593,7 @@ func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Co
 func (s *OpenAIGatewayService) selectAccountStrictPriority(
 	ctx context.Context,
 	groupID *int64,
+	platform string,
 	requestedModel string,
 	excludedIDs map[int64]struct{},
 	requiredTransport OpenAIUpstreamTransport,
@@ -1612,6 +1602,7 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 	requireCompact bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
+	platform = normalizeOpenAICompatiblePlatform(platform)
 	decision := OpenAIAccountScheduleDecision{Layer: OpenAIAccountSchedulerStrategyStrictPriority}
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
@@ -1620,7 +1611,7 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 		return nil, decision, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
 
-	accounts, err := s.listSchedulableAccounts(ctx, groupID)
+	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
 	if err != nil {
 		return nil, decision, err
 	}
@@ -1632,7 +1623,7 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 	candidates := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
-		if !isOpenAIAccountStrictPriorityEligible(ctx, acc, requestedModel, requireCompact, requiredCapability) {
+		if !isOpenAIAccountStrictPriorityEligible(ctx, acc, platform, requestedModel, requireCompact, requiredCapability) {
 			continue
 		}
 		if !s.isOpenAIAccountTransportCompatible(acc, requiredTransport) {
@@ -1680,7 +1671,7 @@ func (s *OpenAIGatewayService) selectAccountStrictPriority(
 
 	var waitAccount *Account
 	for _, acc := range topTierCandidates {
-		fresh := s.recheckStrictPriorityAccountFromDB(ctx, acc, requestedModel, requireCompact, requiredCapability, requiredImageCapability)
+		fresh := s.recheckStrictPriorityAccountFromDB(ctx, acc, platform, requestedModel, requireCompact, requiredCapability, requiredImageCapability)
 		if fresh == nil {
 			continue
 		}

@@ -154,6 +154,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		} else if experimentalScheduler {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountExperimentalSchedulerForCapability(
@@ -166,6 +167,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(

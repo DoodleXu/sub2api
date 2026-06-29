@@ -360,6 +360,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				requiredCapability,
 				requireCompact,
+				requestPlatform,
 			)
 		} else if experimentalScheduler {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountExperimentalSchedulerForCapability(
@@ -372,6 +373,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				requiredCapability,
 				requireCompact,
+				requestPlatform,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -929,6 +931,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		} else if experimentalScheduler {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountExperimentalSchedulerForCapability(
@@ -941,6 +944,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				service.OpenAIUpstreamTransportAny,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
@@ -1561,6 +1565,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				service.OpenAIUpstreamTransportResponsesWebsocketV2,
 				service.OpenAIEndpointCapabilityChatCompletions,
 				false,
+				requestPlatform,
 			)
 		} else {
 			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
