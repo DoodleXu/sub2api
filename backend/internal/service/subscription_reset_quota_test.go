@@ -17,8 +17,9 @@ import (
 type resetQuotaUserSubRepoStub struct {
 	userSubRepoNoop
 
-	sub  *UserSubscription
-	list []UserSubscription
+	sub            *UserSubscription
+	list           []UserSubscription
+	getActiveCalls int
 
 	resetDailyCalled   bool
 	resetWeeklyCalled  bool
@@ -33,6 +34,15 @@ type resetQuotaUserSubRepoStub struct {
 
 func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserSubscription, error) {
 	if r.sub == nil || r.sub.ID != id {
+		return nil, ErrSubscriptionNotFound
+	}
+	cp := *r.sub
+	return &cp, nil
+}
+
+func (r *resetQuotaUserSubRepoStub) GetActiveByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+	r.getActiveCalls++
+	if r.sub == nil || r.sub.UserID != userID || r.sub.GroupID != groupID || r.sub.Status != SubscriptionStatusActive || !r.sub.ExpiresAt.After(time.Now()) {
 		return nil, ErrSubscriptionNotFound
 	}
 	cp := *r.sub
