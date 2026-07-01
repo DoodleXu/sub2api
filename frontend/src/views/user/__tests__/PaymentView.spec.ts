@@ -3,7 +3,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
-import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
+import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan, SubscriptionUpgradeOption } from '@/types/payment'
 
 const routeState = vi.hoisted(() => ({
   path: '/purchase',
@@ -200,7 +200,10 @@ function oauthOrderFixture() {
   }
 }
 
-async function mountSubscriptionConfirm(options: Parameters<typeof checkoutInfoWithPlansFixture>[0] = {}) {
+async function mountSubscriptionConfirm(
+  options: Parameters<typeof checkoutInfoWithPlansFixture>[0] = {},
+  upgradeOptions: SubscriptionUpgradeOption[] = [],
+) {
   vi.useRealTimers()
   routeState.path = '/purchase'
   routeState.query = {
@@ -217,6 +220,7 @@ async function mountSubscriptionConfirm(options: Parameters<typeof checkoutInfoW
   showInfo.mockReset()
   showWarning.mockReset()
   getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoWithPlansFixture(options))
+  getSubscriptionUpgradeOptions.mockReset().mockResolvedValue({ data: { options: upgradeOptions } })
   bridgeInvoke.mockReset()
   window.localStorage.clear()
   ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
@@ -319,6 +323,45 @@ describe('PaymentView subscription confirmation amounts', () => {
     expect(text).toContain(fee)
     expect(text).toContain(total)
     expect(wrapper.findAll('button').some(button => button.text().includes(total))).toBe(true)
+  })
+
+  it('shows original plan price before subscription upgrade credit in the summary', async () => {
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: {
+        balance_recharge_multiplier: 4,
+        recharge_fee_rate: 2.5,
+      },
+      method: {
+        currency: 'CNY',
+      },
+      plan: {
+        price: 100,
+      },
+    }, [{
+      subscription_id: 42,
+      group_id: 3,
+      group_name: 'OpenAI',
+      group_platform: 'openai',
+      expires_at: '2099-01-01T00:00:00Z',
+      days_remaining: 10,
+      credit_amount: 30,
+      credit_days: 10,
+      payable_amount: 70,
+    }])
+
+    const vm = wrapper.vm as unknown as {
+      useUpgradeCredit: boolean
+      selectedUpgradeSubscriptionId: number | null
+    }
+    vm.useUpgradeCredit = true
+    vm.selectedUpgradeSubscriptionId = 42
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.text()
+    expect(text).toContain(formatPaymentAmount(100, 'CNY'))
+    expect(text).toContain(`-${formatPaymentAmount(30, 'CNY')}`)
+    expect(text).toContain(formatPaymentAmount(1.75, 'CNY'))
+    expect(wrapper.findAll('button').some(button => button.text().includes(formatPaymentAmount(71.75, 'CNY')))).toBe(true)
   })
 })
 

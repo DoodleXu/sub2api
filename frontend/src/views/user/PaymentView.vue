@@ -214,7 +214,7 @@
                 <div class="space-y-2 text-sm">
                   <div class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.amountLabel') }}</span>
-                    <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(subscriptionPayableAmount) }}</span>
+                    <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
                   </div>
                   <div v-if="selectedUpgradeOption && useUpgradeCredit" class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.creditAmount') }}</span>
