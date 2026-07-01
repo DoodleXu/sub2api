@@ -130,18 +130,6 @@ func safeDateFormat(granularity string) string {
 	return "YYYY-MM-DD"
 }
 
-// appendRawUsageLogModelWhereCondition keeps direct model filters on the raw model column for backward
-// compatibility with historical rows. Requested/upstream analytics must use
-// resolveModelDimensionExpression instead.
-func appendRawUsageLogModelWhereCondition(conditions []string, args []any, model string) ([]string, []any) {
-	if strings.TrimSpace(model) == "" {
-		return conditions, args
-	}
-	conditions = append(conditions, fmt.Sprintf("%s = $%d", rawUsageLogModelColumn, len(args)+1))
-	args = append(args, model)
-	return conditions, args
-}
-
 func appendUsageLogBillingModeWhereCondition(conditions []string, args []any, billingMode string) ([]string, []any) {
 	return appendUsageLogBillingModeWhereConditionWithAlias(conditions, args, billingMode, "")
 }
