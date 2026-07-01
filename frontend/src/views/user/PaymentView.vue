@@ -104,9 +104,9 @@
                 <!-- Price -->
                 <div class="flex items-baseline gap-2">
                   <span v-if="selectedPlan.original_price" class="text-sm text-gray-400 line-through dark:text-gray-500">
-                    {{ formatSelectedPaymentAmount(selectedPlan.original_price) }}
+                    {{ formatSelectedSubscriptionPaymentAmount(selectedPlan.original_price) }}
                   </span>
-                  <span :class="['text-3xl font-bold', planTextClass]">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
+                  <span :class="['text-3xl font-bold', planTextClass]">{{ formatSelectedSubscriptionPaymentAmount(selectedPlan.price) }}</span>
                   <span class="text-sm text-gray-500 dark:text-gray-400">/ {{ planValiditySuffix }}</span>
                 </div>
                 <!-- Description -->
@@ -214,7 +214,7 @@
                 <div class="space-y-2 text-sm">
                   <div class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.amountLabel') }}</span>
-                    <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
+                    <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(subscriptionPayableAmount) }}</span>
                   </div>
                   <div v-if="selectedUpgradeOption && useUpgradeCredit" class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.creditAmount') }}</span>
@@ -575,7 +575,7 @@ const enabledMethods = computed(() => Object.keys(visibleMethods.value))
 const validAmount = computed(() => amount.value ?? 0)
 const balanceRechargeMultiplier = computed(() => {
   const multiplier = checkout.value.balance_recharge_multiplier
-  return multiplier > 0 ? multiplier : 1
+  return Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
 })
 const creditedAmount = computed(() => Math.round((validAmount.value * balanceRechargeMultiplier.value) * 100) / 100)
 
@@ -612,8 +612,29 @@ const localeCode = computed(() => {
   return undefined
 })
 
+function currencyFractionDigits(currency: string): number {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+    }).resolvedOptions().maximumFractionDigits ?? 2
+  } catch {
+    return 2
+  }
+}
+
+function roundPaymentAmount(value: number, currency: string): number {
+  if (!Number.isFinite(value)) return 0
+  const factor = 10 ** currencyFractionDigits(currency)
+  return Math.round(value * factor) / factor
+}
+
 function formatSelectedPaymentAmount(value: number): string {
   return formatPaymentAmount(value, selectedCurrency.value, localeCode.value)
+}
+
+function formatSelectedSubscriptionPaymentAmount(value: number): string {
+  return formatSelectedPaymentAmount(roundPaymentAmount(value, selectedCurrency.value))
 }
 
 function currencyScale(currency: string): number {
@@ -642,9 +663,14 @@ function normalizedFeeSchedules(limit?: MethodLimit): PaymentFeeSchedule[] {
     }))
     .filter(schedule => schedule.fee_rate > 0 || (schedule.fee_min || 0) > 0)
   if (schedules.length > 0) return schedules
+  const limitFeeRate = Number(limit?.fee_rate ?? 0) || 0
+  const limitFeeMin = Number(limit?.fee_min ?? 0) || 0
+  if (limitFeeRate > 0 || limitFeeMin > 0) {
+    return [{ fee_rate: limitFeeRate, fee_min: limitFeeMin }]
+  }
   const fallback = {
-    fee_rate: Number(limit?.fee_rate ?? checkout.value?.recharge_fee_rate ?? 0) || 0,
-    fee_min: Number(limit?.fee_min ?? 0) || 0,
+    fee_rate: Number(checkout.value?.recharge_fee_rate ?? 0) || 0,
+    fee_min: 0,
   }
   return fallback.fee_rate > 0 || fallback.fee_min > 0 ? [fallback] : []
 }

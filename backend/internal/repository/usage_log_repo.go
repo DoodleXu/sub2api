@@ -143,21 +143,66 @@ func appendRawUsageLogModelWhereCondition(conditions []string, args []any, model
 }
 
 func appendUsageLogBillingModeWhereCondition(conditions []string, args []any, billingMode string) ([]string, []any) {
+	return appendUsageLogBillingModeWhereConditionWithAlias(conditions, args, billingMode, "")
+}
+
+func appendUsageLogBillingModeWhereConditionWithAlias(conditions []string, args []any, billingMode string, alias string) ([]string, []any) {
 	mode := strings.TrimSpace(billingMode)
 	if mode == "" {
 		return conditions, args
 	}
 	placeholder := fmt.Sprintf("$%d", len(args)+1)
+	billingModeColumn := usageLogQualifiedColumn(alias, "billing_mode")
+	imageCountColumn := usageLogQualifiedColumn(alias, "image_count")
 	switch service.BillingMode(mode) {
 	case service.BillingModeImage:
-		conditions = append(conditions, fmt.Sprintf("(billing_mode = %s OR COALESCE(image_count, 0) > 0)", placeholder))
+		conditions = append(conditions, fmt.Sprintf("(%s = %s OR COALESCE(%s, 0) > 0)", billingModeColumn, placeholder, imageCountColumn))
 	case service.BillingModeToken:
-		conditions = append(conditions, fmt.Sprintf("(billing_mode = %s OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(image_count, 0) <= 0))", placeholder))
+		conditions = append(conditions, fmt.Sprintf("(%s = %s OR ((%s IS NULL OR %s = '') AND COALESCE(%s, 0) <= 0))", billingModeColumn, placeholder, billingModeColumn, billingModeColumn, imageCountColumn))
 	default:
-		conditions = append(conditions, fmt.Sprintf("billing_mode = %s", placeholder))
+		conditions = append(conditions, fmt.Sprintf("%s = %s", billingModeColumn, placeholder))
 	}
 	args = append(args, mode)
 	return conditions, args
+}
+
+func appendUsageLogBillingModeQueryFilter(query string, args []any, billingMode string, alias string) (string, []any) {
+	conditions, nextArgs := appendUsageLogBillingModeWhereConditionWithAlias(nil, args, billingMode, alias)
+	if len(conditions) == 0 {
+		return query, nextArgs
+	}
+	return query + " AND " + conditions[0], nextArgs
+}
+
+func usageLogQualifiedColumn(alias string, column string) string {
+	if strings.TrimSpace(alias) == "" {
+		return column
+	}
+	return strings.TrimSpace(alias) + "." + column
+}
+
+func usageLogModelDimensionExpression(source string, alias string) string {
+	requestedModel := usageLogQualifiedColumn(alias, "requested_model")
+	model := usageLogQualifiedColumn(alias, "model")
+	upstreamModel := usageLogQualifiedColumn(alias, "upstream_model")
+	requestedExpr := fmt.Sprintf("COALESCE(NULLIF(TRIM(%s), ''), %s)", requestedModel, model)
+	switch usagestats.NormalizeModelSource(source) {
+	case usagestats.ModelSourceUpstream:
+		return fmt.Sprintf("COALESCE(NULLIF(TRIM(%s), ''), %s)", upstreamModel, requestedExpr)
+	case usagestats.ModelSourceMapping:
+		return fmt.Sprintf("(%s || ' -> ' || COALESCE(NULLIF(TRIM(%s), ''), %s))", requestedExpr, upstreamModel, requestedExpr)
+	default:
+		return requestedExpr
+	}
+}
+
+func appendUsageLogModelQueryFilter(query string, args []any, model string, source string, alias string) (string, []any) {
+	if strings.TrimSpace(model) == "" {
+		return query, args
+	}
+	query += fmt.Sprintf(" AND %s = $%d", usageLogModelDimensionExpression(source, alias), len(args)+1)
+	args = append(args, model)
+	return query, args
 }
 
 // appendRawUsageLogModelQueryFilter keeps direct model filters on the raw model column for backward
@@ -3295,7 +3340,10 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(args)+1))
 		args = append(args, filters.GroupID)
 	}
-	conditions, args = appendRawUsageLogModelWhereCondition(conditions, args, filters.Model)
+	if strings.TrimSpace(filters.Model) != "" {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", usageLogModelDimensionExpression(filters.ModelFilterSource, ""), len(args)+1))
+		args = append(args, filters.Model)
+	}
 	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
 	if filters.BillingType != nil {
 		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", len(args)+1))
@@ -3581,6 +3629,68 @@ func appendUsageTrendFilters(query string, args []any, userID, apiKeyID, account
 	return query, args
 }
 
+func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters usagestats.UsageLogFilters) (results []TrendDataPoint, err error) {
+	dateFormat := safeDateFormat(granularity)
+
+	query := fmt.Sprintf(`
+		SELECT
+			TO_CHAR(created_at, '%s') as date,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			COALESCE(SUM(actual_cost), 0) as actual_cost
+		FROM usage_logs
+		WHERE created_at >= $1 AND created_at < $2
+	`, dateFormat)
+
+	args := []any{startTime, endTime}
+	if filters.UserID > 0 {
+		query += fmt.Sprintf(" AND user_id = $%d", len(args)+1)
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		query += fmt.Sprintf(" AND account_id = $%d", len(args)+1)
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		query += fmt.Sprintf(" AND group_id = $%d", len(args)+1)
+		args = append(args, filters.GroupID)
+	}
+	query, args = appendUsageLogModelQueryFilter(query, args, filters.Model, filters.ModelFilterSource, "")
+	query, args = appendRequestTypeOrStreamQueryFilter(query, args, filters.RequestType, filters.Stream)
+	if filters.BillingType != nil {
+		query += fmt.Sprintf(" AND billing_type = $%d", len(args)+1)
+		args = append(args, int16(*filters.BillingType))
+	}
+	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "")
+	query += " GROUP BY date ORDER BY date ASC"
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results, err = scanTrendRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func shouldUsePreaggregatedTrend(granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) bool {
 	if granularity != "day" && granularity != "hour" {
 		return false
@@ -3735,6 +3845,74 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 	return results, nil
 }
 
+func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, source string) (results []ModelStat, err error) {
+	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
+	if filters.AccountID > 0 && filters.UserID == 0 && filters.APIKeyID == 0 {
+		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
+	}
+	accountCostExpr := "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost"
+	modelExpr := usageLogModelDimensionExpression(source, "")
+
+	query := fmt.Sprintf(`
+		SELECT
+			%s as model,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(total_cost), 0) as cost,
+			%s,
+			%s
+		FROM usage_logs
+		WHERE created_at >= $1 AND created_at < $2
+	`, modelExpr, actualCostExpr, accountCostExpr)
+
+	args := []any{startTime, endTime}
+	if filters.UserID > 0 {
+		query += fmt.Sprintf(" AND user_id = $%d", len(args)+1)
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		query += fmt.Sprintf(" AND account_id = $%d", len(args)+1)
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		query += fmt.Sprintf(" AND group_id = $%d", len(args)+1)
+		args = append(args, filters.GroupID)
+	}
+	query, args = appendUsageLogModelQueryFilter(query, args, filters.Model, source, "")
+	query, args = appendRequestTypeOrStreamQueryFilter(query, args, filters.RequestType, filters.Stream)
+	if filters.BillingType != nil {
+		query += fmt.Sprintf(" AND billing_type = $%d", len(args)+1)
+		args = append(args, int16(*filters.BillingType))
+	}
+	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "")
+	query += fmt.Sprintf(" GROUP BY %s ORDER BY total_tokens DESC", modelExpr)
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results, err = scanModelStatsRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // GetGroupStatsWithFilters returns group usage statistics with optional filters
 func (r *usageLogRepository) GetGroupStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8) (results []usagestats.GroupStat, err error) {
 	query := `
@@ -3773,6 +3951,80 @@ func (r *usageLogRepository) GetGroupStatsWithFilters(ctx context.Context, start
 		query += fmt.Sprintf(" AND ul.billing_type = $%d", len(args)+1)
 		args = append(args, int16(*billingType))
 	}
+	query += " GROUP BY ul.group_id, g.name ORDER BY total_tokens DESC"
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+
+	results = make([]usagestats.GroupStat, 0)
+	for rows.Next() {
+		var row usagestats.GroupStat
+		if err := rows.Scan(
+			&row.GroupID,
+			&row.GroupName,
+			&row.Requests,
+			&row.TotalTokens,
+			&row.Cost,
+			&row.ActualCost,
+			&row.AccountCost,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (r *usageLogRepository) GetGroupStatsWithUsageFilters(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters) (results []usagestats.GroupStat, err error) {
+	query := `
+		SELECT
+			COALESCE(ul.group_id, 0) as group_id,
+			COALESCE(g.name, '') as group_name,
+			COUNT(*) as requests,
+			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_tokens,
+			COALESCE(SUM(ul.total_cost), 0) as cost,
+			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost
+		FROM usage_logs ul
+		LEFT JOIN groups g ON g.id = ul.group_id
+		WHERE ul.created_at >= $1 AND ul.created_at < $2
+	`
+
+	args := []any{startTime, endTime}
+	if filters.UserID > 0 {
+		query += fmt.Sprintf(" AND ul.user_id = $%d", len(args)+1)
+		args = append(args, filters.UserID)
+	}
+	if filters.APIKeyID > 0 {
+		query += fmt.Sprintf(" AND ul.api_key_id = $%d", len(args)+1)
+		args = append(args, filters.APIKeyID)
+	}
+	if filters.AccountID > 0 {
+		query += fmt.Sprintf(" AND ul.account_id = $%d", len(args)+1)
+		args = append(args, filters.AccountID)
+	}
+	if filters.GroupID > 0 {
+		query += fmt.Sprintf(" AND ul.group_id = $%d", len(args)+1)
+		args = append(args, filters.GroupID)
+	}
+	query, args = appendUsageLogModelQueryFilter(query, args, filters.Model, filters.ModelFilterSource, "ul")
+	query, args = appendRequestTypeOrStreamQueryFilter(query, args, filters.RequestType, filters.Stream)
+	if filters.BillingType != nil {
+		query += fmt.Sprintf(" AND ul.billing_type = $%d", len(args)+1)
+		args = append(args, int16(*filters.BillingType))
+	}
+	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "ul")
 	query += " GROUP BY ul.group_id, g.name ORDER BY total_tokens DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -4016,7 +4268,10 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(args)+1))
 		args = append(args, filters.GroupID)
 	}
-	conditions, args = appendRawUsageLogModelWhereCondition(conditions, args, filters.Model)
+	if strings.TrimSpace(filters.Model) != "" {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", usageLogModelDimensionExpression(filters.ModelFilterSource, ""), len(args)+1))
+		args = append(args, filters.Model)
+	}
 	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
 	if filters.BillingType != nil {
 		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", len(args)+1))

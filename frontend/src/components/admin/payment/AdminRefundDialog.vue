@@ -229,7 +229,7 @@ const form = reactive({
 
 const isSubscriptionOrder = computed(() => props.order?.order_type === 'subscription')
 
-// In REFUND_REQUESTED status, refund_amount is the REQUESTED amount, not actually refunded.
+// In REFUND_REQUESTED / REFUND_PENDING status, refund_amount is requested/pending, not actually refunded.
 // Only PARTIALLY_REFUNDED / REFUNDED have real refund amounts.
 const actuallyRefunded = computed(() => {
   if (!props.order) return 0

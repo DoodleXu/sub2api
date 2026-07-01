@@ -610,7 +610,7 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
-			name: "POST /api/v1/payment/public/orders/verify includes subscription upgrade credit fields",
+			name: "POST /api/v1/payment/public/orders/verify returns minimal anonymous order state",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
 				deps.seedPaymentUpgradeOrder(t)
@@ -626,25 +626,11 @@ func TestAPIContracts(t *testing.T) {
 				"code": 0,
 				"message": "success",
 				"data": {
-					"id": 1,
 					"out_trade_no": "sub2_contract_upgrade",
-					"amount": 0.01,
-					"pay_amount": 0.01,
-					"fee_rate": 0,
-					"fee_amount": 0,
-					"currency": "CNY",
-					"payment_type": "easypay",
-					"order_type": "subscription",
 					"status": "PENDING",
+					"paid": false,
 					"created_at": "2025-01-02T03:04:05Z",
-					"expires_at": "2025-01-02T03:34:05Z",
-					"refund_amount": 0,
-					"plan_id": 200,
-					"subscription_group_id": 10,
-					"subscription_days": 30,
-					"upgrade_from_subscription_id": 77,
-					"upgrade_credit_amount": 99.99,
-					"upgrade_credit_days": 20
+					"expires_at": "2025-01-02T03:34:05Z"
 				}
 			}`,
 		},
@@ -2781,7 +2767,7 @@ func (r *stubUsageLogRepo) ListWithFilters(ctx context.Context, params paginatio
 			continue
 		}
 		// Apply Model filter
-		if filters.Model != "" && log.Model != filters.Model {
+		if filters.Model != "" && stubUsageLogFilterModel(log, filters.ModelFilterSource) != filters.Model {
 			continue
 		}
 		// Apply Stream filter
@@ -2807,6 +2793,13 @@ func (r *stubUsageLogRepo) ListWithFilters(ctx context.Context, params paginatio
 	return out, paginationResult(total, params), nil
 }
 
+func stubUsageLogFilterModel(log service.UsageLog, source string) string {
+	if source == usagestats.ModelSourceRequested && log.RequestedModel != "" {
+		return log.RequestedModel
+	}
+	return log.Model
+}
+
 func (r *stubUsageLogRepo) GetGlobalStats(ctx context.Context, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
 	return nil, errors.New("not implemented")
 }
@@ -2816,7 +2809,55 @@ func (r *stubUsageLogRepo) GetAccountUsageStats(ctx context.Context, accountID i
 }
 
 func (r *stubUsageLogRepo) GetStatsWithFilters(ctx context.Context, filters usagestats.UsageLogFilters) (*usagestats.UsageStats, error) {
-	return nil, errors.New("not implemented")
+	logs, _, err := r.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 100000}, filters)
+	if err != nil {
+		return nil, err
+	}
+
+	var totalRequests int64
+	var totalInputTokens int64
+	var totalOutputTokens int64
+	var totalCacheTokens int64
+	var totalCacheCreationTokens int64
+	var totalCacheReadTokens int64
+	var totalCost float64
+	var totalActualCost float64
+	var totalDuration int64
+	var durationCount int64
+
+	for _, log := range logs {
+		totalRequests++
+		totalInputTokens += int64(log.InputTokens)
+		totalOutputTokens += int64(log.OutputTokens)
+		totalCacheTokens += int64(log.CacheCreationTokens + log.CacheReadTokens)
+		totalCacheCreationTokens += int64(log.CacheCreationTokens)
+		totalCacheReadTokens += int64(log.CacheReadTokens)
+		totalCost += log.TotalCost
+		totalActualCost += log.ActualCost
+		if log.DurationMs != nil {
+			totalDuration += int64(*log.DurationMs)
+			durationCount++
+		}
+	}
+
+	var avgDuration float64
+	if durationCount > 0 {
+		avgDuration = float64(totalDuration) / float64(durationCount)
+	}
+
+	return &usagestats.UsageStats{
+		TotalRequests:            totalRequests,
+		TotalInputTokens:         totalInputTokens,
+		TotalOutputTokens:        totalOutputTokens,
+		TotalCacheTokens:         totalCacheTokens,
+		TotalCacheCreationTokens: totalCacheCreationTokens,
+		TotalCacheReadTokens:     totalCacheReadTokens,
+		TotalTokens:              totalInputTokens + totalOutputTokens + totalCacheTokens,
+		TotalCost:                totalCost,
+		TotalActualCost:          totalActualCost,
+		AverageDurationMs:        avgDuration,
+		Endpoints:                []usagestats.EndpointStat{},
+	}, nil
 }
 func (r *stubUsageLogRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
 	return nil, errors.New("not implemented")
