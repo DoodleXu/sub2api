@@ -49,4 +49,9 @@ describe('PROVIDER_CONFIG_FIELDS.stripe', () => {
     expect(currency?.hintKey).toBe('admin.settings.payment.field_paymentCurrencyHint')
     expect(currency?.options).toBe(PAYMENT_CURRENCY_OPTIONS)
   })
+
+  it('allows clearing custom fee fields to inherit global fees again', () => {
+    expect(findField('stripe', 'feeRate')?.clearable).toBe(true)
+    expect(findField('stripe', 'feeMin')?.clearable).toBe(true)
+  })
 })

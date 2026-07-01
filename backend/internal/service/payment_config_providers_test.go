@@ -650,6 +650,42 @@ func validStripeProviderConfig(t *testing.T) map[string]string {
 	}
 }
 
+func TestValidateProviderFeeConfig(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateProviderFeeConfig(payment.TypeStripe, map[string]string{}))
+	require.NoError(t, validateProviderFeeConfig(payment.TypeStripe, map[string]string{
+		payment.ConfigKeyFeeRate: "3",
+		payment.ConfigKeyFeeMin:  "0.50",
+	}))
+
+	err := validateProviderFeeConfig(payment.TypeStripe, map[string]string{
+		payment.ConfigKeyFeeRate: "100.001",
+		payment.ConfigKeyFeeMin:  "0",
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_STRIPE_FEE_RATE", infraerrors.FromError(err).Reason)
+
+	err = validateProviderFeeConfig(payment.TypeStripe, map[string]string{
+		payment.ConfigKeyFeeMin: "-0.01",
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_STRIPE_FEE_CONFIG", infraerrors.FromError(err).Reason)
+
+	err = validateProviderFeeConfig(payment.TypeStripe, map[string]string{
+		payment.ConfigKeyFeeRate: "3",
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_STRIPE_FEE_CONFIG", infraerrors.FromError(err).Reason)
+
+	err = validateProviderFeeConfig(payment.TypeStripe, map[string]string{
+		payment.ConfigKeyFeeRate: "3",
+		payment.ConfigKeyFeeMin:  "-0.01",
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_STRIPE_FEE_MIN", infraerrors.FromError(err).Reason)
+}
+
 func boolPtrValue(v bool) *bool {
 	return &v
 }

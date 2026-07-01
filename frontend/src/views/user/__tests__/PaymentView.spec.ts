@@ -467,4 +467,141 @@ describe('PaymentView WeChat JSAPI flow', () => {
     expect(wrapper.text()).toContain('/ 1payment.week')
     expect(wrapper.text()).not.toContain('/ 1payment.weeks')
   })
+
+  it('previews the highest Stripe fee schedule for the current amount', async () => {
+    routeState.query = {}
+    const fixture = checkoutInfoFixture()
+    fixture.data.methods = {
+      stripe: {
+        daily_limit: 0,
+        daily_used: 0,
+        daily_remaining: 0,
+        single_min: 0,
+        single_max: 0,
+        currency: 'CNY',
+        fee_rate: 5,
+        fee_min: 10,
+        fee_schedules: [
+          { fee_rate: 5, fee_min: 0 },
+          { fee_rate: 0, fee_min: 10 },
+        ],
+        available: true,
+      },
+    }
+    getCheckoutInfo.mockResolvedValue(fixture)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          AmountInput: true,
+          Icon: true,
+          PaymentMethodSelector: true,
+          PaymentStatusPanel: true,
+          SubscriptionPlanCard: true,
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).amount = 10
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).selectedMethod = 'stripe'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('¥10.00')
+    expect(wrapper.text()).toContain('¥20.00')
+  })
+
+  it('disables submit when the estimated payable amount exceeds the method limit', async () => {
+    routeState.query = {}
+    const fixture = checkoutInfoFixture()
+    fixture.data.methods = {
+      stripe: {
+        daily_limit: 0,
+        daily_used: 0,
+        daily_remaining: 0,
+        single_min: 0,
+        single_max: 15,
+        currency: 'CNY',
+        fee_rate: 0,
+        fee_min: 10,
+        fee_schedules: [
+          { fee_rate: 0, fee_min: 10 },
+        ],
+        available: true,
+      },
+    }
+    getCheckoutInfo.mockResolvedValue(fixture)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          AmountInput: true,
+          Icon: true,
+          PaymentMethodSelector: true,
+          PaymentStatusPanel: true,
+          SubscriptionPlanCard: true,
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).amount = 10
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).selectedMethod = 'stripe'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('¥20.00')
+    expect((wrapper.vm as unknown as { canSubmit: boolean }).canSubmit).toBe(false)
+    expect(wrapper.text()).toContain('payment.amountNoMethod')
+  })
+
+  it('previews fees using the selected currency precision', async () => {
+    routeState.query = {}
+    const fixture = checkoutInfoFixture()
+    fixture.data.methods = {
+      stripe: {
+        daily_limit: 0,
+        daily_used: 0,
+        daily_remaining: 0,
+        single_min: 0,
+        single_max: 0,
+        currency: 'JPY',
+        fee_rate: 2.5,
+        fee_min: 0,
+        fee_schedules: [
+          { fee_rate: 2.5, fee_min: 0 },
+        ],
+        available: true,
+      },
+    }
+    getCheckoutInfo.mockResolvedValue(fixture)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          AmountInput: true,
+          Icon: true,
+          PaymentMethodSelector: true,
+          PaymentStatusPanel: true,
+          SubscriptionPlanCard: true,
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).amount = 100
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).selectedMethod = 'stripe'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('¥103')
+    expect(wrapper.text()).not.toContain('103.00')
+  })
 })

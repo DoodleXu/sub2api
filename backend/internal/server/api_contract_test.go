@@ -631,6 +631,7 @@ func TestAPIContracts(t *testing.T) {
 					"amount": 0.01,
 					"pay_amount": 0.01,
 					"fee_rate": 0,
+					"fee_amount": 0,
 					"currency": "CNY",
 					"payment_type": "easypay",
 					"order_type": "subscription",

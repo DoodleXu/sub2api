@@ -77,6 +77,11 @@ const DefaultLoadBalanceStrategy = "round-robin"
 // ConfigKeyPublishableKey is the config map key for Stripe's publishable key.
 const ConfigKeyPublishableKey = "publishableKey"
 
+const (
+	ConfigKeyFeeRate = "feeRate"
+	ConfigKeyFeeMin  = "feeMin"
+)
+
 // GetBasePaymentType extracts the base payment method from a composite key.
 // For example, "alipay_direct" -> "alipay".
 func GetBasePaymentType(t string) string {
@@ -194,6 +199,8 @@ type InstanceSelection struct {
 	Config         map[string]string
 	SupportedTypes string // Comma-separated list of supported payment types from the instance
 	PaymentMode    string // Payment display mode: "qrcode", "redirect", "popup"
+	Limits         string // JSON-encoded per-method instance limits
+	DailyUsed      float64
 }
 
 // Provider defines the interface that all payment providers must implement.

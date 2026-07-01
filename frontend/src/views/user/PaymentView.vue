@@ -63,15 +63,15 @@
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.paymentAmount') }}</span>
                   <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(validAmount) }}</span>
                 </div>
-                <div v-if="feeRate > 0" class="flex justify-between">
-                  <span class="text-gray-500 dark:text-gray-400">{{ t('payment.fee') }} ({{ feeRate }}%)</span>
+                <div v-if="feeAmount > 0" class="flex justify-between">
+                  <span class="text-gray-500 dark:text-gray-400">{{ feeLabel }}</span>
                   <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(feeAmount) }}</span>
                 </div>
-                <div v-if="feeRate > 0" class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
+                <div v-if="feeAmount > 0" class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
                   <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.actualPay') }}</span>
                   <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{{ formatSelectedPaymentAmount(totalAmount) }}</span>
                 </div>
-                <div v-if="balanceRechargeMultiplier !== 1" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': feeRate <= 0 }">
+                <div v-if="balanceRechargeMultiplier !== 1" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': feeAmount <= 0 }">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.creditedBalance') }}</span>
                   <span class="text-gray-900 dark:text-white">${{ creditedAmount.toFixed(2) }}</span>
                 </div>
@@ -220,8 +220,8 @@
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.creditAmount') }}</span>
                     <span class="text-emerald-600 dark:text-emerald-400">-{{ formatSelectedPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
                   </div>
-                  <div class="flex justify-between">
-                    <span class="text-gray-500 dark:text-gray-400">{{ t('payment.fee') }} ({{ feeRate }}%)</span>
+                  <div v-if="subFeeAmount > 0" class="flex justify-between">
+                    <span class="text-gray-500 dark:text-gray-400">{{ feeLabel }}</span>
                     <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(subFeeAmount) }}</span>
                   </div>
                   <div class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
@@ -323,7 +323,7 @@ import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
-import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, SubscriptionUpgradeOption } from '@/types/payment'
+import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, MethodLimit, PaymentFeeSchedule, SubscriptionUpgradeOption } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
@@ -343,7 +343,7 @@ import { platformAccentBarClass, platformBadgeLightClass, platformBadgeClass, pl
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
+import { formatPaymentAmount, normalizePaymentCurrency, paymentCurrencyFractionDigits } from '@/components/payment/currency'
 import type { PaymentMethodOption } from '@/components/payment/PaymentMethodSelector.vue'
 import { buildPaymentErrorToastMessage, describePaymentScenarioError } from './paymentUx'
 import { hasWechatResumeQuery, parseWechatResumeRoute, stripWechatResumeQuery } from './paymentWechatResume'
@@ -586,16 +586,6 @@ const planGridClass = computed(() => {
   return 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3'
 })
 
-// Check if an amount fits a method's [min, max]. 0 = no limit.
-function amountFitsMethod(amt: number, methodType: string): boolean {
-  if (amt <= 0) return true
-  const ml = visibleMethods.value[methodType]
-  if (!ml) return false
-  if (ml.single_min > 0 && amt < ml.single_min) return false
-  if (ml.single_max > 0 && amt > ml.single_max) return false
-  return true
-}
-
 // Visible methods decide the amount range shown to users.
 const globalMinAmount = computed(() => {
   const limits = Object.values(visibleMethods.value)
@@ -626,26 +616,110 @@ function formatSelectedPaymentAmount(value: number): string {
   return formatPaymentAmount(value, selectedCurrency.value, localeCode.value)
 }
 
+function currencyScale(currency: string): number {
+  return Math.pow(10, paymentCurrencyFractionDigits(normalizePaymentCurrency(currency)))
+}
+
+function ceilToCurrencyMinorUnit(value: number, currency: string): number {
+  const scale = currencyScale(currency)
+  return Math.ceil((Number.isFinite(value) ? value : 0) * scale - Number.EPSILON) / scale
+}
+
+function roundToCurrencyMinorUnit(value: number, currency: string): number {
+  const scale = currencyScale(currency)
+  return Math.round((Number.isFinite(value) ? value : 0) * scale) / scale
+}
+
+function methodCurrency(methodType: string): string {
+  return normalizePaymentCurrency(visibleMethods.value[methodType]?.currency)
+}
+
+function normalizedFeeSchedules(limit?: MethodLimit): PaymentFeeSchedule[] {
+  const schedules = (limit?.fee_schedules || [])
+    .map(schedule => ({
+      fee_rate: Number(schedule.fee_rate) || 0,
+      fee_min: Number(schedule.fee_min) || 0,
+    }))
+    .filter(schedule => schedule.fee_rate > 0 || (schedule.fee_min || 0) > 0)
+  if (schedules.length > 0) return schedules
+  const fallback = {
+    fee_rate: Number(limit?.fee_rate ?? checkout.value?.recharge_fee_rate ?? 0) || 0,
+    fee_min: Number(limit?.fee_min ?? 0) || 0,
+  }
+  return fallback.fee_rate > 0 || fallback.fee_min > 0 ? [fallback] : []
+}
+
+function calculateFeeAmountForSchedule(baseAmount: number, schedule: PaymentFeeSchedule, currency = selectedCurrency.value): number {
+  if (baseAmount <= 0) return 0
+  const rawFee = ((baseAmount * (Number(schedule.fee_rate) || 0)) / 100) + (Number(schedule.fee_min) || 0)
+  return rawFee > 0 ? ceilToCurrencyMinorUnit(rawFee, currency) : 0
+}
+
+function selectFeePreviewForAmount(baseAmount: number, limit = selectedLimit.value, currency = selectedCurrency.value): { schedule: PaymentFeeSchedule; amount: number } {
+  const schedules = normalizedFeeSchedules(limit)
+  if (schedules.length === 0 || baseAmount <= 0) {
+    return { schedule: { fee_rate: 0, fee_min: 0 }, amount: 0 }
+  }
+  return schedules.reduce((best, schedule) => {
+    const amount = calculateFeeAmountForSchedule(baseAmount, schedule, currency)
+    if (amount > best.amount) return { schedule, amount }
+    if (amount === best.amount && (schedule.fee_rate || 0) > (best.schedule.fee_rate || 0)) {
+      return { schedule, amount }
+    }
+    return best
+  }, { schedule: schedules[0], amount: calculateFeeAmountForSchedule(baseAmount, schedules[0], currency) })
+}
+
+function estimatedPayAmountForMethod(baseAmount: number, methodType: string): number {
+  if (baseAmount <= 0) return baseAmount
+  const limit = visibleMethods.value[methodType]
+  if (!limit) return baseAmount
+  const currency = methodCurrency(methodType)
+  const fee = selectFeePreviewForAmount(baseAmount, limit, currency).amount
+  return fee > 0 ? roundToCurrencyMinorUnit(baseAmount + fee, currency) : baseAmount
+}
+
+// Check if an amount fits a method's [min, max]. Limits are enforced against the payable amount.
+function amountFitsMethod(amt: number, methodType: string): boolean {
+  if (amt <= 0) return true
+  const ml = visibleMethods.value[methodType]
+  if (!ml) return false
+  const payAmount = estimatedPayAmountForMethod(amt, methodType)
+  if (ml.single_min > 0 && payAmount < ml.single_min) return false
+  if (ml.single_max > 0 && payAmount > ml.single_max) return false
+  return true
+}
+
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
     const ml = visibleMethods.value[type]
     return {
       type,
       fee_rate: ml?.fee_rate ?? 0,
+      fee_min: ml?.fee_min ?? 0,
+      fee_schedules: ml?.fee_schedules ?? [],
       available: ml?.available !== false && amountFitsMethod(validAmount.value, type),
     }
   })
 )
 
-const feeRate = computed(() => checkout.value?.recharge_fee_rate ?? 0)
-const feeAmount = computed(() =>
-  feeRate.value > 0 && validAmount.value > 0
-    ? Math.ceil(((validAmount.value * feeRate.value) / 100) * 100) / 100
-    : 0
-)
+const activeFeeBaseAmount = computed(() => selectedPlan.value ? subscriptionPayableAmount.value : validAmount.value)
+const activeFeePreview = computed(() => selectFeePreviewForAmount(activeFeeBaseAmount.value))
+const feeRate = computed(() => activeFeePreview.value.schedule.fee_rate ?? 0)
+const feeMin = computed(() => activeFeePreview.value.schedule.fee_min ?? 0)
+const feeLabel = computed(() => {
+  const rate = feeRate.value
+  const min = feeMin.value
+  if (rate > 0 && min > 0) {
+    return `${t('payment.fee')} (${rate}% + ${formatSelectedPaymentAmount(min)})`
+  }
+  if (rate > 0) return `${t('payment.fee')} (${rate}%)`
+  return t('payment.fee')
+})
+const feeAmount = computed(() => selectFeePreviewForAmount(validAmount.value).amount)
 const totalAmount = computed(() =>
-  feeRate.value > 0 && validAmount.value > 0
-    ? Math.round((validAmount.value + feeAmount.value) * 100) / 100
+  feeAmount.value > 0 && validAmount.value > 0
+    ? roundToCurrencyMinorUnit(validAmount.value + feeAmount.value, selectedCurrency.value)
     : validAmount.value
 )
 
@@ -658,8 +732,9 @@ const amountError = computed(() => {
   // Selected method can't handle this amount (but others can)
   const ml = selectedLimit.value
   if (ml) {
-    if (ml.single_min > 0 && validAmount.value < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
-    if (ml.single_max > 0 && validAmount.value > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
+    const selectedPayAmount = estimatedPayAmountForMethod(validAmount.value, selectedMethod.value)
+    if (ml.single_min > 0 && selectedPayAmount < ml.single_min) return t('payment.amountTooLow', { min: formatSelectedPaymentAmount(ml.single_min) })
+    if (ml.single_max > 0 && selectedPayAmount > ml.single_max) return t('payment.amountTooHigh', { max: formatSelectedPaymentAmount(ml.single_max) })
   }
   return ''
 })
@@ -689,6 +764,8 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
     return {
       type,
       fee_rate: ml?.fee_rate ?? 0,
+      fee_min: ml?.fee_min ?? 0,
+      fee_schedules: ml?.fee_schedules ?? [],
       available: ml?.available !== false && amountFitsMethod(planPrice, type),
     }
   })
@@ -696,14 +773,13 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
 
 const subFeeAmount = computed(() => {
   const price = subscriptionPayableAmount.value
-  if (feeRate.value <= 0 || price <= 0) return 0
-  return Math.ceil(((price * feeRate.value) / 100) * 100) / 100
+  return selectFeePreviewForAmount(price).amount
 })
 
 const subTotalAmount = computed(() => {
   const price = subscriptionPayableAmount.value
-  if (feeRate.value <= 0 || price <= 0) return price
-  return Math.round((price + subFeeAmount.value) * 100) / 100
+  if (subFeeAmount.value <= 0 || price <= 0) return price
+  return roundToCurrencyMinorUnit(price + subFeeAmount.value, selectedCurrency.value)
 })
 
 const canSubmitSubscription = computed(() =>

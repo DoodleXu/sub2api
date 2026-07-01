@@ -80,11 +80,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	// Subscription plan prices are direct payment prices. Balance recharge multiplier
 	// only affects credited balance for balance orders, not subscription pay_amount.
-	payAmountStr, payAmount, err := calculateCreateOrderPayAmount(limitAmount, feeRate, methodCurrency)
+	payAmountStr, payAmount, feeAmount, err := calculateCreateOrderPayAmount(limitAmount, paymentFeeConfig{Rate: feeRate}, methodCurrency)
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, payAmount)
+	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, limitAmount, payAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -95,11 +95,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if sel != nil {
 		selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
 	}
-	if selectedCurrency != methodCurrency {
-		payAmountStr, payAmount, err = calculateCreateOrderPayAmount(limitAmount, feeRate, selectedCurrency)
+	selectedFee := paymentFeeConfigForSelection(cfg.RechargeFeeRate, sel)
+	feeRate = selectedFee.Rate
+	if selectedCurrency != methodCurrency || selectedFee.Min > 0 || selectedFee.Rate != cfg.RechargeFeeRate {
+		payAmountStr, payAmount, feeAmount, err = calculateCreateOrderPayAmount(limitAmount, selectedFee, selectedCurrency)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := validateSelectedCreateOrderInstanceLimits(req.PaymentType, payAmount, sel); err != nil {
+		return nil, err
 	}
 	if err := validateSelectedCreateOrderAmountCurrency(payAmountStr, sel); err != nil {
 		return nil, err
@@ -111,7 +116,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if oauthResp != nil {
 		return oauthResp, nil
 	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, upgradeCredit)
+	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, feeAmount, payAmount, sel, upgradeCredit)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,7 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
-func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection, upgradeCredit *subscriptionUpgradeCredit) (*dbent.PaymentOrder, error) {
+func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, feeAmount, payAmount float64, sel *payment.InstanceSelection, upgradeCredit *subscriptionUpgradeCredit) (*dbent.PaymentOrder, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -181,7 +186,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	if err != nil {
 		return nil, err
 	}
-	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req)
+	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req, paymentFeeConfigForSelection(cfg.RechargeFeeRate, sel), feeAmount)
 	selectedInstanceID := ""
 	selectedProviderKey := ""
 	if sel != nil {
@@ -270,7 +275,7 @@ func (s *PaymentService) checkPendingLimit(ctx context.Context, tx *dbent.Tx, us
 	return nil
 }
 
-func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req CreateOrderRequest) map[string]any {
+func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req CreateOrderRequest, feeConfig paymentFeeConfig, feeAmount float64) map[string]any {
 	if sel == nil {
 		return nil
 	}
@@ -321,6 +326,12 @@ func buildPaymentOrderProviderSnapshot(sel *payment.InstanceSelection, req Creat
 		}
 		snapshot["currency"] = paymentProviderConfigCurrency(providerKey, sel.Config)
 	}
+	if feeAmount > 0 {
+		snapshot["fee_amount"] = feeAmount
+	}
+	if feeConfig.Min > 0 {
+		snapshot["fee_min"] = feeConfig.Min
+	}
 
 	if len(snapshot) == 1 {
 		return nil
@@ -362,12 +373,39 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 	return nil
 }
 
-func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, payAmount float64) (*payment.InstanceSelection, error) {
+func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, limitAmount, fallbackPayAmount float64) (*payment.InstanceSelection, error) {
 	selectCtx, err := s.prepareCreateOrderSelectionContext(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.loadBalancer.SelectInstance(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), payAmount)
+	if aware, ok := s.loadBalancer.(payment.AmountAwareLoadBalancer); ok {
+		sel, err := aware.SelectInstanceWithAmountEvaluator(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), func(sel *payment.InstanceSelection) (float64, error) {
+			selectedCurrency := paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+			selectedFee := paymentFeeConfigForSelection(cfg.RechargeFeeRate, sel)
+			_, evaluatedPayAmount, _, err := calculateCreateOrderPayAmount(limitAmount, selectedFee, selectedCurrency)
+			return evaluatedPayAmount, err
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "amount-aware selection") {
+				goto fallbackSelectInstance
+			}
+			if appErr := new(infraerrors.ApplicationError); errors.As(err, &appErr) {
+				return nil, err
+			}
+			if strings.Contains(err.Error(), "within limits") {
+				return nil, infraerrors.BadRequest("INVALID_AMOUNT", "amount out of provider instance limits").
+					WithMetadata(map[string]string{"payment_type": req.PaymentType})
+			}
+			return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "method_not_configured").
+				WithMetadata(map[string]string{"payment_type": req.PaymentType})
+		}
+		if sel == nil {
+			return nil, infraerrors.TooManyRequests("NO_AVAILABLE_INSTANCE", "no_available_instance")
+		}
+		return sel, nil
+	}
+fallbackSelectInstance:
+	sel, err := s.loadBalancer.SelectInstance(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), fallbackPayAmount)
 	if err != nil {
 		return nil, infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "method_not_configured").
 			WithMetadata(map[string]string{"payment_type": req.PaymentType})
@@ -624,21 +662,51 @@ func (s *PaymentService) validateSelectedCreateOrderInstance(ctx context.Context
 	return nil
 }
 
-func calculateCreateOrderPayAmount(limitAmount, feeRate float64, currency string) (string, float64, error) {
+func calculateCreateOrderPayAmount(limitAmount float64, feeConfig paymentFeeConfig, currency string) (string, float64, float64, error) {
 	if err := validateCreateOrderAmountCurrency(limitAmount, currency); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
-	payAmountStr := payment.CalculatePayAmountForCurrency(limitAmount, feeRate, currency)
+	payAmountStr := payment.CalculatePayAmountForCurrencyWithFixedFee(limitAmount, feeConfig.Rate, feeConfig.Min, currency)
 	if _, err := payment.AmountToMinorUnit(payAmountStr, currency); err != nil {
-		return "", 0, infraerrors.BadRequest("INVALID_AMOUNT", err.Error()).
+		return "", 0, 0, infraerrors.BadRequest("INVALID_AMOUNT", err.Error()).
 			WithMetadata(map[string]string{"currency": currency})
 	}
 	payAmount, err := strconv.ParseFloat(payAmountStr, 64)
 	if err != nil {
-		return "", 0, infraerrors.BadRequest("INVALID_AMOUNT", "invalid payment amount").
+		return "", 0, 0, infraerrors.BadRequest("INVALID_AMOUNT", "invalid payment amount").
 			WithMetadata(map[string]string{"currency": currency})
 	}
-	return payAmountStr, payAmount, nil
+	feeAmount := payAmount - limitAmount
+	if feeAmount < 0 {
+		feeAmount = 0
+	}
+	feeScale := math.Pow10(payment.CurrencyMaxFractionDigits(currency))
+	return payAmountStr, payAmount, math.Round(feeAmount*feeScale) / feeScale, nil
+}
+
+func validateSelectedCreateOrderInstanceLimits(paymentType string, payAmount float64, sel *payment.InstanceSelection) error {
+	if sel == nil {
+		return nil
+	}
+	limits := payment.GetInstanceChannelLimits(sel.ProviderKey, sel.Limits, paymentType)
+	metadata := map[string]string{
+		"payment_type": paymentType,
+		"pay_amount":   strconv.FormatFloat(payAmount, 'f', -1, 64),
+	}
+	if limits.SingleMin > 0 && payAmount < limits.SingleMin {
+		metadata["min"] = strconv.FormatFloat(limits.SingleMin, 'f', -1, 64)
+		return infraerrors.BadRequest("INVALID_AMOUNT", "amount below provider instance minimum").WithMetadata(metadata)
+	}
+	if limits.SingleMax > 0 && payAmount > limits.SingleMax {
+		metadata["max"] = strconv.FormatFloat(limits.SingleMax, 'f', -1, 64)
+		return infraerrors.BadRequest("INVALID_AMOUNT", "amount above provider instance maximum").WithMetadata(metadata)
+	}
+	if limits.DailyLimit > 0 && sel.DailyUsed+payAmount > limits.DailyLimit {
+		metadata["daily_limit"] = strconv.FormatFloat(limits.DailyLimit, 'f', -1, 64)
+		metadata["daily_used"] = strconv.FormatFloat(sel.DailyUsed, 'f', -1, 64)
+		return infraerrors.BadRequest("INVALID_AMOUNT", "amount exceeds provider instance daily limit").WithMetadata(metadata)
+	}
+	return nil
 }
 
 func validateCreateOrderAmountCurrency(amount float64, currency string) error {

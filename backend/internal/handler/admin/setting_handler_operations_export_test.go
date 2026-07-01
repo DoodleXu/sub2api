@@ -82,7 +82,6 @@ func TestOperationsExportDailyCheckinRecordsCSV(t *testing.T) {
 		VALUES (1, '2026-06-14', 1.25, 2.50, ?)
 	`, now)
 	require.NoError(t, err)
-
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/operations/export?dataset=daily_checkin_records&start_date=2026-06-14&end_date=2026-06-14", nil)
@@ -95,6 +94,8 @@ func TestOperationsExportDailyCheckinRecordsCSV(t *testing.T) {
 	require.True(t, strings.HasPrefix(body, "\ufeff"))
 	require.Contains(t, body, `"A, User"`)
 	require.Contains(t, body, "a@example.com")
+	require.Contains(t, body, "qualified_usage_usd")
+	require.Contains(t, body, "2.500000")
 }
 
 func TestOperationsExportDailyCheckinRecordsDefaultsToOperationsDateRange(t *testing.T) {

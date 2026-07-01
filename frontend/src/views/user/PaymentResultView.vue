@@ -47,8 +47,8 @@
               <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.baseAmount') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(baseAmount) }}</span>
             </div>
-            <div v-if="order.fee_rate > 0" class="flex justify-between">
-              <span class="text-gray-500 dark:text-gray-400">{{ t('payment.orders.fee') }} ({{ order.fee_rate }}%)</span>
+            <div v-if="feeAmount > 0" class="flex justify-between">
+              <span class="text-gray-500 dark:text-gray-400">{{ order.fee_rate > 0 ? `${t('payment.orders.fee')} (${order.fee_rate}%)` : t('payment.orders.fee') }}</span>
               <span class="font-medium text-gray-900 dark:text-white">{{ formatGatewayAmount(feeAmount) }}</span>
             </div>
             <div class="flex justify-between">
@@ -138,17 +138,21 @@ const STATUS_REFRESH_MAX_ATTEMPTS = 15
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 const refreshAttempts = ref(0)
 
-/** 充值金额 = pay_amount / (1 + fee_rate/100)，fee_rate=0 时等于 pay_amount */
+/** 充值金额 = pay_amount - fee_amount；旧订单没有 fee_amount 时回退到原费率反推。 */
 const baseAmount = computed(() => {
   if (!order.value) return 0
+  const directFee = Number(order.value.fee_amount) || 0
+  if (directFee > 0) return Math.round((order.value.pay_amount - directFee) * 100) / 100
   const feeRate = Number(order.value.fee_rate) || 0
   if (feeRate <= 0) return order.value.pay_amount ?? 0
   return Math.round((order.value.pay_amount / (1 + feeRate / 100)) * 100) / 100
 })
 
-/** 手续费 = pay_amount - baseAmount */
+/** 手续费 = fee_amount；旧订单没有 fee_amount 时回退到 pay_amount - baseAmount。 */
 const feeAmount = computed(() => {
   if (!order.value) return 0
+  const directFee = Number(order.value.fee_amount) || 0
+  if (directFee > 0) return directFee
   const feeRate = Number(order.value.fee_rate) || 0
   if (feeRate <= 0) return 0
   return Math.round((order.value.pay_amount - baseAmount.value) * 100) / 100

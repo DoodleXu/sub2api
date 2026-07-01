@@ -137,6 +137,8 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'publishableKey', label: '', sensitive: false },
     { key: 'webhookSecret', label: '', sensitive: true },
     { key: 'currency', label: '', sensitive: false, defaultValue: 'CNY', hintKey: 'admin.settings.payment.field_paymentCurrencyHint', options: PAYMENT_CURRENCY_OPTIONS },
+    { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_stripeFeeRateHint' },
+    { key: 'feeMin', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_stripeFeeMinHint' },
   ],
   airwallex: [
     { key: 'clientId', label: '', sensitive: false },

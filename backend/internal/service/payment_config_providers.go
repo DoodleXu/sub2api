@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 
@@ -185,6 +186,9 @@ func (s *PaymentConfigService) CreateProviderInstance(ctx context.Context, req C
 	if err := validateProviderRequest(req.ProviderKey, req.Name, typesStr); err != nil {
 		return nil, err
 	}
+	if err := validateProviderFeeConfig(req.ProviderKey, req.Config); err != nil {
+		return nil, err
+	}
 	if err := s.validateVisibleMethodEnablementConflicts(ctx, 0, req.ProviderKey, typesStr, req.Enabled); err != nil {
 		return nil, err
 	}
@@ -256,6 +260,9 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 		}
 		mergedConfig, err = s.mergeConfig(ctx, id, req.Config)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateProviderFeeConfig(current.ProviderKey, mergedConfig); err != nil {
 			return nil, err
 		}
 		if hasPendingOrderProtectedConfigChange(current.ProviderKey, currentConfig, mergedConfig) {
@@ -375,6 +382,38 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 		u.SetPaymentMode(*req.PaymentMode)
 	}
 	return u.Save(ctx)
+}
+
+func validateProviderFeeConfig(providerKey string, config map[string]string) error {
+	if providerKey != payment.TypeStripe || !stripeFeeConfigHasAnyOverride(config) {
+		return nil
+	}
+	if !stripeFeeConfigHasCompleteOverride(config) {
+		return infraerrors.BadRequest("INVALID_STRIPE_FEE_CONFIG", "stripe custom fee rate and minimum fee must be set together")
+	}
+	rate, err := parseOptionalProviderFeeFloat(config[payment.ConfigKeyFeeRate])
+	if err != nil || rate < 0 || rate > 100 {
+		return infraerrors.BadRequest("INVALID_STRIPE_FEE_RATE", "stripe fee rate must be between 0 and 100")
+	}
+	if math.Round(rate*100) != rate*100 {
+		return infraerrors.BadRequest("INVALID_STRIPE_FEE_RATE", "stripe fee rate allows at most 2 decimal places")
+	}
+	minFee, err := parseOptionalProviderFeeFloat(config[payment.ConfigKeyFeeMin])
+	if err != nil || minFee < 0 {
+		return infraerrors.BadRequest("INVALID_STRIPE_FEE_MIN", "stripe minimum fee must be greater than or equal to 0")
+	}
+	if math.Round(minFee*100) != minFee*100 {
+		return infraerrors.BadRequest("INVALID_STRIPE_FEE_MIN", "stripe minimum fee allows at most 2 decimal places")
+	}
+	return nil
+}
+
+func parseOptionalProviderFeeFloat(raw string) (float64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	return strconv.ParseFloat(raw, 64)
 }
 
 // GetUserRefundEligibleInstanceIDs returns provider instance IDs that allow user refund.

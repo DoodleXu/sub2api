@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -109,7 +110,7 @@ func TestValidateSelectedCreateOrderAmountCurrencyRejectsFractionalZeroDecimal(t
 func TestCalculateCreateOrderPayAmountUsesCurrencyPrecision(t *testing.T) {
 	t.Parallel()
 
-	amountStr, amount, err := calculateCreateOrderPayAmount(100, 2.5, "JPY")
+	amountStr, amount, _, err := calculateCreateOrderPayAmount(100, paymentFeeConfig{Rate: 2.5}, "JPY")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestCalculateCreateOrderPayAmountUsesCurrencyPrecision(t *testing.T) {
 		t.Fatalf("JPY pay amount = (%q, %v), want (103, 103)", amountStr, amount)
 	}
 
-	amountStr, amount, err = calculateCreateOrderPayAmount(12.345, 1, "KWD")
+	amountStr, amount, _, err = calculateCreateOrderPayAmount(12.345, paymentFeeConfig{Rate: 1}, "KWD")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestCalculateCreateOrderPayAmountUsesCurrencyPrecision(t *testing.T) {
 func TestCalculateCreateOrderPayAmountForSubscriptionKeepsDirectPrice(t *testing.T) {
 	t.Parallel()
 
-	amountStr, amount, err := calculateCreateOrderPayAmount(5, 0, "CNY")
+	amountStr, amount, _, err := calculateCreateOrderPayAmount(5, paymentFeeConfig{}, "CNY")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestCalculateCreateOrderPayAmountForSubscriptionKeepsDirectPrice(t *testing
 func TestCalculateCreateOrderPayAmountForSubscriptionAppliesFeeToDirectPrice(t *testing.T) {
 	t.Parallel()
 
-	amountStr, amount, err := calculateCreateOrderPayAmount(5, 2.5, "CNY")
+	amountStr, amount, _, err := calculateCreateOrderPayAmount(5, paymentFeeConfig{Rate: 2.5}, "CNY")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,12 +168,83 @@ func TestCalculateCreditedBalanceStillUsesRechargeMultiplier(t *testing.T) {
 func TestCalculateCreateOrderPayAmountRejectsFractionalZeroDecimal(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := calculateCreateOrderPayAmount(100.5, 0, "JPY")
+	_, _, _, err := calculateCreateOrderPayAmount(100.5, paymentFeeConfig{}, "JPY")
 	if err == nil {
 		t.Fatal("expected fractional JPY amount to fail")
 	}
 	if appErr := infraerrors.FromError(err); appErr.Reason != "INVALID_AMOUNT" {
 		t.Fatalf("reason = %q, want INVALID_AMOUNT", appErr.Reason)
+	}
+}
+
+func TestCalculateCreateOrderPayAmountAppliesFixedFee(t *testing.T) {
+	t.Parallel()
+
+	amountStr, amount, feeAmount, err := calculateCreateOrderPayAmount(10, paymentFeeConfig{Rate: 3, Min: 0.5}, "CNY")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if amountStr != "10.80" || amount != 10.8 || feeAmount != 0.8 {
+		t.Fatalf("CNY pay amount with fixed fee = (%q, %v, %v), want (10.80, 10.8, 0.8)", amountStr, amount, feeAmount)
+	}
+}
+
+func TestValidateSelectedCreateOrderInstanceLimitsUsesFinalPayAmount(t *testing.T) {
+	t.Parallel()
+
+	err := validateSelectedCreateOrderInstanceLimits(payment.TypeStripe, 110, &payment.InstanceSelection{
+		ProviderKey: payment.TypeStripe,
+		Limits:      `{"stripe":{"singleMax":105}}`,
+	})
+	if err == nil {
+		t.Fatal("expected final pay amount above provider limit to fail")
+	}
+	if appErr := infraerrors.FromError(err); appErr.Reason != "INVALID_AMOUNT" {
+		t.Fatalf("reason = %q, want INVALID_AMOUNT", appErr.Reason)
+	}
+}
+
+func TestSelectCreateOrderInstanceSkipsStripeInstanceAfterEvaluatedFeeLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("Stripe high fixed fee").
+		SetConfig(`{"currency":"CNY","feeRate":"0","feeMin":"10"}`).
+		SetSupportedTypes("card,link").
+		SetEnabled(true).
+		SetLimits(`{"stripe":{"singleMax":15}}`).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create high fee instance: %v", err)
+	}
+	pass, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("Stripe no fee").
+		SetConfig(`{"currency":"CNY","feeRate":"0","feeMin":"0"}`).
+		SetSupportedTypes("card,link").
+		SetEnabled(true).
+		SetLimits(`{"stripe":{"singleMax":15}}`).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create passing instance: %v", err)
+	}
+
+	svc := &PaymentService{
+		loadBalancer: payment.NewDefaultLoadBalancer(client, nil),
+	}
+	sel, err := svc.selectCreateOrderInstance(ctx, CreateOrderRequest{
+		PaymentType: payment.TypeStripe,
+	}, &PaymentConfig{
+		RechargeFeeRate:     0,
+		LoadBalanceStrategy: string(payment.StrategyRoundRobin),
+	}, 10, 10)
+	if err != nil {
+		t.Fatalf("selectCreateOrderInstance returned error: %v", err)
+	}
+	if sel == nil || sel.InstanceID != strconv.FormatInt(pass.ID, 10) {
+		t.Fatalf("selected instance = %#v, want %d", sel, pass.ID)
 	}
 }
 

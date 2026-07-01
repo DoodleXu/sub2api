@@ -156,4 +156,35 @@ describe('PaymentProviderDialog payment guide', () => {
     const payload = wrapper.emitted('save')?.[0]?.[0] as { config: Record<string, string> }
     expect(payload.config.accountId).toBe('')
   })
+
+  it('emits empty Stripe custom fee fields when the admin clears them', async () => {
+    const provider = providerFactory({
+      provider_key: 'stripe',
+      name: 'Stripe',
+      supported_types: ['card', 'link'],
+      config: {
+        publishableKey: 'pk_test_123',
+        currency: 'CNY',
+        feeRate: '3',
+        feeMin: '0.50',
+      },
+    })
+    const wrapper = mountDialog({ editing: provider })
+
+    ;(wrapper.vm as unknown as { loadProvider: (provider: ProviderInstance) => void }).loadProvider(provider)
+    await nextTick()
+
+    for (const value of ['3', '0.50']) {
+      const input = wrapper
+        .findAll('input[type="text"]')
+        .find(item => (item.element as HTMLInputElement).value === value)
+      if (!input) throw new Error(`stripe fee input ${value} not found`)
+      await input.setValue('')
+    }
+    await wrapper.find('form').trigger('submit.prevent')
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as { config: Record<string, string> }
+    expect(payload.config.feeRate).toBe('')
+    expect(payload.config.feeMin).toBe('')
+  })
 })

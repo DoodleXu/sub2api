@@ -26,3 +26,10 @@ func PaymentOrderCurrency(order *dbent.PaymentOrder) string {
 	}
 	return payment.DefaultPaymentCurrency
 }
+
+func PaymentOrderFeeAmount(order *dbent.PaymentOrder) float64 {
+	if snapshot := psOrderProviderSnapshot(order); snapshot != nil && snapshot.FeeAmount > 0 {
+		return snapshot.FeeAmount
+	}
+	return 0
+}

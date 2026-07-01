@@ -10,12 +10,18 @@ func CalculatePayAmount(rechargeAmount float64, feeRate float64) string {
 
 // CalculatePayAmountForCurrency 按币种精度计算应付金额，手续费向上取整到该币种最小支付单位。
 func CalculatePayAmountForCurrency(rechargeAmount float64, feeRate float64, currency string) string {
+	return CalculatePayAmountForCurrencyWithFixedFee(rechargeAmount, feeRate, 0, currency)
+}
+
+func CalculatePayAmountForCurrencyWithFixedFee(rechargeAmount float64, feeRate float64, fixedFee float64, currency string) string {
 	fractionDigits := int32(CurrencyMaxFractionDigits(currency))
 	amount := decimal.NewFromFloat(rechargeAmount)
-	if feeRate <= 0 {
+	if feeRate <= 0 && fixedFee <= 0 {
 		return amount.StringFixed(fractionDigits)
 	}
 	rate := decimal.NewFromFloat(feeRate)
-	fee := amount.Mul(rate).Div(decimal.NewFromInt(100)).RoundUp(fractionDigits)
+	fee := amount.Mul(rate).Div(decimal.NewFromInt(100)).
+		Add(decimal.NewFromFloat(fixedFee)).
+		RoundUp(fractionDigits)
 	return amount.Add(fee).StringFixed(fractionDigits)
 }

@@ -255,6 +255,51 @@ func TestGetAvailableMethodLimitsOmitsMixedCurrencyMethod(t *testing.T) {
 	require.Equal(t, "PAYMENT_METHOD_CURRENCY_CONFLICT", appErr.Reason)
 }
 
+func TestGetAvailableMethodLimitsUsesStripeCustomFee(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	_, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("Stripe CNY").
+		SetConfig(`{"currency":"CNY","feeRate":"3","feeMin":"0.50"}`).
+		SetSupportedTypes("card,link").
+		SetEnabled(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentConfigService{
+		entClient: client,
+		settingRepo: &paymentConfigSettingRepoStub{values: map[string]string{
+			SettingRechargeFeeRate: "1.25",
+		}},
+	}
+	resp, err := svc.GetAvailableMethodLimits(ctx)
+	require.NoError(t, err)
+	require.Contains(t, resp.Methods, payment.TypeStripe)
+	require.Equal(t, 3.0, resp.Methods[payment.TypeStripe].FeeRate)
+	require.Equal(t, 0.5, resp.Methods[payment.TypeStripe].FeeMin)
+	require.Equal(t, []MethodFeeSchedule{{FeeRate: 3, FeeMin: 0.5}}, resp.Methods[payment.TypeStripe].FeeSchedules)
+}
+
+func TestPcAggregateMethodFeeReturnsStripeFeeSchedules(t *testing.T) {
+	t.Parallel()
+
+	svc := &PaymentConfigService{}
+	first := makeInstance(1, payment.TypeStripe, "card,link", "")
+	first.Config = `{"feeRate":"5","feeMin":"0"}`
+	second := makeInstance(2, payment.TypeStripe, "card,link", "")
+	second.Config = `{"feeRate":"0","feeMin":"10"}`
+
+	rate, minFee, schedules := svc.pcAggregateMethodFee(0, []*dbent.PaymentProviderInstance{first, second})
+	require.Equal(t, 5.0, rate)
+	require.Equal(t, 10.0, minFee)
+	require.Equal(t, []MethodFeeSchedule{
+		{FeeRate: 5, FeeMin: 0},
+		{FeeRate: 0, FeeMin: 10},
+	}, schedules)
+}
+
 func TestPcComputeGlobalRange(t *testing.T) {
 	t.Parallel()
 

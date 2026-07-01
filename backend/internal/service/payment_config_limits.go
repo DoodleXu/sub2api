@@ -20,6 +20,7 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 	if err != nil {
 		return nil, fmt.Errorf("query provider instances: %w", err)
 	}
+	globalFeeRate := s.pcGlobalRechargeFeeRate(ctx)
 	typeInstances := pcGroupByPaymentType(instances)
 	typeInstances = s.pcApplyEnabledVisibleMethodInstances(ctx, typeInstances, instances)
 	resp := &MethodLimitsResponse{
@@ -32,6 +33,7 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 		}
 		ml := pcAggregateMethodLimits(pt, insts)
 		ml.Currency = currency
+		ml.FeeRate, ml.FeeMin, ml.FeeSchedules = s.pcAggregateMethodFee(globalFeeRate, insts)
 		resp.Methods[ml.PaymentType] = ml
 	}
 	resp.GlobalMin, resp.GlobalMax = pcComputeGlobalRange(resp.Methods)
@@ -80,6 +82,7 @@ func (s *PaymentConfigService) GetMethodLimits(ctx context.Context, types []stri
 	if err != nil {
 		return nil, fmt.Errorf("query provider instances: %w", err)
 	}
+	globalFeeRate := s.pcGlobalRechargeFeeRate(ctx)
 	result := make([]MethodLimits, 0, len(types))
 	for _, pt := range types {
 		var matching []*dbent.PaymentProviderInstance
@@ -94,6 +97,7 @@ func (s *PaymentConfigService) GetMethodLimits(ctx context.Context, types []stri
 		}
 		ml := pcAggregateMethodLimits(pt, matching)
 		ml.Currency = currency
+		ml.FeeRate, ml.FeeMin, ml.FeeSchedules = s.pcAggregateMethodFee(globalFeeRate, matching)
 		result = append(result, ml)
 	}
 	return result, nil
@@ -161,6 +165,60 @@ func (s *PaymentConfigService) pcInstancePaymentCurrency(inst *dbent.PaymentProv
 		}
 	}
 	return paymentProviderConfigCurrency(inst.ProviderKey, cfg)
+}
+
+func (s *PaymentConfigService) pcGlobalRechargeFeeRate(ctx context.Context) float64 {
+	if s == nil || s.settingRepo == nil {
+		return 0
+	}
+	cfg, err := s.GetPaymentConfig(ctx)
+	if err != nil || cfg == nil {
+		return 0
+	}
+	return cfg.RechargeFeeRate
+}
+
+func (s *PaymentConfigService) pcAggregateMethodFee(globalRate float64, instances []*dbent.PaymentProviderInstance) (float64, float64, []MethodFeeSchedule) {
+	maxRate := globalRate
+	maxMin := 0.0
+	schedules := make([]MethodFeeSchedule, 0)
+	seen := make(map[string]struct{})
+	hasStripe := false
+	for _, inst := range instances {
+		if inst == nil || inst.ProviderKey != payment.TypeStripe {
+			continue
+		}
+		cfg := map[string]string{}
+		if s != nil {
+			decrypted, err := s.decryptConfig(inst.Config)
+			if err == nil && decrypted != nil {
+				cfg = decrypted
+			}
+		}
+		fee := paymentFeeConfigForSelection(globalRate, &payment.InstanceSelection{
+			ProviderKey: inst.ProviderKey,
+			Config:      cfg,
+		})
+		hasStripe = true
+		if fee.Rate > maxRate {
+			maxRate = fee.Rate
+		}
+		if fee.Min > maxMin {
+			maxMin = fee.Min
+		}
+		key := fmt.Sprintf("%g:%g", fee.Rate, fee.Min)
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			schedules = append(schedules, MethodFeeSchedule{
+				FeeRate: fee.Rate,
+				FeeMin:  fee.Min,
+			})
+		}
+	}
+	if !hasStripe {
+		return globalRate, 0, nil
+	}
+	return maxRate, maxMin, schedules
 }
 
 // pcGroupByPaymentType groups instances by user-facing payment type.

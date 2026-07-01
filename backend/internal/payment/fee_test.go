@@ -161,3 +161,52 @@ func TestCalculatePayAmountForCurrency(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculatePayAmountForCurrencyWithFixedFee(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		amount   float64
+		feeRate  float64
+		fixedFee float64
+		currency string
+		expected string
+	}{
+		{
+			name:     "rate plus fixed fee",
+			amount:   10,
+			feeRate:  3,
+			fixedFee: 0.5,
+			currency: "CNY",
+			expected: "10.80",
+		},
+		{
+			name:     "fixed fee without rate",
+			amount:   10,
+			feeRate:  0,
+			fixedFee: 0.5,
+			currency: "CNY",
+			expected: "10.50",
+		},
+		{
+			name:     "zero decimal currency rounds combined fee up",
+			amount:   100,
+			feeRate:  2.5,
+			fixedFee: 1.2,
+			currency: "JPY",
+			expected: "104",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := CalculatePayAmountForCurrencyWithFixedFee(tt.amount, tt.feeRate, tt.fixedFee, tt.currency)
+			if got != tt.expected {
+				t.Fatalf("CalculatePayAmountForCurrencyWithFixedFee(%v, %v, %v, %q) = %q, want %q", tt.amount, tt.feeRate, tt.fixedFee, tt.currency, got, tt.expected)
+			}
+		})
+	}
+}

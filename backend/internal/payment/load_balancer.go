@@ -38,6 +38,12 @@ type LoadBalancer interface {
 	SelectInstance(ctx context.Context, providerKey string, paymentType PaymentType, strategy Strategy, orderAmount float64) (*InstanceSelection, error)
 }
 
+type InstanceAmountEvaluator func(*InstanceSelection) (float64, error)
+
+type AmountAwareLoadBalancer interface {
+	SelectInstanceWithAmountEvaluator(ctx context.Context, providerKey string, paymentType PaymentType, strategy Strategy, amountForSelection InstanceAmountEvaluator) (*InstanceSelection, error)
+}
+
 // DefaultLoadBalancer implements LoadBalancer using database queries.
 type DefaultLoadBalancer struct {
 	db            *dbent.Client
@@ -111,7 +117,48 @@ func (lb *DefaultLoadBalancer) SelectInstance(
 
 	// Step 4: pick by strategy.
 	selected := lb.pickByStrategy(available, strategy)
-	return lb.buildSelection(selected.inst)
+	return lb.buildSelection(selected)
+}
+
+func (lb *DefaultLoadBalancer) SelectInstanceWithAmountEvaluator(
+	ctx context.Context,
+	providerKey string,
+	paymentType PaymentType,
+	strategy Strategy,
+	amountForSelection InstanceAmountEvaluator,
+) (*InstanceSelection, error) {
+	if amountForSelection == nil {
+		return nil, fmt.Errorf("amount evaluator is required")
+	}
+	instances, err := lb.queryEnabledInstances(ctx, providerKey, paymentType)
+	if err != nil {
+		return nil, err
+	}
+	candidates := lb.attachDailyUsage(ctx, instances)
+	available := make([]selectionCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		sel, err := lb.buildSelection(candidate)
+		if err != nil {
+			return nil, err
+		}
+		payAmount, err := amountForSelection(sel)
+		if err != nil {
+			return nil, err
+		}
+		if !selectionFitsLimits(paymentType, payAmount, sel) {
+			continue
+		}
+		available = append(available, selectionCandidate{
+			selection: sel,
+			dailyUsed: candidate.dailyUsed,
+		})
+	}
+	if len(available) == 0 {
+		slog.Warn("all instances exceeded evaluated limits",
+			"provider", providerKey, "payment_type", paymentType, "count", len(candidates))
+		return nil, fmt.Errorf("no enabled instance for payment type %s within limits", paymentType)
+	}
+	return pickSelectionByStrategy(available, strategy, lb.nextCounter()), nil
 }
 
 // queryEnabledInstances returns enabled instances that support paymentType.
@@ -247,16 +294,23 @@ func filterByLimits(candidates []instanceCandidate, paymentType PaymentType, ord
 
 // getInstanceChannelLimits returns the channel limits for a specific payment type.
 func getInstanceChannelLimits(inst *dbent.PaymentProviderInstance, paymentType PaymentType) ChannelLimits {
-	if inst.Limits == "" {
+	if inst == nil {
+		return ChannelLimits{}
+	}
+	return GetInstanceChannelLimits(inst.ProviderKey, inst.Limits, paymentType)
+}
+
+func GetInstanceChannelLimits(providerKey string, limitsJSON string, paymentType PaymentType) ChannelLimits {
+	if limitsJSON == "" {
 		return ChannelLimits{}
 	}
 	var limits InstanceLimits
-	if err := json.Unmarshal([]byte(inst.Limits), &limits); err != nil {
+	if err := json.Unmarshal([]byte(limitsJSON), &limits); err != nil {
 		return ChannelLimits{}
 	}
 	// For Stripe, limits are stored under the provider key "stripe".
 	lookupKey := paymentType
-	if inst.ProviderKey == "stripe" {
+	if providerKey == TypeStripe {
 		lookupKey = "stripe"
 	}
 	if cl, ok := limits[lookupKey]; ok {
@@ -276,8 +330,12 @@ func (lb *DefaultLoadBalancer) pickByStrategy(candidates []instanceCandidate, st
 		return pickLeastAmount(candidates)
 	}
 	// Default: round-robin.
-	idx := lb.counter.Add(1) % uint64(len(candidates))
+	idx := lb.nextCounter() % uint64(len(candidates))
 	return candidates[idx]
+}
+
+func (lb *DefaultLoadBalancer) nextCounter() uint64 {
+	return lb.counter.Add(1)
 }
 
 // pickLeastAmount selects the instance with the lowest daily usage.
@@ -292,25 +350,72 @@ func pickLeastAmount(candidates []instanceCandidate) instanceCandidate {
 	return best
 }
 
-func (lb *DefaultLoadBalancer) buildSelection(selected *dbent.PaymentProviderInstance) (*InstanceSelection, error) {
-	config, err := lb.decryptConfig(selected.Config)
+type selectionCandidate struct {
+	selection *InstanceSelection
+	dailyUsed float64
+}
+
+func selectionFitsLimits(paymentType PaymentType, orderAmount float64, sel *InstanceSelection) bool {
+	if sel == nil {
+		return false
+	}
+	cl := GetInstanceChannelLimits(sel.ProviderKey, sel.Limits, paymentType)
+	if cl.SingleMin > 0 && orderAmount < cl.SingleMin {
+		slog.Info("order below selected instance single min, skipping",
+			"instance_id", sel.InstanceID, "order", orderAmount, "min", cl.SingleMin)
+		return false
+	}
+	if cl.SingleMax > 0 && orderAmount > cl.SingleMax {
+		slog.Info("order above selected instance single max, skipping",
+			"instance_id", sel.InstanceID, "order", orderAmount, "max", cl.SingleMax)
+		return false
+	}
+	if cl.DailyLimit > 0 && sel.DailyUsed+orderAmount > cl.DailyLimit {
+		slog.Info("selected instance daily remaining insufficient, skipping",
+			"instance_id", sel.InstanceID, "used", sel.DailyUsed,
+			"order", orderAmount, "limit", cl.DailyLimit)
+		return false
+	}
+	return true
+}
+
+func pickSelectionByStrategy(candidates []selectionCandidate, strategy Strategy, counter uint64) *InstanceSelection {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if strategy == StrategyLeastAmount && len(candidates) > 1 {
+		best := candidates[0]
+		for _, c := range candidates[1:] {
+			if c.dailyUsed < best.dailyUsed {
+				best = c
+			}
+		}
+		return best.selection
+	}
+	return candidates[counter%uint64(len(candidates))].selection
+}
+
+func (lb *DefaultLoadBalancer) buildSelection(selected instanceCandidate) (*InstanceSelection, error) {
+	config, err := lb.decryptConfig(selected.inst.Config)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt instance %d config: %w", selected.ID, err)
+		return nil, fmt.Errorf("decrypt instance %d config: %w", selected.inst.ID, err)
 	}
 	if config == nil {
 		config = map[string]string{}
 	}
 
-	if selected.PaymentMode != "" {
-		config["paymentMode"] = selected.PaymentMode
+	if selected.inst.PaymentMode != "" {
+		config["paymentMode"] = selected.inst.PaymentMode
 	}
 
 	return &InstanceSelection{
-		InstanceID:     fmt.Sprintf("%d", selected.ID),
-		ProviderKey:    selected.ProviderKey,
+		InstanceID:     fmt.Sprintf("%d", selected.inst.ID),
+		ProviderKey:    selected.inst.ProviderKey,
 		Config:         config,
-		SupportedTypes: selected.SupportedTypes,
-		PaymentMode:    selected.PaymentMode,
+		SupportedTypes: selected.inst.SupportedTypes,
+		PaymentMode:    selected.inst.PaymentMode,
+		Limits:         selected.inst.Limits,
+		DailyUsed:      selected.dailyUsed,
 	}, nil
 }
 

@@ -48,6 +48,8 @@ import airwallexIcon from '@/assets/icons/airwallex.svg'
 export interface PaymentMethodOption {
   type: string
   fee_rate: number
+  fee_min?: number
+  fee_schedules?: { fee_rate: number; fee_min?: number }[]
   available: boolean
 }
 

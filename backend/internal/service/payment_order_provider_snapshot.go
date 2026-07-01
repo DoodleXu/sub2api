@@ -18,6 +18,8 @@ type paymentOrderProviderSnapshot struct {
 	MerchantAppID      string
 	MerchantID         string
 	Currency           string
+	FeeAmount          float64
+	FeeMin             float64
 }
 
 func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSnapshot {
@@ -33,6 +35,8 @@ func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSna
 		MerchantAppID:      psSnapshotStringValue(order.ProviderSnapshot["merchant_app_id"]),
 		MerchantID:         psSnapshotStringValue(order.ProviderSnapshot["merchant_id"]),
 		Currency:           psSnapshotStringValue(order.ProviderSnapshot["currency"]),
+		FeeAmount:          psSnapshotFloatValue(order.ProviderSnapshot["fee_amount"]),
+		FeeMin:             psSnapshotFloatValue(order.ProviderSnapshot["fee_min"]),
 	}
 	if snapshot.SchemaVersion == 0 &&
 		snapshot.ProviderInstanceID == "" &&
@@ -40,7 +44,9 @@ func psOrderProviderSnapshot(order *dbent.PaymentOrder) *paymentOrderProviderSna
 		snapshot.PaymentMode == "" &&
 		snapshot.MerchantAppID == "" &&
 		snapshot.MerchantID == "" &&
-		snapshot.Currency == "" {
+		snapshot.Currency == "" &&
+		snapshot.FeeAmount == 0 &&
+		snapshot.FeeMin == 0 {
 		return nil
 	}
 	return snapshot
@@ -69,6 +75,27 @@ func psSnapshotIntValue(value any) int {
 		return int(typed)
 	case string:
 		n, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+func psSnapshotFloatValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int32:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case string:
+		n, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
 		if err == nil {
 			return n
 		}

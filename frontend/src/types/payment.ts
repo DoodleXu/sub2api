@@ -48,7 +48,14 @@ export interface MethodLimit {
   single_min: number
   single_max: number
   fee_rate: number
+  fee_min?: number
+  fee_schedules?: PaymentFeeSchedule[]
   available: boolean
+}
+
+export interface PaymentFeeSchedule {
+  fee_rate: number
+  fee_min?: number
 }
 
 /** Response from /payment/limits API */
@@ -83,6 +90,7 @@ export interface PaymentOrder {
   pay_amount: number
   currency?: string
   fee_rate: number
+  fee_amount?: number
   payment_type: string
   out_trade_no: string
   status: OrderStatus

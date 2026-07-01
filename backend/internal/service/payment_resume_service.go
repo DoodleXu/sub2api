@@ -211,6 +211,26 @@ func (lb *visibleMethodLoadBalancer) SelectInstance(ctx context.Context, provide
 	return lb.inner.SelectInstance(ctx, inst.ProviderKey, paymentType, strategy, orderAmount)
 }
 
+func (lb *visibleMethodLoadBalancer) SelectInstanceWithAmountEvaluator(ctx context.Context, providerKey string, paymentType payment.PaymentType, strategy payment.Strategy, amountForSelection payment.InstanceAmountEvaluator) (*payment.InstanceSelection, error) {
+	aware, ok := lb.inner.(payment.AmountAwareLoadBalancer)
+	if !ok {
+		return nil, fmt.Errorf("inner load balancer does not support amount-aware selection")
+	}
+	visibleMethod := NormalizeVisibleMethod(paymentType)
+	if providerKey != "" || (visibleMethod != payment.TypeAlipay && visibleMethod != payment.TypeWxpay) {
+		return aware.SelectInstanceWithAmountEvaluator(ctx, providerKey, paymentType, strategy, amountForSelection)
+	}
+
+	inst, err := lb.configService.resolveEnabledVisibleMethodInstance(ctx, visibleMethod)
+	if err != nil {
+		return nil, err
+	}
+	if inst == nil {
+		return nil, fmt.Errorf("visible payment method %s has no enabled provider instance", visibleMethod)
+	}
+	return aware.SelectInstanceWithAmountEvaluator(ctx, inst.ProviderKey, paymentType, strategy, amountForSelection)
+}
+
 func visibleMethodEnabledSettingKey(method string) string {
 	switch NormalizeVisibleMethod(method) {
 	case payment.TypeAlipay:
