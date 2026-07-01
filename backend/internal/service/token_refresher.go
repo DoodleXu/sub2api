@@ -94,6 +94,7 @@ func (r *OpenAITokenRefresher) CacheKey(account *Account) string {
 func (r *OpenAITokenRefresher) CanRefresh(account *Account) bool {
 	return account != nil &&
 		!account.IsArchived() &&
+		!account.IsCredentialShadow() &&
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth
 }
