@@ -144,6 +144,10 @@
                   :subscription-type="row.group.subscription_type"
                   :rate-multiplier="row.group.rate_multiplier"
                   :user-rate-multiplier="userGroupRates[row.group.id]"
+                  :peak-rate-enabled="row.group.peak_rate_enabled"
+                  :peak-start="row.group.peak_start"
+                  :peak-end="row.group.peak_end"
+                  :peak-rate-multiplier="row.group.peak_rate_multiplier"
                 />
                 <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
                   t('keys.noGroup')
@@ -455,6 +459,10 @@
                 :subscription-type="(option as unknown as KeyBindingOption).subscriptionType"
                 :rate-multiplier="(option as unknown as KeyBindingOption).rate"
                 :user-rate-multiplier="(option as unknown as KeyBindingOption).userRate"
+                :peak-rate-enabled="(option as unknown as KeyBindingOption).peakRateEnabled"
+                :peak-start="(option as unknown as KeyBindingOption).peakStart"
+                :peak-end="(option as unknown as KeyBindingOption).peakEnd"
+                :peak-rate-multiplier="(option as unknown as KeyBindingOption).peakRateMultiplier"
               />
               <span v-else class="text-gray-400">{{ t('keys.selectBinding') }}</span>
             </template>
@@ -466,6 +474,10 @@
                 :rate-multiplier="(option as unknown as KeyBindingOption).rate"
                 :user-rate-multiplier="(option as unknown as KeyBindingOption).userRate"
                 :description="(option as unknown as KeyBindingOption).description"
+                :peak-rate-enabled="(option as unknown as KeyBindingOption).peakRateEnabled"
+                :peak-start="(option as unknown as KeyBindingOption).peakStart"
+                :peak-end="(option as unknown as KeyBindingOption).peakEnd"
+                :peak-rate-multiplier="(option as unknown as KeyBindingOption).peakRateMultiplier"
                 :selected="selected"
               />
             </template>
@@ -1060,6 +1072,10 @@
               :subscription-type="option.subscriptionType"
               :rate-multiplier="option.rate"
               :user-rate-multiplier="option.userRate"
+              :peak-rate-enabled="option.peakRateEnabled"
+              :peak-start="option.peakStart"
+              :peak-end="option.peakEnd"
+              :peak-rate-multiplier="option.peakRateMultiplier"
               :description="option.description"
               :selected="!!selectedKeyForGroup && apiKeyBindingValue(selectedKeyForGroup) === option.value"
             />
@@ -1125,6 +1141,10 @@ interface KeyBindingOption {
   description: string | null
   rate: number
   userRate: number | null
+  peakRateEnabled: boolean
+  peakStart: string
+  peakEnd: string
+  peakRateMultiplier: number
   subscriptionType: SubscriptionType
   platform: GroupPlatform
   groupId: number
@@ -1372,6 +1392,10 @@ const legacySubscriptionBindingOption = computed<KeyBindingOption | null>(() => 
     description: group.description,
     rate: group.rate_multiplier,
     userRate: userGroupRates.value[group.id] ?? null,
+    peakRateEnabled: group.peak_rate_enabled,
+    peakStart: group.peak_start,
+    peakEnd: group.peak_end,
+    peakRateMultiplier: group.peak_rate_multiplier,
     subscriptionType: group.subscription_type,
     platform: group.platform,
     groupId: group.id,
@@ -1388,6 +1412,10 @@ const keyBindingOptions = computed<KeyBindingOption[]>(() => {
       description: group.description,
       rate: group.rate_multiplier,
       userRate: userGroupRates.value[group.id] ?? null,
+      peakRateEnabled: group.peak_rate_enabled,
+      peakStart: group.peak_start,
+      peakEnd: group.peak_end,
+      peakRateMultiplier: group.peak_rate_multiplier,
       subscriptionType: group.subscription_type,
       platform: group.platform,
       groupId: group.id,
@@ -1406,6 +1434,10 @@ const keyBindingOptions = computed<KeyBindingOption[]>(() => {
       description: expiresAt ? `${t('keys.subscriptionExpiresAt')} ${expiresAt}` : group.description,
       rate: group.rate_multiplier,
       userRate: userGroupRates.value[group.id] ?? null,
+      peakRateEnabled: group.peak_rate_enabled,
+      peakStart: group.peak_start,
+      peakEnd: group.peak_end,
+      peakRateMultiplier: group.peak_rate_multiplier,
       subscriptionType: group.subscription_type,
       platform: group.platform,
       groupId: group.id,

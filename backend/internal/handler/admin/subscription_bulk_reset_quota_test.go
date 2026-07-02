@@ -31,6 +31,9 @@ func (r *bulkResetUserSubRepoStub) Create(context.Context, *service.UserSubscrip
 func (r *bulkResetUserSubRepoStub) GetByID(context.Context, int64) (*service.UserSubscription, error) {
 	panic("unexpected GetByID call")
 }
+func (r *bulkResetUserSubRepoStub) GetByIDIncludeDeleted(context.Context, int64) (*service.UserSubscription, error) {
+	panic("unexpected GetByIDIncludeDeleted call")
+}
 func (r *bulkResetUserSubRepoStub) GetByUserIDAndGroupID(context.Context, int64, int64) (*service.UserSubscription, error) {
 	panic("unexpected GetByUserIDAndGroupID call")
 }
@@ -42,6 +45,9 @@ func (r *bulkResetUserSubRepoStub) Update(context.Context, *service.UserSubscrip
 }
 func (r *bulkResetUserSubRepoStub) Delete(context.Context, int64) error {
 	panic("unexpected Delete call")
+}
+func (r *bulkResetUserSubRepoStub) Restore(context.Context, int64, string) (*service.UserSubscription, error) {
+	panic("unexpected Restore call")
 }
 func (r *bulkResetUserSubRepoStub) ListByUserID(context.Context, int64) ([]service.UserSubscription, error) {
 	panic("unexpected ListByUserID call")
@@ -75,6 +81,9 @@ func (r *bulkResetUserSubRepoStub) List(_ context.Context, params pagination.Pag
 }
 func (r *bulkResetUserSubRepoStub) ExistsByUserIDAndGroupID(context.Context, int64, int64) (bool, error) {
 	panic("unexpected ExistsByUserIDAndGroupID call")
+}
+func (r *bulkResetUserSubRepoStub) ExistsActiveByUserIDAndGroupID(context.Context, int64, int64) (bool, error) {
+	panic("unexpected ExistsActiveByUserIDAndGroupID call")
 }
 func (r *bulkResetUserSubRepoStub) ExtendExpiry(context.Context, int64, time.Time) error {
 	panic("unexpected ExtendExpiry call")

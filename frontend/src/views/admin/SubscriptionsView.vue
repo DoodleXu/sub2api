@@ -421,6 +421,14 @@
                 <Icon name="ban" size="sm" />
                 <span class="text-xs">{{ t('admin.subscriptions.revoke') }}</span>
               </button>
+              <button
+                v-if="row.status === 'revoked'"
+                @click="handleRestore(row)"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20 dark:hover:text-green-400"
+              >
+                <Icon name="refresh" size="sm" />
+                <span class="text-xs">{{ t('admin.subscriptions.restore') }}</span>
+              </button>
             </div>
           </template>
 
@@ -660,6 +668,17 @@
       :danger="true"
       @confirm="confirmRevoke"
       @cancel="showRevokeDialog = false"
+    />
+
+    <!-- Restore Confirmation Dialog -->
+    <ConfirmDialog
+      :show="showRestoreDialog"
+      :title="t('admin.subscriptions.restoreSubscription')"
+      :message="t('admin.subscriptions.restoreConfirm', { user: restoringSubscription?.user?.email })"
+      :confirm-text="t('admin.subscriptions.restore')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmRestore"
+      @cancel="showRestoreDialog = false"
     />
 
     <!-- Reset Quota Confirmation Dialog -->
@@ -984,6 +1003,7 @@ const pagination = reactive({
 const showAssignModal = ref(false)
 const showExtendModal = ref(false)
 const showRevokeDialog = ref(false)
+const showRestoreDialog = ref(false)
 const showResetQuotaConfirm = ref(false)
 const showResetWeeklyQuotaConfirm = ref(false)
 const showResetAllWeeklyQuotaConfirm = ref(false)
@@ -995,6 +1015,7 @@ const bulkResetPreview = ref<BulkResetQuotaResult | null>(null)
 const bulkResetIdempotencyKey = ref('')
 const extendingSubscription = ref<UserSubscription | null>(null)
 const revokingSubscription = ref<UserSubscription | null>(null)
+const restoringSubscription = ref<UserSubscription | null>(null)
 
 const assignForm = reactive({
   user_id: null as number | null,
@@ -1307,6 +1328,26 @@ const confirmRevoke = async () => {
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToRevoke'))
     console.error('Error revoking subscription:', error)
+  }
+}
+
+const handleRestore = (subscription: UserSubscription) => {
+  restoringSubscription.value = subscription
+  showRestoreDialog.value = true
+}
+
+const confirmRestore = async () => {
+  if (!restoringSubscription.value) return
+
+  try {
+    await adminAPI.subscriptions.restore(restoringSubscription.value.id)
+    appStore.showSuccess(t('admin.subscriptions.subscriptionRestored'))
+    showRestoreDialog.value = false
+    restoringSubscription.value = null
+    loadSubscriptions()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.subscriptions.failedToRestore'))
+    console.error('Error restoring subscription:', error)
   }
 }
 

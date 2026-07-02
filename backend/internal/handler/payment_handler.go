@@ -57,7 +57,13 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 		ID                    int64    `json:"id"`
 		GroupID               int64    `json:"group_id"`
 		GroupPlatform         string   `json:"group_platform"`
+		GroupName             string   `json:"group_name"`
 		GroupSubscriptionType string   `json:"group_subscription_type"`
+		RateMultiplier        float64  `json:"rate_multiplier"`
+		PeakRateEnabled       bool     `json:"peak_rate_enabled"`
+		PeakStart             string   `json:"peak_start"`
+		PeakEnd               string   `json:"peak_end"`
+		PeakRateMultiplier    float64  `json:"peak_rate_multiplier"`
 		Name                  string   `json:"name"`
 		Description           string   `json:"description"`
 		Price                 float64  `json:"price"`
@@ -74,7 +80,10 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 	for _, p := range plans {
 		gi := groupInfo[p.GroupID]
 		result = append(result, planWithPlatform{
-			ID: int64(p.ID), GroupID: p.GroupID, GroupPlatform: gi.Platform, GroupSubscriptionType: gi.SubscriptionType,
+			ID: int64(p.ID), GroupID: p.GroupID,
+			GroupPlatform: gi.Platform, GroupName: gi.Name, GroupSubscriptionType: gi.SubscriptionType,
+			RateMultiplier: gi.RateMultiplier, PeakRateEnabled: gi.PeakRateEnabled,
+			PeakStart: gi.PeakStart, PeakEnd: gi.PeakEnd, PeakRateMultiplier: gi.PeakRateMultiplier,
 			Name: p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
 			ValidityDays: p.ValidityDays, ValidityUnit: p.ValidityUnit, Features: p.Features,
 			ProductName: p.ProductName, ForSale: p.ForSale, SortOrder: p.SortOrder,
@@ -124,7 +133,10 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 			ID: int64(p.ID), GroupID: p.GroupID,
 			GroupPlatform: gi.Platform, GroupName: gi.Name,
 			GroupSubscriptionType: gi.SubscriptionType,
-			RateMultiplier:        gi.RateMultiplier, DailyLimitUSD: gi.DailyLimitUSD,
+			RateMultiplier:        gi.RateMultiplier,
+			PeakRateEnabled:       gi.PeakRateEnabled, PeakStart: gi.PeakStart,
+			PeakEnd: gi.PeakEnd, PeakRateMultiplier: gi.PeakRateMultiplier,
+			DailyLimitUSD:  gi.DailyLimitUSD,
 			WeeklyLimitUSD: gi.WeeklyLimitUSD, MonthlyLimitUSD: gi.MonthlyLimitUSD,
 			ModelScopes: gi.ModelScopes,
 			Name:        p.Name, Description: p.Description, Price: p.Price, OriginalPrice: p.OriginalPrice,
@@ -169,6 +181,10 @@ type checkoutPlan struct {
 	GroupName             string   `json:"group_name"`
 	GroupSubscriptionType string   `json:"group_subscription_type"`
 	RateMultiplier        float64  `json:"rate_multiplier"`
+	PeakRateEnabled       bool     `json:"peak_rate_enabled"`
+	PeakStart             string   `json:"peak_start"`
+	PeakEnd               string   `json:"peak_end"`
+	PeakRateMultiplier    float64  `json:"peak_rate_multiplier"`
 	DailyLimitUSD         *float64 `json:"daily_limit_usd"`
 	WeeklyLimitUSD        *float64 `json:"weekly_limit_usd"`
 	MonthlyLimitUSD       *float64 `json:"monthly_limit_usd"`
