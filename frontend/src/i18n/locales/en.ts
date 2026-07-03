@@ -3541,7 +3541,7 @@ export default {
         },
         notes: {
           experimental_scheduler: 'Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
-          price_uses_account_rate_multiplier_upstream_group_rate_display_only: 'Price scoring uses account and upstream rate multipliers; upstream group rate is display-only.',
+          price_uses_upstream_cost_then_account_rate_multiplier: 'Price scoring prefers upstream cost per dollar, then falls back to the account rate multiplier.',
           strict_priority: 'Strict Priority only selects accounts inside the current highest available priority layer.',
           strict_priority_top_tier_only: 'Lower priority layers do not join this round of top candidates unless no higher-priority layer is available.',
           strict_priority_same_tier_last_used: 'Within the same priority layer, never-used or least-recently-used accounts are preferred; exact ties are spread to avoid hotspots.',
@@ -3566,6 +3566,7 @@ export default {
           overloaded: 'Overload cooldown',
           overload_cooldown: 'Overload cooldown',
           temp_unschedulable: 'Temporarily unschedulable',
+          experimental_circuit_open: 'Experimental scheduler circuit cooldown',
           runtime_blocked: 'Runtime degraded briefly',
           group_mismatch: 'Group mismatch',
           model_unsupported: 'Model or capability mismatch',

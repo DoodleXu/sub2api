@@ -808,6 +808,260 @@ func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_PrefersLowPrice
 	require.Equal(t, 2, decision.CandidateCount)
 }
 
+func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_SkipsCircuitOpenAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10113)
+	accounts := []Account{
+		{
+			ID:          36061,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+		},
+		{
+			ID:          36062,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    10,
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: newOpenAIAccountRuntimeStats(),
+	}
+	svc.openaiAccountStats.report(36061, false, nil)
+	svc.openaiAccountStats.report(36061, false, nil)
+
+	selection, decision, err := svc.SelectAccountExperimentalSchedulerForCapability(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(36062), selection.Account.ID)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, decision.Layer)
+	require.Equal(t, 2, decision.CandidateCount)
+}
+
+func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_SkipsConsecutiveSlowCircuitOpenAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10116)
+	accounts := []Account{
+		{
+			ID:          36091,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+		},
+		{
+			ID:          36092,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    10,
+		},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	slowTTFT := openAIExperimentalCircuitSlowThresholdMS
+	for i := 0; i < openAIExperimentalCircuitSlowThreshold; i++ {
+		stats.report(36091, true, &slowTTFT)
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	state, cooldownUntil, ok := stats.experimentalCircuitSnapshot(36091, time.Now())
+	require.True(t, ok)
+	require.Equal(t, openAIExperimentalCircuitStateOpen, state)
+	require.NotNil(t, cooldownUntil)
+
+	selection, decision, err := svc.SelectAccountExperimentalSchedulerForCapability(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(36092), selection.Account.ID)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, decision.Layer)
+	require.Equal(t, 2, decision.CandidateCount)
+}
+
+func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_DoesNotWaitOnCircuitOpenAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10115)
+	accounts := []Account{
+		{
+			ID:          36081,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+		},
+		{
+			ID:          36082,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    10,
+		},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	stats.report(36081, false, nil)
+	stats.report(36081, false, nil)
+	svc := &OpenAIGatewayService{
+		accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:       &schedulerTestGatewayCache{},
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				Scheduling: config.GatewaySchedulingConfig{
+					FallbackWaitTimeout: time.Second,
+					FallbackMaxWaiting:  1,
+				},
+			},
+		},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{
+				36081: false,
+				36082: false,
+			},
+		}),
+		openaiAccountStats: stats,
+	}
+
+	selection, decision, err := svc.SelectAccountExperimentalSchedulerForCapability(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(36082), selection.Account.ID)
+	require.False(t, selection.Acquired)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, int64(36082), selection.WaitPlan.AccountID)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, decision.Layer)
+}
+
+func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_ProbesHalfOpenAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10114)
+	accounts := []Account{
+		{
+			ID:          36071,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    0,
+		},
+		{
+			ID:          36072,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    10,
+		},
+	}
+	stats := newOpenAIAccountRuntimeStats()
+	stats.report(36071, false, nil)
+	stats.report(36071, false, nil)
+	stats.loadOrCreate(36071).cooldownUntilUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, decision, err := svc.SelectAccountExperimentalSchedulerForCapability(
+		ctx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(36071), selection.Account.ID)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, decision.Layer)
+
+	stats.report(36071, true, nil)
+	state, cooldownUntil, ok := stats.experimentalCircuitSnapshot(36071, time.Now())
+	require.True(t, ok)
+	require.Equal(t, openAIExperimentalCircuitStateRunning, state)
+	require.Nil(t, cooldownUntil)
+}
+
 func TestOpenAIGatewayService_ExplainOpenAIRouting_IncludesAllOpenAIAccounts(t *testing.T) {
 	ctx := context.Background()
 	accounts := []Account{
@@ -2187,6 +2441,55 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeByEr
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 	require.False(t, decision.StickySessionHit)
 	require.Equal(t, int64(21201), cache.sessionBindings["openai:session_hash_sticky_error_rate"])
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountExperimentalScheduler_SessionStickyEscapesCircuitOpenWithoutRebinding(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := context.Background()
+	groupID := int64(10117)
+	accounts := []Account{
+		{ID: 21501, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}},
+		{ID: 21502, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1, GroupIDs: []int64{groupID}},
+	}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_sticky_circuit_open": 21501}}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = false
+	stats := newOpenAIAccountRuntimeStats()
+	stats.report(21501, false, nil)
+	stats.report(21501, false, nil)
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, decision, err := svc.SelectAccountExperimentalSchedulerForCapability(
+		ctx,
+		&groupID,
+		"",
+		"session_hash_sticky_circuit_open",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(21502), selection.Account.ID)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	require.Equal(t, int64(21501), cache.sessionBindings["openai:session_hash_sticky_circuit_open"])
+	require.Zero(t, cache.deletedSessions["openai:session_hash_sticky_circuit_open"])
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}

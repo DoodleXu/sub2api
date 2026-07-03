@@ -177,7 +177,7 @@ func TestOpenAIGatewayService_ExplainOpenAIRoutingForAccount_StrictPriorityNotes
 	require.False(t, result.Account.IsSchedulableNow)
 	require.ElementsMatch(t, []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}, result.Notes)
 	require.NotContains(t, result.Notes, "experimental_scheduler")
-	require.NotContains(t, result.Notes, "price_uses_account_rate_multiplier_upstream_group_rate_display_only")
+	require.NotContains(t, result.Notes, "price_uses_upstream_cost_then_account_rate_multiplier")
 	require.Len(t, result.Top, 2)
 	require.Equal(t, int64(74062), result.Top[0].AccountID)
 	require.Equal(t, int64(74061), result.Top[1].AccountID)
@@ -209,6 +209,35 @@ func TestOpenAIGatewayService_ExplainOpenAIRouting_LegacyAndExperimentalDoNotApp
 			}
 		})
 	}
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRouting_ExperimentalMarksCircuitOpenAccount(t *testing.T) {
+	setOpenAIRoutingExplainStrategyForTest(t, OpenAIAccountSchedulerStrategyExperimental)
+	stats := newOpenAIAccountRuntimeStats()
+	stats.report(74071, false, nil)
+	stats.report(74071, false, nil)
+	svc := &OpenAIGatewayService{
+		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+			{ID: 74071, Name: "open-circuit", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 1, Concurrency: 1},
+			{ID: 74072, Name: "healthy", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Priority: 5, Concurrency: 1},
+		}},
+		openaiAccountStats: stats,
+	}
+
+	result, err := svc.ExplainOpenAIRouting(context.Background(), OpenAIRoutingExplainParams{})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, result.SchedulerStrategy)
+	byID := map[int64]OpenAIRoutingSummary{}
+	for _, item := range result.Items {
+		byID[item.AccountID] = item
+	}
+	require.False(t, byID[74071].IsSchedulableNow)
+	require.Equal(t, "experimental_circuit_open", byID[74071].SummaryReason)
+	require.Contains(t, byID[74071].BlockReasons, "experimental_circuit_open")
+	require.True(t, byID[74072].IsSchedulableNow)
+	require.Equal(t, 1, byID[74072].Rank)
 }
 
 func TestOpenAIGatewayService_ExplainOpenAIRouting_FiltersRequestedAccountIDs(t *testing.T) {

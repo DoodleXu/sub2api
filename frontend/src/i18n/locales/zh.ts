@@ -3572,7 +3572,7 @@ export default {
         },
         notes: {
           experimental_scheduler: '试验性调度按价格、质量、响应、错误率、优先级和负载综合排序。',
-          price_uses_account_rate_multiplier_upstream_group_rate_display_only: '价格评分会结合账号倍率和上游倍率；上游分组倍率仅用于展示。',
+          price_uses_upstream_cost_then_account_rate_multiplier: '价格评分优先使用上游每刀成本；缺少上游成本时回退账号倍率。',
           strict_priority: 'Strict Priority 只在当前最高可用优先级层内选择账号。',
           strict_priority_top_tier_only: '低优先级层不会参与本轮 Top 候选，除非更高优先级层没有可用账号。',
           strict_priority_same_tier_last_used: '同一优先级层内优先使用从未使用或最久未使用的账号；完全相同时会打散以避免热点。',
@@ -3597,6 +3597,7 @@ export default {
           overloaded: '过载冷却中',
           overload_cooldown: '过载冷却中',
           temp_unschedulable: '临时不可调度',
+          experimental_circuit_open: '试验性调度熔断冷却中',
           runtime_blocked: '运行时短期降级',
           group_mismatch: '分组不匹配',
           model_unsupported: '模型或能力不匹配',

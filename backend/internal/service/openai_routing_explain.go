@@ -292,6 +292,9 @@ func (s *OpenAIGatewayService) openAIRoutingBlockReasons(ctx context.Context, ac
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		reasons = append(reasons, "temp_unschedulable")
 	}
+	if strategy == OpenAIAccountSchedulerStrategyExperimental && s != nil && s.isOpenAIExperimentalCircuitOpen(account.ID, now) {
+		reasons = append(reasons, "experimental_circuit_open")
+	}
 	if strategy != OpenAIAccountSchedulerStrategyStrictPriority && s != nil && s.isOpenAIAccountRuntimeBlocked(account) {
 		reasons = append(reasons, "runtime_blocked")
 	}
@@ -302,6 +305,14 @@ func (s *OpenAIGatewayService) openAIRoutingBlockReasons(ctx context.Context, ac
 		reasons = append(reasons, "model_unsupported")
 	}
 	return reasons
+}
+
+func (s *OpenAIGatewayService) isOpenAIExperimentalCircuitOpen(accountID int64, now time.Time) bool {
+	if s == nil || s.openaiAccountStats == nil || accountID <= 0 {
+		return false
+	}
+	state, _, _ := s.openaiAccountStats.experimentalCircuitSnapshot(accountID, now)
+	return state == openAIExperimentalCircuitStateOpen
 }
 
 func (s *OpenAIGatewayService) openAIRoutingLoadMap(ctx context.Context, accounts []Account) map[int64]*AccountLoadInfo {
@@ -421,7 +432,7 @@ func openAIRoutingExplainSource(strategy string) string {
 func openAIRoutingNotes(strategy string) []string {
 	switch strategy {
 	case OpenAIAccountSchedulerStrategyExperimental:
-		return []string{"experimental_scheduler", "price_uses_account_rate_multiplier_upstream_group_rate_display_only"}
+		return []string{"experimental_scheduler", "price_uses_upstream_cost_then_account_rate_multiplier"}
 	case OpenAIAccountSchedulerStrategyStrictPriority:
 		return []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}
 	default:

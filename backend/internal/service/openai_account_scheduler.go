@@ -84,6 +84,19 @@ const (
 	openAIQuotaHeadroomSnapshotStaleAfter = 8 * time.Hour
 )
 
+const (
+	openAIExperimentalCircuitStateRunning  = "running"
+	openAIExperimentalCircuitStateOpen     = "open"
+	openAIExperimentalCircuitStateHalfOpen = "half_open"
+
+	openAIExperimentalCircuitSlowThresholdMS          = 10_000
+	openAIExperimentalCircuitSevereSlowThresholdMS    = 20_000
+	openAIExperimentalCircuitSlowThreshold            = 3
+	openAIExperimentalCircuitErrorThreshold           = 2
+	openAIExperimentalCircuitCooldown                 = 2 * time.Minute
+	openAIExperimentalCircuitHalfOpenSuccessThreshold = 1
+)
+
 type cachedOpenAIAdvancedSchedulerSetting struct {
 	enabled   bool
 	expiresAt int64
@@ -203,8 +216,12 @@ type openAIAccountRuntimeStats struct {
 }
 
 type openAIAccountRuntimeStat struct {
-	errorRateEWMABits atomic.Uint64
-	ttftEWMABits      atomic.Uint64
+	errorRateEWMABits       atomic.Uint64
+	ttftEWMABits            atomic.Uint64
+	consecutiveSlowCount    atomic.Int64
+	consecutiveErrorCount   atomic.Int64
+	consecutiveSuccessCount atomic.Int64
+	cooldownUntilUnixNano   atomic.Int64
 }
 
 func newOpenAIAccountRuntimeStats() *openAIAccountRuntimeStats {
@@ -275,6 +292,7 @@ func (s *openAIAccountRuntimeStats) report(accountID int64, success bool, firstT
 			}
 		}
 	}
+	stat.recordExperimentalCircuitEvent(success, firstTokenMs, time.Now())
 }
 
 func (s *openAIAccountRuntimeStats) snapshot(accountID int64) (errorRate float64, ttft float64, hasTTFT bool) {
@@ -297,11 +315,88 @@ func (s *openAIAccountRuntimeStats) snapshot(accountID int64) (errorRate float64
 	return errorRate, ttftValue, true
 }
 
+func (s *openAIAccountRuntimeStats) experimentalCircuitSnapshot(accountID int64, now time.Time) (state string, cooldownUntil *time.Time, ok bool) {
+	if s == nil || accountID <= 0 {
+		return openAIExperimentalCircuitStateRunning, nil, false
+	}
+	value, exists := s.accounts.Load(accountID)
+	if !exists {
+		return openAIExperimentalCircuitStateRunning, nil, false
+	}
+	stat, _ := value.(*openAIAccountRuntimeStat)
+	if stat == nil {
+		return openAIExperimentalCircuitStateRunning, nil, false
+	}
+	return stat.experimentalCircuitSnapshot(now)
+}
+
 func (s *openAIAccountRuntimeStats) size() int {
 	if s == nil {
 		return 0
 	}
 	return int(s.accountCount.Load())
+}
+
+func (s *openAIAccountRuntimeStat) recordExperimentalCircuitEvent(success bool, firstTokenMs *int, now time.Time) {
+	if s == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if !success {
+		s.consecutiveSuccessCount.Store(0)
+		s.consecutiveSlowCount.Store(0)
+		if s.consecutiveErrorCount.Add(1) >= openAIExperimentalCircuitErrorThreshold {
+			s.openExperimentalCircuit(now)
+		}
+		return
+	}
+
+	if firstTokenMs != nil && *firstTokenMs >= openAIExperimentalCircuitSlowThresholdMS {
+		s.consecutiveSuccessCount.Store(0)
+		s.consecutiveErrorCount.Store(0)
+		if *firstTokenMs >= openAIExperimentalCircuitSevereSlowThresholdMS {
+			s.openExperimentalCircuit(now)
+			return
+		}
+		if s.consecutiveSlowCount.Add(1) >= openAIExperimentalCircuitSlowThreshold {
+			s.openExperimentalCircuit(now)
+		}
+		return
+	}
+
+	s.consecutiveErrorCount.Store(0)
+	s.consecutiveSlowCount.Store(0)
+	if s.consecutiveSuccessCount.Add(1) >= openAIExperimentalCircuitHalfOpenSuccessThreshold {
+		s.cooldownUntilUnixNano.Store(0)
+	}
+}
+
+func (s *openAIAccountRuntimeStat) openExperimentalCircuit(now time.Time) {
+	if s == nil {
+		return
+	}
+	s.consecutiveSuccessCount.Store(0)
+	s.cooldownUntilUnixNano.Store(now.Add(openAIExperimentalCircuitCooldown).UnixNano())
+}
+
+func (s *openAIAccountRuntimeStat) experimentalCircuitSnapshot(now time.Time) (state string, cooldownUntil *time.Time, ok bool) {
+	if s == nil {
+		return openAIExperimentalCircuitStateRunning, nil, false
+	}
+	untilNano := s.cooldownUntilUnixNano.Load()
+	if untilNano <= 0 {
+		return openAIExperimentalCircuitStateRunning, nil, true
+	}
+	until := time.Unix(0, untilNano).UTC()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if now.Before(until) {
+		return openAIExperimentalCircuitStateOpen, &until, true
+	}
+	return openAIExperimentalCircuitStateHalfOpen, &until, true
 }
 
 type defaultOpenAIAccountScheduler struct {
@@ -447,6 +542,13 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	if account == nil || !openAIStickyAccountMatchesGroup(account, req.GroupID) || !s.isAccountTransportCompatible(account, req.RequiredTransport) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, false, nil
+	}
+	if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(accountID) {
+		slog.Info("sticky_escape_triggered",
+			"account_id", accountID,
+			"reason", "experimental_circuit_open",
+		)
+		return nil, true, nil
 	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
 	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape {
@@ -960,6 +1062,11 @@ func (s *defaultOpenAIAccountScheduler) buildExperimentalOpenAISelectionOrder(
 			}
 			left := openAIRoutingScore(ranked[i].account, loadMap[ranked[i].account.ID], leftErrorRate, leftTTFT, leftHasTTFT)
 			right := openAIRoutingScore(ranked[j].account, loadMap[ranked[j].account.ID], rightErrorRate, rightTTFT, rightHasTTFT)
+			leftTier := s.experimentalCircuitSelectionTier(ranked[i].account)
+			rightTier := s.experimentalCircuitSelectionTier(ranked[j].account)
+			if leftTier != rightTier {
+				return leftTier < rightTier
+			}
 			if left.Total != right.Total {
 				return left.Total > right.Total
 			}
@@ -998,6 +1105,21 @@ func (s *defaultOpenAIAccountScheduler) buildExperimentalOpenAISelectionOrder(
 	}
 
 	return buildRanked(plan.candidates)
+}
+
+func (s *defaultOpenAIAccountScheduler) experimentalCircuitSelectionTier(account *Account) int {
+	if s == nil || s.stats == nil || account == nil {
+		return 1
+	}
+	state, _, _ := s.stats.experimentalCircuitSnapshot(account.ID, time.Now())
+	switch state {
+	case openAIExperimentalCircuitStateHalfOpen:
+		return 0
+	case openAIExperimentalCircuitStateOpen:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func sortOpenAICompactRetryCandidates(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
@@ -1050,6 +1172,9 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			compactBlocked = true
 			continue
 		}
+		if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(fresh.ID) {
+			continue
+		}
 		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
 		if acquireErr != nil {
 			return nil, compactBlocked, acquireErr
@@ -1066,6 +1191,14 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 		}
 	}
 	return nil, compactBlocked, nil
+}
+
+func (s *defaultOpenAIAccountScheduler) isExperimentalCircuitOpen(accountID int64) bool {
+	if s == nil || s.stats == nil || accountID <= 0 {
+		return false
+	}
+	state, _, _ := s.stats.experimentalCircuitSnapshot(accountID, time.Now())
+	return state == openAIExperimentalCircuitStateOpen
 }
 
 func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
@@ -1187,6 +1320,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}
 		if req.RequireCompact && openAICompactSupportTier(fresh) == 0 {
 			compactBlocked = true
+			continue
+		}
+		if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(fresh.ID) {
 			continue
 		}
 		return &AccountSelectionResult{
