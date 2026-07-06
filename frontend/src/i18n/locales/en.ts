@@ -3494,6 +3494,7 @@ export default {
         unknown: 'Not refreshed',
         realRate: 'Upstream group rate {rate}x (display only)',
         baseRate: 'Upstream base rate {rate}x (display only)',
+        accountRateFallback: 'Currently using account rate fallback {rate}x',
         updatedAt: 'Updated at {time}'
       },
       routingPriority: {
@@ -3522,10 +3523,31 @@ export default {
         sections: {
           score: 'Score breakdown',
           selectionBasis: 'Selection basis',
+          priceSource: 'Price source',
           blockReasons: 'Block reasons',
           strictPriority: 'Strict priority diagnostics',
           notes: 'Notes',
           topCandidates: 'Top candidates'
+        },
+        priceSource: {
+          source: 'Matched source',
+          rateMultiplier: 'Scoring multiplier',
+          fallback: 'Fallback state',
+          rateValue: '{rate}x',
+          values: {
+            upstream_effective_rate_multiplier: 'Upstream effective rate',
+            upstream_group_rate_multiplier: 'Upstream group rate',
+            account: {
+              rate_multiplier: 'Account rate multiplier'
+            }
+          },
+          fallbackReasons: {
+            account_rate_fallback: 'Currently using account rate fallback',
+            account_missing: 'Account is missing, currently using account rate fallback',
+            upstream_rate_missing: 'Upstream rate is missing, currently using account rate fallback; refresh upstream balance/rate',
+            upstream_rate_invalid: 'Upstream rate is unavailable, currently using account rate fallback; refresh upstream balance/rate',
+            account_rate_default_1: 'Account rate is not configured, currently falling back to default 1.0'
+          }
         },
         strict: {
           badge: 'P{priority}',
@@ -3541,7 +3563,7 @@ export default {
         },
         notes: {
           experimental_scheduler: 'Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
-          price_uses_upstream_cost_then_account_rate_multiplier: 'Price scoring prefers upstream cost per dollar, then falls back to the account rate multiplier.',
+          price_uses_upstream_effective_then_group_then_account_rate_multiplier: 'Price scoring falls back in order: upstream effective rate, upstream group rate, then account rate multiplier.',
           strict_priority: 'Strict Priority only selects accounts inside the current highest available priority layer.',
           strict_priority_top_tier_only: 'Lower priority layers do not join this round of top candidates unless no higher-priority layer is available.',
           strict_priority_same_tier_last_used: 'Within the same priority layer, never-used or least-recently-used accounts are preferred; exact ties are spread to avoid hotspots.',

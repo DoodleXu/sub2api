@@ -32,6 +32,7 @@ type OpenAIRoutingSummary struct {
 	QualityGrade     string                      `json:"quality_grade"`
 	Tier             string                      `json:"tier"`
 	Score            OpenAIRoutingScoreBreakdown `json:"score"`
+	PriceSource      OpenAIRoutingPriceSource    `json:"price_source"`
 	StatusLabel      string                      `json:"status_label"`
 	SummaryReason    string                      `json:"summary_reason"`
 	SummaryReasons   []string                    `json:"summary_reasons"`
@@ -191,6 +192,7 @@ func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, 
 		errorRate, ttft, hasTTFT = s.openaiAccountStats.snapshot(account.ID)
 	}
 	score := openAIRoutingScore(account, loadInfo, errorRate, ttft, hasTTFT)
+	priceSource := openAIAccountRoutingPriceSource(account)
 	qualityScore := int(math.Round(score.Quality * 100))
 	summaryReasons := openAIRoutingSummaryReasons(score, reasons)
 	status := "candidate"
@@ -206,6 +208,7 @@ func (s *OpenAIGatewayService) explainOpenAIRoutingAccount(ctx context.Context, 
 		QualityGrade:     openAIRoutingQualityGrade(qualityScore),
 		Tier:             openAIRoutingTier(qualityScore, len(reasons) == 0),
 		Score:            score,
+		PriceSource:      priceSource,
 		StatusLabel:      status,
 		SummaryReason:    firstString(summaryReasons, "balanced"),
 		SummaryReasons:   summaryReasons,
@@ -432,7 +435,7 @@ func openAIRoutingExplainSource(strategy string) string {
 func openAIRoutingNotes(strategy string) []string {
 	switch strategy {
 	case OpenAIAccountSchedulerStrategyExperimental:
-		return []string{"experimental_scheduler", "price_uses_upstream_cost_then_account_rate_multiplier"}
+		return []string{"experimental_scheduler", "price_uses_upstream_effective_then_group_then_account_rate_multiplier"}
 	case OpenAIAccountSchedulerStrategyStrictPriority:
 		return []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}
 	default:

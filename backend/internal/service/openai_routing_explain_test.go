@@ -176,8 +176,6 @@ func TestOpenAIGatewayService_ExplainOpenAIRoutingForAccount_StrictPriorityNotes
 	require.Equal(t, int64(74063), result.Account.AccountID)
 	require.False(t, result.Account.IsSchedulableNow)
 	require.ElementsMatch(t, []string{"strict_priority", "strict_priority_top_tier_only", "strict_priority_same_tier_last_used"}, result.Notes)
-	require.NotContains(t, result.Notes, "experimental_scheduler")
-	require.NotContains(t, result.Notes, "price_uses_upstream_cost_then_account_rate_multiplier")
 	require.Len(t, result.Top, 2)
 	require.Equal(t, int64(74062), result.Top[0].AccountID)
 	require.Equal(t, int64(74061), result.Top[1].AccountID)
@@ -209,6 +207,100 @@ func TestOpenAIGatewayService_ExplainOpenAIRouting_LegacyAndExperimentalDoNotApp
 			}
 		})
 	}
+}
+
+func TestOpenAIGatewayService_ExplainOpenAIRouting_ExposesPriceSource(t *testing.T) {
+	setOpenAIRoutingExplainStrategyForTest(t, OpenAIAccountSchedulerStrategyExperimental)
+	accountRate := 0.2
+	svc := &OpenAIGatewayService{
+		accountRepo: openAIRoutingExplainTestRepo{accounts: []Account{
+			{
+				ID:             74081,
+				Name:           "effective-price",
+				Platform:       PlatformOpenAI,
+				Type:           AccountTypeAPIKey,
+				Status:         StatusActive,
+				Schedulable:    true,
+				Concurrency:    1,
+				RateMultiplier: &accountRate,
+				Extra: map[string]any{
+					"upstream_effective_rate_multiplier": 0.08,
+					"upstream_group_rate_multiplier":     0.12,
+				},
+			},
+			{
+				ID:             74082,
+				Name:           "group-price",
+				Platform:       PlatformOpenAI,
+				Type:           AccountTypeAPIKey,
+				Status:         StatusActive,
+				Schedulable:    true,
+				Concurrency:    1,
+				RateMultiplier: &accountRate,
+				Extra: map[string]any{
+					"upstream_effective_rate_multiplier": -1,
+					"upstream_group_rate_multiplier":     "0.12",
+				},
+			},
+			{
+				ID:             74083,
+				Name:           "account-price",
+				Platform:       PlatformOpenAI,
+				Type:           AccountTypeAPIKey,
+				Status:         StatusActive,
+				Schedulable:    true,
+				Concurrency:    1,
+				RateMultiplier: &accountRate,
+			},
+			{
+				ID:          74084,
+				Name:        "default-account-price",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeAPIKey,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+			},
+		}},
+	}
+
+	result, err := svc.ExplainOpenAIRouting(context.Background(), OpenAIRoutingExplainParams{})
+
+	require.NoError(t, err)
+	byID := map[int64]OpenAIRoutingSummary{}
+	for _, item := range result.Items {
+		byID[item.AccountID] = item
+	}
+	require.Equal(t, OpenAIRoutingPriceSource{
+		Source:         "upstream_effective_rate_multiplier",
+		RateMultiplier: 0.08,
+	}, byID[74081].PriceSource)
+	require.Equal(t, OpenAIRoutingPriceSource{
+		Source:         "upstream_group_rate_multiplier",
+		RateMultiplier: 0.12,
+	}, byID[74082].PriceSource)
+	require.Equal(t, OpenAIRoutingPriceSource{
+		Source:         "account.rate_multiplier",
+		RateMultiplier: 0.2,
+		Fallback:       true,
+		FallbackReason: openAIRoutingPriceFallbackUpstreamRateMissing,
+	}, byID[74083].PriceSource)
+	require.Equal(t, OpenAIRoutingPriceSource{
+		Source:         "account.rate_multiplier",
+		RateMultiplier: 1,
+		Fallback:       true,
+		FallbackReason: openAIRoutingPriceFallbackAccountRateDefaultOne,
+	}, byID[74084].PriceSource)
+	require.Equal(t, 0.5, byID[74084].Score.Price)
+
+	accountExplain, err := svc.ExplainOpenAIRoutingForAccount(context.Background(), 74082, OpenAIRoutingExplainParams{})
+	require.NoError(t, err)
+	require.Equal(t, "upstream_group_rate_multiplier", accountExplain.Account.PriceSource.Source)
+	require.Equal(t, 0.12, accountExplain.Account.PriceSource.RateMultiplier)
+	require.ElementsMatch(t, []string{
+		"experimental_scheduler",
+		"price_uses_upstream_effective_then_group_then_account_rate_multiplier",
+	}, accountExplain.Notes)
 }
 
 func TestOpenAIGatewayService_ExplainOpenAIRouting_ExperimentalMarksCircuitOpenAccount(t *testing.T) {

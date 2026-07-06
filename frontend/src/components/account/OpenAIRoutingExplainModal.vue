@@ -47,6 +47,16 @@
         </div>
       </section>
 
+      <section v-if="priceSourceItems.length">
+        <div class="mb-2 text-xs font-semibold text-gray-700 dark:text-gray-200">{{ t('admin.accounts.routingPriority.sections.priceSource') }}</div>
+        <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <div v-for="item in priceSourceItems" :key="item.key" class="rounded-md border border-gray-200 px-3 py-2 dark:border-dark-600">
+            <div class="text-[11px] text-gray-500">{{ item.label }}</div>
+            <div class="mt-1 text-sm font-semibold">{{ item.value }}</div>
+          </div>
+        </div>
+      </section>
+
       <section v-if="explain.account.block_reasons?.length">
         <div class="mb-2 text-xs font-semibold text-gray-700 dark:text-gray-200">{{ t('admin.accounts.routingPriority.sections.blockReasons') }}</div>
         <div class="flex flex-wrap gap-2">
@@ -137,6 +147,30 @@ const modalTitle = computed(() => {
   return t('admin.accounts.routingPriority.modal.title')
 })
 const translatedNotes = computed(() => (props.explain?.notes ?? []).map((note) => translate('admin.accounts.routingPriority.notes', note)))
+const priceSourceItems = computed(() => {
+  const priceSource = props.explain?.account.price_source
+  if (!priceSource) return []
+  const items = [
+    {
+      key: 'source',
+      label: t('admin.accounts.routingPriority.priceSource.source'),
+      value: translate('admin.accounts.routingPriority.priceSource.values', priceSource.source),
+    },
+    {
+      key: 'rate_multiplier',
+      label: t('admin.accounts.routingPriority.priceSource.rateMultiplier'),
+      value: t('admin.accounts.routingPriority.priceSource.rateValue', { rate: formatRateMultiplier(priceSource.rate_multiplier) }),
+    },
+  ]
+  if (priceSource.fallback) {
+    items.push({
+      key: 'fallback',
+      label: t('admin.accounts.routingPriority.priceSource.fallback'),
+      value: translate('admin.accounts.routingPriority.priceSource.fallbackReasons', priceSource.fallback_reason || 'account_rate_fallback'),
+    })
+  }
+  return items
+})
 const strictBasisItems = computed(() => {
   const account = props.explain?.account
   if (!account) return []
@@ -168,6 +202,7 @@ const strictCurrentPriorityText = computed(() => {
 })
 
 const format = (value: number) => Number.isFinite(value) ? value.toFixed(3) : '-'
+const formatRateMultiplier = (value: number) => Number.isFinite(value) ? value.toFixed(4).replace(/\.?0+$/, '') : '-'
 const formatLastUsed = (value?: string | null) => {
   if (!value) return t('admin.accounts.routingPriority.strict.neverUsed')
   const date = new Date(value)

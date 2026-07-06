@@ -981,6 +981,13 @@ export interface OpenAIRoutingScoreBreakdown {
   queue: number
 }
 
+export interface OpenAIRoutingPriceSource {
+  source: string
+  rate_multiplier: number
+  fallback?: boolean
+  fallback_reason?: string
+}
+
 export interface OpenAIRoutingSummary {
   account_id: number
   account_name: string
@@ -991,6 +998,7 @@ export interface OpenAIRoutingSummary {
   quality_grade: string
   tier: string
   score: OpenAIRoutingScoreBreakdown
+  price_source?: OpenAIRoutingPriceSource
   status_label: string
   summary_reason: string
   summary_reasons: string[]

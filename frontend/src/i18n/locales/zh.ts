@@ -3525,6 +3525,7 @@ export default {
         unknown: '未刷新',
         realRate: '上游分组倍率 {rate}x（仅展示）',
         baseRate: '上游基础倍率 {rate}x（仅展示）',
+        accountRateFallback: '当前使用账号倍率回退 {rate}x',
         updatedAt: '更新于 {time}'
       },
       routingPriority: {
@@ -3553,10 +3554,31 @@ export default {
         sections: {
           score: '分项评分',
           selectionBasis: '选择依据',
+          priceSource: '价格来源',
           blockReasons: '阻塞原因',
           strictPriority: 'Strict Priority 排障',
           notes: '说明',
           topCandidates: 'Top 候选'
+        },
+        priceSource: {
+          source: '命中来源',
+          rateMultiplier: '参与评分倍率',
+          fallback: '回退状态',
+          rateValue: '{rate}x',
+          values: {
+            upstream_effective_rate_multiplier: '上游实时有效倍率',
+            upstream_group_rate_multiplier: '上游分组倍率',
+            account: {
+              rate_multiplier: '账号倍率'
+            }
+          },
+          fallbackReasons: {
+            account_rate_fallback: '当前使用账号倍率回退',
+            account_missing: '账号缺失，当前使用账号倍率回退',
+            upstream_rate_missing: '缺少上游倍率，当前使用账号倍率回退；可刷新上游余额/倍率',
+            upstream_rate_invalid: '上游倍率不可用，当前使用账号倍率回退；可刷新上游余额/倍率',
+            account_rate_default_1: '账号未配置倍率，当前按默认 1.0 回退'
+          }
         },
         strict: {
           badge: 'P{priority}',
@@ -3572,7 +3594,7 @@ export default {
         },
         notes: {
           experimental_scheduler: '试验性调度按价格、质量、响应、错误率、优先级和负载综合排序。',
-          price_uses_upstream_cost_then_account_rate_multiplier: '价格评分优先使用上游每刀成本；缺少上游成本时回退账号倍率。',
+          price_uses_upstream_effective_then_group_then_account_rate_multiplier: '价格评分按上游实时有效倍率、上游分组倍率、账号倍率依次回退。',
           strict_priority: 'Strict Priority 只在当前最高可用优先级层内选择账号。',
           strict_priority_top_tier_only: '低优先级层不会参与本轮 Top 候选，除非更高优先级层没有可用账号。',
           strict_priority_same_tier_last_used: '同一优先级层内优先使用从未使用或最久未使用的账号；完全相同时会打散以避免热点。',

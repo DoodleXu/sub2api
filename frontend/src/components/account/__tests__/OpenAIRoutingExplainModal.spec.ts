@@ -13,6 +13,7 @@ const messages: Record<string, string> = {
   'admin.accounts.routingPriority.sections.notes': '说明',
   'admin.accounts.routingPriority.sections.blockReasons': '不可调度原因',
   'admin.accounts.routingPriority.sections.topCandidates': 'Top 候选',
+  'admin.accounts.routingPriority.sections.priceSource': '价格来源',
   'admin.accounts.routingPriority.score.total': '综合分',
   'admin.accounts.routingPriority.score.quality': '质量',
   'admin.accounts.routingPriority.score.price': '价格',
@@ -32,7 +33,16 @@ const messages: Record<string, string> = {
   'admin.accounts.routingPriority.notes.strict_priority_top_tier_only': '低优先级层不会参与本轮 Top 候选，除非更高优先级层没有可用账号。',
   'admin.accounts.routingPriority.notes.strict_priority_same_tier_last_used': '同一优先级层内优先使用从未使用或最久未使用的账号；完全相同时会打散以避免热点。',
   'admin.accounts.routingPriority.notes.experimental_scheduler': '试验性调度按价格、质量、响应、错误率、优先级和负载综合排序。',
-  'admin.accounts.routingPriority.notes.price_uses_upstream_cost_then_account_rate_multiplier': '价格评分优先使用上游每刀成本；缺少上游成本时回退账号倍率。',
+  'admin.accounts.routingPriority.notes.price_uses_upstream_effective_then_group_then_account_rate_multiplier': '价格评分按上游实时有效倍率、上游分组倍率、账号倍率依次回退。',
+  'admin.accounts.routingPriority.priceSource.source': '命中来源',
+  'admin.accounts.routingPriority.priceSource.rateMultiplier': '参与评分倍率',
+  'admin.accounts.routingPriority.priceSource.fallback': '回退状态',
+  'admin.accounts.routingPriority.priceSource.rateValue': '{rate}x',
+  'admin.accounts.routingPriority.priceSource.values.upstream_effective_rate_multiplier': '上游实时有效倍率',
+  'admin.accounts.routingPriority.priceSource.values.upstream_group_rate_multiplier': '上游分组倍率',
+  'admin.accounts.routingPriority.priceSource.values.account.rate_multiplier': '账号倍率',
+  'admin.accounts.routingPriority.priceSource.fallbackReasons.upstream_rate_missing': '缺少上游倍率，当前使用账号倍率回退；可刷新上游余额/倍率',
+  'admin.accounts.routingPriority.priceSource.fallbackReasons.account_rate_default_1': '账号未配置倍率，当前按默认 1.0 回退',
   'admin.accounts.routingPriority.summary.strict_priority_top_tier': '当前最高可用优先级层',
   'admin.accounts.routingPriority.summary.experimental_circuit_open': '试验性调度熔断冷却中',
   'common.close': '关闭',
@@ -85,6 +95,10 @@ const baseExplain = (overrides: Partial<OpenAIRoutingAccountExplain> = {}): Open
       load: 1,
       queue: 1,
     },
+    price_source: {
+      source: 'upstream_effective_rate_multiplier',
+      rate_multiplier: 0.08,
+    },
     status_label: 'candidate',
     summary_reason: 'strict_priority_top_tier',
     summary_reasons: ['strict_priority_top_tier', 'strict_priority_never_used_first'],
@@ -110,6 +124,10 @@ const baseExplain = (overrides: Partial<OpenAIRoutingAccountExplain> = {}): Open
         priority: 1,
         load: 1,
         queue: 1,
+      },
+      price_source: {
+        source: 'upstream_effective_rate_multiplier',
+        rate_multiplier: 0.08,
       },
       status_label: 'candidate',
       summary_reason: 'strict_priority_top_tier',
@@ -142,7 +160,14 @@ describe('OpenAIRoutingExplainModal', () => {
 
   it('keeps the experimental scheduler title for experimental explains', () => {
     const wrapper = mountModal(baseExplain({
-      notes: ['experimental_scheduler', 'price_uses_upstream_cost_then_account_rate_multiplier'],
+      account: {
+        ...baseExplain().account,
+        price_source: {
+          source: 'upstream_group_rate_multiplier',
+          rate_multiplier: 0.12,
+        },
+      },
+      notes: ['experimental_scheduler', 'price_uses_upstream_effective_then_group_then_account_rate_multiplier'],
       scheduler_strategy: 'experimental_scheduler',
       strict_priority: {
         enabled: false,
@@ -153,6 +178,41 @@ describe('OpenAIRoutingExplainModal', () => {
 
     expect(wrapper.get('[data-testid="title"]').text()).toBe('OpenAI 试验性调度解释')
     expect(wrapper.text()).toContain('综合分')
+    expect(wrapper.text()).toContain('价格来源')
+    expect(wrapper.text()).toContain('上游分组倍率')
+    expect(wrapper.text()).toContain('0.12x')
+    expect(wrapper.text()).toContain('价格评分按上游实时有效倍率、上游分组倍率、账号倍率依次回退。')
+  })
+
+  it('marks account-rate fallback when upstream rates are unavailable', () => {
+    const wrapper = mountModal(baseExplain({
+      account: {
+        ...baseExplain().account,
+        score: {
+          ...baseExplain().account.score,
+          price: 0.5,
+        },
+        price_source: {
+          source: 'account.rate_multiplier',
+          rate_multiplier: 1,
+          fallback: true,
+          fallback_reason: 'account_rate_default_1',
+        },
+      },
+      notes: ['experimental_scheduler', 'price_uses_upstream_effective_then_group_then_account_rate_multiplier'],
+      scheduler_strategy: 'experimental_scheduler',
+      strict_priority: {
+        enabled: false,
+        candidate_count: 0,
+        excluded_accounts: [],
+      },
+    }))
+
+    expect(wrapper.text()).toContain('价格来源')
+    expect(wrapper.text()).toContain('账号倍率')
+    expect(wrapper.text()).toContain('1x')
+    expect(wrapper.text()).toContain('回退状态')
+    expect(wrapper.text()).toContain('账号未配置倍率，当前按默认 1.0 回退')
   })
 
   it('translates experimental circuit cooldown reasons', () => {
