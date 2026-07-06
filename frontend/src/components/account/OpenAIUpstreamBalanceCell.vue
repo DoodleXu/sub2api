@@ -36,11 +36,15 @@ const loading = ref(false)
 const localAccount = ref<Account | null>(null)
 const localError = ref('')
 const INFINITE_UPSTREAM_BALANCE_ACCOUNT_ID = 401
+const INFINITE_UPSTREAM_BALANCE_ACCOUNT_NAME = 'AI Nexus'
 
 const account = computed(() => localAccount.value ?? props.account)
 const extra = computed(() => account.value.extra ?? {})
 const visible = computed(() => props.account.platform === 'openai' && props.account.type === 'apikey')
-const isInfiniteBalanceAccount = computed(() => account.value.id === INFINITE_UPSTREAM_BALANCE_ACCOUNT_ID)
+const isInfiniteBalanceAccount = computed(() =>
+  account.value.id === INFINITE_UPSTREAM_BALANCE_ACCOUNT_ID &&
+  account.value.name === INFINITE_UPSTREAM_BALANCE_ACCOUNT_NAME
+)
 const status = computed(() => String(extra.value.upstream_balance_status ?? '').toLowerCase())
 const providerLabel = computed(() => String(extra.value.upstream_balance_provider ?? '').trim())
 const groupLabel = computed(() => String(extra.value.upstream_group ?? '').trim())

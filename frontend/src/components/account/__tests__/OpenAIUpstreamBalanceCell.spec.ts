@@ -46,11 +46,12 @@ function account(overrides: Partial<Account> = {}): Account {
 }
 
 describe('OpenAIUpstreamBalanceCell', () => {
-  it('hardcodes account 401 upstream balance as infinity', () => {
+  it('shows account 401 named AI Nexus upstream balance as infinity', () => {
     const wrapper = mount(OpenAIUpstreamBalanceCell, {
       props: {
         account: account({
           id: 401,
+          name: 'AI Nexus',
           extra: {
             upstream_balance_status: 'error',
             upstream_balance_error: 'GET https://example.com failed',
@@ -65,6 +66,28 @@ describe('OpenAIUpstreamBalanceCell', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.upstreamBalance.refresh')
     expect(wrapper.text()).not.toContain('admin.accounts.upstreamBalance.errorHint')
     expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('keeps account 401 with a different name on the normal balance path', () => {
+    const wrapper = mount(OpenAIUpstreamBalanceCell, {
+      props: {
+        account: account({
+          id: 401,
+          name: 'Regular OpenAI',
+          extra: {
+            upstream_balance_status: 'error',
+            upstream_balance_error: 'GET https://example.com failed',
+            upstream_balance_provider: 'OpenAI'
+          }
+        })
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('♾️')
+    expect(wrapper.text()).toContain('admin.accounts.upstreamBalance.failed')
+    expect(wrapper.text()).toContain('admin.accounts.upstreamBalance.refresh')
+    expect(wrapper.text()).toContain('admin.accounts.upstreamBalance.errorHint')
+    expect(wrapper.find('button').exists()).toBe(true)
   })
 
   it('keeps regular accounts on the normal balance path', () => {
