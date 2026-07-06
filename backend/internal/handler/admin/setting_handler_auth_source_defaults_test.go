@@ -217,17 +217,18 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	handler := NewSettingHandler(svc, nil, nil, nil, nil, nil, nil)
 
 	body := map[string]any{
-		"promo_code_enabled":                                    true,
-		"payment_visible_method_alipay_source":                  "easypay",
-		"payment_visible_method_wxpay_source":                   "wxpay",
-		"payment_visible_method_alipay_enabled":                 true,
-		"payment_visible_method_wxpay_enabled":                  false,
-		"openai_advanced_scheduler_enabled":                     true,
-		"openai_account_scheduler_strategy":                     "experimental_scheduler",
-		"openai_account_experimental_retry_count":               99,
-		"openai_account_experimental_record_recovered_upstream": true,
-		"openai_account_strict_retry_count":                     99,
-		"openai_account_strict_record_recovered_upstream":       true,
+		"promo_code_enabled":                                      true,
+		"payment_visible_method_alipay_source":                    "easypay",
+		"payment_visible_method_wxpay_source":                     "wxpay",
+		"payment_visible_method_alipay_enabled":                   true,
+		"payment_visible_method_wxpay_enabled":                    false,
+		"openai_advanced_scheduler_enabled":                       true,
+		"openai_account_scheduler_strategy":                       "experimental_scheduler",
+		"openai_account_experimental_retry_count":                 99,
+		"openai_account_experimental_record_recovered_upstream":   true,
+		"openai_account_strict_retry_count":                       99,
+		"openai_account_strict_record_recovered_upstream":         true,
+		"openai_advanced_scheduler_subscription_priority_enabled": true,
 	}
 	rawBody, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -250,6 +251,7 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, "true", repo.values["openai_account_experimental_record_recovered_upstream"])
 	require.Equal(t, "10", repo.values["openai_account_strict_retry_count"])
 	require.Equal(t, "true", repo.values["openai_account_strict_record_recovered_upstream"])
+	require.Equal(t, "true", repo.values[service.SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
 
 	var resp response.Response
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -265,6 +267,7 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, true, data["openai_account_experimental_record_recovered_upstream"])
 	require.Equal(t, float64(10), data["openai_account_strict_retry_count"])
 	require.Equal(t, true, data["openai_account_strict_record_recovered_upstream"])
+	require.Equal(t, true, data["openai_advanced_scheduler_subscription_priority_enabled"])
 }
 
 func TestSettingHandler_UpdateSettings_PreservesLegacyBlankPaymentVisibleMethodSource(t *testing.T) {
