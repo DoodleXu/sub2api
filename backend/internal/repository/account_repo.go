@@ -640,7 +640,7 @@ func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platfor
 		return []service.Account{}, nil
 	}
 
-	q := r.client.Account.Query()
+	q := r.client.Account.Query().Where(dbaccount.ArchivedAtIsNil())
 	if platformFilter = strings.TrimSpace(platformFilter); platformFilter != "" {
 		q = q.Where(dbaccount.PlatformEQ(platformFilter))
 	}

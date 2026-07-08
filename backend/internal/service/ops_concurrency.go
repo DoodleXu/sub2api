@@ -22,7 +22,11 @@ func (s *OpsService) listAllAccountsForOps(ctx context.Context, platformFilter s
 		return []Account{}, nil
 	}
 	if repo, ok := s.accountRepo.(opsAccountStatsRepository); ok {
-		return repo.ListOpsAccountsForStats(ctx, platformFilter, groupIDFilter)
+		accounts, err := repo.ListOpsAccountsForStats(ctx, platformFilter, groupIDFilter)
+		if err != nil {
+			return nil, err
+		}
+		return filterArchivedOpsAccounts(accounts), nil
 	}
 
 	out := make([]Account, 0, 128)
@@ -58,7 +62,21 @@ func (s *OpsService) listAllAccountsForOps(ctx context.Context, platformFilter s
 		}
 	}
 
-	return out, nil
+	return filterArchivedOpsAccounts(out), nil
+}
+
+func filterArchivedOpsAccounts(accounts []Account) []Account {
+	if len(accounts) == 0 {
+		return accounts
+	}
+	out := accounts[:0]
+	for _, acc := range accounts {
+		if acc.ArchivedAt != nil {
+			continue
+		}
+		out = append(out, acc)
+	}
+	return out
 }
 
 func (s *OpsService) getAccountsLoadMapBestEffort(ctx context.Context, accounts []Account) map[int64]*AccountLoadInfo {

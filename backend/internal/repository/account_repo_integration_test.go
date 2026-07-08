@@ -518,6 +518,19 @@ func (s *AccountRepoSuite) TestListWithFilters_ArchivedHiddenByDefaultAndFiltere
 	s.Require().Equal(5.5, archived[0].Extra["quota_used"], "archive must retain key account quota usage")
 }
 
+func (s *AccountRepoSuite) TestListOpsAccountsForStatsExcludesArchived() {
+	now := time.Now()
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "ops-visible", Platform: service.PlatformOpenAI, Status: service.StatusActive})
+	mustCreateAccount(s.T(), s.client, &service.Account{Name: "ops-archived-error", Platform: service.PlatformOpenAI, Status: service.StatusError, ArchivedAt: &now})
+
+	accounts, err := s.repo.ListOpsAccountsForStats(s.ctx, service.PlatformOpenAI, nil)
+	s.Require().NoError(err)
+
+	names := accountNames(accounts)
+	s.Require().Contains(names, "ops-visible")
+	s.Require().NotContains(names, "ops-archived-error")
+}
+
 func (s *AccountRepoSuite) TestListByPlatform() {
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "p1", Platform: service.PlatformAnthropic, Status: service.StatusActive})
 	mustCreateAccount(s.T(), s.client, &service.Account{Name: "p2", Platform: service.PlatformOpenAI, Status: service.StatusActive})
