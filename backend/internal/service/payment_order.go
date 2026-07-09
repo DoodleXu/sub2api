@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/shopspring/decimal"
 )
 
 // --- Order Creation ---
@@ -78,9 +79,13 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 			return nil, err
 		}
 	}
-	// Subscription plan prices are direct payment prices. Balance recharge multiplier
-	// only affects credited balance for balance orders, not subscription pay_amount.
-	payAmountStr, payAmount, feeAmount, err := calculateCreateOrderPayAmount(limitAmount, paymentFeeConfig{Rate: feeRate}, methodCurrency)
+	payAmountStr, payAmount, feeAmount, err := calculateCreateOrderPayAmountForOrderType(
+		limitAmount,
+		paymentFeeConfig{Rate: feeRate},
+		methodCurrency,
+		req.OrderType,
+		cfg.SubscriptionUSDToCNYRate,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +103,13 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	selectedFee := paymentFeeConfigForSelection(cfg.RechargeFeeRate, sel)
 	feeRate = selectedFee.Rate
 	if selectedCurrency != methodCurrency || selectedFee.Min > 0 || selectedFee.Rate != cfg.RechargeFeeRate {
-		payAmountStr, payAmount, feeAmount, err = calculateCreateOrderPayAmount(limitAmount, selectedFee, selectedCurrency)
+		payAmountStr, payAmount, feeAmount, err = calculateCreateOrderPayAmountForOrderType(
+			limitAmount,
+			selectedFee,
+			selectedCurrency,
+			req.OrderType,
+			cfg.SubscriptionUSDToCNYRate,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -724,6 +735,28 @@ func validateSelectedCreateOrderInstanceLimits(paymentType string, payAmount flo
 		return infraerrors.BadRequest("INVALID_AMOUNT", "amount exceeds provider instance daily limit").WithMetadata(metadata)
 	}
 	return nil
+}
+
+func calculateCreateOrderPayAmountForOrderType(limitAmount float64, feeConfig paymentFeeConfig, currency, orderType string, usdToCnyRate float64) (string, float64, float64, error) {
+	paymentAmount := limitAmount
+	if orderType == payment.OrderTypeSubscription {
+		paymentAmount = calculateSubscriptionGatewayBaseAmount(limitAmount, usdToCnyRate, currency)
+	}
+	return calculateCreateOrderPayAmount(paymentAmount, feeConfig, currency)
+}
+
+// calculateSubscriptionGatewayBaseAmount 计算订阅订单的网关扣款基数。
+// 换算是显式 opt-in：仅当管理员配置了订阅汇率（rate > 0，1 USD = rate CNY）
+// 且网关币种为 CNY 时，按 price × rate 换算；未配置时保持 price 直付的存量行为。
+func calculateSubscriptionGatewayBaseAmount(amount, usdToCnyRate float64, currency string) float64 {
+	rate := normalizeSubscriptionUSDToCNYRate(usdToCnyRate)
+	if rate <= 0 || currency != payment.DefaultPaymentCurrency {
+		return amount
+	}
+	return decimal.NewFromFloat(amount).
+		Mul(decimal.NewFromFloat(rate)).
+		Round(int32(payment.CurrencyMaxFractionDigits(currency))).
+		InexactFloat64()
 }
 
 func validateCreateOrderAmountCurrency(amount float64, currency string) error {

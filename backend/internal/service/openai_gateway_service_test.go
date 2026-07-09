@@ -677,6 +677,7 @@ func TestOpenAISelectAccountWithSchedulerForCapability_RequiresNativeResponses(t
 		OpenAIUpstreamTransportAny,
 		OpenAIEndpointCapabilityResponsesNative,
 		false,
+		false,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, selection)
@@ -694,6 +695,7 @@ func TestOpenAISelectAccountWithSchedulerForCapability_RequiresNativeResponses(t
 		nil,
 		OpenAIUpstreamTransportAny,
 		OpenAIEndpointCapabilityChatCompletions,
+		false,
 		false,
 	)
 	require.NoError(t, err)
