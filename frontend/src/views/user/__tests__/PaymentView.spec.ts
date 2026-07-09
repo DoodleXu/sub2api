@@ -409,6 +409,98 @@ describe('PaymentView subscription confirmation amounts', () => {
     expect(text).not.toContain(`-${formatPaymentAmount(30, 'CNY')}`)
     expect(wrapper.findAll('button').some(button => button.text().includes(formatPaymentAmount(513.02, 'CNY')))).toBe(true)
   })
+
+  it('sends the raw subscription payable amount when the CNY display amount is converted', async () => {
+    createOrder.mockResolvedValue({
+      order_id: 901,
+      amount: 9.99,
+      pay_amount: 71.43,
+      fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=raw-subscription',
+      out_trade_no: 'sub2_raw_subscription_901',
+    })
+
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: {
+        subscription_usd_to_cny_rate: 7.15,
+      },
+      method: {
+        currency: 'CNY',
+      },
+      plan: {
+        price: 9.99,
+      },
+    })
+
+    const button = wrapper.findAll('button').find(item => item.text().includes('payment.createOrder'))
+    await button?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(71.43, 'CNY'))
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 9.99,
+      order_type: 'subscription',
+      plan_id: 7,
+    }))
+  })
+
+  it('sends the raw post-credit subscription amount while showing converted CNY totals', async () => {
+    createOrder.mockResolvedValue({
+      order_id: 902,
+      amount: 70,
+      pay_amount: 500.5,
+      fee_rate: 2.5,
+      expires_at: '2099-01-01T00:10:00.000Z',
+      payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=raw-upgrade',
+      out_trade_no: 'sub2_raw_upgrade_902',
+    })
+
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: {
+        subscription_usd_to_cny_rate: 7.15,
+        recharge_fee_rate: 2.5,
+      },
+      method: {
+        currency: 'CNY',
+      },
+      plan: {
+        price: 100,
+      },
+    }, [{
+      subscription_id: 42,
+      group_id: 3,
+      group_name: 'OpenAI',
+      group_platform: 'openai',
+      expires_at: '2099-01-01T00:00:00Z',
+      days_remaining: 10,
+      credit_amount: 30,
+      credit_days: 10,
+      payable_amount: 70,
+    }])
+
+    const vm = wrapper.vm as unknown as {
+      useUpgradeCredit: boolean
+      selectedUpgradeSubscriptionId: number | null
+    }
+    vm.useUpgradeCredit = true
+    vm.selectedUpgradeSubscriptionId = 42
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.findAll('button').find(item => item.text().includes('payment.createOrder'))
+    await button?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(formatPaymentAmount(513.02, 'CNY'))
+    expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 70,
+      order_type: 'subscription',
+      plan_id: 7,
+      upgrade_from_subscription_id: 42,
+    }))
+  })
 })
 
 describe('PaymentView payment recovery', () => {

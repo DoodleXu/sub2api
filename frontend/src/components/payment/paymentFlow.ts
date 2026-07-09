@@ -178,7 +178,6 @@ export function decidePaymentLaunch(
 
   if (baseState.clientSecret) {
     // visibleMethod === 'stripe' means the user clicked the dedicated Stripe button
-    // and should land on the full Payment Element to choose a sub-method themselves.
     const isStripeButton = visibleMethod === 'stripe'
     const stripeMethod: StripeVisibleMethod | undefined = isStripeButton
       ? undefined

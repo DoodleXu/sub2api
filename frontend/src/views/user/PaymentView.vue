@@ -539,7 +539,7 @@ function buildWechatOAuthAuthorizeUrl(
       redirectUrl.searchParams.delete('upgrade_from_subscription_id')
     }
 
-    if (context.orderAmount > 0) {
+    if (context.orderType === 'balance' && context.orderAmount > 0) {
       redirectUrl.searchParams.set('amount', String(context.orderAmount))
     } else {
       redirectUrl.searchParams.delete('amount')
@@ -805,11 +805,15 @@ const selectedUpgradeOption = computed(() => {
   return upgradeOptions.value.find(option => option.subscription_id === selectedUpgradeSubscriptionId.value) || null
 })
 
-const subscriptionPayableAmount = computed(() => {
+const subscriptionOrderRequestAmount = computed(() => {
   const price = selectedPlan.value?.price ?? 0
-  const discountedPrice = selectedUpgradeOption.value
+  return selectedUpgradeOption.value
     ? Math.max(0.01, Math.round((price - selectedUpgradeOption.value.credit_amount) * 100) / 100)
     : price
+})
+
+const subscriptionPayableAmount = computed(() => {
+  const discountedPrice = subscriptionOrderRequestAmount.value
   return subscriptionPaymentAmountForCurrency(discountedPrice, selectedCurrency.value)
 })
 
@@ -947,7 +951,7 @@ async function handleSubmitRecharge() {
 
 async function confirmSubscribe() {
   if (!selectedPlan.value || submitting.value) return
-  await createOrder(subscriptionPayableAmount.value, 'subscription', selectedPlan.value.id, {
+  await createOrder(subscriptionOrderRequestAmount.value, 'subscription', selectedPlan.value.id, {
     upgradeFromSubscriptionId: selectedUpgradeOption.value?.subscription_id,
   })
 }
@@ -1320,8 +1324,11 @@ async function resumeWechatPaymentFromQuery() {
     return
   }
 
-  if (resume.orderAmount > 0 && resume.openid) {
-    await createOrder(resume.orderAmount, resume.orderType, resume.planId, {
+  const resumeOrderAmount = resume.orderType === 'subscription'
+    ? subscriptionOrderRequestAmount.value
+    : resume.orderAmount
+  if (resume.openid && (resume.orderType === 'subscription' || resumeOrderAmount > 0)) {
+    await createOrder(resumeOrderAmount, resume.orderType, resume.planId, {
       openid: resume.openid,
       paymentType: resume.paymentType,
       upgradeFromSubscriptionId: resume.upgradeFromSubscriptionId,
