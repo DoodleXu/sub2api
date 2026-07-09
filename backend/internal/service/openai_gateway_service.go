@@ -2986,7 +2986,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		}
 	}
-
 	if rawTier := requestView.ServiceTier; rawTier != "" {
 		if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
 			action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
@@ -3006,6 +3005,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					markPatchSet("service_tier", normTier)
 				}
 			}
+		}
+	}
+	if openAIResponsesFunctionCallArgumentsNeedNormalization(body) {
+		decoded, decodeErr := ensureReqBody()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if normalizeOpenAIResponsesFunctionCallArguments(decoded) {
+			markDecodedModified()
 		}
 	}
 
@@ -7319,7 +7327,104 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 		}
 	}
 
+	if openAIResponsesFunctionCallArgumentsNeedNormalization(normalized) {
+		var reqBody map[string]any
+		if err := json.Unmarshal(normalized, &reqBody); err != nil {
+			return body, false, fmt.Errorf("normalize passthrough body function_call arguments: %w", err)
+		}
+		if normalizeOpenAIResponsesFunctionCallArguments(reqBody) {
+			rebuilt, err := marshalOpenAIUpstreamJSON(reqBody)
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough body function_call arguments: %w", err)
+			}
+			normalized = rebuilt
+			changed = true
+		}
+	}
+
 	return normalized, changed, nil
+}
+
+func openAIResponsesFunctionCallArgumentsNeedNormalization(body []byte) bool {
+	return bytes.Contains(body, []byte(`function_call`)) &&
+		bytes.Contains(body, []byte(`arguments`))
+}
+
+func normalizeOpenAIResponsesFunctionCallArgumentsInRawBody(body []byte) ([]byte, bool, error) {
+	if !openAIResponsesFunctionCallArgumentsNeedNormalization(body) {
+		return body, false, nil
+	}
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return body, false, fmt.Errorf("normalize function_call arguments: %w", err)
+	}
+	if !normalizeOpenAIResponsesFunctionCallArguments(reqBody) {
+		return body, false, nil
+	}
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
+	if err != nil {
+		return body, false, fmt.Errorf("serialize normalized function_call arguments: %w", err)
+	}
+	return normalized, true, nil
+}
+
+func normalizeOpenAIResponsesFunctionCallArguments(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	input, ok := reqBody["input"]
+	if !ok {
+		return false
+	}
+	normalized, changed := normalizeOpenAIResponsesFunctionCallArgumentsInInput(input)
+	if changed {
+		reqBody["input"] = normalized
+	}
+	return changed
+}
+
+func normalizeOpenAIResponsesFunctionCallArgumentsInInput(input any) (any, bool) {
+	items, ok := input.([]any)
+	if !ok {
+		return input, false
+	}
+	changed := false
+	for i, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(firstNonEmptyString(itemMap["type"])) != "function_call" {
+			continue
+		}
+		arguments, ok := itemMap["arguments"].(string)
+		if !ok {
+			continue
+		}
+		normalizedArgs, normalized := normalizeOpenAIResponsesFunctionCallArgumentsValue(arguments)
+		if !normalized {
+			continue
+		}
+		itemMap["arguments"] = normalizedArgs
+		items[i] = itemMap
+		changed = true
+	}
+	return items, changed
+}
+
+func normalizeOpenAIResponsesFunctionCallArgumentsValue(arguments string) (map[string]any, bool) {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return map[string]any{}, true
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return nil, false
+	}
+	if decoded == nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {

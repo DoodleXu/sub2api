@@ -445,6 +445,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if model == "" {
 				model = capturedSessionModel
 			}
+			out, normalizedArgs, normalizeErr := normalizeOpenAIResponsesFunctionCallArgumentsInRawBody(payload)
+			if normalizeErr != nil {
+				return payload, nil, normalizeErr
+			}
+			if normalizedArgs {
+				payload = out
+			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）
 			// 的 response.create 帧上更新 usageMeta，使用
@@ -481,6 +488,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	upstreamFirstMessageSent := false
+	if normalizedFirstMessage, normalizedArgs, normalizeErr := normalizeOpenAIResponsesFunctionCallArgumentsInRawBody(firstClientMessage); normalizeErr != nil {
+		return wrapOpenAIWSIngressTurnError(
+			"normalize_first_upstream_request",
+			fmt.Errorf("normalize first upstream websocket request: %w", normalizeErr),
+			false,
+		)
+	} else if normalizedArgs {
+		firstClientMessage = normalizedFirstMessage
+	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := upstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()

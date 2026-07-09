@@ -169,6 +169,23 @@ func TestStripCodexSparkImageGenerationToolFromRawPayload(t *testing.T) {
 	})
 }
 
+func TestNormalizeOpenAIResponsesFunctionCallArgumentsInRawBody(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"type":"response.create","model":"gpt-5.1","input":[{"type":"function_call","call_id":"call_a","name":"exec","arguments":"{\"cmd\":\"pwd\"}"},{"type":"function_call","call_id":"call_b","name":"noop","arguments":""},{"type":"function_call","call_id":"call_c","name":"already_object","arguments":{"ok":true}},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	updated, changed, err := normalizeOpenAIResponsesFunctionCallArgumentsInRawBody(payload)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, gjson.JSON, gjson.GetBytes(updated, "input.0.arguments").Type)
+	require.Equal(t, "pwd", gjson.GetBytes(updated, "input.0.arguments.cmd").String())
+	require.Equal(t, gjson.JSON, gjson.GetBytes(updated, "input.1.arguments").Type)
+	require.Equal(t, `{}`, gjson.GetBytes(updated, "input.1.arguments").Raw)
+	require.Equal(t, gjson.JSON, gjson.GetBytes(updated, "input.2.arguments").Type)
+	require.True(t, gjson.GetBytes(updated, "input.2.arguments.ok").Bool())
+	require.Equal(t, "hi", gjson.GetBytes(updated, "input.3.content.0.text").String())
+}
+
 func TestStripOpenAIImageGenerationToolFromRawPayload(t *testing.T) {
 	payload := []byte(`{
 		"type":"response.create",
