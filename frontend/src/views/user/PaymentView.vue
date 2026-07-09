@@ -207,7 +207,7 @@
                     <div v-if="selectedUpgradeOption" class="rounded-lg bg-emerald-50 p-3 text-sm dark:bg-emerald-900/20">
                       <div class="flex justify-between">
                         <span class="text-emerald-700 dark:text-emerald-300">{{ t('payment.upgrade.creditAmount') }}</span>
-                        <span class="font-semibold text-emerald-800 dark:text-emerald-200">-{{ formatSelectedPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
+                        <span class="font-semibold text-emerald-800 dark:text-emerald-200">-{{ formatSelectedSubscriptionPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
                       </div>
                       <div class="mt-1 text-xs text-emerald-700/80 dark:text-emerald-300/80">
                         {{ t('payment.upgrade.creditDaysHint', { days: selectedUpgradeOption.credit_days }) }}
@@ -220,11 +220,11 @@
                 <div class="space-y-2 text-sm">
                   <div class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.amountLabel') }}</span>
-                    <span class="text-gray-900 dark:text-white">{{ formatSelectedPaymentAmount(selectedPlan.price) }}</span>
+                    <span class="text-gray-900 dark:text-white">{{ formatSelectedSubscriptionPaymentAmount(selectedPlan.price) }}</span>
                   </div>
                   <div v-if="selectedUpgradeOption && useUpgradeCredit" class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ t('payment.upgrade.creditAmount') }}</span>
-                    <span class="text-emerald-600 dark:text-emerald-400">-{{ formatSelectedPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
+                    <span class="text-emerald-600 dark:text-emerald-400">-{{ formatSelectedSubscriptionPaymentAmount(selectedUpgradeOption.credit_amount) }}</span>
                   </div>
                   <div v-if="subFeeAmount > 0" class="flex justify-between">
                     <span class="text-gray-500 dark:text-gray-400">{{ feeLabel }}</span>
@@ -981,7 +981,7 @@ async function loadUpgradeOptions(planId: number) {
 
 function upgradeOptionLabel(option: SubscriptionUpgradeOption): string {
   const name = option.group_name || t('payment.groupFallback', { id: option.group_id })
-  return `${name} · ${t('userSubscriptions.daysRemaining', { days: option.days_remaining })} · -${formatSelectedPaymentAmount(option.credit_amount)}`
+  return `${name} · ${t('userSubscriptions.daysRemaining', { days: option.days_remaining })} · -${formatSelectedSubscriptionPaymentAmount(option.credit_amount)}`
 }
 
 async function createOrder(orderAmount: number, orderType: OrderType, planId?: number, options: CreateOrderOptions = {}) {

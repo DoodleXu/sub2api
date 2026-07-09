@@ -264,6 +264,7 @@ describe('PaymentView subscription confirmation amounts', () => {
 
 	expect(text).toContain(convertedPrice)
 	expect(text).toContain(convertedOriginalPrice)
+	expect(text).not.toContain(formatPaymentAmount(9.99, 'CNY'))
 	// 换算必须使用订阅汇率（×7.15），而不是余额倍率（÷0.14 = 71.36）
 	expect(text).not.toContain(formatPaymentAmount(71.36, 'CNY'))
     expect(wrapper.findAll('button').some(button => button.text().includes(convertedPrice))).toBe(true)
@@ -367,6 +368,46 @@ describe('PaymentView subscription confirmation amounts', () => {
     expect(text).toContain(`-${formatPaymentAmount(30, 'CNY')}`)
     expect(text).toContain(formatPaymentAmount(1.75, 'CNY'))
     expect(wrapper.findAll('button').some(button => button.text().includes(formatPaymentAmount(71.75, 'CNY')))).toBe(true)
+  })
+
+  it('shows subscription upgrade credit using the converted CNY display amount', async () => {
+    const wrapper = await mountSubscriptionConfirm({
+      checkout: {
+        subscription_usd_to_cny_rate: 7.15,
+        recharge_fee_rate: 2.5,
+      },
+      method: {
+        currency: 'CNY',
+      },
+      plan: {
+        price: 100,
+      },
+    }, [{
+      subscription_id: 42,
+      group_id: 3,
+      group_name: 'OpenAI',
+      group_platform: 'openai',
+      expires_at: '2099-01-01T00:00:00Z',
+      days_remaining: 10,
+      credit_amount: 30,
+      credit_days: 10,
+      payable_amount: 70,
+    }])
+
+    const vm = wrapper.vm as unknown as {
+      useUpgradeCredit: boolean
+      selectedUpgradeSubscriptionId: number | null
+    }
+    vm.useUpgradeCredit = true
+    vm.selectedUpgradeSubscriptionId = 42
+    await wrapper.vm.$nextTick()
+
+    const text = wrapper.text()
+    expect(text).toContain(formatPaymentAmount(715, 'CNY'))
+    expect(text).toContain(`-${formatPaymentAmount(214.50, 'CNY')}`)
+    expect(text).not.toContain(formatPaymentAmount(100, 'CNY'))
+    expect(text).not.toContain(`-${formatPaymentAmount(30, 'CNY')}`)
+    expect(wrapper.findAll('button').some(button => button.text().includes(formatPaymentAmount(513.02, 'CNY')))).toBe(true)
   })
 })
 
