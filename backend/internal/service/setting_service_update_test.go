@@ -362,11 +362,6 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 		PaymentVisibleMethodAlipayEnabled:                  true,
 		PaymentVisibleMethodWxpayEnabled:                   false,
 		OpenAIAdvancedSchedulerEnabled:                     true,
-		OpenAIAccountSchedulerStrategy:                     OpenAIAccountSchedulerStrategyExperimental,
-		OpenAIAccountExperimentalRetryCount:                99,
-		OpenAIAccountExperimentalRecordRecoveredUpstream:   true,
-		OpenAIAccountStrictRetryCount:                      99,
-		OpenAIAccountStrictRecordRecoveredUpstream:         true,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:       true,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled: true,
 		OpenAIAdvancedSchedulerLBTopK:                      " 3 ",
@@ -386,11 +381,6 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "true", repo.updates[SettingPaymentVisibleMethodAlipayEnabled])
 	require.Equal(t, "false", repo.updates[SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
-	require.Equal(t, OpenAIAccountSchedulerStrategyExperimental, repo.updates[openAIAccountSchedulerStrategySettingKey])
-	require.Equal(t, "10", repo.updates[openAIAccountExperimentalRetryCountSettingKey])
-	require.Equal(t, "true", repo.updates[openAIAccountExperimentalRecordRecoveredSettingKey])
-	require.Equal(t, "10", repo.updates[openAIAccountStrictRetryCountSettingKey])
-	require.Equal(t, "true", repo.updates[openAIAccountStrictRecordRecoveredSettingKey])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
 	require.Equal(t, "3", repo.updates[SettingKeyOpenAIAdvancedSchedulerLBTopK])

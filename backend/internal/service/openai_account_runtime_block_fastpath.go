@@ -36,9 +36,6 @@ func isOpenAIAccount(account *Account) bool {
 }
 
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) bool {
-	if IsOpenAISchedulerNoPenaltyFailoverMode(ctx) {
-		return false
-	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 

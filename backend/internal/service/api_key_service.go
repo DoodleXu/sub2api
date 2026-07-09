@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -494,12 +495,87 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 // List 获取用户的API Key列表
 func (s *APIKeyService) List(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	if isAPIKeyCurrentConcurrencySort(params.SortBy) {
+		if keys, page, err, ok := s.listByCurrentConcurrency(ctx, userID, params, filters); ok {
+			return keys, page, err
+		}
+	}
+
 	keys, pagination, err := s.apiKeyRepo.ListByUserID(ctx, userID, params, filters)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list api keys: %w", err)
 	}
 	s.fillCurrentConcurrency(ctx, keys)
 	return keys, pagination, nil
+}
+
+type apiKeyListAllByUserIDRepository interface {
+	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
+}
+
+func isAPIKeyCurrentConcurrencySort(sortBy string) bool {
+	return strings.EqualFold(strings.TrimSpace(sortBy), "current_concurrency")
+}
+
+func (s *APIKeyService) listByCurrentConcurrency(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error, bool) {
+	repo, ok := s.apiKeyRepo.(apiKeyListAllByUserIDRepository)
+	if !ok {
+		return nil, nil, nil, false
+	}
+	keys, err := repo.ListAllByUserID(ctx, userID, filters)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list api keys: %w", err), true
+	}
+	s.fillCurrentConcurrency(ctx, keys)
+
+	desc := params.NormalizedSortOrder(pagination.SortOrderDesc) == pagination.SortOrderDesc
+	sort.SliceStable(keys, func(i, j int) bool {
+		if keys[i].CurrentConcurrency == keys[j].CurrentConcurrency {
+			if desc {
+				return keys[i].ID > keys[j].ID
+			}
+			return keys[i].ID < keys[j].ID
+		}
+		if desc {
+			return keys[i].CurrentConcurrency > keys[j].CurrentConcurrency
+		}
+		return keys[i].CurrentConcurrency < keys[j].CurrentConcurrency
+	})
+
+	return paginateAPIKeys(keys, params), apiKeyPaginationResult(int64(len(keys)), params), nil, true
+}
+
+func paginateAPIKeys(keys []APIKey, params pagination.PaginationParams) []APIKey {
+	if len(keys) == 0 {
+		return []APIKey{}
+	}
+	offset := params.Offset()
+	if offset >= len(keys) {
+		return []APIKey{}
+	}
+	end := offset + params.Limit()
+	if end > len(keys) {
+		end = len(keys)
+	}
+	return keys[offset:end]
+}
+
+func apiKeyPaginationResult(total int64, params pagination.PaginationParams) *pagination.PaginationResult {
+	limit := params.Limit()
+	pages := int(total) / limit
+	if int(total)%limit > 0 {
+		pages++
+	}
+	page := params.Page
+	if page < 1 {
+		page = 1
+	}
+	return &pagination.PaginationResult{
+		Total:    total,
+		Page:     page,
+		PageSize: limit,
+		Pages:    pages,
+	}
 }
 
 func (s *APIKeyService) fillCurrentConcurrency(ctx context.Context, keys []APIKey) {

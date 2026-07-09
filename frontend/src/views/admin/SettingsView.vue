@@ -1158,7 +1158,11 @@
                     <Select
                       :modelValue="rule.action"
                       @update:modelValue="
-                        rule.action = $event as 'pass' | 'filter' | 'block'
+                        rule.action = $event as
+                          | 'pass'
+                          | 'filter'
+                          | 'block'
+                          | 'force_priority'
                       "
                       :options="openaiFastPolicyActionOptions"
                     />
@@ -1297,6 +1301,7 @@
                         | 'pass'
                         | 'filter'
                         | 'block'
+                        | 'force_priority'
                     "
                     :options="openaiFastPolicyActionOptions"
                   />
@@ -4013,57 +4018,6 @@
                   </p>
                 </div>
                 <Toggle v-model="form.openai_advanced_scheduler_enabled" />
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.openaiAccountScheduler.strategy") }}
-                  </label>
-                  <Select
-                    :modelValue="form.openai_account_scheduler_strategy"
-                    @update:modelValue="handleOpenAIAccountSchedulerStrategyChange"
-                    :options="openaiAccountSchedulerStrategyOptions"
-                  />
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.openaiAccountScheduler.strategyHint") }}
-                  </p>
-                </div>
-
-                <div>
-                  <label class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.openaiAccountScheduler.retryCount") }}
-                  </label>
-                  <input
-                    v-model.number="activeOpenAIAccountSchedulerRetryCount"
-                    type="number"
-                    min="0"
-                    max="10"
-                    step="1"
-                    :disabled="form.openai_account_scheduler_strategy === 'legacy'"
-                    class="input"
-                  />
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.openaiAccountScheduler.retryCountHint") }}
-                  </p>
-                </div>
-              </div>
-
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.openaiAccountScheduler.recordRecoveredUpstream") }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.openaiAccountScheduler.recordRecoveredUpstreamHint") }}
-                  </p>
-                </div>
-                <Toggle
-                  v-model="activeOpenAIAccountSchedulerRecordRecoveredUpstream"
-                  :disabled="form.openai_account_scheduler_strategy === 'legacy'"
-                />
               </div>
 
               <div
@@ -8751,13 +8705,6 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
-
-  openai_account_scheduler_strategy: "legacy" | "experimental_scheduler" | "strict_priority";
-  openai_account_experimental_retry_count: number;
-  openai_account_experimental_record_recovered_upstream: boolean;
-  openai_account_strict_retry_count: number;
-  openai_account_strict_record_recovered_upstream: boolean;
-
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
   openai_advanced_scheduler_lb_top_k: string;
@@ -8964,13 +8911,6 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_advanced_scheduler_enabled: false,
-
-  openai_account_scheduler_strategy: "legacy",
-  openai_account_experimental_retry_count: 3,
-  openai_account_experimental_record_recovered_upstream: false,
-  openai_account_strict_retry_count: 3,
-  openai_account_strict_record_recovered_upstream: false,
-
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
   openai_advanced_scheduler_lb_top_k: "",
@@ -9068,69 +9008,6 @@ const webConsoleEndpointOptions = computed(() => {
   }
 
   return options;
-});
-
-const openaiAccountSchedulerStrategyOptions = computed(() => [
-  {
-    value: "legacy",
-    label: t("admin.settings.openaiAccountScheduler.legacy"),
-  },
-  {
-    value: "experimental_scheduler",
-    label: t("admin.settings.openaiAccountScheduler.experimentalScheduler"),
-  },
-  {
-    value: "strict_priority",
-    label: t("admin.settings.openaiAccountScheduler.strictPriority"),
-  },
-]);
-
-function normalizeOpenAIAccountSchedulerStrategy(value: unknown) {
-  if (value === "experimental_scheduler") {
-    return "experimental_scheduler";
-  }
-  if (value === "strict_priority") {
-    return "strict_priority";
-  }
-  return "legacy";
-}
-
-function handleOpenAIAccountSchedulerStrategyChange(value: unknown) {
-  const strategy = normalizeOpenAIAccountSchedulerStrategy(value);
-  form.openai_account_scheduler_strategy = strategy;
-}
-
-const activeOpenAIAccountSchedulerRetryCount = computed({
-  get() {
-    return form.openai_account_scheduler_strategy === "strict_priority"
-      ? form.openai_account_strict_retry_count
-      : form.openai_account_experimental_retry_count;
-  },
-  set(value: number) {
-    const normalized = Number.isFinite(Number(value))
-      ? Math.max(0, Math.min(10, Number(value)))
-      : 3;
-    if (form.openai_account_scheduler_strategy === "strict_priority") {
-      form.openai_account_strict_retry_count = normalized;
-      return;
-    }
-    form.openai_account_experimental_retry_count = normalized;
-  },
-});
-
-const activeOpenAIAccountSchedulerRecordRecoveredUpstream = computed({
-  get() {
-    return form.openai_account_scheduler_strategy === "strict_priority"
-      ? form.openai_account_strict_record_recovered_upstream
-      : form.openai_account_experimental_record_recovered_upstream;
-  },
-  set(value: boolean) {
-    if (form.openai_account_scheduler_strategy === "strict_priority") {
-      form.openai_account_strict_record_recovered_upstream = Boolean(value);
-      return;
-    }
-    form.openai_account_experimental_record_recovered_upstream = Boolean(value);
-  },
 });
 
 const notificationBarkLevelOptions = computed(() => [
@@ -9951,10 +9828,6 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    form.openai_account_scheduler_strategy =
-      normalizeOpenAIAccountSchedulerStrategy(
-        settings.openai_account_scheduler_strategy,
-      );
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
         defaultClaudeOAuthSystemPromptBlocks;
@@ -10639,28 +10512,6 @@ async function saveSettings() {
         form.payment_cancel_rate_limit_window_mode,
       payment_alipay_force_qrcode: form.payment_alipay_force_qrcode,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
-
-      openai_account_scheduler_strategy:
-        normalizeOpenAIAccountSchedulerStrategy(
-          form.openai_account_scheduler_strategy,
-        ),
-      openai_account_experimental_retry_count:
-        Number.isFinite(Number(form.openai_account_experimental_retry_count))
-          ? Math.max(
-              0,
-              Math.min(10, Number(form.openai_account_experimental_retry_count)),
-            )
-          : 3,
-      openai_account_experimental_record_recovered_upstream:
-        form.openai_account_experimental_record_recovered_upstream,
-      openai_account_strict_retry_count: Number.isFinite(
-        Number(form.openai_account_strict_retry_count),
-      )
-        ? Math.max(0, Math.min(10, Number(form.openai_account_strict_retry_count)))
-        : 3,
-      openai_account_strict_record_recovered_upstream:
-        form.openai_account_strict_record_recovered_upstream,
-
       openai_advanced_scheduler_sticky_weighted_enabled:
         form.openai_advanced_scheduler_sticky_weighted_enabled,
       openai_advanced_scheduler_subscription_priority_enabled:
@@ -10751,10 +10602,6 @@ async function saveSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    form.openai_account_scheduler_strategy =
-      normalizeOpenAIAccountSchedulerStrategy(
-        updated.openai_account_scheduler_strategy,
-      );
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
     form.site_launch_at = formatDateTimeLocal(updated.site_launch_at);
@@ -11200,6 +11047,10 @@ const openaiFastPolicyTierOptions = computed(() => [
 const openaiFastPolicyActionOptions = computed(() => [
   { value: "pass", label: t("admin.settings.openaiFastPolicy.actionPass") },
   { value: "filter", label: t("admin.settings.openaiFastPolicy.actionFilter") },
+  {
+    value: "force_priority",
+    label: t("admin.settings.openaiFastPolicy.actionForcePriority"),
+  },
   { value: "block", label: t("admin.settings.openaiFastPolicy.actionBlock") },
 ]);
 

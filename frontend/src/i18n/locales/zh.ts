@@ -3512,8 +3512,6 @@ export default {
         schedulerScore: '调度权值',
         status: '状态',
         schedulable: '调度',
-        routingPriority: '质量评分',
-        upstreamBalance: '上游状态/余额',
         todayStats: '今日统计',
         groups: '分组',
         usageWindows: '用量窗口',
@@ -3522,118 +3520,6 @@ export default {
         createdAt: '创建时间',
         expiresAt: '过期时间',
         actions: '操作'
-      },
-      upstreamBalance: {
-        refresh: '刷新余额',
-        failed: '刷新失败',
-        errorHint: '请稍后重试',
-        unknown: '未刷新',
-        realRate: '上游分组倍率 {rate}x（仅展示）',
-        baseRate: '上游基础倍率 {rate}x（仅展示）',
-        accountRateFallback: '当前使用账号倍率回退 {rate}x',
-        updatedAt: '更新于 {time}'
-      },
-      routingPriority: {
-        modal: {
-          title: 'OpenAI 调度解释',
-          experimentalTitle: 'OpenAI 试验性调度解释',
-          strictTitle: 'OpenAI Strict Priority 调度解释',
-          empty: '暂无可显示的调度解释'
-        },
-        status: {
-          candidate: '可调度',
-          skipped: '不可调度',
-          schedulable: '可调度',
-          blocked: '不可调度'
-        },
-        score: {
-          total: '综合分',
-          quality: '质量',
-          price: '价格',
-          latency: '响应',
-          error_rate: '错误率',
-          priority: '优先级',
-          load: '负载',
-          queue: '队列'
-        },
-        sections: {
-          score: '分项评分',
-          selectionBasis: '选择依据',
-          priceSource: '价格来源',
-          blockReasons: '阻塞原因',
-          strictPriority: 'Strict Priority 排障',
-          notes: '说明',
-          topCandidates: 'Top 候选'
-        },
-        priceSource: {
-          source: '命中来源',
-          rateMultiplier: '参与评分倍率',
-          fallback: '回退状态',
-          rateValue: '{rate}x',
-          values: {
-            upstream_effective_rate_multiplier: '上游实时有效倍率',
-            upstream_group_rate_multiplier: '上游分组倍率',
-            account: {
-              rate_multiplier: '账号倍率'
-            }
-          },
-          fallbackReasons: {
-            account_rate_fallback: '当前使用账号倍率回退',
-            account_missing: '账号缺失，当前使用账号倍率回退',
-            upstream_rate_missing: '缺少上游倍率，当前使用账号倍率回退；可刷新上游余额/倍率',
-            upstream_rate_invalid: '上游倍率不可用，当前使用账号倍率回退；可刷新上游余额/倍率',
-            account_rate_default_1: '账号未配置倍率，当前按默认 1.0 回退'
-          }
-        },
-        strict: {
-          badge: 'P{priority}',
-          priorityLabel: '优先级层',
-          lastUsed: 'LastUsed',
-          neverUsed: '从未使用',
-          currentLayer: '当前层内依据',
-          currentPriority: '当前最高可用优先级层：P{priority}',
-          noCurrentPriority: '当前没有可用的 strict priority 候选层',
-          candidateCount: '基础可调度候选：{count} 个',
-          priority: 'P{priority}',
-          excludedReason: '优先级 P{priority} 低于当前最高可用层 P{current}，本轮被整层排除'
-        },
-        notes: {
-          experimental_scheduler: '试验性调度按价格、质量、响应、错误率、优先级和负载综合排序。',
-          price_uses_upstream_effective_then_group_then_account_rate_multiplier: '价格评分按上游实时有效倍率、上游分组倍率、账号倍率依次回退。',
-          strict_priority: 'Strict Priority 只在当前最高可用优先级层内选择账号。',
-          strict_priority_top_tier_only: '低优先级层不会参与本轮 Top 候选，除非更高优先级层没有可用账号。',
-          strict_priority_same_tier_last_used: '同一优先级层内优先使用从未使用或最久未使用的账号；完全相同时会打散以避免热点。',
-          legacy_scheduler: '传统调度按优先级和 LastUsed 选择账号。',
-          priority_last_used_order: '同优先级时从未使用或最久未使用的账号优先。'
-        },
-        summary: {
-          low_price_high_quality: '低价且质量稳定',
-          high_quality: '高质量中等价格',
-          cost_advantage: '价格优势明显',
-          balanced: '综合表现均衡',
-          balanced_quality_cost: '低价且质量稳定',
-          high_quality_mid_price: '高质量中等价格',
-          expensive_or_slow: '成本或响应偏高',
-          blocked: '当前不可调度',
-          inactive: '账号未启用',
-          archived: '账号已归档',
-          manual_unschedulable: '手动关闭调度',
-          error_status: '账号错误状态',
-          expired: '账号已过期',
-          rate_limited: '限流冷却中',
-          overloaded: '过载冷却中',
-          overload_cooldown: '过载冷却中',
-          temp_unschedulable: '临时不可调度',
-          experimental_circuit_open: '试验性调度熔断冷却中',
-          runtime_blocked: '运行时短期降级',
-          group_mismatch: '分组不匹配',
-          model_unsupported: '模型或能力不匹配',
-          model_mismatch: '模型或能力不匹配',
-          strict_priority_lower_tier: '低于最高可用优先级层',
-          strict_priority_top_tier: '当前最高可用优先级层',
-          strict_priority_never_used_first: '同层从未使用优先',
-          strict_priority_least_recently_used: '同层最久未使用优先'
-        }
       },
       schedulerScore: {
         baseShort: '普通',

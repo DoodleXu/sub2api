@@ -455,7 +455,15 @@ func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
 }
 
 func isOpenAIImageGenerationModel(model string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-")
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(model, "gpt-image-") || isGrokImageGenerationModel(model)
+}
+
+func isGrokImageGenerationModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return model == "grok-imagine" ||
+		model == "grok-imagine-edit" ||
+		strings.HasPrefix(model, "grok-imagine-image")
 }
 
 func validateOpenAIImagesModel(model string) error {
@@ -593,16 +601,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
 	if err != nil {
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
-			return nil, failoverErr
-		}
 		return nil, err
 	}
 	upstreamReq, err := s.buildOpenAIImagesRequest(upstreamCtx, c, account, forwardBody, forwardContentType, token, parsed.Endpoint)
 	if err != nil {
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
-			return nil, failoverErr
-		}
 		return nil, err
 	}
 
@@ -640,9 +642,6 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
-		}
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
-			return nil, failoverErr
 		}
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, upstreamModel)
 	}

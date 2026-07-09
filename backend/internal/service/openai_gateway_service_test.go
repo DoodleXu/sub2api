@@ -2320,6 +2320,19 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_key").Exists())
 }
 
+func TestNormalizeOpenAIResponsesInputArgumentsStringifiesObjects(t *testing.T) {
+	body := []byte(`{"input":[{"type":"function_call","name":"exec","arguments":{"cmd":"ls"}},{"type":"custom_tool_call","name":"patch","arguments":["a","b"]},{"type":"function_call","name":"noop","arguments":"{}"},{"type":"function_call_output","arguments":{"kept":true}}]}`)
+
+	normalized, changed, err := normalizeOpenAIResponsesInputArgumentsInBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{"cmd":"ls"}`, gjson.GetBytes(normalized, "input.0.arguments").String())
+	require.JSONEq(t, `["a","b"]`, gjson.GetBytes(normalized, "input.1.arguments").String())
+	require.Equal(t, "{}", gjson.GetBytes(normalized, "input.2.arguments").String())
+	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.3.arguments").Type)
+}
+
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

@@ -86,6 +86,7 @@ export interface User {
   wechat_bound?: boolean
   role: 'admin' | 'user' // User role for authorization
   balance: number // User balance for API usage
+  frozen_balance?: number // Balance currently held by async batch jobs
   concurrency: number // Allowed concurrent requests
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
@@ -520,11 +521,19 @@ export interface Group {
   monthly_limit_usd: number | null
   // 图片生成计费配置
   allow_image_generation: boolean
+  allow_batch_image_generation: boolean
   image_rate_independent: boolean
   image_rate_multiplier: number
+  batch_image_discount_multiplier: number
+  batch_image_hold_multiplier: number
   image_price_1k: number | null
   image_price_2k: number | null
   image_price_4k: number | null
+  video_rate_independent: boolean
+  video_rate_multiplier: number
+  video_price_480p: number | null
+  video_price_720p: number | null
+  video_price_1080p: number | null
   // 高峰时段倍率配置
   peak_rate_enabled: boolean
   peak_start: string
@@ -585,6 +594,7 @@ export interface ApiKey {
   ip_whitelist: string[]
   ip_blacklist: string[]
   last_used_at: string | null
+  last_used_ip: string | null
   quota: number // Quota limit in USD (0 = unlimited)
   quota_used: number // Used quota amount in USD
   expires_at: string | null // Expiration time (null = never expires)
@@ -647,11 +657,19 @@ export interface CreateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   allow_image_generation?: boolean
+  allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
+  batch_image_discount_multiplier?: number
+  batch_image_hold_multiplier?: number
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
+  video_rate_independent?: boolean
+  video_rate_multiplier?: number
+  video_price_480p?: number | null
+  video_price_720p?: number | null
+  video_price_1080p?: number | null
   peak_rate_enabled?: boolean
   peak_start?: string
   peak_end?: string
@@ -686,11 +704,19 @@ export interface UpdateGroupRequest {
   weekly_limit_usd?: number | null
   monthly_limit_usd?: number | null
   allow_image_generation?: boolean
+  allow_batch_image_generation?: boolean
   image_rate_independent?: boolean
   image_rate_multiplier?: number
+  batch_image_discount_multiplier?: number
+  batch_image_hold_multiplier?: number
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
+  video_rate_independent?: boolean
+  video_rate_multiplier?: number
+  video_price_480p?: number | null
+  video_price_720p?: number | null
+  video_price_1080p?: number | null
   peak_rate_enabled?: boolean
   peak_start?: string
   peak_end?: string
@@ -857,12 +883,6 @@ export interface Account {
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
-    upstream_balance_provider?: string
-    upstream_balance_remaining?: number
-    upstream_balance_unit?: string
-    upstream_balance_updated_at?: string
-    upstream_balance_status?: string
-    upstream_balance_error?: string
     upstream_group?: string
     upstream_group_id?: number
     upstream_key_id?: number
@@ -885,7 +905,6 @@ export interface Account {
   scheduler_scores?: AccountSchedulerGroupScore[] | null
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
-  routing_priority?: OpenAIRoutingSummary
   total_cost_cny?: number
   total_account_cost?: number
   cost_cny_per_usd?: number
@@ -976,74 +995,6 @@ export interface Account {
   parent_privacy_mode?: string
   parent_subscription_expires_at?: string
   parent_chatgpt_account_id?: string
-}
-
-export interface OpenAIRoutingScoreBreakdown {
-  total: number
-  quality: number
-  price: number
-  latency: number
-  error_rate: number
-  priority: number
-  load: number
-  queue: number
-}
-
-export interface OpenAIRoutingPriceSource {
-  source: string
-  rate_multiplier: number
-  fallback?: boolean
-  fallback_reason?: string
-}
-
-export interface OpenAIRoutingSummary {
-  account_id: number
-  account_name: string
-  rank?: number
-  priority: number
-  last_used_at?: string | null
-  quality_score: number
-  quality_grade: string
-  tier: string
-  score: OpenAIRoutingScoreBreakdown
-  price_source?: OpenAIRoutingPriceSource
-  status_label: string
-  summary_reason: string
-  summary_reasons: string[]
-  is_schedulable_now: boolean
-  block_reasons?: string[]
-  snapshot_at: string
-}
-
-export interface OpenAIRoutingStrictPriorityExcludedAccount {
-  account_id: number
-  account_name: string
-  priority: number
-  current_priority: number
-  reasons: string[]
-}
-
-export interface OpenAIRoutingStrictPriorityExplain {
-  enabled: boolean
-  current_available_priority?: number | null
-  candidate_count: number
-  excluded_accounts: OpenAIRoutingStrictPriorityExcludedAccount[]
-}
-
-export interface OpenAIRoutingRankingResponse {
-  items: OpenAIRoutingSummary[]
-  source: string
-  scheduler_strategy: string
-  strict_priority: OpenAIRoutingStrictPriorityExplain
-  snapshot_at: string
-}
-
-export interface OpenAIRoutingAccountExplain {
-  account: OpenAIRoutingSummary
-  top: OpenAIRoutingSummary[]
-  notes: string[]
-  scheduler_strategy: string
-  strict_priority: OpenAIRoutingStrictPriorityExplain
 }
 
 export interface AccountSchedulerGroupScore {
@@ -1671,6 +1622,9 @@ export interface UserBreakdownItem {
   user_id: number
   email: string
   requests: number
+  input_tokens: number
+  output_tokens: number
+  cache_tokens: number
   total_tokens: number
   cost: number
   actual_cost: number

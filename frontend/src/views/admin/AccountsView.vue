@@ -258,12 +258,6 @@
               <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
             </button>
           </template>
-          <template #cell-routing_priority="{ row }">
-            <RoutingPriorityBadge :summary="row.routing_priority" @open="openRoutingExplain(row)" />
-          </template>
-          <template #cell-upstream_balance="{ row }">
-            <OpenAIUpstreamBalanceCell :account="row" @refreshed="handleAccountUpdated" />
-          </template>
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
@@ -412,7 +406,6 @@
       @updated="handleBulkUpdated"
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
-    <OpenAIRoutingExplainModal :show="showRoutingExplain" :loading="routingExplainLoading" :explain="routingExplain" @close="showRoutingExplain = false" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
@@ -459,9 +452,6 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
-import OpenAIUpstreamBalanceCell from '@/components/account/OpenAIUpstreamBalanceCell.vue'
-import RoutingPriorityBadge from '@/components/account/RoutingPriorityBadge.vue'
-import OpenAIRoutingExplainModal from '@/components/account/OpenAIRoutingExplainModal.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
@@ -470,7 +460,7 @@ import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
-import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, OpenAIRoutingAccountExplain } from '@/types'
+import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -535,9 +525,6 @@ const showTest = ref(false)
 const showStats = ref(false)
 const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
-const showRoutingExplain = ref(false)
-const routingExplainLoading = ref(false)
-const routingExplain = ref<OpenAIRoutingAccountExplain | null>(null)
 const edAcc = ref<Account | null>(null)
 const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
@@ -903,7 +890,6 @@ const load = async () => {
     isFirstLoad.value = false
     delete requestParams.lite
   }
-  await refreshOpenAIRoutingSummaries()
   await refreshTodayStatsBatch()
 }
 
@@ -913,7 +899,6 @@ const reload = async () => {
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
   await baseReload()
-  await refreshOpenAIRoutingSummaries()
   await refreshTodayStatsBatch()
 }
 
@@ -979,8 +964,7 @@ const isAnyModalOpen = computed(() => {
     showStats.value ||
     showSchedulePanel.value ||
     showErrorPassthrough.value ||
-    showTLSFingerprintProfiles.value ||
-    showRoutingExplain.value
+    showTLSFingerprintProfiles.value
   )
 })
 
@@ -1069,7 +1053,6 @@ const refreshAccountsIncrementally = async () => {
       pagination.total = result.data.total || 0
       pagination.pages = result.data.pages || 0
       mergeAccountsIncrementally(result.data.items || [])
-      await refreshOpenAIRoutingSummaries()
       hasPendingListSync.value = false
     }
 
@@ -1288,8 +1271,6 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
-    { key: 'routing_priority', label: t('admin.accounts.columns.routingPriority'), sortable: false },
-    { key: 'upstream_balance', label: t('admin.accounts.columns.upstreamBalance'), sortable: false },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
@@ -1623,31 +1604,6 @@ const buildAccountQueryFilters = () => ({
   sort_order: sortState.sort_order
 })
 
-const currentRoutingGroupID = () => {
-  const value = Number(params.group)
-  return Number.isInteger(value) && value > 0 ? value : undefined
-}
-
-const refreshOpenAIRoutingSummaries = async () => {
-  const openAIAccountIDs = accounts.value
-    .filter((account) => account.platform === 'openai')
-    .map((account) => account.id)
-  if (openAIAccountIDs.length === 0) return
-  try {
-    const result = await adminAPI.accounts.getOpenAIRoutingRanking({
-      group_id: currentRoutingGroupID(),
-      account_ids: openAIAccountIDs.join(','),
-    })
-    const byID = new Map(result.items.map((item) => [item.account_id, item]))
-    accounts.value = accounts.value.map((account) => {
-      if (account.platform !== 'openai') return account
-      const summary = byID.get(account.id)
-      return summary ? { ...account, routing_priority: summary } : account
-    })
-  } catch (error) {
-    console.error('Failed to load OpenAI routing summaries:', error)
-  }
-}
 const accountMatchesCurrentFilters = (account: Account) => {
   const filters = buildAccountQueryFilters()
   const isArchived = Boolean(account.archived_at)
@@ -1761,23 +1717,6 @@ const handleAccountUpdated = (updatedAccount: Account) => {
   markLocalAccountMutation()
 }
 
-const openRoutingExplain = async (account: Account) => {
-  if (account.platform !== 'openai') return
-  showRoutingExplain.value = true
-  routingExplain.value = null
-  routingExplainLoading.value = true
-  try {
-    routingExplain.value = await adminAPI.accounts.getOpenAIRoutingAccountExplain(account.id, {
-      group_id: currentRoutingGroupID(),
-    })
-  } catch (error) {
-    console.error('Failed to load OpenAI routing explanation:', error)
-    appStore.showError(t('common.error'))
-    showRoutingExplain.value = false
-  } finally {
-    routingExplainLoading.value = false
-  }
-}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')

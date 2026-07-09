@@ -223,11 +223,6 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 		"payment_visible_method_alipay_enabled":                   true,
 		"payment_visible_method_wxpay_enabled":                    false,
 		"openai_advanced_scheduler_enabled":                       true,
-		"openai_account_scheduler_strategy":                       "experimental_scheduler",
-		"openai_account_experimental_retry_count":                 99,
-		"openai_account_experimental_record_recovered_upstream":   true,
-		"openai_account_strict_retry_count":                       99,
-		"openai_account_strict_record_recovered_upstream":         true,
 		"openai_advanced_scheduler_subscription_priority_enabled": true,
 	}
 	rawBody, err := json.Marshal(body)
@@ -246,11 +241,6 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, "true", repo.values[service.SettingPaymentVisibleMethodAlipayEnabled])
 	require.Equal(t, "false", repo.values[service.SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.values["openai_advanced_scheduler_enabled"])
-	require.Equal(t, service.OpenAIAccountSchedulerStrategyExperimental, repo.values["openai_account_scheduler_strategy"])
-	require.Equal(t, "10", repo.values["openai_account_experimental_retry_count"])
-	require.Equal(t, "true", repo.values["openai_account_experimental_record_recovered_upstream"])
-	require.Equal(t, "10", repo.values["openai_account_strict_retry_count"])
-	require.Equal(t, "true", repo.values["openai_account_strict_record_recovered_upstream"])
 	require.Equal(t, "true", repo.values[service.SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
 
 	var resp response.Response
@@ -262,11 +252,6 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, true, data["payment_visible_method_alipay_enabled"])
 	require.Equal(t, false, data["payment_visible_method_wxpay_enabled"])
 	require.Equal(t, true, data["openai_advanced_scheduler_enabled"])
-	require.Equal(t, service.OpenAIAccountSchedulerStrategyExperimental, data["openai_account_scheduler_strategy"])
-	require.Equal(t, float64(10), data["openai_account_experimental_retry_count"])
-	require.Equal(t, true, data["openai_account_experimental_record_recovered_upstream"])
-	require.Equal(t, float64(10), data["openai_account_strict_retry_count"])
-	require.Equal(t, true, data["openai_account_strict_record_recovered_upstream"])
 	require.Equal(t, true, data["openai_advanced_scheduler_subscription_priority_enabled"])
 }
 

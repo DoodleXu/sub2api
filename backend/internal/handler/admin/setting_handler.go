@@ -291,11 +291,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentVisibleMethodAlipayEnabled:                      settings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:                       settings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:                         settings.OpenAIAdvancedSchedulerEnabled,
-		OpenAIAccountSchedulerStrategy:                         settings.OpenAIAccountSchedulerStrategy,
-		OpenAIAccountExperimentalRetryCount:                    settings.OpenAIAccountExperimentalRetryCount,
-		OpenAIAccountExperimentalRecordRecoveredUpstream:       settings.OpenAIAccountExperimentalRecordRecoveredUpstream,
-		OpenAIAccountStrictRetryCount:                          settings.OpenAIAccountStrictRetryCount,
-		OpenAIAccountStrictRecordRecoveredUpstream:             settings.OpenAIAccountStrictRecordRecoveredUpstream,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
 		OpenAIAdvancedSchedulerLBTopK:                          settings.OpenAIAdvancedSchedulerLBTopK,
@@ -1175,11 +1170,6 @@ type UpdateSettingsRequest struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled                     *bool   `json:"openai_advanced_scheduler_enabled"`
-	OpenAIAccountSchedulerStrategy                     *string `json:"openai_account_scheduler_strategy"`
-	OpenAIAccountExperimentalRetryCount                *int    `json:"openai_account_experimental_retry_count"`
-	OpenAIAccountExperimentalRecordRecoveredUpstream   *bool   `json:"openai_account_experimental_record_recovered_upstream"`
-	OpenAIAccountStrictRetryCount                      *int    `json:"openai_account_strict_retry_count"`
-	OpenAIAccountStrictRecordRecoveredUpstream         *bool   `json:"openai_account_strict_record_recovered_upstream"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool   `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled *bool   `json:"openai_advanced_scheduler_subscription_priority_enabled"`
 	OpenAIAdvancedSchedulerLBTopK                      *string `json:"openai_advanced_scheduler_lb_top_k"`
@@ -2434,36 +2424,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAIAdvancedSchedulerEnabled
 		}(),
-		OpenAIAccountSchedulerStrategy: func() string {
-			if req.OpenAIAccountSchedulerStrategy != nil {
-				return service.NormalizeOpenAIAccountSchedulerStrategy(*req.OpenAIAccountSchedulerStrategy)
-			}
-			return previousSettings.OpenAIAccountSchedulerStrategy
-		}(),
-		OpenAIAccountExperimentalRetryCount: func() int {
-			if req.OpenAIAccountExperimentalRetryCount != nil {
-				return service.NormalizeOpenAIAccountExperimentalRetryCount(*req.OpenAIAccountExperimentalRetryCount)
-			}
-			return previousSettings.OpenAIAccountExperimentalRetryCount
-		}(),
-		OpenAIAccountExperimentalRecordRecoveredUpstream: func() bool {
-			if req.OpenAIAccountExperimentalRecordRecoveredUpstream != nil {
-				return *req.OpenAIAccountExperimentalRecordRecoveredUpstream
-			}
-			return previousSettings.OpenAIAccountExperimentalRecordRecoveredUpstream
-		}(),
-		OpenAIAccountStrictRetryCount: func() int {
-			if req.OpenAIAccountStrictRetryCount != nil {
-				return service.NormalizeOpenAIAccountStrictRetryCount(*req.OpenAIAccountStrictRetryCount)
-			}
-			return previousSettings.OpenAIAccountStrictRetryCount
-		}(),
-		OpenAIAccountStrictRecordRecoveredUpstream: func() bool {
-			if req.OpenAIAccountStrictRecordRecoveredUpstream != nil {
-				return *req.OpenAIAccountStrictRecordRecoveredUpstream
-			}
-			return previousSettings.OpenAIAccountStrictRecordRecoveredUpstream
-		}(),
 		OpenAIAdvancedSchedulerStickyWeightedEnabled: func() bool {
 			if req.OpenAIAdvancedSchedulerStickyWeightedEnabled != nil {
 				return *req.OpenAIAdvancedSchedulerStickyWeightedEnabled
@@ -2981,11 +2941,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentVisibleMethodAlipayEnabled:                      updatedSettings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:                       updatedSettings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:                         updatedSettings.OpenAIAdvancedSchedulerEnabled,
-		OpenAIAccountSchedulerStrategy:                         updatedSettings.OpenAIAccountSchedulerStrategy,
-		OpenAIAccountExperimentalRetryCount:                    updatedSettings.OpenAIAccountExperimentalRetryCount,
-		OpenAIAccountExperimentalRecordRecoveredUpstream:       updatedSettings.OpenAIAccountExperimentalRecordRecoveredUpstream,
-		OpenAIAccountStrictRetryCount:                          updatedSettings.OpenAIAccountStrictRetryCount,
-		OpenAIAccountStrictRecordRecoveredUpstream:             updatedSettings.OpenAIAccountStrictRecordRecoveredUpstream,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           updatedSettings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     updatedSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
 		OpenAIAdvancedSchedulerLBTopK:                          updatedSettings.OpenAIAdvancedSchedulerLBTopK,
@@ -3544,22 +3499,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAIAdvancedSchedulerEnabled != after.OpenAIAdvancedSchedulerEnabled {
 		changed = append(changed, "openai_advanced_scheduler_enabled")
-	}
-
-	if before.OpenAIAccountSchedulerStrategy != after.OpenAIAccountSchedulerStrategy {
-		changed = append(changed, "openai_account_scheduler_strategy")
-	}
-	if before.OpenAIAccountExperimentalRetryCount != after.OpenAIAccountExperimentalRetryCount {
-		changed = append(changed, "openai_account_experimental_retry_count")
-	}
-	if before.OpenAIAccountExperimentalRecordRecoveredUpstream != after.OpenAIAccountExperimentalRecordRecoveredUpstream {
-		changed = append(changed, "openai_account_experimental_record_recovered_upstream")
-	}
-	if before.OpenAIAccountStrictRetryCount != after.OpenAIAccountStrictRetryCount {
-		changed = append(changed, "openai_account_strict_retry_count")
-	}
-	if before.OpenAIAccountStrictRecordRecoveredUpstream != after.OpenAIAccountStrictRecordRecoveredUpstream {
-		changed = append(changed, "openai_account_strict_record_recovered_upstream")
 	}
 
 	if before.OpenAIAdvancedSchedulerStickyWeightedEnabled != after.OpenAIAdvancedSchedulerStickyWeightedEnabled {

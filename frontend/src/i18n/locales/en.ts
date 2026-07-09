@@ -3482,7 +3482,6 @@ export default {
         schedulerScore: 'Scheduler Score',
         status: 'Status',
         schedulable: 'Schedulable',
-        upstreamBalance: 'Upstream Status/Balance',
         todayStats: 'Today Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
@@ -3491,118 +3490,6 @@ export default {
         createdAt: 'Created',
         expiresAt: 'Expires At',
         actions: 'Actions'
-      },
-      upstreamBalance: {
-        refresh: 'Refresh balance',
-        failed: 'Refresh failed',
-        errorHint: 'Please try again later',
-        unknown: 'Not refreshed',
-        realRate: 'Upstream group rate {rate}x (display only)',
-        baseRate: 'Upstream base rate {rate}x (display only)',
-        accountRateFallback: 'Currently using account rate fallback {rate}x',
-        updatedAt: 'Updated at {time}'
-      },
-      routingPriority: {
-        modal: {
-          title: 'OpenAI Routing Explanation',
-          experimentalTitle: 'OpenAI Experimental Scheduler Explanation',
-          strictTitle: 'OpenAI Strict Priority Explanation',
-          empty: 'No routing explanation available'
-        },
-        status: {
-          candidate: 'Schedulable',
-          skipped: 'Skipped',
-          schedulable: 'Schedulable',
-          blocked: 'Blocked'
-        },
-        score: {
-          total: 'Total',
-          quality: 'Quality',
-          price: 'Price',
-          latency: 'Latency',
-          error_rate: 'Error rate',
-          priority: 'Priority',
-          load: 'Load',
-          queue: 'Queue'
-        },
-        sections: {
-          score: 'Score breakdown',
-          selectionBasis: 'Selection basis',
-          priceSource: 'Price source',
-          blockReasons: 'Block reasons',
-          strictPriority: 'Strict priority diagnostics',
-          notes: 'Notes',
-          topCandidates: 'Top candidates'
-        },
-        priceSource: {
-          source: 'Matched source',
-          rateMultiplier: 'Scoring multiplier',
-          fallback: 'Fallback state',
-          rateValue: '{rate}x',
-          values: {
-            upstream_effective_rate_multiplier: 'Upstream effective rate',
-            upstream_group_rate_multiplier: 'Upstream group rate',
-            account: {
-              rate_multiplier: 'Account rate multiplier'
-            }
-          },
-          fallbackReasons: {
-            account_rate_fallback: 'Currently using account rate fallback',
-            account_missing: 'Account is missing, currently using account rate fallback',
-            upstream_rate_missing: 'Upstream rate is missing, currently using account rate fallback; refresh upstream balance/rate',
-            upstream_rate_invalid: 'Upstream rate is unavailable, currently using account rate fallback; refresh upstream balance/rate',
-            account_rate_default_1: 'Account rate is not configured, currently falling back to default 1.0'
-          }
-        },
-        strict: {
-          badge: 'P{priority}',
-          priorityLabel: 'Priority layer',
-          lastUsed: 'Last used',
-          neverUsed: 'Never used',
-          currentLayer: 'Current layer basis',
-          currentPriority: 'Current highest available priority layer: P{priority}',
-          noCurrentPriority: 'No available strict priority candidate layer right now',
-          candidateCount: 'Base schedulable candidates: {count}',
-          priority: 'P{priority}',
-          excludedReason: 'Priority P{priority} is below current highest available layer P{current}; this whole layer is excluded for this round'
-        },
-        notes: {
-          experimental_scheduler: 'Experimental scheduler ranks accounts by price, quality, latency, error rate, priority, and load.',
-          price_uses_upstream_effective_then_group_then_account_rate_multiplier: 'Price scoring falls back in order: upstream effective rate, upstream group rate, then account rate multiplier.',
-          strict_priority: 'Strict Priority only selects accounts inside the current highest available priority layer.',
-          strict_priority_top_tier_only: 'Lower priority layers do not join this round of top candidates unless no higher-priority layer is available.',
-          strict_priority_same_tier_last_used: 'Within the same priority layer, never-used or least-recently-used accounts are preferred; exact ties are spread to avoid hotspots.',
-          legacy_scheduler: 'Legacy scheduling selects accounts by priority and last-used order.',
-          priority_last_used_order: 'For the same priority, never-used or least-recently-used accounts are preferred.'
-        },
-        summary: {
-          low_price_high_quality: 'Low price and stable quality',
-          high_quality: 'High quality',
-          cost_advantage: 'Cost advantage',
-          balanced: 'Balanced',
-          balanced_quality_cost: 'Low price and stable quality',
-          high_quality_mid_price: 'High quality, medium price',
-          expensive_or_slow: 'Cost or latency is high',
-          blocked: 'Currently blocked',
-          inactive: 'Account inactive',
-          archived: 'Account archived',
-          manual_unschedulable: 'Scheduling disabled manually',
-          error_status: 'Account in error status',
-          expired: 'Account expired',
-          rate_limited: 'Rate-limit cooldown',
-          overloaded: 'Overload cooldown',
-          overload_cooldown: 'Overload cooldown',
-          temp_unschedulable: 'Temporarily unschedulable',
-          experimental_circuit_open: 'Experimental scheduler circuit cooldown',
-          runtime_blocked: 'Runtime degraded briefly',
-          group_mismatch: 'Group mismatch',
-          model_unsupported: 'Model or capability mismatch',
-          model_mismatch: 'Model or capability mismatch',
-          strict_priority_lower_tier: 'Below highest available priority layer',
-          strict_priority_top_tier: 'Current highest available priority layer',
-          strict_priority_never_used_first: 'Same layer: never-used first',
-          strict_priority_least_recently_used: 'Same layer: least recently used first'
-        }
       },
       schedulerScore: {
         baseShort: 'Base',

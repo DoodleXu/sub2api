@@ -608,11 +608,6 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
-  openai_account_scheduler_strategy?: "legacy" | "experimental_scheduler" | "strict_priority";
-  openai_account_experimental_retry_count?: number;
-  openai_account_experimental_record_recovered_upstream?: boolean;
-  openai_account_strict_retry_count?: number;
-  openai_account_strict_record_recovered_upstream?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
   openai_advanced_scheduler_lb_top_k?: string;
@@ -921,11 +916,6 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
-  openai_account_scheduler_strategy?: "legacy" | "experimental_scheduler" | "strict_priority";
-  openai_account_experimental_retry_count?: number;
-  openai_account_experimental_record_recovered_upstream?: boolean;
-  openai_account_strict_retry_count?: number;
-  openai_account_strict_record_recovered_upstream?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
   openai_advanced_scheduler_lb_top_k?: string;
@@ -1576,11 +1566,11 @@ export async function updateRectifierSettings(
  */
 export interface OpenAIFastPolicyRule {
   service_tier: "all" | "priority" | "flex";
-  action: "pass" | "filter" | "block";
+  action: "pass" | "filter" | "block" | "force_priority";
   scope: "all" | "oauth" | "apikey" | "bedrock";
   error_message?: string;
   model_whitelist?: string[];
-  fallback_action?: "pass" | "filter" | "block";
+  fallback_action?: "pass" | "filter" | "block" | "force_priority";
   fallback_error_message?: string;
 }
 

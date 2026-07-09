@@ -121,9 +121,6 @@ func (s *GatewayService) ForwardAsResponses(
 	upstreamReq, _, err := s.buildUpstreamRequest(upstreamCtx, c, account, anthropicBody, token, tokenType, mappedModel, reqStream, shouldMimicClaudeCode)
 	releaseUpstreamCtx()
 	if err != nil {
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
-			return nil, failoverErr
-		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
@@ -143,9 +140,6 @@ func (s *GatewayService) ForwardAsResponses(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, safeErr); failoverErr != nil {
-			return nil, failoverErr
-		}
 		writeResponsesError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
@@ -178,9 +172,6 @@ func (s *GatewayService) ForwardAsResponses(
 				ResponseBody:    respBody,
 				ResponseHeaders: resp.Header.Clone(),
 			}
-		}
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
-			return nil, failoverErr
 		}
 
 		// Non-failover error: return Responses-formatted error to client

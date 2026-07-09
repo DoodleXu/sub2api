@@ -17,60 +17,11 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-type openAIExperimentalSchedulerFailoverModeContextKey struct{}
-type openAIStrictPriorityNoPenaltyContextKey struct{}
-
-func WithOpenAIExperimentalSchedulerFailoverMode(ctx context.Context) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, openAIExperimentalSchedulerFailoverModeContextKey{}, true)
-}
-
-func IsOpenAIExperimentalSchedulerFailoverMode(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	v, _ := ctx.Value(openAIExperimentalSchedulerFailoverModeContextKey{}).(bool)
-	return v
-}
-
-func WithOpenAIStrictPriorityNoPenalty(ctx context.Context) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, openAIStrictPriorityNoPenaltyContextKey{}, true)
-}
-
-func IsOpenAIStrictPriorityNoPenalty(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	v, _ := ctx.Value(openAIStrictPriorityNoPenaltyContextKey{}).(bool)
-	return v
-}
-
-func IsOpenAISchedulerNoPenaltyFailoverMode(ctx context.Context) bool {
-	return IsOpenAIExperimentalSchedulerFailoverMode(ctx) || IsOpenAIStrictPriorityNoPenalty(ctx)
-}
-
 const (
-	openAIAccountScheduleLayerPreviousResponse         = "previous_response_id"
-	openAIAccountScheduleLayerSessionSticky            = "session_hash"
-	openAIAccountScheduleLayerLoadBalance              = "load_balance"
-	openAIAdvancedSchedulerSettingKey                  = "openai_advanced_scheduler_enabled"
-	openAIAccountSchedulerStrategySettingKey           = "openai_account_scheduler_strategy"
-	openAIAccountExperimentalRetryCountSettingKey      = "openai_account_experimental_retry_count"
-	openAIAccountExperimentalRecordRecoveredSettingKey = "openai_account_experimental_record_recovered_upstream"
-	openAIAccountStrictRetryCountSettingKey            = "openai_account_strict_retry_count"
-	openAIAccountStrictRecordRecoveredSettingKey       = "openai_account_strict_record_recovered_upstream"
-	OpenAIAccountSchedulerStrategyLegacy               = "legacy"
-	OpenAIAccountSchedulerStrategyExperimental         = "experimental_scheduler"
-	OpenAIAccountSchedulerStrategyStrictPriority       = "strict_priority"
-	DefaultOpenAIAccountExperimentalRetryCount         = 3
-	MaxOpenAIAccountExperimentalRetryCount             = 10
-	DefaultOpenAIAccountStrictRetryCount               = 3
-	MaxOpenAIAccountStrictRetryCount                   = 10
+	openAIAccountScheduleLayerPreviousResponse = "previous_response_id"
+	openAIAccountScheduleLayerSessionSticky    = "session_hash"
+	openAIAccountScheduleLayerLoadBalance      = "load_balance"
+	openAIAdvancedSchedulerSettingKey          = "openai_advanced_scheduler_enabled"
 )
 
 const (
@@ -82,19 +33,6 @@ const (
 	openAIQuotaHeadroomNeutralFactor      = 0.5
 	openAIQuotaHeadroomSecondaryLowRemain = 0.10
 	openAIQuotaHeadroomSnapshotStaleAfter = 8 * time.Hour
-)
-
-const (
-	openAIExperimentalCircuitStateRunning  = "running"
-	openAIExperimentalCircuitStateOpen     = "open"
-	openAIExperimentalCircuitStateHalfOpen = "half_open"
-
-	openAIExperimentalCircuitSlowThresholdMS          = 10_000
-	openAIExperimentalCircuitSevereSlowThresholdMS    = 20_000
-	openAIExperimentalCircuitSlowThreshold            = 3
-	openAIExperimentalCircuitErrorThreshold           = 2
-	openAIExperimentalCircuitCooldown                 = 2 * time.Minute
-	openAIExperimentalCircuitHalfOpenSuccessThreshold = 1
 )
 
 type cachedOpenAIAdvancedSchedulerSetting struct {
@@ -114,19 +52,8 @@ type openAIAdvancedSchedulerRuntimeSettings struct {
 	weightOverrides             map[string]float64
 }
 
-type cachedOpenAIAccountSchedulerStrategySetting struct {
-	strategy                    string
-	experimentalRetry           int
-	experimentalRecordRecovered bool
-	strictRetry                 int
-	strictRecordRecovered       bool
-	expiresAt                   int64
-}
-
 var openAIAdvancedSchedulerSettingCache atomic.Value // *cachedOpenAIAdvancedSchedulerSetting
 var openAIAdvancedSchedulerSettingSF singleflight.Group
-var openAIAccountSchedulerStrategySettingCache atomic.Value // *cachedOpenAIAccountSchedulerStrategySetting
-var openAIAccountSchedulerStrategySettingSF singleflight.Group
 
 type OpenAIAccountScheduleRequest struct {
 	GroupID                 *int64
@@ -144,7 +71,6 @@ type OpenAIAccountScheduleRequest struct {
 	RequiredCapability      OpenAIEndpointCapability
 	RequiredImageCapability OpenAIImagesCapability
 	RequireCompact          bool
-	ExperimentalScheduler   bool
 	ExcludedIDs             map[int64]struct{}
 }
 
@@ -243,12 +169,8 @@ type openAIAccountRuntimeStats struct {
 }
 
 type openAIAccountRuntimeStat struct {
-	errorRateEWMABits       atomic.Uint64
-	ttftEWMABits            atomic.Uint64
-	consecutiveSlowCount    atomic.Int64
-	consecutiveErrorCount   atomic.Int64
-	consecutiveSuccessCount atomic.Int64
-	cooldownUntilUnixNano   atomic.Int64
+	errorRateEWMABits atomic.Uint64
+	ttftEWMABits      atomic.Uint64
 }
 
 func newOpenAIAccountRuntimeStats() *openAIAccountRuntimeStats {
@@ -319,7 +241,6 @@ func (s *openAIAccountRuntimeStats) report(accountID int64, success bool, firstT
 			}
 		}
 	}
-	stat.recordExperimentalCircuitEvent(success, firstTokenMs, time.Now())
 }
 
 func (s *openAIAccountRuntimeStats) snapshot(accountID int64) (errorRate float64, ttft float64, hasTTFT bool) {
@@ -342,88 +263,11 @@ func (s *openAIAccountRuntimeStats) snapshot(accountID int64) (errorRate float64
 	return errorRate, ttftValue, true
 }
 
-func (s *openAIAccountRuntimeStats) experimentalCircuitSnapshot(accountID int64, now time.Time) (state string, cooldownUntil *time.Time, ok bool) {
-	if s == nil || accountID <= 0 {
-		return openAIExperimentalCircuitStateRunning, nil, false
-	}
-	value, exists := s.accounts.Load(accountID)
-	if !exists {
-		return openAIExperimentalCircuitStateRunning, nil, false
-	}
-	stat, _ := value.(*openAIAccountRuntimeStat)
-	if stat == nil {
-		return openAIExperimentalCircuitStateRunning, nil, false
-	}
-	return stat.experimentalCircuitSnapshot(now)
-}
-
 func (s *openAIAccountRuntimeStats) size() int {
 	if s == nil {
 		return 0
 	}
 	return int(s.accountCount.Load())
-}
-
-func (s *openAIAccountRuntimeStat) recordExperimentalCircuitEvent(success bool, firstTokenMs *int, now time.Time) {
-	if s == nil {
-		return
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-	if !success {
-		s.consecutiveSuccessCount.Store(0)
-		s.consecutiveSlowCount.Store(0)
-		if s.consecutiveErrorCount.Add(1) >= openAIExperimentalCircuitErrorThreshold {
-			s.openExperimentalCircuit(now)
-		}
-		return
-	}
-
-	if firstTokenMs != nil && *firstTokenMs >= openAIExperimentalCircuitSlowThresholdMS {
-		s.consecutiveSuccessCount.Store(0)
-		s.consecutiveErrorCount.Store(0)
-		if *firstTokenMs >= openAIExperimentalCircuitSevereSlowThresholdMS {
-			s.openExperimentalCircuit(now)
-			return
-		}
-		if s.consecutiveSlowCount.Add(1) >= openAIExperimentalCircuitSlowThreshold {
-			s.openExperimentalCircuit(now)
-		}
-		return
-	}
-
-	s.consecutiveErrorCount.Store(0)
-	s.consecutiveSlowCount.Store(0)
-	if s.consecutiveSuccessCount.Add(1) >= openAIExperimentalCircuitHalfOpenSuccessThreshold {
-		s.cooldownUntilUnixNano.Store(0)
-	}
-}
-
-func (s *openAIAccountRuntimeStat) openExperimentalCircuit(now time.Time) {
-	if s == nil {
-		return
-	}
-	s.consecutiveSuccessCount.Store(0)
-	s.cooldownUntilUnixNano.Store(now.Add(openAIExperimentalCircuitCooldown).UnixNano())
-}
-
-func (s *openAIAccountRuntimeStat) experimentalCircuitSnapshot(now time.Time) (state string, cooldownUntil *time.Time, ok bool) {
-	if s == nil {
-		return openAIExperimentalCircuitStateRunning, nil, false
-	}
-	untilNano := s.cooldownUntilUnixNano.Load()
-	if untilNano <= 0 {
-		return openAIExperimentalCircuitStateRunning, nil, true
-	}
-	until := time.Unix(0, untilNano).UTC()
-	if now.IsZero() {
-		now = time.Now()
-	}
-	if now.Before(until) {
-		return openAIExperimentalCircuitStateOpen, &until, true
-	}
-	return openAIExperimentalCircuitStateHalfOpen, &until, true
 }
 
 type defaultOpenAIAccountScheduler struct {
@@ -580,13 +424,6 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	if account == nil || !openAIStickyAccountMatchesGroup(account, req.GroupID) || !s.isAccountTransportCompatible(account, req.RequiredTransport) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, false, nil
-	}
-	if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(accountID) {
-		slog.Info("sticky_escape_triggered",
-			"account_id", accountID,
-			"reason", "experimental_circuit_open",
-		)
-		return nil, true, nil
 	}
 	escapeCfg := s.service.openAIStickyEscapeConfig()
 	if reason, errorRate, ttft, shouldEscape := s.shouldEscapeStickyAccount(accountID, escapeCfg); shouldEscape {
@@ -921,11 +758,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		staleSnapshotCompactRetry: staleSnapshotCompactRetry,
 		candidateCount:            len(candidates),
 	}
-	if req.ExperimentalScheduler {
-		plan.topK = len(candidates)
-		plan.selectionOrder = s.buildExperimentalOpenAISelectionOrder(req, plan)
-		return plan
-	}
 	if len(candidates) == 0 {
 		plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
 		return plan
@@ -1110,89 +942,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	return buildSelectionOrder(plan.candidates)
 }
 
-func (s *defaultOpenAIAccountScheduler) buildExperimentalOpenAISelectionOrder(
-	req OpenAIAccountScheduleRequest,
-	plan openAIAccountLoadPlan,
-) []openAIAccountCandidateScore {
-	buildRanked := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
-		if len(pool) == 0 {
-			return nil
-		}
-		ranked := append([]openAIAccountCandidateScore(nil), pool...)
-		loadMap := make(map[int64]*AccountLoadInfo, len(ranked))
-		for _, candidate := range ranked {
-			loadMap[candidate.account.ID] = candidate.loadInfo
-		}
-		runtimeStats := s.stats
-		sort.SliceStable(ranked, func(i, j int) bool {
-			leftErrorRate, leftTTFT, leftHasTTFT := 0.0, 0.0, false
-			rightErrorRate, rightTTFT, rightHasTTFT := 0.0, 0.0, false
-			if runtimeStats != nil {
-				leftErrorRate, leftTTFT, leftHasTTFT = runtimeStats.snapshot(ranked[i].account.ID)
-				rightErrorRate, rightTTFT, rightHasTTFT = runtimeStats.snapshot(ranked[j].account.ID)
-			}
-			left := openAIRoutingScore(ranked[i].account, loadMap[ranked[i].account.ID], leftErrorRate, leftTTFT, leftHasTTFT)
-			right := openAIRoutingScore(ranked[j].account, loadMap[ranked[j].account.ID], rightErrorRate, rightTTFT, rightHasTTFT)
-			leftTier := s.experimentalCircuitSelectionTier(ranked[i].account)
-			rightTier := s.experimentalCircuitSelectionTier(ranked[j].account)
-			if leftTier != rightTier {
-				return leftTier < rightTier
-			}
-			if left.Total != right.Total {
-				return left.Total > right.Total
-			}
-			if left.Quality != right.Quality {
-				return left.Quality > right.Quality
-			}
-			if left.Price != right.Price {
-				return left.Price > right.Price
-			}
-			if ranked[i].account.Priority != ranked[j].account.Priority {
-				return ranked[i].account.Priority < ranked[j].account.Priority
-			}
-			return openAIAccountOlderLastUsed(ranked[i].account, ranked[j].account)
-		})
-		return ranked
-	}
-
-	if req.RequireCompact {
-		supported := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
-		unknown := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
-		for _, candidate := range plan.candidates {
-			switch openAICompactSupportTier(candidate.account) {
-			case 2:
-				supported = append(supported, candidate)
-			case 1:
-				unknown = append(unknown, candidate)
-			}
-		}
-		selectionOrder := make([]openAIAccountCandidateScore, 0, len(plan.allCandidates))
-		selectionOrder = append(selectionOrder, buildRanked(supported)...)
-		selectionOrder = append(selectionOrder, buildRanked(unknown)...)
-		if len(plan.staleSnapshotCompactRetry) > 0 && s.service.schedulerSnapshot != nil {
-			selectionOrder = append(selectionOrder, sortOpenAICompactRetryCandidates(plan.staleSnapshotCompactRetry)...)
-		}
-		return selectionOrder
-	}
-
-	return buildRanked(plan.candidates)
-}
-
-func (s *defaultOpenAIAccountScheduler) experimentalCircuitSelectionTier(account *Account) int {
-	if s == nil || s.stats == nil || account == nil {
-		return 1
-	}
-	state, _, _ := s.stats.experimentalCircuitSnapshot(account.ID, time.Now())
-	switch state {
-	case openAIExperimentalCircuitStateHalfOpen:
-		return 0
-	case openAIExperimentalCircuitStateOpen:
-		return 2
-	default:
-		return 1
-	}
-}
-
 func sortOpenAICompactRetryCandidates(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
 	if len(pool) == 0 {
 		return nil
@@ -1243,9 +992,6 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			compactBlocked = true
 			continue
 		}
-		if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(fresh.ID) {
-			continue
-		}
 		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
 		if acquireErr != nil {
 			return nil, compactBlocked, acquireErr
@@ -1262,14 +1008,6 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 		}
 	}
 	return nil, compactBlocked, nil
-}
-
-func (s *defaultOpenAIAccountScheduler) isExperimentalCircuitOpen(accountID int64) bool {
-	if s == nil || s.stats == nil || accountID <= 0 {
-		return false
-	}
-	state, _, _ := s.stats.experimentalCircuitSnapshot(accountID, time.Now())
-	return state == openAIExperimentalCircuitStateOpen
 }
 
 func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
@@ -1584,9 +1322,6 @@ func (s *defaultOpenAIAccountScheduler) finishLoadBalanceSelectionFallback(
 			compactBlocked = true
 			continue
 		}
-		if req.ExperimentalScheduler && s.isExperimentalCircuitOpen(fresh.ID) {
-			continue
-		}
 		return &AccountSelectionResult{
 			Account: fresh,
 			WaitPlan: &AccountWaitPlan{
@@ -1880,7 +1615,7 @@ func (s *OpenAIGatewayService) getOpenAIAccountScheduler(ctx context.Context) Op
 	if s == nil {
 		return nil
 	}
-	if !s.isOpenAIAdvancedSchedulerEnabled(ctx) && !s.IsOpenAIAccountExperimentalSchedulerEnabled(ctx) {
+	if !s.isOpenAIAdvancedSchedulerEnabled(ctx) {
 		return nil
 	}
 	s.openaiSchedulerOnce.Do(func() {
@@ -1897,109 +1632,6 @@ func (s *OpenAIGatewayService) getOpenAIAccountScheduler(ctx context.Context) Op
 func resetOpenAIAdvancedSchedulerSettingCacheForTest() {
 	openAIAdvancedSchedulerSettingCache = atomic.Value{}
 	openAIAdvancedSchedulerSettingSF = singleflight.Group{}
-	openAIAccountSchedulerStrategySettingCache = atomic.Value{}
-	openAIAccountSchedulerStrategySettingSF = singleflight.Group{}
-}
-
-func (s *OpenAIGatewayService) openAIAccountSchedulerStrategy(ctx context.Context) string {
-	cached := s.openAIAccountSchedulerRuntimeSettings(ctx)
-	return cached.strategy
-}
-
-func (s *OpenAIGatewayService) OpenAIAccountExperimentalRetryCount(ctx context.Context) int {
-	cached := s.openAIAccountSchedulerRuntimeSettings(ctx)
-	return cached.experimentalRetry
-}
-
-func (s *OpenAIGatewayService) ShouldRecordOpenAIAccountExperimentalRecoveredUpstream(ctx context.Context) bool {
-	cached := s.openAIAccountSchedulerRuntimeSettings(ctx)
-	return cached.experimentalRecordRecovered
-}
-
-func (s *OpenAIGatewayService) OpenAIAccountStrictRetryCount(ctx context.Context) int {
-	cached := s.openAIAccountSchedulerRuntimeSettings(ctx)
-	return cached.strictRetry
-}
-
-func (s *OpenAIGatewayService) ShouldRecordOpenAIAccountStrictRecoveredUpstream(ctx context.Context) bool {
-	cached := s.openAIAccountSchedulerRuntimeSettings(ctx)
-	return cached.strictRecordRecovered
-}
-
-func (s *OpenAIGatewayService) openAIAccountSchedulerRuntimeSettings(ctx context.Context) *cachedOpenAIAccountSchedulerStrategySetting {
-	if cached, ok := openAIAccountSchedulerStrategySettingCache.Load().(*cachedOpenAIAccountSchedulerStrategySetting); ok && cached != nil {
-		if time.Now().UnixNano() < cached.expiresAt {
-			return cached
-		}
-	}
-
-	result, _, _ := openAIAccountSchedulerStrategySettingSF.Do(openAIAccountSchedulerStrategySettingKey, func() (any, error) {
-		if cached, ok := openAIAccountSchedulerStrategySettingCache.Load().(*cachedOpenAIAccountSchedulerStrategySetting); ok && cached != nil {
-			if time.Now().UnixNano() < cached.expiresAt {
-				return cached, nil
-			}
-		}
-
-		strategy := OpenAIAccountSchedulerStrategyLegacy
-		experimentalRetry := DefaultOpenAIAccountExperimentalRetryCount
-		experimentalRecordRecovered := false
-		strictRetry := DefaultOpenAIAccountStrictRetryCount
-		strictRecordRecovered := false
-		if repo := s.openAIAdvancedSchedulerSettingRepo(); repo != nil {
-			dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAIAdvancedSchedulerSettingDBTimeout)
-			defer cancel()
-			values, err := repo.GetMultiple(dbCtx, []string{
-				openAIAccountSchedulerStrategySettingKey,
-				openAIAccountExperimentalRetryCountSettingKey,
-				openAIAccountExperimentalRecordRecoveredSettingKey,
-				openAIAccountStrictRetryCountSettingKey,
-				openAIAccountStrictRecordRecoveredSettingKey,
-			})
-			if err == nil {
-				strategy = NormalizeOpenAIAccountSchedulerStrategy(values[openAIAccountSchedulerStrategySettingKey])
-				if parsed, parseErr := strconv.Atoi(strings.TrimSpace(values[openAIAccountExperimentalRetryCountSettingKey])); parseErr == nil {
-					experimentalRetry = NormalizeOpenAIAccountExperimentalRetryCount(parsed)
-				}
-				experimentalRecordRecovered = values[openAIAccountExperimentalRecordRecoveredSettingKey] == "true"
-				if parsed, parseErr := strconv.Atoi(strings.TrimSpace(values[openAIAccountStrictRetryCountSettingKey])); parseErr == nil {
-					strictRetry = NormalizeOpenAIAccountStrictRetryCount(parsed)
-				}
-				strictRecordRecovered = values[openAIAccountStrictRecordRecoveredSettingKey] == "true"
-			}
-		}
-		cached := &cachedOpenAIAccountSchedulerStrategySetting{
-			strategy:                    strategy,
-			experimentalRetry:           experimentalRetry,
-			experimentalRecordRecovered: experimentalRecordRecovered,
-			strictRetry:                 strictRetry,
-			strictRecordRecovered:       strictRecordRecovered,
-			expiresAt:                   time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
-		}
-		openAIAccountSchedulerStrategySettingCache.Store(cached)
-		return cached, nil
-	})
-
-	if cached, ok := result.(*cachedOpenAIAccountSchedulerStrategySetting); ok && cached != nil {
-		cached.strategy = NormalizeOpenAIAccountSchedulerStrategy(cached.strategy)
-		cached.experimentalRetry = NormalizeOpenAIAccountExperimentalRetryCount(cached.experimentalRetry)
-		cached.strictRetry = NormalizeOpenAIAccountStrictRetryCount(cached.strictRetry)
-		return cached
-	}
-	return &cachedOpenAIAccountSchedulerStrategySetting{
-		strategy:                    OpenAIAccountSchedulerStrategyLegacy,
-		experimentalRetry:           DefaultOpenAIAccountExperimentalRetryCount,
-		experimentalRecordRecovered: false,
-		strictRetry:                 DefaultOpenAIAccountStrictRetryCount,
-		strictRecordRecovered:       false,
-	}
-}
-
-func (s *OpenAIGatewayService) IsOpenAIAccountExperimentalSchedulerEnabled(ctx context.Context) bool {
-	return s.openAIAccountSchedulerStrategy(ctx) == OpenAIAccountSchedulerStrategyExperimental
-}
-
-func (s *OpenAIGatewayService) IsOpenAIAccountStrictPrioritySchedulerEnabled(ctx context.Context) bool {
-	return s.openAIAccountSchedulerStrategy(ctx) == OpenAIAccountSchedulerStrategyStrictPriority
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithScheduler(
@@ -2038,241 +1670,6 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove)
 }
 
-func (s *OpenAIGatewayService) SelectAccountExperimentalSchedulerForCapability(
-	ctx context.Context,
-	groupID *int64,
-	previousResponseID string,
-	sessionHash string,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredTransport OpenAIUpstreamTransport,
-	requiredCapability OpenAIEndpointCapability,
-	requireCompact bool,
-	platformOverride ...string,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	platform := PlatformOpenAI
-	if len(platformOverride) > 0 {
-		platform = platformOverride[0]
-	}
-	return s.selectAccountWithSchedulerMode(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, true, false, platform)
-}
-
-func (s *OpenAIGatewayService) SelectAccountExperimentalSchedulerForImages(
-	ctx context.Context,
-	groupID *int64,
-	sessionHash string,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredCapability OpenAIImagesCapability,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	selection, decision, err := s.selectAccountWithSchedulerMode(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, true, false)
-	if err == nil && selection != nil && selection.Account != nil {
-		return selection, decision, nil
-	}
-	if requiredCapability == OpenAIImagesCapabilityNative {
-		return s.selectAccountWithSchedulerMode(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", OpenAIImagesCapabilityBasic, false, true, false)
-	}
-	return selection, decision, err
-}
-
-func (s *OpenAIGatewayService) SelectAccountStrictPriorityForCapability(
-	ctx context.Context,
-	groupID *int64,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredTransport OpenAIUpstreamTransport,
-	requiredCapability OpenAIEndpointCapability,
-	requireCompact bool,
-	platformOverride ...string,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	platform := PlatformOpenAI
-	if len(platformOverride) > 0 {
-		platform = platformOverride[0]
-	}
-	return s.selectAccountStrictPriority(ctx, groupID, platform, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact)
-}
-
-func (s *OpenAIGatewayService) SelectAccountStrictPriorityForImages(
-	ctx context.Context,
-	groupID *int64,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredCapability OpenAIImagesCapability,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	selection, decision, err := s.selectAccountStrictPriority(ctx, groupID, PlatformOpenAI, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false)
-	if err == nil && selection != nil && selection.Account != nil {
-		return selection, decision, nil
-	}
-	if requiredCapability == OpenAIImagesCapabilityNative {
-		return s.selectAccountStrictPriority(ctx, groupID, PlatformOpenAI, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", OpenAIImagesCapabilityBasic, false)
-	}
-	return selection, decision, err
-}
-
-func openAIAccountOlderLastUsed(a, b *Account) bool {
-	if a == nil || b == nil {
-		return a != nil
-	}
-	if a.LastUsedAt == nil && b.LastUsedAt != nil {
-		return true
-	}
-	if a.LastUsedAt != nil && b.LastUsedAt == nil {
-		return false
-	}
-	if a.LastUsedAt != nil && b.LastUsedAt != nil && !a.LastUsedAt.Equal(*b.LastUsedAt) {
-		return a.LastUsedAt.Before(*b.LastUsedAt)
-	}
-	return a.ID < b.ID
-}
-
-func isOpenAIAccountStrictPriorityEligible(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
-	return isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability)
-}
-
-func (s *OpenAIGatewayService) recheckStrictPriorityAccountFromDB(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) *Account {
-	if account == nil {
-		return nil
-	}
-	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if !isOpenAIAccountStrictPriorityEligible(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
-			return nil
-		}
-		if !accountSupportsOpenAICapabilities(account, requiredCapability, requiredImageCapability) {
-			return nil
-		}
-		return account
-	}
-
-	latest, err := s.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil {
-		return nil
-	}
-	if !isOpenAIAccountStrictPriorityEligible(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
-		return nil
-	}
-	if !accountSupportsOpenAICapabilities(latest, requiredCapability, requiredImageCapability) {
-		return nil
-	}
-	return latest
-}
-
-func (s *OpenAIGatewayService) selectAccountStrictPriority(
-	ctx context.Context,
-	groupID *int64,
-	platform string,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredTransport OpenAIUpstreamTransport,
-	requiredCapability OpenAIEndpointCapability,
-	requiredImageCapability OpenAIImagesCapability,
-	requireCompact bool,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
-	platform = normalizeOpenAICompatiblePlatform(platform)
-	decision := OpenAIAccountScheduleDecision{Layer: OpenAIAccountSchedulerStrategyStrictPriority}
-	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
-		slog.Warn("channel pricing restriction blocked request",
-			"group_id", derefGroupID(groupID),
-			"model", requestedModel)
-		return nil, decision, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
-	}
-
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
-	if err != nil {
-		return nil, decision, err
-	}
-	if len(accounts) == 0 {
-		return nil, decision, ErrNoAvailableAccounts
-	}
-
-	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
-	candidates := make([]*Account, 0, len(accounts))
-	for i := range accounts {
-		acc := &accounts[i]
-		if !isOpenAIAccountStrictPriorityEligible(ctx, acc, platform, requestedModel, requireCompact, requiredCapability) {
-			continue
-		}
-		if !s.isOpenAIAccountTransportCompatible(acc, requiredTransport) {
-			continue
-		}
-		if !accountSupportsOpenAICapabilities(acc, requiredCapability, requiredImageCapability) {
-			continue
-		}
-		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, acc, requestedModel, requireCompact) {
-			continue
-		}
-		candidates = append(candidates, acc)
-	}
-	if len(candidates) == 0 {
-		if requireCompact {
-			return nil, decision, ErrNoAvailableCompactAccounts
-		}
-		return nil, decision, ErrNoAvailableAccounts
-	}
-
-	sortAccountsByPriorityAndLastUsed(candidates, false)
-	decision.CandidateCount = len(candidates)
-	highestPriority := candidates[0].Priority
-	topTierCandidates := make([]*Account, 0, len(candidates))
-	for _, acc := range candidates {
-		if acc.Priority != highestPriority {
-			break
-		}
-		if excludedIDs != nil {
-			if _, excluded := excludedIDs[acc.ID]; excluded {
-				continue
-			}
-		}
-		topTierCandidates = append(topTierCandidates, acc)
-	}
-	if len(topTierCandidates) == 0 {
-		if requireCompact {
-			return nil, decision, ErrNoAvailableCompactAccounts
-		}
-		return nil, decision, ErrNoAvailableAccounts
-	}
-	if requireCompact {
-		topTierCandidates = prioritizeOpenAICompactAccounts(topTierCandidates)
-	}
-
-	var waitAccount *Account
-	for _, acc := range topTierCandidates {
-		fresh := s.recheckStrictPriorityAccountFromDB(ctx, acc, platform, requestedModel, requireCompact, requiredCapability, requiredImageCapability)
-		if fresh == nil {
-			continue
-		}
-		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
-			continue
-		}
-		result, err := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
-		if err != nil {
-			return nil, decision, err
-		}
-		if result != nil && result.Acquired {
-			selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
-			return selection, decision, selectErr
-		}
-		if waitAccount == nil {
-			waitAccount = fresh
-		}
-	}
-
-	if waitAccount != nil {
-		selection, selectErr := s.newSelectionResult(ctx, waitAccount, false, nil, &AccountWaitPlan{
-			AccountID:      waitAccount.ID,
-			MaxConcurrency: waitAccount.Concurrency,
-			Timeout:        s.schedulingConfig().FallbackWaitTimeout,
-			MaxWaiting:     s.schedulingConfig().FallbackMaxWaiting,
-		})
-		return selection, decision, selectErr
-	}
-
-	if requireCompact {
-		return nil, decision, ErrNoAvailableCompactAccounts
-	}
-	return nil, decision, ErrNoAvailableAccounts
-}
-
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	ctx context.Context,
 	groupID *int64,
@@ -2306,29 +1703,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	platform string,
 	previousResponseCanMove bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	return s.selectAccountWithSchedulerMode(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, false, previousResponseCanMove, platform)
-}
-
-func (s *OpenAIGatewayService) selectAccountWithSchedulerMode(
-	ctx context.Context,
-	groupID *int64,
-	previousResponseID string,
-	sessionHash string,
-	requestedModel string,
-	excludedIDs map[int64]struct{},
-	requiredTransport OpenAIUpstreamTransport,
-	requiredCapability OpenAIEndpointCapability,
-	requiredImageCapability OpenAIImagesCapability,
-	requireCompact bool,
-	experimentalScheduler bool,
-	previousResponseCanMove bool,
-	platformOverride ...string,
-) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
-	platform := PlatformOpenAI
-	if len(platformOverride) > 0 {
-		platform = platformOverride[0]
-	}
 	platform = normalizeOpenAICompatiblePlatform(platform)
 	decision := OpenAIAccountScheduleDecision{}
 	scheduler := s.getOpenAIAccountScheduler(ctx)
@@ -2406,7 +1781,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerMode(
 		stickyPreviousAccountID = s.ResolveAccountIDByPreviousResponseIDForScheduler(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	}
 
-	selection, scheduleDecision, err := scheduler.Select(ctx, OpenAIAccountScheduleRequest{
+	return scheduler.Select(ctx, OpenAIAccountScheduleRequest{
 		GroupID:                 groupID,
 		Platform:                platform,
 		SessionHash:             sessionHash,
@@ -2421,13 +1796,8 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerMode(
 		RequiredCapability:      requiredCapability,
 		RequiredImageCapability: requiredImageCapability,
 		RequireCompact:          requireCompact,
-		ExperimentalScheduler:   experimentalScheduler,
 		ExcludedIDs:             excludedIDs,
 	})
-	if experimentalScheduler && scheduleDecision.Layer == openAIAccountScheduleLayerLoadBalance {
-		scheduleDecision.Layer = OpenAIAccountSchedulerStrategyExperimental
-	}
-	return selection, scheduleDecision, err
 }
 
 func accountSupportsOpenAICapabilities(account *Account, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {
@@ -2479,26 +1849,12 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(accountID int64
 	scheduler.ReportResult(accountID, success, firstTokenMs)
 }
 
-func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResultForStrategy(strictPriority bool, accountID int64, success bool, firstTokenMs *int) {
-	if strictPriority {
-		return
-	}
-	s.ReportOpenAIAccountScheduleResult(accountID, success, firstTokenMs)
-}
-
 func (s *OpenAIGatewayService) RecordOpenAIAccountSwitch() {
 	scheduler := s.getOpenAIAccountScheduler(context.Background())
 	if scheduler == nil {
 		return
 	}
 	scheduler.ReportSwitch()
-}
-
-func (s *OpenAIGatewayService) RecordOpenAIAccountSwitchForStrategy(strictPriority bool) {
-	if strictPriority {
-		return
-	}
-	s.RecordOpenAIAccountSwitch()
 }
 
 func (s *OpenAIGatewayService) SnapshotOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot {

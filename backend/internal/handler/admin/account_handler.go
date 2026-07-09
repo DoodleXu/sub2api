@@ -60,8 +60,6 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
-	upstreamBalanceService  *service.OpenAIUpstreamBalanceService
-	openAIGatewayService    *service.OpenAIGatewayService
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -79,8 +77,6 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
-	upstreamBalanceService *service.OpenAIUpstreamBalanceService,
-	openAIGatewayService *service.OpenAIGatewayService,
 ) *AccountHandler {
 	return &AccountHandler{
 		adminService:            adminService,
@@ -96,8 +92,6 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
-		upstreamBalanceService:  upstreamBalanceService,
-		openAIGatewayService:    openAIGatewayService,
 	}
 }
 
@@ -497,6 +491,8 @@ func (h *AccountHandler) List(c *gin.Context) {
 		search = search[:100]
 	}
 	lite := parseBoolQueryWithDefault(c.Query("lite"), false)
+	// 调度分需要跨候选池批量打分并读取负载，默认列表不计算；只有前端列可见时才显式开启。
+	includeSchedulerScore := parseBoolQueryWithDefault(c.Query("include_scheduler_score"), false)
 
 	var groupID int64
 	if groupIDStr := c.Query("group"); groupIDStr != "" {
@@ -532,7 +528,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 	var windowCosts map[int64]float64
 	var activeSessions map[int64]int
 	var rpmCounts map[int64]int
-	// 仅当前页存在 OpenAI 账号时才计算调度分数，避免为空结果付出池查询开销。
+	// 双重门控：用户要看该列，且当前页确实有 OpenAI 账号，才进入昂贵的候选池打分路径。
 	var schedulerScores map[int64]*AccountSchedulerScore
 	var schedulerGroupScores map[int64][]AccountSchedulerGroupScore
 	pageHasOpenAIAccounts := false
@@ -542,7 +538,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 			break
 		}
 	}
-	if pageHasOpenAIAccounts {
+	if includeSchedulerScore && pageHasOpenAIAccounts {
 		schedulerFilterPool := h.listAccountSchedulerScoreFilterPool(c.Request.Context(), platform, accountType, status, search, groupID, privacyMode)
 		schedulerScores, schedulerGroupScores = h.buildOpenAIAccountSchedulerScores(c.Request.Context(), accounts, schedulerFilterPool)
 	}
@@ -740,114 +736,6 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
-}
-
-// RefreshUpstreamBalance refreshes upstream balance metadata for OpenAI API Key accounts.
-// POST /api/v1/admin/accounts/:id/upstream-balance/refresh
-func (h *AccountHandler) RefreshUpstreamBalance(c *gin.Context) {
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid account ID")
-		return
-	}
-	if h.upstreamBalanceService == nil {
-		response.InternalError(c, "upstream balance service not configured")
-		return
-	}
-	account, err := h.upstreamBalanceService.Refresh(c.Request.Context(), accountID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
-}
-
-func (h *AccountHandler) GetOpenAIRoutingRanking(c *gin.Context) {
-	if h.openAIGatewayService == nil {
-		response.InternalError(c, "openai gateway service not configured")
-		return
-	}
-	params, err := parseOpenAIRoutingExplainParams(c)
-	if err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
-	result, err := h.openAIGatewayService.ExplainOpenAIRouting(c.Request.Context(), params)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func (h *AccountHandler) GetOpenAIRoutingAccountExplain(c *gin.Context) {
-	if h.openAIGatewayService == nil {
-		response.InternalError(c, "openai gateway service not configured")
-		return
-	}
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid account ID")
-		return
-	}
-	params, err := parseOpenAIRoutingExplainParams(c)
-	if err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
-	result, err := h.openAIGatewayService.ExplainOpenAIRoutingForAccount(c.Request.Context(), accountID, params)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func parseOpenAIRoutingExplainParams(c *gin.Context) (service.OpenAIRoutingExplainParams, error) {
-	var groupID *int64
-	if raw := strings.TrimSpace(c.Query("group_id")); raw != "" {
-		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed >= 0 {
-			groupID = &parsed
-		}
-	}
-	accountIDs, accountIDsProvided, err := parseOpenAIRoutingAccountIDs(c)
-	if err != nil {
-		return service.OpenAIRoutingExplainParams{}, err
-	}
-	return service.OpenAIRoutingExplainParams{
-		GroupID:            groupID,
-		Model:              strings.TrimSpace(c.Query("model")),
-		AccountIDs:         accountIDs,
-		AccountIDsProvided: accountIDsProvided,
-	}, nil
-}
-
-func parseOpenAIRoutingAccountIDs(c *gin.Context) ([]int64, bool, error) {
-	values := append([]string{}, c.QueryArray("account_ids")...)
-	values = append(values, c.QueryArray("account_ids[]")...)
-	if len(values) == 0 {
-		return nil, false, nil
-	}
-	seen := make(map[int64]struct{}, len(values))
-	ids := make([]int64, 0, len(values))
-	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			id, err := strconv.ParseInt(part, 10, 64)
-			if err != nil || id <= 0 {
-				return nil, true, fmt.Errorf("invalid account_ids")
-			}
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	return ids, true, nil
 }
 
 // CheckMixedChannel handles checking mixed channel risk for account-group binding.

@@ -20,9 +20,7 @@ import type {
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse,
-  OpenAIRoutingAccountExplain,
-  OpenAIRoutingRankingResponse
+  CheckMixedChannelResponse
 } from '@/types'
 
 /**
@@ -43,6 +41,7 @@ export async function list(
     search?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -78,6 +77,7 @@ export async function listWithEtag(
     search?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -211,28 +211,6 @@ export async function testAccount(id: number): Promise<{
  */
 export async function refreshCredentials(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/refresh`)
-  return data
-}
-
-export async function refreshUpstreamBalance(id: number): Promise<Account> {
-  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/upstream-balance/refresh`)
-  return data
-}
-
-export async function getOpenAIRoutingRanking(params?: {
-  group_id?: number
-  model?: string
-  account_ids?: string
-}): Promise<OpenAIRoutingRankingResponse> {
-  const { data } = await apiClient.get<OpenAIRoutingRankingResponse>('/admin/openai-scheduler/ranking', { params })
-  return data
-}
-
-export async function getOpenAIRoutingAccountExplain(
-  id: number,
-  params?: { group_id?: number; model?: string }
-): Promise<OpenAIRoutingAccountExplain> {
-  const { data } = await apiClient.get<OpenAIRoutingAccountExplain>(`/admin/openai-scheduler/accounts/${id}/explain`, { params })
   return data
 }
 
@@ -589,7 +567,9 @@ export async function syncFromCrs(params: {
       action: string
       error?: string
     }>
-  }>('/admin/accounts/sync/crs', params)
+  }>('/admin/accounts/sync/crs', params, {
+    timeout: 180000 // 180s timeout: sync refreshes each existing account's OAuth token serially
+  })
   return data
 }
 
@@ -847,9 +827,6 @@ export const accountsAPI = {
   toggleStatus,
   testAccount,
   refreshCredentials,
-  refreshUpstreamBalance,
-  getOpenAIRoutingRanking,
-  getOpenAIRoutingAccountExplain,
   applyOAuthCredentials,
   getStats,
   clearError,

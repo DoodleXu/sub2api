@@ -46,6 +46,14 @@ func (c *updateServiceTestGitHubClient) FetchLatestRelease(_ context.Context, re
 	}, nil
 }
 
+func (c *updateServiceTestGitHubClient) FetchRecentReleases(ctx context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	release, err := c.FetchLatestRelease(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	return []*GitHubRelease{release}, nil
+}
+
 func (c *updateServiceTestGitHubClient) DownloadFile(context.Context, string, string, int64) error {
 	panic("DownloadFile should not be called by these tests")
 }

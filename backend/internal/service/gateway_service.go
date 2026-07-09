@@ -589,43 +589,6 @@ func (e *UpstreamFailoverError) Error() string {
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
 }
 
-func newOpenAISchedulerNoPenaltyFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
-	return newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx, statusCode, message, nil, nil)
-}
-
-func newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
-	if !IsOpenAISchedulerNoPenaltyFailoverMode(ctx) {
-		return nil
-	}
-	if statusCode <= 0 {
-		statusCode = http.StatusBadGateway
-	}
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "Upstream request failed"
-	}
-	if len(responseBody) == 0 {
-		responseBody = []byte(`{"error":{"message":` + strconv.Quote(message) + `}}`)
-	}
-	headers := responseHeaders
-	if headers != nil {
-		headers = headers.Clone()
-	}
-	return &UpstreamFailoverError{
-		StatusCode:      statusCode,
-		ResponseBody:    responseBody,
-		ResponseHeaders: headers,
-	}
-}
-
-func newOpenAIExperimentalSchedulerFailoverError(ctx context.Context, statusCode int, message string) *UpstreamFailoverError {
-	return newOpenAISchedulerNoPenaltyFailoverError(ctx, statusCode, message)
-}
-
-func newOpenAIExperimentalSchedulerFailoverHTTPError(ctx context.Context, statusCode int, message string, responseBody []byte, responseHeaders http.Header) *UpstreamFailoverError {
-	return newOpenAISchedulerNoPenaltyFailoverHTTPError(ctx, statusCode, message, responseBody, responseHeaders)
-}
-
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。
 // RawData 是该事件 data: 行的原始 JSON 字符串
 // （Anthropic 标准结构 {"type":"error","error":{"type":"...","message":"..."}}）。
@@ -7917,6 +7880,11 @@ func extractUpstreamErrorMessage(body []byte) string {
 		return m
 	}
 
+	// OpenAI Responses SSE 失败事件：{"type":"response.failed","response":{"error":{"message":"..."}}}
+	if m := gjson.GetBytes(body, "response.error.message").String(); strings.TrimSpace(m) != "" {
+		return m
+	}
+
 	// ChatGPT 内部 API 风格：{"detail":"..."}
 	if d := gjson.GetBytes(body, "detail").String(); strings.TrimSpace(d) != "" {
 		return d
@@ -9810,6 +9778,10 @@ func (s *GatewayService) calculateImageCost(
 	multiplier float64,
 ) *CostBreakdown {
 	sizeTier := NormalizeImageBillingTierOrDefault(result.ImageSize)
+	groupConfig := imagePriceConfigFromAPIKey(apiKey)
+	if apiKeyHasConfiguredImagePrice(apiKey, sizeTier) {
+		return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+	}
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {
 		tokens := UsageTokens{
 			InputTokens:       result.Usage.InputTokens,
@@ -9835,14 +9807,6 @@ func (s *GatewayService) calculateImageCost(
 		return cost
 	}
 
-	var groupConfig *ImagePriceConfig
-	if apiKey.Group != nil {
-		groupConfig = &ImagePriceConfig{
-			Price1K: apiKey.Group.ImagePrice1K,
-			Price2K: apiKey.Group.ImagePrice2K,
-			Price4K: apiKey.Group.ImagePrice4K,
-		}
-	}
 	return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
 }
 

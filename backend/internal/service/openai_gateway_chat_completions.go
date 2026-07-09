@@ -223,9 +223,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
-			return nil, failoverErr
-		}
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
 
@@ -234,9 +231,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false)
 	releaseUpstreamCtx()
 	if err != nil {
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverError(ctx, http.StatusBadGateway, err.Error()); failoverErr != nil {
-			return nil, failoverErr
-		}
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
@@ -305,9 +299,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
-		}
-		if failoverErr := newOpenAIExperimentalSchedulerFailoverHTTPError(ctx, resp.StatusCode, upstreamMsg, respBody, resp.Header); failoverErr != nil {
-			return nil, failoverErr
 		}
 		return s.handleChatCompletionsErrorResponse(ctx, resp, c, account, billingModel)
 	}
@@ -453,6 +444,9 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		message := openAICompatFailedResponseMessage(finalResponse)
 		if openAIStreamFailedEventShouldFailover(payload, message) {
 			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+		}
+		if errMsg, matched := s.writeOpenAIResponseFailedCompatError(c, account, payload, message, writeChatCompletionsError); matched {
+			return nil, fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
 		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
@@ -628,6 +622,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 			if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
 				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+				return true
+			}
+			if errMsg, matched := s.writeOpenAIResponseFailedCompatError(c, account, payloadBytes, message, writeChatCompletionsError); matched {
+				streamNonFailoverErr = fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
+				clientOutputStarted = true
 				return true
 			}
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)

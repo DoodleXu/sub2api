@@ -210,11 +210,6 @@ type SystemSettings struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled                         bool   `json:"openai_advanced_scheduler_enabled"`
-	OpenAIAccountSchedulerStrategy                         string `json:"openai_account_scheduler_strategy"`
-	OpenAIAccountExperimentalRetryCount                    int    `json:"openai_account_experimental_retry_count"`
-	OpenAIAccountExperimentalRecordRecoveredUpstream       bool   `json:"openai_account_experimental_record_recovered_upstream"`
-	OpenAIAccountStrictRetryCount                          int    `json:"openai_account_strict_retry_count"`
-	OpenAIAccountStrictRecordRecoveredUpstream             bool   `json:"openai_account_strict_record_recovered_upstream"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool   `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool   `json:"openai_advanced_scheduler_subscription_priority_enabled"`
 	OpenAIAdvancedSchedulerLBTopK                          string `json:"openai_advanced_scheduler_lb_top_k"`
