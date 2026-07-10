@@ -14,7 +14,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -1382,16 +1381,6 @@ func (s *openAIWSBalanceSequenceCache) ReaddDirtyUserPlatformQuotaKeys(ctx conte
 }
 func (s *openAIWSBalanceSequenceCache) BatchGetUserPlatformQuotaCache(ctx context.Context, keys []service.UserPlatformQuotaKey) ([]*service.UserPlatformQuotaCacheEntry, error) {
 	return nil, nil
-}
-
-type openAIHandlerHTTPUpstreamFunc func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
-
-func (f openAIHandlerHTTPUpstreamFunc) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	return f(req, proxyURL, accountID, accountConcurrency)
-}
-
-func (f openAIHandlerHTTPUpstreamFunc) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-	return f.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
 func (s *openAIWSUsageHandlerChannelRepoStub) ListAll(ctx context.Context) ([]service.Channel, error) {
