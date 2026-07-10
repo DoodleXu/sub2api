@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-10
+最后更新：2026-07-11
 
 ## 当前对比基线
 
@@ -10,22 +10,28 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `9e55df0e2 chore: 准备发布 v0.1.208` | 本次 merge 前基线，fork 版本继续保留 `0.1.208` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.150` -> `0dec1ad292` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.150` |
-| 上游 main HEAD | `5260a42a0b` | 上游 main 在 `v0.1.150` 后还有 13 个提交，尚未进入当前 fork |
-| fork 相对上游 release 差异 | 约 276 个提交、470 个文件 | 以本次 merge 暂存树相对 `refs/tags/upstream/v0.1.150^{}` 统计 |
+| Fork 同步前 HEAD | `1f5efa636 chore: 准备发布 v0.1.211` | 本次 merge 前基线，fork 版本继续保留 `0.1.211` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.151` -> `deff3123de` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.151` |
+| 上游 main HEAD | `e316ebf52` | 上游 main 在 `v0.1.151` 后还有提交，尚未进入当前 fork |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次合并保留 fork 当前文件结构，只移植上游行为修复，避免恢复上游拆分文件引入隐性风险 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.150:refs/tags/upstream/v0.1.150 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.150^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
+git fetch upstream refs/tags/v0.1.151:refs/tags/upstream/v0.1.151 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.151^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.150` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.151` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.151` 合并说明：
+
+- 上游行为修复已移植：Codex identity header pairing、Codex image generation tool strip、OpenAI Fast/Flex 用户级规则、setup-token 后台刷新、Grok `reasoning_effort` 兼容、usage request_type legacy alias 过滤。
+- 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
+- fork 额外修复：为 OpenAI `json_object` JSON mode 增加兼容兜底，当 input 消息缺少 `JSON/json` 关键字时自动补最小 developer 指令，避免上游批量返回 `Response input messages must contain the word 'json'`。
 
 ## 核心 fork 定制功能
 
