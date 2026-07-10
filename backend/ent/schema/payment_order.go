@@ -90,6 +90,8 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Int64("upgrade_from_subscription_id").
 			Optional().
 			Nillable(),
+		field.Bool("upgrade_claim_active").
+			Default(false),
 		field.Int64("fulfilled_subscription_id").
 			Optional().
 			Nillable(),
@@ -208,6 +210,10 @@ func (PaymentOrder) Indexes() []ent.Index {
 		index.Fields("payment_type", "paid_at"),
 		index.Fields("order_type"),
 		index.Fields("upgrade_from_subscription_id"),
+		index.Fields("upgrade_from_subscription_id").
+			Unique().
+			StorageKey("idx_payment_orders_active_upgrade_claim").
+			Annotations(entsql.IndexWhere("upgrade_from_subscription_id IS NOT NULL AND upgrade_claim_active = true")),
 		index.Fields("fulfilled_subscription_id"),
 	}
 }

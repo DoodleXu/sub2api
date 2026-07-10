@@ -52,6 +52,8 @@ const (
 	FieldSubscriptionDays = "subscription_days"
 	// FieldUpgradeFromSubscriptionID holds the string denoting the upgrade_from_subscription_id field in the database.
 	FieldUpgradeFromSubscriptionID = "upgrade_from_subscription_id"
+	// FieldUpgradeClaimActive holds the string denoting the upgrade_claim_active field in the database.
+	FieldUpgradeClaimActive = "upgrade_claim_active"
 	// FieldFulfilledSubscriptionID holds the string denoting the fulfilled_subscription_id field in the database.
 	FieldFulfilledSubscriptionID = "fulfilled_subscription_id"
 	// FieldUpgradeCreditAmount holds the string denoting the upgrade_credit_amount field in the database.
@@ -135,6 +137,7 @@ var Columns = []string{
 	FieldSubscriptionGroupID,
 	FieldSubscriptionDays,
 	FieldUpgradeFromSubscriptionID,
+	FieldUpgradeClaimActive,
 	FieldFulfilledSubscriptionID,
 	FieldUpgradeCreditAmount,
 	FieldUpgradeCreditDays,
@@ -192,6 +195,8 @@ var (
 	DefaultOrderType string
 	// OrderTypeValidator is a validator for the "order_type" field. It is called by the builders before save.
 	OrderTypeValidator func(string) error
+	// DefaultUpgradeClaimActive holds the default value on creation for the "upgrade_claim_active" field.
+	DefaultUpgradeClaimActive bool
 	// DefaultUpgradeCreditAmount holds the default value on creation for the "upgrade_credit_amount" field.
 	DefaultUpgradeCreditAmount float64
 	// ProviderInstanceIDValidator is a validator for the "provider_instance_id" field. It is called by the builders before save.
@@ -321,6 +326,11 @@ func BySubscriptionDays(opts ...sql.OrderTermOption) OrderOption {
 // ByUpgradeFromSubscriptionID orders the results by the upgrade_from_subscription_id field.
 func ByUpgradeFromSubscriptionID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpgradeFromSubscriptionID, opts...).ToFunc()
+}
+
+// ByUpgradeClaimActive orders the results by the upgrade_claim_active field.
+func ByUpgradeClaimActive(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUpgradeClaimActive, opts...).ToFunc()
 }
 
 // ByFulfilledSubscriptionID orders the results by the fulfilled_subscription_id field.

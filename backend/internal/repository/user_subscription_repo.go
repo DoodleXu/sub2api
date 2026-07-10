@@ -152,10 +152,15 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 }
 
 func (r *userSubscriptionRepository) Delete(ctx context.Context, id int64) error {
-	// Match GORM semantics: deleting a missing row is not an error.
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
-	return err
+	deleted, err := client.UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return service.ErrSubscriptionNotFound
+	}
+	return nil
 }
 
 func (r *userSubscriptionRepository) Restore(ctx context.Context, subscriptionID int64, restoredStatus string) (*service.UserSubscription, error) {

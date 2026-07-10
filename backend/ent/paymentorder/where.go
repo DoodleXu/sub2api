@@ -150,6 +150,11 @@ func UpgradeFromSubscriptionID(v int64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeFromSubscriptionID, v))
 }
 
+// UpgradeClaimActive applies equality check predicate on the "upgrade_claim_active" field. It's identical to UpgradeClaimActiveEQ.
+func UpgradeClaimActive(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeClaimActive, v))
+}
+
 // FulfilledSubscriptionID applies equality check predicate on the "fulfilled_subscription_id" field. It's identical to FulfilledSubscriptionIDEQ.
 func FulfilledSubscriptionID(v int64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldFulfilledSubscriptionID, v))
@@ -1358,6 +1363,16 @@ func UpgradeFromSubscriptionIDIsNil() predicate.PaymentOrder {
 // UpgradeFromSubscriptionIDNotNil applies the NotNil predicate on the "upgrade_from_subscription_id" field.
 func UpgradeFromSubscriptionIDNotNil() predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldNotNull(FieldUpgradeFromSubscriptionID))
+}
+
+// UpgradeClaimActiveEQ applies the EQ predicate on the "upgrade_claim_active" field.
+func UpgradeClaimActiveEQ(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldUpgradeClaimActive, v))
+}
+
+// UpgradeClaimActiveNEQ applies the NEQ predicate on the "upgrade_claim_active" field.
+func UpgradeClaimActiveNEQ(v bool) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldUpgradeClaimActive, v))
 }
 
 // FulfilledSubscriptionIDEQ applies the EQ predicate on the "fulfilled_subscription_id" field.

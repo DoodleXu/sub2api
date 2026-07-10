@@ -252,6 +252,31 @@ func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int6
 	return nil
 }
 
+func (s *PaymentService) markUpgradeClaimConflictFailed(ctx context.Context, o *dbent.PaymentOrder, cause error) {
+	if o == nil || o.PaidAt == nil || o.UpgradeFromSubscriptionID == nil {
+		return
+	}
+	now := time.Now()
+	reason := psErrMsg(cause)
+	updated, err := s.entClient.PaymentOrder.Update().
+		Where(
+			paymentorder.IDEQ(o.ID),
+			paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed),
+			paymentorder.UpgradeClaimActiveEQ(false),
+		).
+		SetStatus(OrderStatusFailed).
+		SetFailedAt(now).
+		SetFailedReason(reason).
+		Save(ctx)
+	if err != nil {
+		slog.Error("mark upgrade claim conflict failed", "orderID", o.ID, "error", err)
+		return
+	}
+	if updated > 0 {
+		s.writeAuditLog(ctx, o.ID, "FULFILLMENT_FAILED", "system", map[string]any{"reason": reason})
+	}
+}
+
 func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *dbent.PaymentOrder) (*paymentFulfillmentLease, error) {
 	if o == nil {
 		return nil, infraerrors.BadRequest("INVALID_STATUS", "nil payment order")
@@ -259,7 +284,7 @@ func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	staleBefore := now.Add(-paymentFulfillmentLeaseDuration)
-	updated, err := s.entClient.PaymentOrder.Update().
+	update := s.entClient.PaymentOrder.Update().
 		Where(
 			paymentorder.IDEQ(o.ID),
 			paymentorder.Or(
@@ -273,9 +298,15 @@ func (s *PaymentService) acquirePaymentFulfillmentLease(ctx context.Context, o *
 		SetStatus(OrderStatusRecharging).
 		SetUpdatedAt(now).
 		ClearFailedAt().
-		ClearFailedReason().
-		Save(ctx)
+		ClearFailedReason()
+	if o.UpgradeFromSubscriptionID != nil && !o.UpgradeClaimActive {
+		update.SetUpgradeClaimActive(true)
+	}
+	updated, err := update.Save(ctx)
 	if err != nil {
+		if o.UpgradeFromSubscriptionID != nil && dbent.IsConstraintError(err) {
+			return nil, infraerrors.Conflict("UPGRADE_SUBSCRIPTION_RESERVED", "selected subscription is already reserved by another upgrade order")
+		}
 		return nil, fmt.Errorf("acquire fulfillment lease: %w", err)
 	}
 	if updated == 0 {
@@ -490,6 +521,9 @@ func (s *PaymentService) ExecuteSubscriptionFulfillment(ctx context.Context, oid
 	}
 	lease, err := s.acquirePaymentFulfillmentLease(ctx, o)
 	if err != nil {
+		if infraerrors.Reason(err) == "UPGRADE_SUBSCRIPTION_RESERVED" {
+			s.markUpgradeClaimConflictFailed(ctx, o, err)
+		}
 		return err
 	}
 	if lease == nil {
@@ -612,16 +646,16 @@ func (s *PaymentService) assignAndRecordPaymentSubscription(ctx context.Context,
 	txCtx := dbent.NewTxContext(ctx, tx)
 
 	var upgradeSource *UserSubscription
+	upgradeSourceAlreadyRevoked := false
 	if o.UpgradeFromSubscriptionID != nil && *o.UpgradeFromSubscriptionID > 0 {
-		upgradeSource, err = s.subscriptionSvc.GetByID(txCtx, *o.UpgradeFromSubscriptionID)
+		upgradeSource, upgradeSourceAlreadyRevoked, err = s.loadSubscriptionUpgradeSourceForFulfillment(txCtx, tx.Client(), o)
 		if err != nil {
 			return nil, fmt.Errorf("get upgrade source subscription: %w", err)
 		}
-		if err := validateSubscriptionUpgradeSourceForFulfillment(upgradeSource, o); err != nil {
-			return nil, err
-		}
-		if _, err := s.subscriptionSvc.revokeSubscription(txCtx, upgradeSource.ID, true); err != nil {
-			return nil, fmt.Errorf("revoke upgrade source subscription: %w", err)
+		if !upgradeSourceAlreadyRevoked {
+			if _, err := s.subscriptionSvc.revokeSubscription(txCtx, upgradeSource.ID, true); err != nil {
+				return nil, fmt.Errorf("revoke upgrade source subscription: %w", err)
+			}
 		}
 	}
 
@@ -645,7 +679,7 @@ func (s *PaymentService) assignAndRecordPaymentSubscription(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	if upgradeSource != nil {
+	if upgradeSource != nil && !upgradeSourceAlreadyRevoked {
 		detail, _ := json.Marshal(map[string]any{
 			"subscriptionID": upgradeSource.ID,
 			"creditAmount":   o.UpgradeCreditAmount,
@@ -666,8 +700,68 @@ func (s *PaymentService) assignAndRecordPaymentSubscription(ctx context.Context,
 
 	lease.version = newVersion
 	o.FulfilledSubscriptionID = &sub.ID
+	o.UpgradeClaimActive = true
 	s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
 	return sub, nil
+}
+
+func (s *PaymentService) loadSubscriptionUpgradeSourceForFulfillment(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder) (*UserSubscription, bool, error) {
+	if s.subscriptionSvc == nil || s.subscriptionSvc.userSubRepo == nil || client == nil || o == nil || o.UpgradeFromSubscriptionID == nil {
+		return nil, false, errors.New("missing subscription upgrade source dependencies")
+	}
+
+	subscriptionID := *o.UpgradeFromSubscriptionID
+	sub, err := s.subscriptionSvc.GetByID(ctx, subscriptionID)
+	if err == nil {
+		if err := validateSubscriptionUpgradeSourceForFulfillment(sub, o); err != nil {
+			return nil, false, err
+		}
+		return sub, false, nil
+	}
+	if !errors.Is(err, ErrSubscriptionNotFound) {
+		return nil, false, err
+	}
+
+	sub, err = s.subscriptionSvc.userSubRepo.GetByIDIncludeDeleted(ctx, subscriptionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if sub.DeletedAt == nil {
+		return nil, false, ErrSubscriptionNotFound
+	}
+	if err := validateSubscriptionUpgradeSourceIdentity(sub, o); err != nil {
+		return nil, false, err
+	}
+	matched, err := hasMatchingSubscriptionUpgradeAudit(ctx, client, o.ID, subscriptionID)
+	if err != nil {
+		return nil, false, err
+	}
+	if !matched {
+		return nil, false, infraerrors.Conflict("UPGRADE_SOURCE_ALREADY_CONSUMED", "selected subscription was revoked by another operation")
+	}
+	return sub, true, nil
+}
+
+func hasMatchingSubscriptionUpgradeAudit(ctx context.Context, client *dbent.Client, orderID, subscriptionID int64) (bool, error) {
+	audit, err := client.PaymentAuditLog.Query().
+		Where(
+			paymentauditlog.OrderIDEQ(strconv.FormatInt(orderID, 10)),
+			paymentauditlog.ActionEQ("SUBSCRIPTION_UPGRADE_CREDIT_APPLIED"),
+		).
+		First(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("query subscription upgrade audit: %w", err)
+	}
+	var detail struct {
+		SubscriptionID int64 `json:"subscriptionID"`
+	}
+	if err := json.Unmarshal([]byte(audit.Detail), &detail); err != nil {
+		return false, fmt.Errorf("parse subscription upgrade audit: %w", err)
+	}
+	return detail.SubscriptionID == subscriptionID, nil
 }
 
 func persistPaymentSubscriptionAssignment(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, lease *paymentFulfillmentLease, subscriptionID int64, detail map[string]any) (time.Time, error) {

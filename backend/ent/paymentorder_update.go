@@ -392,6 +392,20 @@ func (_u *PaymentOrderUpdate) ClearUpgradeFromSubscriptionID() *PaymentOrderUpda
 	return _u
 }
 
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (_u *PaymentOrderUpdate) SetUpgradeClaimActive(v bool) *PaymentOrderUpdate {
+	_u.mutation.SetUpgradeClaimActive(v)
+	return _u
+}
+
+// SetNillableUpgradeClaimActive sets the "upgrade_claim_active" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableUpgradeClaimActive(v *bool) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetUpgradeClaimActive(*v)
+	}
+	return _u
+}
+
 // SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
 func (_u *PaymentOrderUpdate) SetFulfilledSubscriptionID(v int64) *PaymentOrderUpdate {
 	_u.mutation.ResetFulfilledSubscriptionID()
@@ -1052,6 +1066,9 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
 		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
 	}
+	if value, ok := _u.mutation.UpgradeClaimActive(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeClaimActive, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.FulfilledSubscriptionID(); ok {
 		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
 	}
@@ -1587,6 +1604,20 @@ func (_u *PaymentOrderUpdateOne) AddUpgradeFromSubscriptionID(v int64) *PaymentO
 // ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
 func (_u *PaymentOrderUpdateOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpdateOne {
 	_u.mutation.ClearUpgradeFromSubscriptionID()
+	return _u
+}
+
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (_u *PaymentOrderUpdateOne) SetUpgradeClaimActive(v bool) *PaymentOrderUpdateOne {
+	_u.mutation.SetUpgradeClaimActive(v)
+	return _u
+}
+
+// SetNillableUpgradeClaimActive sets the "upgrade_claim_active" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableUpgradeClaimActive(v *bool) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetUpgradeClaimActive(*v)
+	}
 	return _u
 }
 
@@ -2279,6 +2310,9 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if _u.mutation.UpgradeFromSubscriptionIDCleared() {
 		_spec.ClearField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.UpgradeClaimActive(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeClaimActive, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.FulfilledSubscriptionID(); ok {
 		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)

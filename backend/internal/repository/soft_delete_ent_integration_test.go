@@ -159,7 +159,7 @@ func TestEntSoftDelete_UserSubscription_DefaultFilterAndSkip(t *testing.T) {
 	require.NotNil(t, got.DeletedAt, "deleted_at should be set after soft delete")
 }
 
-func TestEntSoftDelete_UserSubscription_DeleteIdempotent(t *testing.T) {
+func TestEntSoftDelete_UserSubscription_RepeatedDeleteReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
 
@@ -176,7 +176,7 @@ func TestEntSoftDelete_UserSubscription_DeleteIdempotent(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, sub), "create user subscription")
 
 	require.NoError(t, repo.Delete(ctx, sub.ID), "first delete")
-	require.NoError(t, repo.Delete(ctx, sub.ID), "second delete should be idempotent")
+	require.ErrorIs(t, repo.Delete(ctx, sub.ID), service.ErrSubscriptionNotFound, "a concurrent or repeated revoke must not report success")
 }
 
 func TestEntSoftDelete_UserSubscription_ListExcludesDeleted(t *testing.T) {

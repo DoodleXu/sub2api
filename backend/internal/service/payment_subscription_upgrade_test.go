@@ -391,12 +391,25 @@ func TestCreateOrderAppliesSubscriptionUpgradeCreditAndMinimumPayable(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, order.UpgradeFromSubscriptionID)
 	require.Equal(t, int64(77), *order.UpgradeFromSubscriptionID)
+	require.True(t, order.UpgradeClaimActive)
 	require.Equal(t, 99.99, order.UpgradeCreditAmount)
 	require.NotNil(t, order.UpgradeCreditDays)
 	require.GreaterOrEqual(t, *order.UpgradeCreditDays, 19)
 	require.LessOrEqual(t, *order.UpgradeCreditDays, 20)
 	require.Equal(t, 0.01, order.Amount)
 	require.Equal(t, 0.01, order.PayAmount)
+
+	_, err = svc.CreateOrder(ctx, CreateOrderRequest{
+		UserID:                    user.ID,
+		PaymentType:               payment.TypeEasyPay,
+		OrderType:                 payment.OrderTypeSubscription,
+		PlanID:                    plan.ID,
+		UpgradeFromSubscriptionID: 77,
+		ClientIP:                  "127.0.0.1",
+		SrcHost:                   "api.example.com",
+	})
+	require.Error(t, err)
+	require.Equal(t, "UPGRADE_SUBSCRIPTION_RESERVED", infraerrors.Reason(err))
 }
 
 type paymentUpgradeUserRepoStub struct {

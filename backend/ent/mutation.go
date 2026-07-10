@@ -27674,6 +27674,7 @@ type PaymentOrderMutation struct {
 	addsubscription_days            *int
 	upgrade_from_subscription_id    *int64
 	addupgrade_from_subscription_id *int64
+	upgrade_claim_active            *bool
 	fulfilled_subscription_id       *int64
 	addfulfilled_subscription_id    *int64
 	upgrade_credit_amount           *float64
@@ -28738,6 +28739,42 @@ func (m *PaymentOrderMutation) ResetUpgradeFromSubscriptionID() {
 	m.upgrade_from_subscription_id = nil
 	m.addupgrade_from_subscription_id = nil
 	delete(m.clearedFields, paymentorder.FieldUpgradeFromSubscriptionID)
+}
+
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (m *PaymentOrderMutation) SetUpgradeClaimActive(b bool) {
+	m.upgrade_claim_active = &b
+}
+
+// UpgradeClaimActive returns the value of the "upgrade_claim_active" field in the mutation.
+func (m *PaymentOrderMutation) UpgradeClaimActive() (r bool, exists bool) {
+	v := m.upgrade_claim_active
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpgradeClaimActive returns the old "upgrade_claim_active" field's value of the PaymentOrder entity.
+// If the PaymentOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentOrderMutation) OldUpgradeClaimActive(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpgradeClaimActive is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpgradeClaimActive requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpgradeClaimActive: %w", err)
+	}
+	return oldValue.UpgradeClaimActive, nil
+}
+
+// ResetUpgradeClaimActive resets all changes to the "upgrade_claim_active" field.
+func (m *PaymentOrderMutation) ResetUpgradeClaimActive() {
+	m.upgrade_claim_active = nil
 }
 
 // SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
@@ -29942,7 +29979,7 @@ func (m *PaymentOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PaymentOrderMutation) Fields() []string {
-	fields := make([]string, 0, 43)
+	fields := make([]string, 0, 44)
 	if m.user != nil {
 		fields = append(fields, paymentorder.FieldUserID)
 	}
@@ -29999,6 +30036,9 @@ func (m *PaymentOrderMutation) Fields() []string {
 	}
 	if m.upgrade_from_subscription_id != nil {
 		fields = append(fields, paymentorder.FieldUpgradeFromSubscriptionID)
+	}
+	if m.upgrade_claim_active != nil {
+		fields = append(fields, paymentorder.FieldUpgradeClaimActive)
 	}
 	if m.fulfilled_subscription_id != nil {
 		fields = append(fields, paymentorder.FieldFulfilledSubscriptionID)
@@ -30118,6 +30158,8 @@ func (m *PaymentOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.SubscriptionDays()
 	case paymentorder.FieldUpgradeFromSubscriptionID:
 		return m.UpgradeFromSubscriptionID()
+	case paymentorder.FieldUpgradeClaimActive:
+		return m.UpgradeClaimActive()
 	case paymentorder.FieldFulfilledSubscriptionID:
 		return m.FulfilledSubscriptionID()
 	case paymentorder.FieldUpgradeCreditAmount:
@@ -30213,6 +30255,8 @@ func (m *PaymentOrderMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldSubscriptionDays(ctx)
 	case paymentorder.FieldUpgradeFromSubscriptionID:
 		return m.OldUpgradeFromSubscriptionID(ctx)
+	case paymentorder.FieldUpgradeClaimActive:
+		return m.OldUpgradeClaimActive(ctx)
 	case paymentorder.FieldFulfilledSubscriptionID:
 		return m.OldFulfilledSubscriptionID(ctx)
 	case paymentorder.FieldUpgradeCreditAmount:
@@ -30402,6 +30446,13 @@ func (m *PaymentOrderMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetUpgradeFromSubscriptionID(v)
+		return nil
+	case paymentorder.FieldUpgradeClaimActive:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpgradeClaimActive(v)
 		return nil
 	case paymentorder.FieldFulfilledSubscriptionID:
 		v, ok := value.(int64)
@@ -30952,6 +31003,9 @@ func (m *PaymentOrderMutation) ResetField(name string) error {
 		return nil
 	case paymentorder.FieldUpgradeFromSubscriptionID:
 		m.ResetUpgradeFromSubscriptionID()
+		return nil
+	case paymentorder.FieldUpgradeClaimActive:
+		m.ResetUpgradeClaimActive()
 		return nil
 	case paymentorder.FieldFulfilledSubscriptionID:
 		m.ResetFulfilledSubscriptionID()

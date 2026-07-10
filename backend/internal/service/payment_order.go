@@ -133,9 +133,12 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
-		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
-			SetStatus(OrderStatusFailed).
-			Save(ctx)
+		update := s.entClient.PaymentOrder.UpdateOneID(order.ID).
+			SetStatus(OrderStatusFailed)
+		if order.UpgradeFromSubscriptionID != nil {
+			update.SetUpgradeClaimActive(false)
+		}
+		_, _ = update.Save(ctx)
 		return nil, err
 	}
 	return resp, nil
@@ -238,11 +241,15 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	}
 	if upgradeCredit != nil && upgradeCredit.SubscriptionID > 0 {
 		b.SetUpgradeFromSubscriptionID(upgradeCredit.SubscriptionID).
+			SetUpgradeClaimActive(true).
 			SetUpgradeCreditAmount(upgradeCredit.CreditAmount).
 			SetUpgradeCreditDays(upgradeCredit.CreditDays)
 	}
 	order, err := b.Save(ctx)
 	if err != nil {
+		if upgradeCredit != nil && dbent.IsConstraintError(err) {
+			return nil, infraerrors.Conflict("UPGRADE_SUBSCRIPTION_RESERVED", "selected subscription is already reserved by another upgrade order")
+		}
 		return nil, fmt.Errorf("create order: %w", err)
 	}
 	code := fmt.Sprintf("PAY-%d-%d", order.ID, time.Now().UnixNano()%100000)

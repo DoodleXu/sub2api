@@ -301,6 +301,8 @@ git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 - 已采用上游支付履约 lease 和 stale worker 保护，同时保留 fork 的独立订阅记录、升级抵扣、`fulfilled_subscription_id` 和订单备注恢复逻辑。
 - `SUBSCRIPTION_ASSIGNED`、`SUBSCRIPTION_SUCCESS`、已记录订阅 ID 和精确订单备注均可作为恢复锚点；恢复时仍执行幂等返佣，避免重复发放权益或漏返佣。
 - 独立订阅创建、升级来源撤销、订单关联和履约审计已收敛到同一事务，并以 lease version 条件更新订单；旧 worker 失去 lease 时会整体回滚，升级目标创建失败也不会提前撤销原订阅。
+- 升级订单通过 `upgrade_claim_active` 和部分唯一索引独占来源订阅；取消、过期及未支付的渠道创建失败会释放占用，历史未占用的已支付订单会在获取履约 lease 时原子补领，避免同一剩余价值被并发重复抵扣。
+- 来源订阅软删除现在必须实际影响一行；对于旧版本已撤销来源并写入 `SUBSCRIPTION_UPGRADE_CREDIT_APPLIED`、但尚未创建目标订阅的半完成订单，重试会校验审计中的来源 ID 并继续原子发放。没有匹配审计的已删除来源仍拒绝自动恢复，避免误用其他订单或管理员撤销的权益。
 - 订阅配额重置已接入上游原子 `ResetUsageWindows` 与窗口起点 CAS 参数；fork 的周配额批量重置继续保留，批量重置按单订阅原子提交所选窗口。
 
 ### OpenAI 路由与调度增强
@@ -328,6 +330,7 @@ git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 - 已迁入 compact SSE 原始 output item 保留、缺失 compaction item 补全、SSE 心跳提交后的协议错误回传，以及 API Key compact 强制 JSON `Accept`。
 - 已迁入 GPT-5.6 `max` reasoning effort、候选模型后缀推导、Codex compact `max -> xhigh` 降级和 Codex `0.144.1` User-Agent 一致性。
 - OpenAI 缓存读写 token 现按多种上游字段解析，普通输入、cache read、cache write 三类计费桶保持互斥，避免 cache write 重复计费。
+- Anthropic 转 Responses/Chat Completions 时会同时保留总输入、cache read 和 cache creation 明细；非流式及流式终止事件不再把缓存创建 token 隐藏为普通输入，避免下游成本核算口径漂移。
 
 ### 通知、风控与内容审计增强
 
@@ -387,6 +390,7 @@ git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 
 - 后端：支付 lease/恢复、订阅配额、OpenAI reasoning/compact/cache 专项测试通过；修复 handler 测试 stub 接口漂移后，`TZ=UTC go test -tags=unit ./...` 全量通过。
 - 合并后审核修复：新增 stale lease 独立订阅事务回滚、升级目标创建失败回滚来源撤销、批量配额原子失败不部分重置测试。
+- 二次全面审核修复：新增升级来源唯一占用与取消释放、历史半完成升级恢复、重复占用已支付订单失败归档、重复软删除拒绝，以及 Anthropic -> Responses/Chat cache creation 明细透传测试。
 - 前端：`vue-tsc --noEmit`、路由 `feature-access.spec.ts` 和生产构建通过。
 - 路由守卫仅在公共设置明确返回 `false` 时禁用 payment/risk control，Web 创作台仍由 `web_console_enabled` 控制。
 

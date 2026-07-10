@@ -1625,8 +1625,13 @@ func TestAnthropicToResponsesResponse_CacheTokensUseOpenAIInputSemantics(t *test
 	assert.Equal(t, 54206, out.Usage.InputTokens)
 	assert.Equal(t, 123, out.Usage.OutputTokens)
 	assert.Equal(t, 54329, out.Usage.TotalTokens)
+	assert.Equal(t, 200, out.Usage.CacheCreationInputTokens)
 	require.NotNil(t, out.Usage.InputTokensDetails)
 	assert.Equal(t, 50688, out.Usage.InputTokensDetails.CachedTokens)
+	chatUsage := chatUsageFromResponsesUsage(out.Usage)
+	require.NotNil(t, chatUsage)
+	require.NotNil(t, chatUsage.PromptTokensDetails)
+	assert.Equal(t, 200, chatUsage.PromptTokensDetails.CacheCreationTokens)
 }
 
 func TestAnthropicToResponsesResponse_NoCacheTokens(t *testing.T) {
@@ -1693,6 +1698,7 @@ func TestAnthropicEventToResponses_CacheTokensRoundTripFromMessageStart(t *testi
 	assert.Equal(t, 31, completed.Response.Usage.TotalTokens)
 	require.NotNil(t, completed.Response.Usage.InputTokensDetails)
 	assert.Equal(t, 9, completed.Response.Usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 3, completed.Response.Usage.CacheCreationInputTokens)
 }
 
 func TestAnthropicEventToResponses_CacheTokensFromMessageDelta(t *testing.T) {
@@ -1728,6 +1734,7 @@ func TestAnthropicEventToResponses_CacheTokensFromMessageDelta(t *testing.T) {
 	require.NotNil(t, completed)
 	require.NotNil(t, completed.Response.Usage)
 	// 20 (uncached) + 11 (read) + 4 (creation) = 35
+	assert.Equal(t, 4, completed.Response.Usage.CacheCreationInputTokens)
 	assert.Equal(t, 35, completed.Response.Usage.InputTokens)
 	assert.Equal(t, 8, completed.Response.Usage.OutputTokens)
 	require.NotNil(t, completed.Response.Usage.InputTokensDetails)

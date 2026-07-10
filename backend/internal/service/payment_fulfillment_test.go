@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -76,6 +78,18 @@ func (r *paymentFulfillmentTransactionalSubRepo) GetByID(ctx context.Context, id
 	return paymentFulfillmentSubscriptionFromEntity(sub), nil
 }
 
+func (r *paymentFulfillmentTransactionalSubRepo) GetByIDIncludeDeleted(ctx context.Context, id int64) (*UserSubscription, error) {
+	queryCtx := mixins.SkipSoftDelete(ctx)
+	sub, err := r.entClient(ctx).UserSubscription.Get(queryCtx, id)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrSubscriptionNotFound
+		}
+		return nil, err
+	}
+	return paymentFulfillmentSubscriptionFromEntity(sub), nil
+}
+
 func (r *paymentFulfillmentTransactionalSubRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
 	sub, err := r.entClient(ctx).UserSubscription.Query().
 		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDEQ(groupID)).
@@ -91,8 +105,14 @@ func (r *paymentFulfillmentTransactionalSubRepo) GetByUserIDAndGroupID(ctx conte
 }
 
 func (r *paymentFulfillmentTransactionalSubRepo) Delete(ctx context.Context, id int64) error {
-	_, err := r.entClient(ctx).UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
-	return err
+	deleted, err := r.entClient(ctx).UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return ErrSubscriptionNotFound
+	}
+	return nil
 }
 
 func paymentFulfillmentSubscriptionFromEntity(sub *dbent.UserSubscription) *UserSubscription {
@@ -115,6 +135,7 @@ func paymentFulfillmentSubscriptionFromEntity(sub *dbent.UserSubscription) *User
 		AssignedBy:         sub.AssignedBy,
 		AssignedAt:         sub.AssignedAt,
 		Notes:              subscriptionStringValue(sub.Notes),
+		DeletedAt:          sub.DeletedAt,
 	}
 }
 
@@ -872,6 +893,103 @@ func TestSubscriptionUpgradeAssignmentFailureRollsBackSourceRevocation(t *testin
 	).Count(ctx)
 	require.NoError(t, err)
 	require.Zero(t, upgradeAudits)
+}
+
+func TestSubscriptionUpgradeRecoversHistoricallyRevokedSourceFromAudit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	group, err := client.Group.Create().
+		SetName("upgrade-history-recovery-group").
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	source, err := client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetStartsAt(time.Now().Add(-24 * time.Hour)).
+		SetExpiresAt(time.Now().Add(30 * 24 * time.Hour)).
+		SetStatus(SubscriptionStatusActive).
+		SetNotes("historically revoked upgrade source").
+		Save(ctx)
+	require.NoError(t, err)
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).
+		SetSubscriptionGroupID(group.ID).
+		SetUpgradeFromSubscriptionID(source.ID).
+		SetUpgradeClaimActive(true).
+		Save(ctx)
+	require.NoError(t, err)
+
+	repo := &paymentFulfillmentTransactionalSubRepo{client: client}
+	require.NoError(t, repo.Delete(ctx, source.ID))
+	detail, err := json.Marshal(map[string]any{
+		"subscriptionID": source.ID,
+		"creditAmount":   50,
+		"creditDays":     15,
+	})
+	require.NoError(t, err)
+	_, err = client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("SUBSCRIPTION_UPGRADE_CREDIT_APPLIED").
+		SetDetail(string(detail)).
+		SetOperator("system").
+		Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := &subscriptionGroupRepoStub{group: &Group{ID: group.ID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription}}
+	svc := &PaymentService{
+		entClient:       client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, repo, nil, nil, nil),
+	}
+
+	require.NoError(t, svc.ExecuteSubscriptionFulfillment(ctx, order.ID))
+	reloadedOrder, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloadedOrder.Status)
+	require.NotNil(t, reloadedOrder.FulfilledSubscriptionID)
+	require.NotEqual(t, source.ID, *reloadedOrder.FulfilledSubscriptionID)
+	recoveredSource, err := client.UserSubscription.Get(mixins.SkipSoftDelete(ctx), source.ID)
+	require.NoError(t, err)
+	require.NotNil(t, recoveredSource.DeletedAt)
+	activeTargets, err := client.UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(order.UserID), usersubscription.GroupIDEQ(group.ID)).
+		All(ctx)
+	require.NoError(t, err)
+	require.Len(t, activeTargets, 1)
+}
+
+func TestPaidUpgradeOrderWithoutClaimIsMarkedFailedWhenSourceIsReserved(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	first := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	second := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+
+	const sourceID int64 = 88
+	_, err := client.PaymentOrder.UpdateOneID(first.ID).
+		SetUpgradeFromSubscriptionID(sourceID).
+		SetUpgradeClaimActive(true).
+		Save(ctx)
+	require.NoError(t, err)
+	second, err = client.PaymentOrder.UpdateOneID(second.ID).
+		SetUpgradeFromSubscriptionID(sourceID).
+		SetUpgradeClaimActive(false).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	err = svc.ExecuteSubscriptionFulfillment(ctx, second.ID)
+	require.Error(t, err)
+	require.Equal(t, "UPGRADE_SUBSCRIPTION_RESERVED", infraerrors.Reason(err))
+
+	reloaded, err := client.PaymentOrder.Get(ctx, second.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusFailed, reloaded.Status)
+	require.NotNil(t, reloaded.FailedAt)
+	require.Contains(t, subscriptionStringValue(reloaded.FailedReason), "selected subscription is already reserved")
 }
 
 func TestExecuteBalanceFulfillmentRecoversAfterRedeemWithoutCreditingAgain(t *testing.T) {

@@ -57,6 +57,8 @@ type PaymentOrder struct {
 	SubscriptionDays *int `json:"subscription_days,omitempty"`
 	// UpgradeFromSubscriptionID holds the value of the "upgrade_from_subscription_id" field.
 	UpgradeFromSubscriptionID *int64 `json:"upgrade_from_subscription_id,omitempty"`
+	// UpgradeClaimActive holds the value of the "upgrade_claim_active" field.
+	UpgradeClaimActive bool `json:"upgrade_claim_active,omitempty"`
 	// FulfilledSubscriptionID holds the value of the "fulfilled_subscription_id" field.
 	FulfilledSubscriptionID *int64 `json:"fulfilled_subscription_id,omitempty"`
 	// UpgradeCreditAmount holds the value of the "upgrade_credit_amount" field.
@@ -138,7 +140,7 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case paymentorder.FieldProviderSnapshot:
 			values[i] = new([]byte)
-		case paymentorder.FieldForceRefund:
+		case paymentorder.FieldUpgradeClaimActive, paymentorder.FieldForceRefund:
 			values[i] = new(sql.NullBool)
 		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldUpgradeCreditAmount, paymentorder.FieldRefundAmount:
 			values[i] = new(sql.NullFloat64)
@@ -290,6 +292,12 @@ func (_m *PaymentOrder) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.UpgradeFromSubscriptionID = new(int64)
 				*_m.UpgradeFromSubscriptionID = value.Int64
+			}
+		case paymentorder.FieldUpgradeClaimActive:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field upgrade_claim_active", values[i])
+			} else if value.Valid {
+				_m.UpgradeClaimActive = value.Bool
 			}
 		case paymentorder.FieldFulfilledSubscriptionID:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -564,6 +572,9 @@ func (_m *PaymentOrder) String() string {
 		builder.WriteString("upgrade_from_subscription_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("upgrade_claim_active=")
+	builder.WriteString(fmt.Sprintf("%v", _m.UpgradeClaimActive))
 	builder.WriteString(", ")
 	if v := _m.FulfilledSubscriptionID; v != nil {
 		builder.WriteString("fulfilled_subscription_id=")

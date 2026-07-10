@@ -1057,6 +1057,7 @@ var (
 		{Name: "subscription_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "subscription_days", Type: field.TypeInt, Nullable: true},
 		{Name: "upgrade_from_subscription_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "upgrade_claim_active", Type: field.TypeBool, Default: false},
 		{Name: "fulfilled_subscription_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "upgrade_credit_amount", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,2)"}},
 		{Name: "upgrade_credit_days", Type: field.TypeInt, Nullable: true},
@@ -1091,7 +1092,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "payment_orders_users_payment_orders",
-				Columns:    []*schema.Column{PaymentOrdersColumns[43]},
+				Columns:    []*schema.Column{PaymentOrdersColumns[44]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -1108,32 +1109,32 @@ var (
 			{
 				Name:    "paymentorder_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[43]},
+				Columns: []*schema.Column{PaymentOrdersColumns[44]},
 			},
 			{
 				Name:    "paymentorder_status",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[25]},
+				Columns: []*schema.Column{PaymentOrdersColumns[26]},
 			},
 			{
 				Name:    "paymentorder_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[33]},
+				Columns: []*schema.Column{PaymentOrdersColumns[34]},
 			},
 			{
 				Name:    "paymentorder_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[41]},
+				Columns: []*schema.Column{PaymentOrdersColumns[42]},
 			},
 			{
 				Name:    "paymentorder_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[34]},
+				Columns: []*schema.Column{PaymentOrdersColumns[35]},
 			},
 			{
 				Name:    "paymentorder_payment_type_paid_at",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[34]},
+				Columns: []*schema.Column{PaymentOrdersColumns[9], PaymentOrdersColumns[35]},
 			},
 			{
 				Name:    "paymentorder_order_type",
@@ -1146,9 +1147,17 @@ var (
 				Columns: []*schema.Column{PaymentOrdersColumns[18]},
 			},
 			{
+				Name:    "idx_payment_orders_active_upgrade_claim",
+				Unique:  true,
+				Columns: []*schema.Column{PaymentOrdersColumns[18]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "upgrade_from_subscription_id IS NOT NULL AND upgrade_claim_active = true",
+				},
+			},
+			{
 				Name:    "paymentorder_fulfilled_subscription_id",
 				Unique:  false,
-				Columns: []*schema.Column{PaymentOrdersColumns[19]},
+				Columns: []*schema.Column{PaymentOrdersColumns[20]},
 			},
 		},
 	}

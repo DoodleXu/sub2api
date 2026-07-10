@@ -225,6 +225,20 @@ func (_c *PaymentOrderCreate) SetNillableUpgradeFromSubscriptionID(v *int64) *Pa
 	return _c
 }
 
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (_c *PaymentOrderCreate) SetUpgradeClaimActive(v bool) *PaymentOrderCreate {
+	_c.mutation.SetUpgradeClaimActive(v)
+	return _c
+}
+
+// SetNillableUpgradeClaimActive sets the "upgrade_claim_active" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableUpgradeClaimActive(v *bool) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetUpgradeClaimActive(*v)
+	}
+	return _c
+}
+
 // SetFulfilledSubscriptionID sets the "fulfilled_subscription_id" field.
 func (_c *PaymentOrderCreate) SetFulfilledSubscriptionID(v int64) *PaymentOrderCreate {
 	_c.mutation.SetFulfilledSubscriptionID(v)
@@ -581,6 +595,10 @@ func (_c *PaymentOrderCreate) defaults() {
 		v := paymentorder.DefaultOrderType
 		_c.mutation.SetOrderType(v)
 	}
+	if _, ok := _c.mutation.UpgradeClaimActive(); !ok {
+		v := paymentorder.DefaultUpgradeClaimActive
+		_c.mutation.SetUpgradeClaimActive(v)
+	}
 	if _, ok := _c.mutation.UpgradeCreditAmount(); !ok {
 		v := paymentorder.DefaultUpgradeCreditAmount
 		_c.mutation.SetUpgradeCreditAmount(v)
@@ -676,6 +694,9 @@ func (_c *PaymentOrderCreate) check() error {
 		if err := paymentorder.OrderTypeValidator(v); err != nil {
 			return &ValidationError{Name: "order_type", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.order_type": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.UpgradeClaimActive(); !ok {
+		return &ValidationError{Name: "upgrade_claim_active", err: errors.New(`ent: missing required field "PaymentOrder.upgrade_claim_active"`)}
 	}
 	if _, ok := _c.mutation.UpgradeCreditAmount(); !ok {
 		return &ValidationError{Name: "upgrade_credit_amount", err: errors.New(`ent: missing required field "PaymentOrder.upgrade_credit_amount"`)}
@@ -835,6 +856,10 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.UpgradeFromSubscriptionID(); ok {
 		_spec.SetField(paymentorder.FieldUpgradeFromSubscriptionID, field.TypeInt64, value)
 		_node.UpgradeFromSubscriptionID = &value
+	}
+	if value, ok := _c.mutation.UpgradeClaimActive(); ok {
+		_spec.SetField(paymentorder.FieldUpgradeClaimActive, field.TypeBool, value)
+		_node.UpgradeClaimActive = value
 	}
 	if value, ok := _c.mutation.FulfilledSubscriptionID(); ok {
 		_spec.SetField(paymentorder.FieldFulfilledSubscriptionID, field.TypeInt64, value)
@@ -1316,6 +1341,18 @@ func (u *PaymentOrderUpsert) AddUpgradeFromSubscriptionID(v int64) *PaymentOrder
 // ClearUpgradeFromSubscriptionID clears the value of the "upgrade_from_subscription_id" field.
 func (u *PaymentOrderUpsert) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsert {
 	u.SetNull(paymentorder.FieldUpgradeFromSubscriptionID)
+	return u
+}
+
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (u *PaymentOrderUpsert) SetUpgradeClaimActive(v bool) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldUpgradeClaimActive, v)
+	return u
+}
+
+// UpdateUpgradeClaimActive sets the "upgrade_claim_active" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateUpgradeClaimActive() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldUpgradeClaimActive)
 	return u
 }
 
@@ -2122,6 +2159,20 @@ func (u *PaymentOrderUpsertOne) UpdateUpgradeFromSubscriptionID() *PaymentOrderU
 func (u *PaymentOrderUpsertOne) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (u *PaymentOrderUpsertOne) SetUpgradeClaimActive(v bool) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeClaimActive(v)
+	})
+}
+
+// UpdateUpgradeClaimActive sets the "upgrade_claim_active" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateUpgradeClaimActive() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeClaimActive()
 	})
 }
 
@@ -3159,6 +3210,20 @@ func (u *PaymentOrderUpsertBulk) UpdateUpgradeFromSubscriptionID() *PaymentOrder
 func (u *PaymentOrderUpsertBulk) ClearUpgradeFromSubscriptionID() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.ClearUpgradeFromSubscriptionID()
+	})
+}
+
+// SetUpgradeClaimActive sets the "upgrade_claim_active" field.
+func (u *PaymentOrderUpsertBulk) SetUpgradeClaimActive(v bool) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetUpgradeClaimActive(v)
+	})
+}
+
+// UpdateUpgradeClaimActive sets the "upgrade_claim_active" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateUpgradeClaimActive() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateUpgradeClaimActive()
 	})
 }
 

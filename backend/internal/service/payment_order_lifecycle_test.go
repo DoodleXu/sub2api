@@ -191,6 +191,8 @@ func TestVerifyOrderByOutTradeNoBackfillsTradeNoFromPaidQuery(t *testing.T) {
 		SetPaymentType(payment.TypeAlipay).
 		SetPaymentTradeNo("").
 		SetOrderType(payment.OrderTypeBalance).
+		SetUpgradeFromSubscriptionID(77).
+		SetUpgradeClaimActive(true).
 		SetStatus(OrderStatusPending).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SetClientIP("127.0.0.1").
@@ -645,6 +647,28 @@ func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCancelled, reloaded.Status)
+	require.False(t, reloaded.UpgradeClaimActive)
+
+	_, err = client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(88).
+		SetPayAmount(88).
+		SetFeeRate(0).
+		SetRechargeCode("CANCEL-PENDING-REUSE").
+		SetOutTradeNo("sub2_cancel_pending_reuse").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetUpgradeFromSubscriptionID(77).
+		SetUpgradeClaimActive(true).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err, "a cancelled order must release its upgrade source reservation")
 }
 
 func TestReconcilePendingWxpayOrdersBackfillsPaidOrder(t *testing.T) {

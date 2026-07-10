@@ -134,6 +134,16 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 }
 
 func validateSubscriptionUpgradeSourceForFulfillment(sub *UserSubscription, order *dbent.PaymentOrder) error {
+	if err := validateSubscriptionUpgradeSourceIdentity(sub, order); err != nil {
+		return err
+	}
+	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
+		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_ACTIVE", "selected subscription is no longer active")
+	}
+	return nil
+}
+
+func validateSubscriptionUpgradeSourceIdentity(sub *UserSubscription, order *dbent.PaymentOrder) error {
 	if sub == nil {
 		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_FOUND", "selected subscription is not available")
 	}
@@ -145,9 +155,6 @@ func validateSubscriptionUpgradeSourceForFulfillment(sub *UserSubscription, orde
 	}
 	if sub.GroupID != *order.SubscriptionGroupID {
 		return infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
-	}
-	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
-		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_ACTIVE", "selected subscription is no longer active")
 	}
 	return nil
 }
