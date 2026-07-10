@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,15 @@ type paymentFulfillmentTransactionalSubRepo struct {
 
 	client    *dbent.Client
 	createErr error
+}
+
+func hasPaymentSubscriptionOrderNote(notes string, orderNote string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(notes, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(line) == orderNote {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *paymentFulfillmentTransactionalSubRepo) entClient(ctx context.Context) *dbent.Client {

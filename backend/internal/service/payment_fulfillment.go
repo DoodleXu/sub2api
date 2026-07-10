@@ -585,15 +585,6 @@ func paymentSubscriptionOrderNote(orderID int64) string {
 	return fmt.Sprintf("payment order %d", orderID)
 }
 
-func hasPaymentSubscriptionOrderNote(notes string, orderNote string) bool {
-	for _, line := range strings.Split(strings.ReplaceAll(notes, "\r\n", "\n"), "\n") {
-		if strings.TrimSpace(line) == orderNote {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *PaymentService) recordFulfilledSubscription(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease, subscriptionID int64) error {
 	if o == nil || subscriptionID <= 0 {
 		return nil
