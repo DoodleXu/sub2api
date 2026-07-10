@@ -2987,8 +2987,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		}
 	}
-	if bytes.Contains(body, []byte(`"arguments"`)) &&
-		(bytes.Contains(body, []byte(`"function_call"`)) || bytes.Contains(body, []byte(`"custom_tool_call"`))) {
+	if openAIResponsesInputArgumentsMayNeedNormalize(body) {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -6315,8 +6314,7 @@ func sanitizeEncryptedReasoningInputItem(item any) (next any, changed bool, keep
 }
 
 func normalizeOpenAIResponsesInputArgumentsInBody(body []byte) ([]byte, bool, error) {
-	if !bytes.Contains(body, []byte(`"arguments"`)) ||
-		(!bytes.Contains(body, []byte(`"function_call"`)) && !bytes.Contains(body, []byte(`"custom_tool_call"`))) {
+	if !openAIResponsesInputArgumentsMayNeedNormalize(body) {
 		return body, false, nil
 	}
 
@@ -6334,6 +6332,27 @@ func normalizeOpenAIResponsesInputArgumentsInBody(body []byte) ([]byte, bool, er
 	return normalized, true, nil
 }
 
+var openAIResponsesInputArgumentNormalizeTypeTokens = [][]byte{
+	[]byte(`"function_call"`),
+	[]byte(`"custom_tool_call"`),
+	[]byte(`"tool_call"`),
+	[]byte(`"local_shell_call"`),
+	[]byte(`"tool_search_call"`),
+	[]byte(`"mcp_tool_call"`),
+}
+
+func openAIResponsesInputArgumentsMayNeedNormalize(body []byte) bool {
+	if !bytes.Contains(body, []byte(`"arguments"`)) {
+		return false
+	}
+	for _, token := range openAIResponsesInputArgumentNormalizeTypeTokens {
+		if bytes.Contains(body, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeOpenAIResponsesInputArguments(reqBody map[string]any) bool {
 	input, ok := reqBody["input"].([]any)
 	if !ok {
@@ -6347,17 +6366,31 @@ func normalizeOpenAIResponsesInputArguments(reqBody map[string]any) bool {
 			continue
 		}
 		itemType, _ := item["type"].(string)
-		if itemType != "function_call" && itemType != "custom_tool_call" {
-			continue
-		}
-		switch arguments := item["arguments"].(type) {
-		case map[string]any, []any:
-			encoded, err := json.Marshal(arguments)
-			if err != nil {
-				continue
+		switch itemType {
+		case "function_call", "custom_tool_call":
+			switch arguments := item["arguments"].(type) {
+			case map[string]any, []any:
+				encoded, err := json.Marshal(arguments)
+				if err != nil {
+					continue
+				}
+				item["arguments"] = string(encoded)
+				changed = true
 			}
-			item["arguments"] = string(encoded)
-			changed = true
+		case "tool_call", "local_shell_call", "tool_search_call", "mcp_tool_call":
+			if arguments, ok := item["arguments"].(string); ok {
+				var decoded map[string]any
+				trimmed := strings.TrimSpace(arguments)
+				if trimmed == "" {
+					decoded = map[string]any{}
+				} else if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+					continue
+				} else if decoded == nil {
+					continue
+				}
+				item["arguments"] = decoded
+				changed = true
+			}
 		}
 	}
 	return changed

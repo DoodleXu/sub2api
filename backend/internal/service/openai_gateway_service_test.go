@@ -2333,6 +2333,41 @@ func TestNormalizeOpenAIResponsesInputArgumentsStringifiesObjects(t *testing.T) 
 	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.3.arguments").Type)
 }
 
+func TestNormalizeOpenAIResponsesInputArgumentsObjectifiesCodexToolCalls(t *testing.T) {
+	body := []byte(`{"input":[{"type":"tool_search_call","name":"search","arguments":"{\"query\":\"repo\"}"},{"type":"mcp_tool_call","name":"read","arguments":"{}"},{"type":"local_shell_call","name":"exec","arguments":""},{"type":"tool_call","name":"custom","arguments":{"kept":true}}]}`)
+
+	normalized, changed, err := normalizeOpenAIResponsesInputArgumentsInBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.0.arguments").Type)
+	require.Equal(t, "repo", gjson.GetBytes(normalized, "input.0.arguments.query").String())
+	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.1.arguments").Type)
+	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.2.arguments").Type)
+	require.Equal(t, gjson.JSON, gjson.GetBytes(normalized, "input.3.arguments").Type)
+	require.True(t, gjson.GetBytes(normalized, "input.3.arguments.kept").Bool())
+}
+
+func TestNormalizeOpenAIResponsesInputArgumentsSkipsUnrelatedArguments(t *testing.T) {
+	body := []byte(`{"metadata":{"arguments":{"kept":true}}}`)
+
+	normalized, changed, err := normalizeOpenAIResponsesInputArgumentsInBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+}
+
+func TestNormalizeOpenAIResponsesInputArgumentsKeepsNonObjectCodexArgumentStrings(t *testing.T) {
+	body := []byte(`{"input":[{"type":"tool_search_call","arguments":"[]"},{"type":"mcp_tool_call","arguments":"null"},{"type":"local_shell_call","arguments":"\"text\""}]}`)
+
+	normalized, changed, err := normalizeOpenAIResponsesInputArgumentsInBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+}
+
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
