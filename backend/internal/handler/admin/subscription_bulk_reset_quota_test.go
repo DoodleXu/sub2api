@@ -97,19 +97,22 @@ func (r *bulkResetUserSubRepoStub) UpdateNotes(context.Context, int64, string) e
 func (r *bulkResetUserSubRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
-func (r *bulkResetUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, _ time.Time) error {
+func (r *bulkResetUserSubRepoStub) ResetUsageWindows(context.Context, int64, bool, bool, bool, time.Time) error {
+	panic("unexpected ResetUsageWindows call")
+}
+func (r *bulkResetUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, _ *time.Time, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dailyIDs = append(r.dailyIDs, id)
 	return nil
 }
-func (r *bulkResetUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, _ time.Time) error {
+func (r *bulkResetUserSubRepoStub) ResetWeeklyUsage(_ context.Context, id int64, _ *time.Time, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.weeklyIDs = append(r.weeklyIDs, id)
 	return nil
 }
-func (r *bulkResetUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, _ time.Time) error {
+func (r *bulkResetUserSubRepoStub) ResetMonthlyUsage(_ context.Context, id int64, _ *time.Time, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.monthlyIDs = append(r.monthlyIDs, id)

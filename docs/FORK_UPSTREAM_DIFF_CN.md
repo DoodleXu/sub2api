@@ -10,22 +10,22 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork HEAD | `b933b5833 chore: 准备发布 v0.1.205` | 2026-07-10 |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.149` -> `dd1a116f4` | fork 已通过 `f100ba770 chore: 合并上游 v0.1.149 release` 合入 |
-| 上游 main HEAD | `ddb1a210c` | 上游 main 在 `v0.1.149` 后还有 17 个提交，尚未进入当前 fork |
-| fork 相对上游 release 差异 | 约 265 个提交、467 个文件 | 以 `refs/tags/upstream/v0.1.149^{}..HEAD` 统计 |
+| Fork 同步前 HEAD | `9e55df0e2 chore: 准备发布 v0.1.208` | 本次 merge 前基线，fork 版本继续保留 `0.1.208` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.150` -> `0dec1ad292` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.150` |
+| 上游 main HEAD | `5260a42a0b` | 上游 main 在 `v0.1.150` 后还有 13 个提交，尚未进入当前 fork |
+| fork 相对上游 release 差异 | 约 276 个提交、470 个文件 | 以本次 merge 暂存树相对 `refs/tags/upstream/v0.1.150^{}` 统计 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.149:refs/tags/upstream/v0.1.149 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.149^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.149^{}..HEAD
+git fetch upstream refs/tags/v0.1.150:refs/tags/upstream/v0.1.150 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.150^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.149` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.150` 替换为新的官方 release tag，再更新本节。
 
 ## 核心 fork 定制功能
 
@@ -296,6 +296,12 @@ git diff --name-status refs/tags/upstream/v0.1.149^{}..HEAD
 - `0b4e6d73f feat: 支持批量重置订阅周配额`
 - `f75aa0ed9 fix: 支持所有订阅类型高峰倍率`
 
+`v0.1.150` 同步说明：
+
+- 已采用上游支付履约 lease 和 stale worker 保护，同时保留 fork 的独立订阅记录、升级抵扣、`fulfilled_subscription_id` 和订单备注恢复逻辑。
+- `SUBSCRIPTION_ASSIGNED`、`SUBSCRIPTION_SUCCESS`、已记录订阅 ID 和精确订单备注均可作为恢复锚点；恢复时仍执行幂等返佣，避免重复发放权益或漏返佣。
+- 订阅配额重置已接入上游原子 `ResetUsageWindows` 与窗口起点 CAS 参数；fork 的周配额批量重置继续保留。
+
 ### OpenAI 路由与调度增强
 
 差异包括严格优先级调度、试验性调度、路由解释、上游余额展示、Responses 原生工具账号能力区分、Codex 官方额度重置、工具调用参数归一化。
@@ -315,6 +321,12 @@ git diff --name-status refs/tags/upstream/v0.1.149^{}..HEAD
 - `2767be90b fix: 区分 Responses 原生工具账号能力`
 - `582399afb feat: 增加 Codex 官方额度重置`
 - `a8b927ab3 fix: 兼容 Codex 工具调用参数类型`
+
+`v0.1.150` 同步说明：
+
+- 已迁入 compact SSE 原始 output item 保留、缺失 compaction item 补全、SSE 心跳提交后的协议错误回传，以及 API Key compact 强制 JSON `Accept`。
+- 已迁入 GPT-5.6 `max` reasoning effort、候选模型后缀推导、Codex compact `max -> xhigh` 降级和 Codex `0.144.1` User-Agent 一致性。
+- OpenAI 缓存读写 token 现按多种上游字段解析，普通输入、cache read、cache write 三类计费桶保持互斥，避免 cache write 重复计费。
 
 ### 通知、风控与内容审计增强
 
@@ -354,23 +366,27 @@ git diff --name-status refs/tags/upstream/v0.1.149^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已合入上游最新 release `v0.1.149`，但上游 `main` 在该 release 后还有 17 个提交，后续同步时需要重点看：
+当前 fork 已合入上游最新 release `v0.1.150`，但上游 `main` 在该 release 后还有 13 个提交，后续同步时需要重点看：
 
-- `ad8afc8a2 Add parallel_tool_calls compatibility mapping`
-- `657c4f97d fix(openai): 升级 Codex 客户端版本至 0.144.1，修复 gpt-5.6-luna 404`
-- `2cffe1cf5 fix(compact): SSE→JSON 保留 raw output_item.done 并为 unary 等待补下游心跳`
-- `000f6dc65 fix(compact): 终态 output 非空但缺 compaction 时从事件流补入`
-- `80b3d4c1f fix: 兼容 GPT-5.6 max 推理强度`
-- `e984b4e2e fix(i18n): 补齐 en 语言包 overview 和 resources 缺失 key`
-- `fc66a30ff fix: harden billing concurrency and payment recovery`
-- `c3ae5fc3c fix(usage): effort 提取改用模型候选列表，修复后缀模型元数据丢失`
-- `ddb1a210c Merge pull request #3912 from superman2003/fix/audit-concurrency-and-recovery`
+- `f2966530c feat(openai): 支持用户级 Fast/Flex 策略`
+- `de28eba3c fix(openai): harden GPT-5.6 billing and usage`
+- `d3a1835ed fix(image): strip Codex image_gen namespace declarations`
+- `99da30819 fix: 后台自动刷新纳入 setup-token 账号`
+- `0fa1eb85e fix(grok): preserve compatible reasoning effort`
+- `9a2f11b4e chore: sync VERSION to 0.1.150 [skip ci]`
 
 风险判断：
 
-- OpenAI compact/SSE/Responses 相关提交可能影响 Web 创作台、OpenAI 调度和网关兼容。
-- billing/payment recovery 相关提交可能影响 fork 的订阅履约、支付金额口径和成本核算。
-- i18n 补 key 可能和 fork 前端拆分后的语言包结构冲突。
+- 用户级 Fast/Flex 策略会触及 fork 的 OpenAI 严格优先级、试验性调度和路由解释，需要避免策略层重复或优先级倒置。
+- GPT-5.6 billing/usage 后续加固可能继续调整缓存 token 和 usage 完整性，应与本次迁入的互斥计费桶逐项比对。
+- image_gen namespace 清理会直接影响 Web 创作台生图工具声明和 Responses 工具调用兼容。
+- setup-token 后台刷新会触及账号生命周期与调度；需要确认归档账号仍被排除。
+
+## v0.1.150 合并验证
+
+- 后端：支付 lease/恢复、订阅配额、OpenAI reasoning/compact/cache 专项测试通过；修复 handler 测试 stub 接口漂移后，`TZ=UTC go test -tags=unit ./...` 全量通过。
+- 前端：`vue-tsc --noEmit`、路由 `feature-access.spec.ts` 和生产构建通过。
+- 路由守卫仅在公共设置明确返回 `false` 时禁用 payment/risk control，Web 创作台仍由 `web_console_enabled` 控制。
 
 ## 后续维护流程
 
@@ -408,13 +424,13 @@ pnpm --dir frontend run build
 
 ```bash
 # 查看 fork 自有提交
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.149^{}...HEAD
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.150^{}...HEAD
 
 # 按关键词找功能提交
 git log --oneline --grep='签到\|运营\|成本\|归档\|创作台\|生图' --regexp-ignore-case
 
 # 查看与上游 release 的文件差异
-git diff --name-status refs/tags/upstream/v0.1.149^{}..HEAD
+git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 
 # 查看某个功能的代码入口
 rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|OperationsCenter'
