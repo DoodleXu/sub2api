@@ -2348,6 +2348,37 @@ func TestNormalizeOpenAIResponsesInputArgumentsObjectifiesCodexToolCalls(t *test
 	require.True(t, gjson.GetBytes(normalized, "input.3.arguments.kept").Bool())
 }
 
+func TestSanitizeOpenAIResponsesInputNamespaceFieldsRemovesInputItemNamespace(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString(`{"metadata":{"namespace":"kept"},"input":[`)
+	for i := 0; i < 157; i++ {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(`{"type":"message","role":"user","content":"history"}`)
+	}
+	builder.WriteString(`,{"type":"tool_search_call","namespace":"functions","name":"search","arguments":{"query":"repo"}},{"type":"message","role":"user","content":"latest"}]}`)
+	body := []byte(builder.String())
+
+	sanitized, changed, err := sanitizeOpenAIResponsesInputNamespaceFieldsInBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(sanitized, "input.157.namespace").Exists())
+	require.Equal(t, "search", gjson.GetBytes(sanitized, "input.157.name").String())
+	require.Equal(t, "kept", gjson.GetBytes(sanitized, "metadata.namespace").String())
+}
+
+func TestSanitizeOpenAIResponsesInputNamespaceFieldsSkipsNonInputNamespace(t *testing.T) {
+	body := []byte(`{"metadata":{"namespace":"kept"},"tools":[{"type":"function","name":"search","namespace":"kept"}]}`)
+
+	sanitized, changed, err := sanitizeOpenAIResponsesInputNamespaceFieldsInBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, sanitized)
+}
+
 func TestNormalizeOpenAIResponsesInputArgumentsSkipsUnrelatedArguments(t *testing.T) {
 	body := []byte(`{"metadata":{"arguments":{"kept":true}}}`)
 

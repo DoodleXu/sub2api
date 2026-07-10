@@ -2987,6 +2987,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		}
 	}
+	if openAIResponsesInputNamespaceFieldsMayNeedSanitize(body) {
+		decoded, decodeErr := ensureReqBody()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if sanitizeOpenAIResponsesInputNamespaceFields(decoded) {
+			markDecodedModified()
+		}
+	}
 	if openAIResponsesInputArgumentsMayNeedNormalize(body) {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
@@ -3501,6 +3510,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 	if sanitized {
 		body = sanitizedBody
+	}
+	sanitizedNamespaceBody, sanitizedNamespace, err := sanitizeOpenAIResponsesInputNamespaceFieldsInBody(body)
+	if err != nil {
+		return nil, err
+	}
+	if sanitizedNamespace {
+		body = sanitizedNamespaceBody
 	}
 	normalizedArgsBody, normalizedArgs, err := normalizeOpenAIResponsesInputArgumentsInBody(body)
 	if err != nil {
@@ -6330,6 +6346,56 @@ func normalizeOpenAIResponsesInputArgumentsInBody(body []byte) ([]byte, bool, er
 		return body, false, fmt.Errorf("serialize function call arguments: %w", err)
 	}
 	return normalized, true, nil
+}
+
+func sanitizeOpenAIResponsesInputNamespaceFieldsInBody(body []byte) ([]byte, bool, error) {
+	if !openAIResponsesInputNamespaceFieldsMayNeedSanitize(body) {
+		return body, false, nil
+	}
+
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return body, false, fmt.Errorf("sanitize input namespace fields: %w", err)
+	}
+	if !sanitizeOpenAIResponsesInputNamespaceFields(reqBody) {
+		return body, false, nil
+	}
+	sanitized, err := marshalOpenAIUpstreamJSON(reqBody)
+	if err != nil {
+		return body, false, fmt.Errorf("serialize sanitized input namespace fields: %w", err)
+	}
+	return sanitized, true, nil
+}
+
+func openAIResponsesInputNamespaceFieldsMayNeedSanitize(body []byte) bool {
+	return bytes.Contains(body, []byte(`"input"`)) && bytes.Contains(body, []byte(`"namespace"`))
+}
+
+func sanitizeOpenAIResponsesInputNamespaceFields(reqBody map[string]any) bool {
+	input, ok := reqBody["input"].([]any)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	for _, raw := range input {
+		if sanitizeOpenAIResponsesInputNamespaceField(raw) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func sanitizeOpenAIResponsesInputNamespaceField(raw any) bool {
+	item, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := item["namespace"]; !ok {
+		return false
+	}
+	delete(item, "namespace")
+	return true
 }
 
 var openAIResponsesInputArgumentNormalizeTypeTokens = [][]byte{
