@@ -2349,16 +2349,16 @@ func TestNormalizeOpenAIResponsesInputArgumentsObjectifiesCodexToolCalls(t *test
 }
 
 func TestSanitizeOpenAIResponsesInputNamespaceFieldsRemovesInputItemNamespace(t *testing.T) {
-	var builder strings.Builder
-	builder.WriteString(`{"metadata":{"namespace":"kept"},"input":[`)
+	items := make([]string, 0, 159)
 	for i := 0; i < 157; i++ {
-		if i > 0 {
-			builder.WriteByte(',')
-		}
-		builder.WriteString(`{"type":"message","role":"user","content":"history"}`)
+		items = append(items, `{"type":"message","role":"user","content":"history"}`)
 	}
-	builder.WriteString(`,{"type":"tool_search_call","namespace":"functions","name":"search","arguments":{"query":"repo"}},{"type":"message","role":"user","content":"latest"}]}`)
-	body := []byte(builder.String())
+	items = append(
+		items,
+		`{"type":"tool_search_call","namespace":"functions","name":"search","arguments":{"query":"repo"}}`,
+		`{"type":"message","role":"user","content":"latest"}`,
+	)
+	body := []byte(`{"metadata":{"namespace":"kept"},"input":[` + strings.Join(items, ",") + `]}`)
 
 	sanitized, changed, err := sanitizeOpenAIResponsesInputNamespaceFieldsInBody(body)
 
