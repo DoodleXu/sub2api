@@ -158,7 +158,16 @@ func (r *userSubscriptionRepository) Delete(ctx context.Context, id int64) error
 		return err
 	}
 	if deleted == 0 {
-		return service.ErrSubscriptionNotFound
+		exists, existsErr := client.UserSubscription.Query().
+			Where(usersubscription.IDEQ(id)).
+			Exist(mixins.SkipSoftDelete(ctx))
+		if existsErr != nil {
+			return translatePersistenceError(existsErr, service.ErrSubscriptionNotFound, nil)
+		}
+		if exists {
+			return service.ErrSubscriptionNotFound
+		}
+		return nil
 	}
 	return nil
 }
