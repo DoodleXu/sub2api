@@ -42,6 +42,8 @@
 
 Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的 API 配额。用户通过平台生成的 API Key 调用上游 AI 服务，平台负责鉴权、计费、负载均衡和请求转发。
 
+本 fork 的定制功能与上游官方仓库差异维护在 [Fork 与上游功能差异维护台账](docs/FORK_UPSTREAM_DIFF_CN.md)，用于后续同步上游、迭代和 debug。
+
 ## 核心功能
 
 - **多账号管理** - 支持多种上游账号类型（OAuth、API Key）
