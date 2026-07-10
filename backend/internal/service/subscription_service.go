@@ -310,6 +310,10 @@ func (s *SubscriptionService) maybeInvalidateAssignmentCaches(userID, groupID in
 // AssignIndependentSubscription 创建一条独立订阅。
 // 支付购买同一订阅时使用该路径，避免把新购买的有效期直接累加到既有订阅上。
 func (s *SubscriptionService) AssignIndependentSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, error) {
+	return s.assignIndependentSubscription(ctx, input, false)
+}
+
+func (s *SubscriptionService) assignIndependentSubscription(ctx context.Context, input *AssignSubscriptionInput, deferCacheInvalidation bool) (*UserSubscription, error) {
 	if input == nil {
 		return nil, ErrSubscriptionNilInput
 	}
@@ -325,7 +329,7 @@ func (s *SubscriptionService) AssignIndependentSubscription(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	s.invalidateSubscriptionCaches(input.UserID, input.GroupID)
+	s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, deferCacheInvalidation)
 	return sub, nil
 }
 
@@ -638,18 +642,23 @@ func normalizeAssignValidityDays(days int) int {
 
 // RevokeSubscription 撤销订阅
 func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscriptionID int64) error {
+	_, err := s.revokeSubscription(ctx, subscriptionID, false)
+	return err
+}
+
+func (s *SubscriptionService) revokeSubscription(ctx context.Context, subscriptionID int64, deferCacheInvalidation bool) (*UserSubscription, error) {
 	// 先获取订阅信息用于失效缓存
 	sub, err := s.userSubRepo.GetByID(ctx, subscriptionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := s.userSubRepo.Delete(ctx, subscriptionID); err != nil {
-		return err
+		return nil, err
 	}
 
-	s.invalidateSubscriptionCaches(sub.UserID, sub.GroupID)
-	return nil
+	s.maybeInvalidateAssignmentCaches(sub.UserID, sub.GroupID, deferCacheInvalidation)
+	return sub, nil
 }
 
 // RestoreSubscription 恢复已撤销订阅
@@ -1031,26 +1040,10 @@ func (s *SubscriptionService) adminBulkResetQuota(ctx context.Context, resetDail
 			if dryRun {
 				continue
 			}
-			if resetDaily {
-				if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, sub.DailyWindowStart, windowStart); err != nil {
-					result.Failed++
-					result.FailedIDs = append(result.FailedIDs, sub.ID)
-					continue
-				}
-			}
-			if resetWeekly {
-				if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, sub.WeeklyWindowStart, windowStart); err != nil {
-					result.Failed++
-					result.FailedIDs = append(result.FailedIDs, sub.ID)
-					continue
-				}
-			}
-			if resetMonthly {
-				if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, sub.MonthlyWindowStart, windowStart); err != nil {
-					result.Failed++
-					result.FailedIDs = append(result.FailedIDs, sub.ID)
-					continue
-				}
+			if err := s.userSubRepo.ResetUsageWindows(ctx, sub.ID, resetDaily, resetWeekly, resetMonthly, windowStart); err != nil {
+				result.Failed++
+				result.FailedIDs = append(result.FailedIDs, sub.ID)
+				continue
 			}
 
 			s.invalidateSubscriptionCaches(sub.UserID, sub.GroupID)

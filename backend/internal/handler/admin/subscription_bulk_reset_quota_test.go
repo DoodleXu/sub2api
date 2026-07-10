@@ -97,8 +97,19 @@ func (r *bulkResetUserSubRepoStub) UpdateNotes(context.Context, int64, string) e
 func (r *bulkResetUserSubRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
-func (r *bulkResetUserSubRepoStub) ResetUsageWindows(context.Context, int64, bool, bool, bool, time.Time) error {
-	panic("unexpected ResetUsageWindows call")
+func (r *bulkResetUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if resetDaily {
+		r.dailyIDs = append(r.dailyIDs, id)
+	}
+	if resetWeekly {
+		r.weeklyIDs = append(r.weeklyIDs, id)
+	}
+	if resetMonthly {
+		r.monthlyIDs = append(r.monthlyIDs, id)
+	}
+	return nil
 }
 func (r *bulkResetUserSubRepoStub) ResetDailyUsage(_ context.Context, id int64, _ *time.Time, _ time.Time) error {
 	r.mu.Lock()

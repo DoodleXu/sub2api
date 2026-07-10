@@ -526,12 +526,6 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder, lease
 		if err := s.recordFulfilledSubscription(ctx, o, lease, sub.ID); err != nil {
 			return err
 		}
-		s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_ASSIGNED", "system", map[string]any{
-			"subscriptionID":    sub.ID,
-			"groupID":           gid,
-			"days":              days,
-			"recoveredFromNote": true,
-		})
 		slog.Info("subscription already assigned for order via note marker, skipping", "orderID", o.ID, "groupID", gid, "subscriptionID", sub.ID)
 		if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 			return err
@@ -544,36 +538,9 @@ func (s *PaymentService) doSub(ctx context.Context, o *dbent.PaymentOrder, lease
 	if err != nil || g.Status != payment.EntityStatusActive {
 		return fmt.Errorf("group %d no longer exists or inactive", gid)
 	}
-	if o.UpgradeFromSubscriptionID != nil && *o.UpgradeFromSubscriptionID > 0 {
-		sub, err := s.subscriptionSvc.GetByID(ctx, *o.UpgradeFromSubscriptionID)
-		if err != nil {
-			return fmt.Errorf("get upgrade source subscription: %w", err)
-		}
-		if err := validateSubscriptionUpgradeSourceForFulfillment(sub, o); err != nil {
-			return err
-		}
-		if err := s.subscriptionSvc.RevokeSubscription(ctx, sub.ID); err != nil {
-			return fmt.Errorf("revoke upgrade source subscription: %w", err)
-		}
-		s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_UPGRADE_CREDIT_APPLIED", "system", map[string]any{
-			"subscriptionID": sub.ID,
-			"creditAmount":   o.UpgradeCreditAmount,
-			"creditDays":     o.UpgradeCreditDays,
-		})
-	}
-	orderNote := paymentSubscriptionOrderNote(o.ID)
-	sub, err := s.subscriptionSvc.AssignIndependentSubscription(ctx, &AssignSubscriptionInput{UserID: o.UserID, GroupID: gid, ValidityDays: days, AssignedBy: 0, Notes: orderNote})
-	if err != nil {
-		return fmt.Errorf("assign subscription: %w", err)
-	}
-	if err := s.recordFulfilledSubscription(ctx, o, lease, sub.ID); err != nil {
+	if _, err := s.assignAndRecordPaymentSubscription(ctx, o, lease, gid, days); err != nil {
 		return err
 	}
-	s.writeAuditLog(ctx, o.ID, "SUBSCRIPTION_ASSIGNED", "system", map[string]any{
-		"subscriptionID": sub.ID,
-		"groupID":        gid,
-		"days":           days,
-	})
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 		return err
 	}
@@ -600,22 +567,141 @@ func (s *PaymentService) recordFulfilledSubscription(ctx context.Context, o *dbe
 	if lease == nil {
 		return errors.New("missing payment fulfillment lease")
 	}
-	updated, err := s.entClient.PaymentOrder.Update().Where(
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin recovered subscription fulfillment tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	txCtx := dbent.NewTxContext(ctx, tx)
+	detail := map[string]any{
+		"subscriptionID":    subscriptionID,
+		"groupID":           o.SubscriptionGroupID,
+		"days":              o.SubscriptionDays,
+		"recoveredFromNote": true,
+	}
+	newVersion, err := persistPaymentSubscriptionAssignment(txCtx, tx.Client(), o, lease, subscriptionID, detail)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit recovered subscription fulfillment tx: %w", err)
+	}
+
+	lease.version = newVersion
+	o.FulfilledSubscriptionID = &subscriptionID
+	if s.subscriptionSvc != nil && o.SubscriptionGroupID != nil {
+		s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, *o.SubscriptionGroupID)
+	}
+	return nil
+}
+
+func (s *PaymentService) assignAndRecordPaymentSubscription(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease, groupID int64, days int) (*UserSubscription, error) {
+	if o == nil || lease == nil {
+		return nil, errors.New("missing payment fulfillment order or lease")
+	}
+	if s.subscriptionSvc == nil {
+		return nil, errors.New("subscription service is unavailable")
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin subscription fulfillment tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+
+	var upgradeSource *UserSubscription
+	if o.UpgradeFromSubscriptionID != nil && *o.UpgradeFromSubscriptionID > 0 {
+		upgradeSource, err = s.subscriptionSvc.GetByID(txCtx, *o.UpgradeFromSubscriptionID)
+		if err != nil {
+			return nil, fmt.Errorf("get upgrade source subscription: %w", err)
+		}
+		if err := validateSubscriptionUpgradeSourceForFulfillment(upgradeSource, o); err != nil {
+			return nil, err
+		}
+		if _, err := s.subscriptionSvc.revokeSubscription(txCtx, upgradeSource.ID, true); err != nil {
+			return nil, fmt.Errorf("revoke upgrade source subscription: %w", err)
+		}
+	}
+
+	orderNote := paymentSubscriptionOrderNote(o.ID)
+	sub, err := s.subscriptionSvc.assignIndependentSubscription(txCtx, &AssignSubscriptionInput{
+		UserID:       o.UserID,
+		GroupID:      groupID,
+		ValidityDays: days,
+		AssignedBy:   0,
+		Notes:        orderNote,
+	}, true)
+	if err != nil {
+		return nil, fmt.Errorf("assign subscription: %w", err)
+	}
+
+	newVersion, err := persistPaymentSubscriptionAssignment(txCtx, tx.Client(), o, lease, sub.ID, map[string]any{
+		"subscriptionID": sub.ID,
+		"groupID":        groupID,
+		"days":           days,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if upgradeSource != nil {
+		detail, _ := json.Marshal(map[string]any{
+			"subscriptionID": upgradeSource.ID,
+			"creditAmount":   o.UpgradeCreditAmount,
+			"creditDays":     o.UpgradeCreditDays,
+		})
+		if _, err := tx.Client().PaymentAuditLog.Create().
+			SetOrderID(strconv.FormatInt(o.ID, 10)).
+			SetAction("SUBSCRIPTION_UPGRADE_CREDIT_APPLIED").
+			SetDetail(string(detail)).
+			SetOperator("system").
+			Save(txCtx); err != nil {
+			return nil, fmt.Errorf("record subscription upgrade audit: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit subscription fulfillment tx: %w", err)
+	}
+
+	lease.version = newVersion
+	o.FulfilledSubscriptionID = &sub.ID
+	s.subscriptionSvc.invalidateSubscriptionCaches(o.UserID, groupID)
+	return sub, nil
+}
+
+func persistPaymentSubscriptionAssignment(ctx context.Context, client *dbent.Client, o *dbent.PaymentOrder, lease *paymentFulfillmentLease, subscriptionID int64, detail map[string]any) (time.Time, error) {
+	if client == nil || o == nil || lease == nil || subscriptionID <= 0 {
+		return time.Time{}, errors.New("invalid payment subscription assignment")
+	}
+	newVersion := time.Now().UTC().Truncate(time.Microsecond)
+	if !newVersion.After(lease.version) {
+		newVersion = lease.version.Add(time.Microsecond)
+	}
+	updated, err := client.PaymentOrder.Update().Where(
 		paymentorder.IDEQ(o.ID),
 		paymentorder.StatusEQ(OrderStatusRecharging),
 		paymentorder.UpdatedAtEQ(lease.version),
 	).
 		SetFulfilledSubscriptionID(subscriptionID).
-		SetUpdatedAt(lease.version).
+		SetUpdatedAt(newVersion).
 		Save(ctx)
 	if err != nil {
-		return fmt.Errorf("record fulfilled subscription: %w", err)
+		return time.Time{}, fmt.Errorf("record fulfilled subscription: %w", err)
 	}
 	if updated == 0 {
-		return infraerrors.Conflict("CONFLICT", "fulfillment lease was lost before recording subscription")
+		return time.Time{}, infraerrors.Conflict("CONFLICT", "fulfillment lease was lost before recording subscription")
 	}
-	o.FulfilledSubscriptionID = &subscriptionID
-	return nil
+	detailJSON, _ := json.Marshal(detail)
+	if _, err := client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(o.ID, 10)).
+		SetAction("SUBSCRIPTION_ASSIGNED").
+		SetDetail(string(detailJSON)).
+		SetOperator("system").
+		Save(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("record subscription assignment audit: %w", err)
+	}
+	return newVersion, nil
 }
 
 func (s *PaymentService) hasAuditLog(ctx context.Context, orderID int64, action string) bool {

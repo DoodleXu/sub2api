@@ -69,7 +69,7 @@ func (r *resetQuotaUserSubRepoStub) List(_ context.Context, params pagination.Pa
 	return out, &pagination.PaginationResult{Total: int64(len(r.list)), Page: params.Page, PageSize: params.PageSize, Pages: pages}, nil
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64, resetDaily, resetWeekly, resetMonthly bool, windowStart time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, windowStart time.Time) error {
 	r.resetDailyCalled = resetDaily
 	r.resetWeeklyCalled = resetWeekly
 	r.resetMonthlyCalled = resetMonthly
@@ -81,6 +81,15 @@ func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64
 	}
 	if resetMonthly && r.resetMonthlyErr != nil {
 		return r.resetMonthlyErr
+	}
+	if resetDaily {
+		r.resetDailyIDs = append(r.resetDailyIDs, id)
+	}
+	if resetWeekly {
+		r.resetWeeklyIDs = append(r.resetWeeklyIDs, id)
+	}
+	if resetMonthly {
+		r.resetMonthlyIDs = append(r.resetMonthlyIDs, id)
 	}
 	if r.sub == nil {
 		return nil
@@ -296,6 +305,40 @@ func TestAdminBulkResetQuota_ResetDailyAndWeeklyOnly(t *testing.T) {
 	require.Equal(t, []int64{11, 12}, stub.resetDailyIDs)
 	require.Equal(t, []int64{11, 12}, stub.resetWeeklyIDs)
 	require.Empty(t, stub.resetMonthlyIDs, "补偿型周配额重置不应清月用量")
+}
+
+func TestAdminBulkResetQuota_AtomicFailureDoesNotPartiallyReset(t *testing.T) {
+	dbErr := errors.New("weekly reset failed")
+	stub := &resetQuotaUserSubRepoStub{
+		list: []UserSubscription{{
+			ID:             13,
+			UserID:         103,
+			GroupID:        203,
+			Status:         SubscriptionStatusActive,
+			DailyUsageUSD:  12,
+			WeeklyUsageUSD: 34,
+		}},
+		sub: &UserSubscription{
+			ID:             13,
+			UserID:         103,
+			GroupID:        203,
+			Status:         SubscriptionStatusActive,
+			DailyUsageUSD:  12,
+			WeeklyUsageUSD: 34,
+		},
+		resetWeeklyErr: dbErr,
+	}
+	svc := newResetQuotaSvc(stub)
+
+	result, err := svc.AdminBulkResetQuota(context.Background(), true, true, false)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Failed)
+	require.Equal(t, []int64{13}, result.FailedIDs)
+	require.Equal(t, float64(12), stub.sub.DailyUsageUSD)
+	require.Equal(t, float64(34), stub.sub.WeeklyUsageUSD)
+	require.Empty(t, stub.resetDailyIDs)
+	require.Empty(t, stub.resetWeeklyIDs)
 }
 
 func TestAdminBulkResetQuotaDryRun_CountsActiveSubscriptionsWithoutReset(t *testing.T) {

@@ -300,7 +300,8 @@ git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 
 - 已采用上游支付履约 lease 和 stale worker 保护，同时保留 fork 的独立订阅记录、升级抵扣、`fulfilled_subscription_id` 和订单备注恢复逻辑。
 - `SUBSCRIPTION_ASSIGNED`、`SUBSCRIPTION_SUCCESS`、已记录订阅 ID 和精确订单备注均可作为恢复锚点；恢复时仍执行幂等返佣，避免重复发放权益或漏返佣。
-- 订阅配额重置已接入上游原子 `ResetUsageWindows` 与窗口起点 CAS 参数；fork 的周配额批量重置继续保留。
+- 独立订阅创建、升级来源撤销、订单关联和履约审计已收敛到同一事务，并以 lease version 条件更新订单；旧 worker 失去 lease 时会整体回滚，升级目标创建失败也不会提前撤销原订阅。
+- 订阅配额重置已接入上游原子 `ResetUsageWindows` 与窗口起点 CAS 参数；fork 的周配额批量重置继续保留，批量重置按单订阅原子提交所选窗口。
 
 ### OpenAI 路由与调度增强
 
@@ -385,6 +386,7 @@ git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
 ## v0.1.150 合并验证
 
 - 后端：支付 lease/恢复、订阅配额、OpenAI reasoning/compact/cache 专项测试通过；修复 handler 测试 stub 接口漂移后，`TZ=UTC go test -tags=unit ./...` 全量通过。
+- 合并后审核修复：新增 stale lease 独立订阅事务回滚、升级目标创建失败回滚来源撤销、批量配额原子失败不部分重置测试。
 - 前端：`vue-tsc --noEmit`、路由 `feature-access.spec.ts` 和生产构建通过。
 - 路由守卫仅在公共设置明确返回 `false` 时禁用 payment/risk control，Web 创作台仍由 `web_console_enabled` 控制。
 

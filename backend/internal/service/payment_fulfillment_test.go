@@ -12,6 +12,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
+	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,108 @@ import (
 type paymentFulfillmentTestProvider struct {
 	key            string
 	supportedTypes []payment.PaymentType
+}
+
+type paymentFulfillmentTransactionalSubRepo struct {
+	userSubRepoNoop
+
+	client    *dbent.Client
+	createErr error
+}
+
+func (r *paymentFulfillmentTransactionalSubRepo) entClient(ctx context.Context) *dbent.Client {
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return tx.Client()
+	}
+	return r.client
+}
+
+func (r *paymentFulfillmentTransactionalSubRepo) Create(ctx context.Context, sub *UserSubscription) error {
+	if r.createErr != nil {
+		return r.createErr
+	}
+	created, err := r.entClient(ctx).UserSubscription.Create().
+		SetUserID(sub.UserID).
+		SetGroupID(sub.GroupID).
+		SetStartsAt(sub.StartsAt).
+		SetExpiresAt(sub.ExpiresAt).
+		SetStatus(sub.Status).
+		SetNillableDailyWindowStart(sub.DailyWindowStart).
+		SetNillableWeeklyWindowStart(sub.WeeklyWindowStart).
+		SetNillableMonthlyWindowStart(sub.MonthlyWindowStart).
+		SetDailyUsageUsd(sub.DailyUsageUSD).
+		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
+		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
+		SetNillableAssignedBy(sub.AssignedBy).
+		SetAssignedAt(sub.AssignedAt).
+		SetNotes(sub.Notes).
+		Save(ctx)
+	if err != nil {
+		return err
+	}
+	applyPaymentFulfillmentSubscriptionEntity(sub, created)
+	return nil
+}
+
+func (r *paymentFulfillmentTransactionalSubRepo) GetByID(ctx context.Context, id int64) (*UserSubscription, error) {
+	sub, err := r.entClient(ctx).UserSubscription.Get(ctx, id)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrSubscriptionNotFound
+		}
+		return nil, err
+	}
+	return paymentFulfillmentSubscriptionFromEntity(sub), nil
+}
+
+func (r *paymentFulfillmentTransactionalSubRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	sub, err := r.entClient(ctx).UserSubscription.Query().
+		Where(usersubscription.UserIDEQ(userID), usersubscription.GroupIDEQ(groupID)).
+		Order(dbent.Desc(usersubscription.FieldCreatedAt), dbent.Desc(usersubscription.FieldID)).
+		First(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			return nil, ErrSubscriptionNotFound
+		}
+		return nil, err
+	}
+	return paymentFulfillmentSubscriptionFromEntity(sub), nil
+}
+
+func (r *paymentFulfillmentTransactionalSubRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.entClient(ctx).UserSubscription.Delete().Where(usersubscription.IDEQ(id)).Exec(ctx)
+	return err
+}
+
+func paymentFulfillmentSubscriptionFromEntity(sub *dbent.UserSubscription) *UserSubscription {
+	if sub == nil {
+		return nil
+	}
+	return &UserSubscription{
+		ID:                 sub.ID,
+		UserID:             sub.UserID,
+		GroupID:            sub.GroupID,
+		StartsAt:           sub.StartsAt,
+		ExpiresAt:          sub.ExpiresAt,
+		Status:             sub.Status,
+		DailyWindowStart:   sub.DailyWindowStart,
+		WeeklyWindowStart:  sub.WeeklyWindowStart,
+		MonthlyWindowStart: sub.MonthlyWindowStart,
+		DailyUsageUSD:      sub.DailyUsageUsd,
+		WeeklyUsageUSD:     sub.WeeklyUsageUsd,
+		MonthlyUsageUSD:    sub.MonthlyUsageUsd,
+		AssignedBy:         sub.AssignedBy,
+		AssignedAt:         sub.AssignedAt,
+		Notes:              subscriptionStringValue(sub.Notes),
+	}
+}
+
+func applyPaymentFulfillmentSubscriptionEntity(dst *UserSubscription, src *dbent.UserSubscription) {
+	updated := paymentFulfillmentSubscriptionFromEntity(src)
+	if dst == nil || updated == nil {
+		return
+	}
+	*dst = *updated
 }
 
 func (p paymentFulfillmentTestProvider) Name() string        { return p.key }
@@ -666,6 +769,109 @@ func TestFulfillmentLeaseVersionRejectsStaleWorker(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusRecharging, reloaded.Status)
 	require.NoError(t, svc.markCompleted(ctx, order, secondLease, "SUBSCRIPTION_SUCCESS"))
+}
+
+func TestStaleSubscriptionWorkerRollsBackIndependentAssignment(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	group, err := client.Group.Create().
+		SetName("stale-subscription-group").
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	staleAt := time.Now().Add(-paymentFulfillmentLeaseDuration - time.Minute)
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusRecharging, staleAt)
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).SetSubscriptionGroupID(group.ID).SetUpdatedAt(staleAt).Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := &subscriptionGroupRepoStub{group: &Group{ID: group.ID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription}}
+	repo := &paymentFulfillmentTransactionalSubRepo{client: client}
+	svc := &PaymentService{
+		entClient:       client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, repo, nil, nil, nil),
+	}
+
+	firstLease, err := svc.acquirePaymentFulfillmentLease(ctx, order)
+	require.NoError(t, err)
+	require.NotNil(t, firstLease)
+	_, err = client.PaymentOrder.UpdateOneID(order.ID).SetUpdatedAt(staleAt).Save(ctx)
+	require.NoError(t, err)
+	staleOrder, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	secondLease, err := svc.acquirePaymentFulfillmentLease(ctx, staleOrder)
+	require.NoError(t, err)
+	require.NotNil(t, secondLease)
+
+	_, err = svc.assignAndRecordPaymentSubscription(ctx, order, firstLease, group.ID, 30)
+	require.Error(t, err)
+	require.Equal(t, "CONFLICT", infraerrors.Reason(err))
+	count, err := client.UserSubscription.Query().Where(usersubscription.UserIDEQ(order.UserID), usersubscription.GroupIDEQ(group.ID)).Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count, "stale worker transaction must roll back the independent subscription")
+
+	_, err = svc.assignAndRecordPaymentSubscription(ctx, order, secondLease, group.ID, 30)
+	require.NoError(t, err)
+	count, err = client.UserSubscription.Query().Where(usersubscription.UserIDEQ(order.UserID), usersubscription.GroupIDEQ(group.ID)).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.NoError(t, svc.markCompleted(ctx, order, secondLease, "SUBSCRIPTION_SUCCESS"))
+	assignmentAudits, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+		paymentauditlog.ActionEQ("SUBSCRIPTION_ASSIGNED"),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, assignmentAudits)
+}
+
+func TestSubscriptionUpgradeAssignmentFailureRollsBackSourceRevocation(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+	group, err := client.Group.Create().
+		SetName("upgrade-rollback-group").
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	order := createPaymentFulfillmentSubscriptionOrder(t, ctx, client, OrderStatusPaid, time.Now())
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).SetSubscriptionGroupID(group.ID).Save(ctx)
+	require.NoError(t, err)
+	source, err := client.UserSubscription.Create().
+		SetUserID(order.UserID).
+		SetGroupID(group.ID).
+		SetStartsAt(time.Now().Add(-24 * time.Hour)).
+		SetExpiresAt(time.Now().Add(30 * 24 * time.Hour)).
+		SetStatus(SubscriptionStatusActive).
+		SetNotes("upgrade source").
+		Save(ctx)
+	require.NoError(t, err)
+	order, err = client.PaymentOrder.UpdateOneID(order.ID).SetUpgradeFromSubscriptionID(source.ID).Save(ctx)
+	require.NoError(t, err)
+
+	groupRepo := &subscriptionGroupRepoStub{group: &Group{ID: group.ID, Status: StatusActive, SubscriptionType: SubscriptionTypeSubscription}}
+	repo := &paymentFulfillmentTransactionalSubRepo{client: client, createErr: errors.New("target subscription create failed")}
+	svc := &PaymentService{
+		entClient:       client,
+		groupRepo:       groupRepo,
+		subscriptionSvc: NewSubscriptionService(groupRepo, repo, nil, nil, nil),
+	}
+
+	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+	require.ErrorContains(t, err, "target subscription create failed")
+	reloadedSource, err := client.UserSubscription.Get(ctx, source.ID)
+	require.NoError(t, err)
+	require.Nil(t, reloadedSource.DeletedAt, "source subscription revocation must roll back with target creation")
+	upgradeAudits, err := client.PaymentAuditLog.Query().Where(
+		paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)),
+		paymentauditlog.ActionEQ("SUBSCRIPTION_UPGRADE_CREDIT_APPLIED"),
+	).Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, upgradeAudits)
 }
 
 func TestExecuteBalanceFulfillmentRecoversAfterRedeemWithoutCreditingAgain(t *testing.T) {
