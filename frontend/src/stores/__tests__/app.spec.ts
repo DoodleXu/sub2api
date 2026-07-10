@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
+import { checkUpdates } from '@/api/admin/system'
 import { getPublicSettings } from '@/api/auth'
 import type { PublicSettings } from '@/types'
 
@@ -74,6 +75,7 @@ describe('useAppStore', () => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
     localStorage.clear()
+    vi.mocked(checkUpdates).mockReset()
     vi.mocked(getPublicSettings).mockReset()
     // 清除 window.__APP_CONFIG__
     delete (window as any).__APP_CONFIG__
@@ -315,6 +317,48 @@ describe('useAppStore', () => {
       expect(store.sidebarCollapsed).toBe(false)
       expect(store.loading).toBe(false)
       expect(store.toasts).toHaveLength(0)
+    })
+  })
+
+  // --- 版本管理 ---
+
+  describe('版本管理', () => {
+    it('fetchVersion 缓存更新仓库来源并在缓存命中时保留', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue({
+        current_version: '0.1.208',
+        latest_version: '0.1.208',
+        has_update: false,
+        build_type: 'release',
+        repository: 'DoodleXu/sub2api',
+        cached: false
+      })
+      const store = useAppStore()
+
+      await expect(store.fetchVersion(true)).resolves.toMatchObject({
+        repository: 'DoodleXu/sub2api'
+      })
+      expect(store.updateRepository).toBe('DoodleXu/sub2api')
+
+      await expect(store.fetchVersion()).resolves.toMatchObject({
+        repository: 'DoodleXu/sub2api',
+        cached: true
+      })
+      expect(checkUpdates).toHaveBeenCalledTimes(1)
+    })
+
+    it('fetchVersion 在 API 缺省仓库字段时使用 fork 默认仓库', async () => {
+      vi.mocked(checkUpdates).mockResolvedValue({
+        current_version: '0.1.208',
+        latest_version: '0.1.208',
+        has_update: false,
+        build_type: 'release',
+        cached: false
+      })
+      const store = useAppStore()
+
+      await store.fetchVersion(true)
+
+      expect(store.updateRepository).toBe('DoodleXu/sub2api')
     })
   })
 
