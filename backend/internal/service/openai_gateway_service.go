@@ -6501,7 +6501,17 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		if !value.Exists() {
 			continue
 		}
-		next, err := sjson.SetRawBytes(normalized, field, []byte(value.Raw))
+		rawValue := []byte(value.Raw)
+		if field == "input" {
+			normalizedInput, reordered, err := normalizeOpenAICompactInputTriggerOrder(rawValue)
+			if err != nil {
+				return body, false, fmt.Errorf("normalize compact body %s: %w", field, err)
+			}
+			if reordered {
+				rawValue = normalizedInput
+			}
+		}
+		next, err := sjson.SetRawBytes(normalized, field, rawValue)
 		if err != nil {
 			return body, false, fmt.Errorf("normalize compact body %s: %w", field, err)
 		}
@@ -6510,6 +6520,43 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 
 	if bytes.Equal(bytes.TrimSpace(body), bytes.TrimSpace(normalized)) {
 		return body, false, nil
+	}
+	return normalized, true, nil
+}
+
+func normalizeOpenAICompactInputTriggerOrder(input []byte) ([]byte, bool, error) {
+	if !gjson.ParseBytes(input).IsArray() {
+		return input, false, nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(input, &items); err != nil {
+		return input, false, err
+	}
+
+	nonTriggers := make([]json.RawMessage, 0, len(items))
+	triggers := make([]json.RawMessage, 0, 1)
+	seenTrigger := false
+	needsReorder := false
+	for _, item := range items {
+		if gjson.GetBytes(item, "type").String() == "compaction_trigger" {
+			seenTrigger = true
+			triggers = append(triggers, item)
+			continue
+		}
+		if seenTrigger {
+			needsReorder = true
+		}
+		nonTriggers = append(nonTriggers, item)
+	}
+	if len(triggers) == 0 || !needsReorder {
+		return input, false, nil
+	}
+
+	ordered := append(nonTriggers, triggers...)
+	normalized, err := json.Marshal(ordered)
+	if err != nil {
+		return input, false, err
 	}
 	return normalized, true, nil
 }

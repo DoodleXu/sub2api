@@ -2320,6 +2320,31 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_key").Exists())
 }
 
+func TestNormalizeOpenAICompactRequestBodyMovesCompactionTriggerToFinalInputItem(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"before"},{"type":"compaction_trigger","keep":"yes"},{"type":"message","role":"user","content":"after"}]}`)
+
+	normalized, changed, err := normalizeOpenAICompactRequestBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "message", gjson.GetBytes(normalized, "input.0.type").String())
+	require.Equal(t, "before", gjson.GetBytes(normalized, "input.0.content").String())
+	require.Equal(t, "message", gjson.GetBytes(normalized, "input.1.type").String())
+	require.Equal(t, "after", gjson.GetBytes(normalized, "input.1.content").String())
+	require.Equal(t, "compaction_trigger", gjson.GetBytes(normalized, "input.2.type").String())
+	require.Equal(t, "yes", gjson.GetBytes(normalized, "input.2.keep").String())
+}
+
+func TestNormalizeOpenAICompactRequestBodyKeepsFinalCompactionTriggerOrder(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"before"},{"type":"compaction_trigger"}]}`)
+
+	normalized, changed, err := normalizeOpenAICompactRequestBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
+}
+
 func TestNormalizeOpenAIResponsesInputArgumentsStringifiesObjects(t *testing.T) {
 	body := []byte(`{"input":[{"type":"function_call","name":"exec","arguments":{"cmd":"ls"}},{"type":"custom_tool_call","name":"patch","arguments":["a","b"]},{"type":"function_call","name":"noop","arguments":"{}"},{"type":"function_call_output","arguments":{"kept":true}}]}`)
 
