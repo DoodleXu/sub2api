@@ -339,6 +339,16 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - OpenAI 缓存读写 token 现按多种上游字段解析，普通输入、cache read、cache write 三类计费桶保持互斥，避免 cache write 重复计费。
 - Anthropic 转 Responses/Chat Completions 时会同时保留总输入、cache read 和 cache creation 明细；非流式及流式终止事件不再把缓存创建 token 隐藏为普通输入，避免下游成本核算口径漂移。
 
+`v0.1.151` 合入后的 fork 链路加固：
+
+- 渠道缓存首次加载失败时显式 fail-closed；刷新失败时仅短暂沿用最近一次成功快照，不再把数据库故障伪装成“无渠道限制”。
+- OpenAI 请求在账号选定后，按渠道映射、账号映射和 compact 映射得到的最终模型预检价格；图片模型交由媒体计费链路。上游完成后若仍缺价，会持久化 `pricing_pending` 原始用量供对账，不再生成零费用已结算账单。所有计费任务在 worker 队列拒绝或停止时同步兜底，`drop/sample` 配置不再影响账务完整性。
+- Responses 显式图片请求继续在路由前抢占图片并发槽；Codex bridge 自动注入的图片工具则按最终账号归一化 payload 抢槽。WebSocket 每个 turn 使用同一最终 payload 语义，并在 turn 结束或上游早期 failover 时释放槽位。
+- Responses 流读取超时、单行超限和异常 EOF 不再由 service 注入非终态 `type:error`；由 handler 统一发出一个规范的 `response.failed` 终态。
+- Chat Completions 与 Responses 恢复 `model_not_found` / 临时容量不足分类；compact 与 Responses 原生能力不足仍保留专用错误语义。
+- 图片归档把启用检查、记录创建、解码和存储统一纳入有界后台任务，并设置总超时；超时后使用独立 cleanup context 持久化失败终态，避免请求完成后无界保活 base64 数据或记录永久停在 pending/running。
+- 非流式响应体与 SSE 单行默认上限统一为 `128MB`，部署样例和中文文档使用同一口径，兼顾 4K base64 图片与内存保护。
+
 ### 通知、风控与内容审计增强
 
 差异包括渠道监控全局通知、Bark 通知模板、通知免打扰、风控 hash 白名单、内容审计用户处置、邮件群发和退订。
@@ -392,21 +402,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已合入上游最新 release `v0.1.150`，但上游 `main` 在该 release 后还有 13 个提交，后续同步时需要重点看：
-
-- `f2966530c feat(openai): 支持用户级 Fast/Flex 策略`
-- `de28eba3c fix(openai): harden GPT-5.6 billing and usage`
-- `d3a1835ed fix(image): strip Codex image_gen namespace declarations`
-- `99da30819 fix: 后台自动刷新纳入 setup-token 账号`
-- `0fa1eb85e fix(grok): preserve compatible reasoning effort`
-- `9a2f11b4e chore: sync VERSION to 0.1.150 [skip ci]`
-
-风险判断：
-
-- 用户级 Fast/Flex 策略会触及 fork 的 OpenAI 严格优先级、试验性调度和路由解释，需要避免策略层重复或优先级倒置。
-- GPT-5.6 billing/usage 后续加固可能继续调整缓存 token 和 usage 完整性，应与本次迁入的互斥计费桶逐项比对。
-- image_gen namespace 清理会直接影响 Web 创作台生图工具声明和 Responses 工具调用兼容。
-- setup-token 后台刷新会触及账号生命周期与调度；需要确认归档账号仍被排除。
+当前 fork 已包含官方最新 release `v0.1.151`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 OpenAI 计费、Responses/WS 协议、图片工具 namespace、setup-token 刷新与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
 ## v0.1.150 合并验证
 
@@ -452,13 +448,13 @@ pnpm --dir frontend run build
 
 ```bash
 # 查看 fork 自有提交
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.150^{}...HEAD
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.151^{}...HEAD
 
 # 按关键词找功能提交
 git log --oneline --grep='签到\|运营\|成本\|归档\|创作台\|生图' --regexp-ignore-case
 
 # 查看与上游 release 的文件差异
-git diff --name-status refs/tags/upstream/v0.1.150^{}..HEAD
+git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 # 查看某个功能的代码入口
 rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|OperationsCenter'

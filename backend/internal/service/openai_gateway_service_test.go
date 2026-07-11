@@ -1252,8 +1252,8 @@ func TestOpenAIStreamingTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stream data interval timeout") {
 		t.Fatalf("expected stream timeout error, got %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "\"type\":\"error\"") || !strings.Contains(rec.Body.String(), "stream_timeout") {
-		t.Fatalf("expected OpenAI-compatible error SSE event, got %q", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "\"type\":\"error\"") {
+		t.Fatalf("service must not inject a non-terminal Responses error event, got %q", rec.Body.String())
 	}
 }
 
@@ -2016,8 +2016,8 @@ func TestOpenAIStreamingTooLong(t *testing.T) {
 	if !errors.Is(err, bufio.ErrTooLong) {
 		t.Fatalf("expected ErrTooLong, got %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "\"type\":\"error\"") || !strings.Contains(rec.Body.String(), "response_too_large") {
-		t.Fatalf("expected OpenAI-compatible error SSE event, got %q", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "\"type\":\"error\"") {
+		t.Fatalf("service must leave terminal response.failed emission to the handler, got %q", rec.Body.String())
 	}
 }
 

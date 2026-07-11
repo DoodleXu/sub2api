@@ -88,8 +88,11 @@ type channelCache struct {
 	groupPlatform           map[int64]string                                    // groupID → platform
 
 	// 冷路径（CRUD 操作）
-	byID     map[int64]*Channel
-	loadedAt time.Time
+	byID          map[int64]*Channel
+	loadedAt      time.Time
+	usable        bool   // true 表示快照至少成功从数据库加载过一次
+	refreshFailed bool   // true 表示最近一次刷新失败，当前正在短暂沿用旧快照
+	refreshError  string // 仅用于错误哨兵和诊断日志，不向热路径暴露底层 error 对象
 }
 
 // ChannelMappingResult 渠道映射查找结果
@@ -166,6 +169,9 @@ func NewChannelService(repo ChannelRepository, groupRepo GroupRepository, authCa
 func (s *ChannelService) loadCache(ctx context.Context) (*channelCache, error) {
 	if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil {
 		if time.Since(cached.loadedAt) < channelCacheTTL {
+			if cached.refreshFailed && !cached.usable {
+				return nil, cached.loadError()
+			}
 			return cached, nil
 		}
 	}
@@ -174,12 +180,21 @@ func (s *ChannelService) loadCache(ctx context.Context) (*channelCache, error) {
 		// 双重检查
 		if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil {
 			if time.Since(cached.loadedAt) < channelCacheTTL {
+				if cached.refreshFailed && !cached.usable {
+					return nil, cached.loadError()
+				}
 				return cached, nil
 			}
 		}
 		return s.buildCache(ctx)
 	})
 	if err != nil {
+		// buildCache 会在刷新失败时把“最近一次成功快照”改为短 TTL 快照。
+		// 当前请求也沿用该快照，避免瞬时数据库故障中断已有渠道；若从未成功
+		// 加载过，则保持 fail-closed 并向调用方返回错误。
+		if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil && (cached.usable || !cached.refreshFailed) {
+			return cached, nil
+		}
 		return nil, err
 	}
 	cache, ok := result.(*channelCache)
@@ -187,6 +202,13 @@ func (s *ChannelService) loadCache(ctx context.Context) (*channelCache, error) {
 		return nil, fmt.Errorf("unexpected cache type")
 	}
 	return cache, nil
+}
+
+func (c *channelCache) loadError() error {
+	if c == nil || c.refreshError == "" {
+		return fmt.Errorf("channel cache unavailable")
+	}
+	return fmt.Errorf("channel cache unavailable: %s", c.refreshError)
 }
 
 // newEmptyChannelCache 创建空的渠道缓存（所有 map 已初始化）
@@ -254,11 +276,24 @@ func expandMappingToCache(cache *channelCache, ch *Channel, gid int64, platform 
 	}
 }
 
-// storeErrorCache 存入短 TTL 空缓存，防止 DB 错误后紧密重试。
-// 通过回退 loadedAt 使剩余 TTL = channelErrorTTL。
-func (s *ChannelService) storeErrorCache() {
+// storeErrorCache 在刷新失败后存入短 TTL 状态，防止紧密重试。
+// 若已有成功快照则继续沿用；首次加载失败则存入不可用哨兵，绝不能把
+// “缓存不可用”伪装成“渠道配置为空”。
+func (s *ChannelService) storeErrorCache(loadErr error) {
+	loadedAt := time.Now().Add(-(channelCacheTTL - channelErrorTTL))
+	if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil && (cached.usable || !cached.refreshFailed) {
+		stale := *cached
+		stale.loadedAt = loadedAt
+		stale.refreshFailed = true
+		stale.refreshError = loadErr.Error()
+		s.cache.Store(&stale)
+		return
+	}
+
 	errorCache := newEmptyChannelCache()
-	errorCache.loadedAt = time.Now().Add(-(channelCacheTTL - channelErrorTTL))
+	errorCache.loadedAt = loadedAt
+	errorCache.refreshFailed = true
+	errorCache.refreshError = loadErr.Error()
 	s.cache.Store(errorCache)
 }
 
@@ -283,7 +318,7 @@ func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[i
 	channels, err := s.repo.ListAll(ctx)
 	if err != nil {
 		slog.Warn("failed to build channel cache", "error", err)
-		s.storeErrorCache()
+		s.storeErrorCache(err)
 		return nil, nil, fmt.Errorf("list all channels: %w", err)
 	}
 
@@ -297,7 +332,7 @@ func (s *ChannelService) fetchChannelData(ctx context.Context) ([]Channel, map[i
 		groupPlatforms, err = s.repo.GetGroupPlatforms(ctx, allGroupIDs)
 		if err != nil {
 			slog.Warn("failed to load group platforms for channel cache", "error", err)
-			s.storeErrorCache()
+			s.storeErrorCache(err)
 			return nil, nil, fmt.Errorf("get group platforms: %w", err)
 		}
 	}
@@ -313,6 +348,7 @@ func populateChannelCache(channels []Channel, groupPlatforms map[int64]string) *
 	cache.groupPlatform = groupPlatforms
 	cache.byID = make(map[int64]*Channel, len(channels))
 	cache.loadedAt = time.Now()
+	cache.usable = true
 
 	for i := range channels {
 		channels[i].normalizeBillingModelSource()
@@ -502,6 +538,7 @@ func (s *ChannelService) IsModelRestricted(ctx context.Context, groupID int64, m
 	lk, err := s.lookupGroupChannel(ctx, groupID)
 	if err != nil {
 		slog.Warn("failed to load channel cache for model restriction check", "group_id", groupID, "error", err)
+		return true
 	}
 	if lk == nil {
 		return false
@@ -510,13 +547,17 @@ func (s *ChannelService) IsModelRestricted(ctx context.Context, groupID int64, m
 }
 
 // ResolveChannelMappingAndRestrict 解析渠道映射。
-// 返回映射结果。模型限制检查已移至调度阶段（GatewayService.checkChannelPricingRestriction），
-// restricted 始终返回 false，保留签名兼容性。
+// 返回映射结果。模型限制检查已移至调度阶段（GatewayService.checkChannelPricingRestriction）。
+// restricted 通常为 false；缓存不可用时返回 true，以确保旧调用方同样 fail-closed。
 func (s *ChannelService) ResolveChannelMappingAndRestrict(ctx context.Context, groupID *int64, model string) (ChannelMappingResult, bool) {
 	if groupID == nil {
 		return ChannelMappingResult{MappedModel: model}, false
 	}
-	lk, _ := s.lookupGroupChannel(ctx, *groupID)
+	lk, err := s.lookupGroupChannel(ctx, *groupID)
+	if err != nil {
+		slog.Warn("failed to load channel cache for mapping", "group_id", *groupID, "error", err)
+		return ChannelMappingResult{MappedModel: model}, true
+	}
 	if lk == nil {
 		return ChannelMappingResult{MappedModel: model}, false
 	}

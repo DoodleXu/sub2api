@@ -124,7 +124,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.handleStreamingAwareError(c, status, code, message, streamStarted)
 		return
 	}
-
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 
@@ -155,8 +154,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
-				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+				routingModel := reqModel
+				if channelMapping.Mapped {
+					routingModel = channelMapping.MappedModel
+				}
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel, requestPlatform)
+				if !cls.ModelNotFound {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+				}
+				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			} else {
 				if lastFailoverErr != nil {
@@ -168,8 +174,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}
 		}
 		if selection == nil || selection.Account == nil {
-			markOpsRoutingCapacityLimited(c)
-			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+			routingModel := reqModel
+			if channelMapping.Mapped {
+				routingModel = channelMapping.MappedModel
+			}
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel, requestPlatform)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
 		account := selection.Account
@@ -180,6 +193,17 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if !acquired {
+			return
+		}
+		if err := h.gatewayService.ValidateOpenAIUsagePricing(
+			c.Request.Context(), apiKey, account, gjson.GetBytes(body, "service_tier").String(), false,
+			channelMapping.MappedModel, reqModel,
+		); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_chat_completions.pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "billing_error", "Pricing is unavailable for the requested model", streamStarted)
 			return
 		}
 

@@ -126,6 +126,34 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 	}
 }
 
+func TestOpenAIGatewayServiceForward_FinalBridgePayloadAcquiresImageSlot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_gate","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}`)),
+		},
+	}
+	svc := newOpenAIImageGenerationControlTestService(upstream)
+	svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+	c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.98.0")
+	account := newOpenAIImageGenerationControlTestAccount()
+
+	acquired := 0
+	released := 0
+	ctx := WithOpenAIImageGenerationSlotAcquirer(context.Background(), func(context.Context) (func(), error) {
+		acquired++
+		return func() { released++ }, nil
+	})
+	result, err := svc.Forward(ctx, c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, acquired, "bridge-injected image tool must acquire the final-payload gate")
+	require.Equal(t, 1, released)
+}
+
 func TestOpenAIGatewayServiceForward_BridgeInjectsTextOnlyCodexRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

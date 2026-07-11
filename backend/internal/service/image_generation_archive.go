@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -44,6 +45,7 @@ const (
 	imageArchiveAssetTokenLeeway   = time.Minute
 	imageArchiveAssetTokenVersion  = "v1"
 	imageArchiveStableTokenVersion = "v2"
+	imageArchiveTaskTimeout        = 5 * time.Minute
 )
 
 type ImageGenerationArchiveRepository interface {
@@ -394,12 +396,14 @@ func (s *s3ImageArchiveStorage) publicURLForKey(key string) string {
 }
 
 type ImageGenerationArchiveService struct {
-	repo          ImageGenerationArchiveRepository
-	settingRepo   SettingRepository
-	apiKeyService APIKeyRepository
-	storage       ImageGenerationStorage
-	workerLimit   chan struct{}
-	cfg           *config.Config
+	repo            ImageGenerationArchiveRepository
+	settingRepo     SettingRepository
+	apiKeyService   APIKeyRepository
+	storage         ImageGenerationStorage
+	storageResolver func(context.Context) (ImageGenerationStorage, error)
+	workerLimit     chan struct{}
+	taskTimeout     time.Duration
+	cfg             *config.Config
 }
 
 func NewImageGenerationArchiveService(repo ImageGenerationArchiveRepository, settingRepo SettingRepository, apiKeyService APIKeyRepository, cfg *config.Config) *ImageGenerationArchiveService {
@@ -408,10 +412,18 @@ func NewImageGenerationArchiveService(repo ImageGenerationArchiveRepository, set
 		settingRepo:   settingRepo,
 		apiKeyService: apiKeyService,
 		workerLimit:   make(chan struct{}, 4),
+		taskTimeout:   imageArchiveTaskTimeout,
 		cfg:           cfg,
 	}
 	svc.storage = newLocalImageArchiveStorage(defaultImageArchiveLocalDir(cfg), "")
 	return svc
+}
+
+func (s *ImageGenerationArchiveService) archiveTaskTimeoutDuration() time.Duration {
+	if s != nil && s.taskTimeout > 0 {
+		return s.taskTimeout
+	}
+	return imageArchiveTaskTimeout
 }
 
 func (s *ImageGenerationArchiveService) SetStorage(storage ImageGenerationStorage) {
@@ -814,8 +826,58 @@ func (s *ImageGenerationArchiveService) ArchiveBase64Images(ctx context.Context,
 	}
 	go func() {
 		defer func() { <-s.workerLimit }()
-		_ = s.archiveBase64Images(context.Background(), record, images)
+		archiveCtx, cancel := context.WithTimeout(context.Background(), s.archiveTaskTimeoutDuration())
+		defer cancel()
+		_ = s.archiveBase64Images(archiveCtx, record, images)
 	}()
+}
+
+// SubmitBase64Archive 将启用检查、记录创建和资产归档作为一个有界后台任务提交。
+// 返回 false 表示服务不可用或队列已满，调用方不得再创建无界 goroutine 重试。
+func (s *ImageGenerationArchiveService) SubmitBase64Archive(record *ImageGenerationRecord, images []ArchivedImageInput) bool {
+	if s == nil || s.repo == nil || record == nil || len(images) == 0 {
+		return false
+	}
+	select {
+	case s.workerLimit <- struct{}{}:
+	default:
+		return false
+	}
+
+	go func() {
+		defer func() { <-s.workerLimit }()
+		ctx, cancel := context.WithTimeout(context.Background(), s.archiveTaskTimeoutDuration())
+		defer cancel()
+		defer func() {
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) || record.ID <= 0 || record.Status == "completed" {
+				return
+			}
+			// 主任务 context 已过期，终态写入必须使用独立的短 context，
+			// 否则数据库会拒绝 UpdateRecord，记录将永久停在 pending/running。
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if err := s.updateRecordStatus(cleanupCtx, record, "failed", "image archive task timed out"); err != nil {
+				slog.Error("image archive timeout status update failed", "record_id", record.ID, "error", err)
+			}
+		}()
+
+		enabled, err := s.IsArchiveEnabled(ctx)
+		if err != nil {
+			slog.Warn("image archive enabled check failed", "error", err)
+			return
+		}
+		if !enabled {
+			return
+		}
+		if err := s.CreateRecord(ctx, record); err != nil {
+			slog.Warn("image archive record creation failed", "error", err)
+			return
+		}
+		if err := s.archiveBase64Images(ctx, record, images); err != nil {
+			slog.Warn("image archive task failed", "record_id", record.ID, "error", err)
+		}
+	}()
+	return true
 }
 
 func (s *ImageGenerationArchiveService) ArchiveBase64ImagesSync(ctx context.Context, record *ImageGenerationRecord, images []ArchivedImageInput) error {
@@ -850,6 +912,9 @@ func (s *ImageGenerationArchiveService) ArchiveImageBytesSync(ctx context.Contex
 func (s *ImageGenerationArchiveService) storageForCurrentConfig(ctx context.Context) (ImageGenerationStorage, error) {
 	if s == nil {
 		return nil, fmt.Errorf("image archive service is not configured")
+	}
+	if s.storageResolver != nil {
+		return s.storageResolver(ctx)
 	}
 	cfg, err := s.GetStorageConfig(ctx)
 	if err != nil {

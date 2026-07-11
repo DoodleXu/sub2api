@@ -132,6 +132,86 @@ func TestArchiveImageBytesSyncRespectsDisabledStorage(t *testing.T) {
 	require.Empty(t, repo.assets)
 }
 
+func TestSubmitBase64ArchiveRejectsWhenWholeTaskQueueIsFull(t *testing.T) {
+	repo := &imageArchiveRepoStub{}
+	svc := NewImageGenerationArchiveService(repo, &imageArchiveSettingRepoStub{}, nil, nil)
+	svc.workerLimit = make(chan struct{}, 1)
+	svc.workerLimit <- struct{}{}
+
+	accepted := svc.SubmitBase64Archive(
+		&ImageGenerationRecord{RequestID: "req_queue_full"},
+		[]ArchivedImageInput{{Index: 0, B64JSON: base64.StdEncoding.EncodeToString(tinyPNGBytes(t))}},
+	)
+
+	require.False(t, accepted)
+	require.Empty(t, repo.records, "rejected tasks must not create dangling archive records")
+}
+
+func TestSubmitBase64ArchivePersistsFailedStatusAfterTaskTimeout(t *testing.T) {
+	repo := &imageArchiveTimeoutRepoStub{updates: make(chan imageArchiveStatusUpdate, 4)}
+	settingRepo := &imageArchiveSettingRepoStub{values: map[string]string{
+		imageArchiveStorageSettingKey: `{"enabled":true,"type":"local","local_dir":"./data/image-archive"}`,
+	}}
+	svc := NewImageGenerationArchiveService(repo, settingRepo, nil, nil)
+	svc.taskTimeout = 20 * time.Millisecond
+	svc.storageResolver = func(context.Context) (ImageGenerationStorage, error) {
+		return &imageArchiveBlockingStorage{}, nil
+	}
+
+	require.True(t, svc.SubmitBase64Archive(
+		&ImageGenerationRecord{RequestID: "req_timeout"},
+		[]ArchivedImageInput{{Index: 0, B64JSON: base64.StdEncoding.EncodeToString(tinyPNGBytes(t))}},
+	))
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case update := <-repo.updates:
+			if update.status != "failed" || update.msg != "image archive task timed out" {
+				continue
+			}
+			require.NoError(t, update.ctxErr, "timeout cleanup must use a live context")
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for archive timeout terminal status")
+		}
+	}
+}
+
+type imageArchiveTimeoutRepoStub struct {
+	ImageGenerationArchiveRepository
+	updates chan imageArchiveStatusUpdate
+}
+
+type imageArchiveStatusUpdate struct {
+	status string
+	msg    string
+	ctxErr error
+}
+
+func (r *imageArchiveTimeoutRepoStub) CreateRecord(_ context.Context, record *ImageGenerationRecord) error {
+	record.ID = 1
+	return nil
+}
+
+func (r *imageArchiveTimeoutRepoStub) UpdateRecord(ctx context.Context, record *ImageGenerationRecord) error {
+	update := imageArchiveStatusUpdate{status: record.Status, msg: record.ErrorMessage, ctxErr: ctx.Err()}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.updates <- update
+	return nil
+}
+
+type imageArchiveBlockingStorage struct {
+	ImageGenerationStorage
+}
+
+func (s *imageArchiveBlockingStorage) Save(ctx context.Context, _ []byte, _ StoredImageMeta) (*StoredImage, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 type imageArchiveRepoStub struct {
 	records           []*ImageGenerationRecord
 	assets            []*ImageGenerationAsset

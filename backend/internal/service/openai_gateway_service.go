@@ -475,7 +475,8 @@ func (s *OpenAIGatewayService) IsModelRestricted(ctx context.Context, groupID in
 }
 
 // ResolveChannelMappingAndRestrict 解析渠道映射。
-// 模型限制检查已移至调度阶段，restricted 始终返回 false。
+// 模型限制检查通常在调度阶段执行；缓存不可用时 restricted 会返回 true，
+// 让仍依赖该兼容返回值的入口同样 fail-closed。
 func (s *OpenAIGatewayService) ResolveChannelMappingAndRestrict(ctx context.Context, groupID *int64, model string) (ChannelMappingResult, bool) {
 	if s.channelService == nil {
 		return ChannelMappingResult{MappedModel: model}, false
@@ -3120,6 +3121,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageSizeTier = imageCfg.SizeTier
 		imageInputSize = imageCfg.InputSize
 	}
+	// 图片意图必须基于账号映射、Codex bridge 注入和工具归一化完成后的最终
+	// payload 判断。此处位于任何上游连接之前，并让 release 覆盖完整响应周期。
+	var imageGenerationRelease func()
+	if imageIntent {
+		imageGenerationRelease, err = acquireOpenAIImageGenerationSlot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if imageGenerationRelease != nil {
+			defer imageGenerationRelease()
+		}
+	}
 
 	// Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -5249,10 +5262,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	// based on downstream idle time.
 	lastDownstreamWriteAt := time.Now()
 
-	// 仅发送一次错误事件，避免多次写入导致协议混乱。
-	// 注意：OpenAI `/v1/responses` streaming 事件必须符合 OpenAI Responses schema；
-	// 否则下游 SDK（例如 OpenCode）会因为类型校验失败而报错。
-	errorEventSent := false
 	clientDisconnected := false // 客户端断开后继续 drain 上游以收集 usage
 	sawTerminalEvent := false
 	sawFailedEvent := false
@@ -5260,28 +5269,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	var streamFailoverErr error
-	sendErrorEvent := func(reason string) {
-		if errorEventSent || clientDisconnected {
-			return
-		}
-		errorEventSent = true
-		payload := `{"type":"error","sequence_number":0,"error":{"type":"upstream_error","message":` + strconv.Quote(reason) + `,"code":` + strconv.Quote(reason) + `}}`
-		if err := flushBuffered(); err != nil {
-			clientDisconnected = true
-			return
-		}
-		if _, err := bufferedWriter.WriteString("data: " + payload + "\n\n"); err != nil {
-			clientDisconnected = true
-			return
-		}
-		if err := flushBuffered(); err != nil {
-			clientDisconnected = true
-			return
-		}
-		clientOutputStarted = true
-		lastDownstreamWriteAt = time.Now()
-	}
-
 	needModelReplace := originalModel != mappedModel
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	functionArgumentDeltas := make(map[int]*strings.Builder)
@@ -5345,7 +5332,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
-			sendErrorEvent("response_too_large")
 			return resultWithUsage(), scanErr, true
 		}
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
@@ -5359,7 +5345,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", scanErr), true
 		}
-		sendErrorEvent("stream_read_error")
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
 	processSSELine := func(line string, queueDrained bool) {
@@ -5580,7 +5565,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			sendErrorEvent("stream_timeout")
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
@@ -6886,19 +6870,13 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
 	if err != nil {
-		if !isUsagePricingUnavailableError(err) {
-			return err
+		// 上游已经完成时不能只返回异步错误，否则既没有扣费，也没有可追溯记录。
+		// 先持久化 pricing_pending 行，保留原始用量和完整路由信息供后续对账；
+		// 它不会进入扣费事务，也不会伪装成零费用已结算账单。
+		if pendingErr := s.recordOpenAIPricingPendingUsage(ctx, input, result, actualInputTokens, multiplier); pendingErr != nil {
+			return fmt.Errorf("%w; persist pricing-pending usage: %v", err, pendingErr)
 		}
-		logger.L().With(
-			zap.String("component", "service.openai_gateway"),
-			zap.Strings("billing_models", billingModels),
-			zap.String("requested_model", input.OriginalModel),
-			zap.String("mapped_model", input.ChannelMappedModel),
-			zap.String("upstream_model", result.UpstreamModel),
-			zap.Int64("api_key_id", apiKey.ID),
-			zap.Int64("account_id", account.ID),
-		).Warn("openai_usage.pricing_missing_record_zero_cost", zap.Error(err))
-		cost = &CostBreakdown{BillingMode: string(BillingModeToken)}
+		return err
 	}
 
 	// Determine billing type
@@ -7063,6 +7041,96 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	return nil
 }
 
+func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
+	ctx context.Context,
+	input *OpenAIRecordUsageInput,
+	result *OpenAIForwardResult,
+	actualInputTokens int,
+	rateMultiplier float64,
+) error {
+	if s == nil || s.usageLogRepo == nil {
+		return errors.New("usage log repository is unavailable")
+	}
+	if input == nil || input.APIKey == nil || input.User == nil || input.Account == nil || result == nil {
+		return errors.New("pricing-pending usage metadata is incomplete")
+	}
+
+	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	if result.OpenAIWSMode {
+		if upstreamRequestID := strings.TrimSpace(result.RequestID); upstreamRequestID != "" {
+			requestID = upstreamRequestID
+		}
+	}
+	requestedModel := strings.TrimSpace(input.OriginalModel)
+	if requestedModel == "" {
+		requestedModel = strings.TrimSpace(result.Model)
+	}
+	durationMs := int(result.Duration.Milliseconds())
+	billingMode := string(BillingModePricingPending)
+	accountRateMultiplier := input.Account.BillingRateMultiplier()
+	usageLog := &UsageLog{
+		UserID:                input.User.ID,
+		APIKeyID:              input.APIKey.ID,
+		AccountID:             input.Account.ID,
+		RequestID:             requestID,
+		Model:                 result.Model,
+		RequestedModel:        requestedModel,
+		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		ChannelID:             optionalInt64Ptr(input.ChannelID),
+		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
+		BillingMode:           &billingMode,
+		ServiceTier:           result.ServiceTier,
+		ReasoningEffort:       result.ReasoningEffort,
+		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:           actualInputTokens,
+		OutputTokens:          result.Usage.OutputTokens,
+		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		ImageOutputTokens:     result.Usage.ImageOutputTokens,
+		RateMultiplier:        rateMultiplier,
+		AccountRateMultiplier: &accountRateMultiplier,
+		BillingType:           BillingTypeBalance,
+		Stream:                result.Stream,
+		OpenAIWSMode:          result.OpenAIWSMode,
+		DurationMs:            &durationMs,
+		FirstTokenMs:          result.FirstTokenMs,
+		UserAgent:             optionalTrimmedStringPtr(input.UserAgent),
+		IPAddress:             optionalTrimmedStringPtr(input.IPAddress),
+		ImageCount:            result.ImageCount,
+		ImageSize:             optionalTrimmedStringPtr(result.ImageSize),
+		ImageInputSize:        optionalTrimmedStringPtr(result.ImageInputSize),
+		ImageOutputSize:       optionalTrimmedStringPtr(result.ImageOutputSize),
+		ImageSizeSource:       optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeBreakdown:    result.ImageSizeBreakdown,
+		VideoCount:            result.VideoCount,
+		VideoResolution:       optionalTrimmedStringPtr(result.VideoResolution),
+		CreatedAt:             time.Now(),
+	}
+	if result.VideoDurationSeconds > 0 {
+		usageLog.VideoDurationSeconds = &result.VideoDurationSeconds
+	}
+	if input.CyberBlocked {
+		usageLog.RequestType = RequestTypeCyberBlocked
+	}
+	if input.APIKey.GroupID != nil {
+		usageLog.GroupID = input.APIKey.GroupID
+	}
+	if input.Subscription != nil {
+		usageLog.SubscriptionID = &input.Subscription.ID
+		usageLog.BillingType = BillingTypeSubscription
+	}
+	inserted, err := s.usageLogRepo.Create(ctx, usageLog)
+	if err != nil {
+		return err
+	}
+	if !inserted {
+		// request_id 幂等冲突表示同一条待对账记录已经存在，仍视为已持久化。
+		return nil
+	}
+	return nil
+}
+
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	ctx context.Context,
 	result *OpenAIForwardResult,
@@ -7127,15 +7195,78 @@ func isGrokVideoUsageResult(result *OpenAIForwardResult, billingModels []string)
 	return false
 }
 
-func isUsagePricingUnavailableError(err error) bool {
-	if err == nil {
-		return false
+// ValidateOpenAIUsagePricing 在请求发往上游前确认至少一个可能的计费模型可定价。
+// 这是 RecordUsage 价格校验的前置防线：动态价格源或渠道价格不可用时应拒绝
+// 请求，而不是在收到成功响应后生成零费用账单。
+func (s *OpenAIGatewayService) ValidateOpenAIUsagePricing(
+	ctx context.Context,
+	apiKey *APIKey,
+	account *Account,
+	serviceTier string,
+	compact bool,
+	models ...string,
+) error {
+	if s == nil {
+		return errors.New("OpenAI gateway service is unavailable")
 	}
-	if errors.Is(err, ErrModelPricingUnavailable) {
-		return true
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		return nil
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no pricing available") || strings.Contains(msg, "pricing not found")
+	if s.billingService == nil {
+		return errors.New("OpenAI billing service is unavailable")
+	}
+	if apiKey == nil {
+		return errors.New("API key is required for OpenAI pricing validation")
+	}
+	resolvedModels := make([]string, 0, len(models)*4)
+	primaryEffectiveModel := ""
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		resolvedModels = append(resolvedModels, model)
+		mappedModel := model
+		if account != nil {
+			mappedModel = strings.TrimSpace(account.GetMappedModel(model))
+			resolvedModels = append(resolvedModels, mappedModel)
+		}
+		if compact {
+			mappedModel = resolveOpenAICompactForwardModel(account, mappedModel)
+			resolvedModels = append(resolvedModels, mappedModel)
+		}
+		effectiveModel := normalizeOpenAIModelForUpstream(account, mappedModel)
+		resolvedModels = append(resolvedModels, effectiveModel)
+		if primaryEffectiveModel == "" {
+			primaryEffectiveModel = effectiveModel
+		}
+	}
+	candidates := usageBillingModelCandidates("", resolvedModels...)
+	if len(candidates) == 0 {
+		return errors.New("OpenAI usage billing model is empty")
+	}
+	// 图片模型由媒体计费链路按图片规格/数量定价，不要求存在 token 价格。
+	// 这里以账号映射和 compact 映射后的最终模型为准，避免把图片请求误判为缺价。
+	if isOpenAIImageGenerationModel(primaryEffectiveModel) {
+		return nil
+	}
+
+	var lastErr error
+	for _, candidate := range candidates {
+		_, err := s.calculateOpenAIRecordUsageTokenCost(
+			ctx,
+			apiKey,
+			candidate,
+			1,
+			UsageTokens{},
+			strings.TrimSpace(serviceTier),
+		)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return fmt.Errorf("OpenAI usage pricing unavailable for models %s: %w", strings.Join(candidates, ","), lastErr)
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(

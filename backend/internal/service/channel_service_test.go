@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -1149,16 +1150,11 @@ func TestBuildCache_DBError(t *testing.T) {
 	require.Contains(t, err.Error(), "database down")
 	require.Equal(t, 1, callCount)
 
-	// Second call within error-TTL should use error cache, but still return error
-	// Because buildCache stores error-TTL cache and returns error, the cached value
-	// is still within TTL and loadCache returns it (which is an empty cache).
-	// Actually, re-reading the code: buildCache returns nil, err, and the error cache
-	// only serves as a "don't retry immediately" mechanism. The singleflight.Do
-	// returns the error. On next call within error-TTL, the cache has an empty but
-	// valid entry, so loadCache returns it (with empty maps). GetChannelForGroup
-	// will find nothing and return nil, nil.
+	// Second call within error-TTL should reuse the error sentinel without hitting DB,
+	// but must still fail closed instead of pretending the channel configuration is empty.
 	result, err := svc.GetChannelForGroup(context.Background(), 10)
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "database down")
 	require.Nil(t, result)
 	// Should NOT have hit DB again (error-TTL cache is active)
 	require.Equal(t, 1, callCount)
@@ -1188,10 +1184,61 @@ func TestBuildCache_GroupPlatformError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, result)
 
-	// Within error-TTL, second call should hit cache (empty) and return nil, nil
+	// Within error-TTL, second call should hit the error sentinel and remain fail-closed.
 	result2, err2 := svc.GetChannelForGroup(context.Background(), 10)
-	require.NoError(t, err2)
+	require.Error(t, err2)
+	require.Contains(t, err2.Error(), "group platforms failed")
 	require.Nil(t, result2)
+}
+
+func TestBuildCache_RefreshFailureKeepsLastKnownGoodSnapshot(t *testing.T) {
+	callCount := 0
+	ch := Channel{ID: 1, Status: StatusActive, GroupIDs: []int64{10}}
+	repo := &mockChannelRepository{
+		listAllFn: func(_ context.Context) ([]Channel, error) {
+			callCount++
+			if callCount > 1 {
+				return nil, errors.New("database temporarily unavailable")
+			}
+			return []Channel{ch}, nil
+		},
+		getGroupPlatformsFn: func(_ context.Context, _ []int64) (map[int64]string, error) {
+			return map[int64]string{10: "anthropic"}, nil
+		},
+	}
+	svc := newTestChannelService(repo)
+
+	first, err := svc.GetChannelForGroup(context.Background(), 10)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	cached := svc.cache.Load().(*channelCache)
+	cached.loadedAt = time.Now().Add(-channelCacheTTL)
+
+	second, err := svc.GetChannelForGroup(context.Background(), 10)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.Equal(t, int64(1), second.ID)
+	require.Equal(t, 2, callCount)
+
+	third, err := svc.GetChannelForGroup(context.Background(), 10)
+	require.NoError(t, err)
+	require.NotNil(t, third)
+	require.Equal(t, 2, callCount, "short stale-cache TTL should suppress immediate DB retries")
+}
+
+func TestIsModelRestricted_CacheUnavailableFailsClosed(t *testing.T) {
+	repo := &mockChannelRepository{
+		listAllFn: func(_ context.Context) ([]Channel, error) {
+			return nil, errors.New("database down")
+		},
+	}
+	svc := newTestChannelService(repo)
+
+	require.True(t, svc.IsModelRestricted(context.Background(), 10, "gpt-5.1"))
+	groupID := int64(10)
+	_, restricted := svc.ResolveChannelMappingAndRestrict(context.Background(), &groupID, "gpt-5.1")
+	require.True(t, restricted)
 }
 
 func TestBuildCache_MultipleGroupsSameChannel(t *testing.T) {

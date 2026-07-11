@@ -394,37 +394,27 @@ func (h *OpenAIGatewayHandler) submitImageArchiveTask(userID, apiKeyID int64, gr
 		groupIDCopy = &v
 	}
 	inputs := append([]service.ArchivedImageInput(nil), result.ImageArchiveInputs...)
-	go func() {
-		ctx := context.Background()
-		enabled, err := h.imageArchiveService.IsArchiveEnabled(ctx)
-		if err != nil {
-			logger.L().With(zap.String("component", "handler.openai_gateway.images")).Warn("image_archive.check_enabled_failed", zap.Error(err))
-			return
-		}
-		if !enabled {
-			return
-		}
-		userIDCopy := userID
-		apiKeyIDCopy := apiKeyID
-		accountIDCopy := accountID
-		record := &service.ImageGenerationRecord{
-			UserID:        &userIDCopy,
-			APIKeyID:      &apiKeyIDCopy,
-			GroupID:       groupIDCopy,
-			AccountID:     &accountIDCopy,
-			RequestID:     result.RequestID,
-			Source:        "gateway",
-			Endpoint:      endpoint,
-			Model:         model,
-			PromptExcerpt: prompt,
-			Status:        "pending",
-		}
-		if err := h.imageArchiveService.CreateRecord(ctx, record); err != nil {
-			logger.L().With(zap.String("component", "handler.openai_gateway.images")).Warn("image_archive.create_record_failed", zap.Error(err))
-			return
-		}
-		h.imageArchiveService.ArchiveBase64Images(ctx, record, inputs)
-	}()
+	userIDCopy := userID
+	apiKeyIDCopy := apiKeyID
+	accountIDCopy := accountID
+	record := &service.ImageGenerationRecord{
+		UserID:        &userIDCopy,
+		APIKeyID:      &apiKeyIDCopy,
+		GroupID:       groupIDCopy,
+		AccountID:     &accountIDCopy,
+		RequestID:     result.RequestID,
+		Source:        "gateway",
+		Endpoint:      endpoint,
+		Model:         model,
+		PromptExcerpt: prompt,
+		Status:        "pending",
+	}
+	if !h.imageArchiveService.SubmitBase64Archive(record, inputs) {
+		logger.L().With(
+			zap.String("component", "handler.openai_gateway.images"),
+			zap.String("request_id", result.RequestID),
+		).Warn("image_archive.queue_full_or_unavailable")
+	}
 }
 
 func isMultipartImagesContentType(contentType string) bool {

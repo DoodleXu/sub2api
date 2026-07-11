@@ -70,7 +70,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 			"responses_websockets_v2_enabled": true,
 		},
 	}
-
 	serverErrCh := make(chan error, 1)
 	turnWSModeCh := make(chan bool, 2)
 	hooks := &OpenAIWSIngressHooks{
@@ -360,6 +359,15 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 			"codex_image_generation_bridge":                true,
 		},
 	}
+	finalPayloadImageIntent := make(chan bool, 1)
+	hooks := &OpenAIWSIngressHooks{
+		BeforeRequest: func(turn int, payload []byte, originalModel string) error {
+			if turn == 1 {
+				finalPayloadImageIntent <- IsImageGenerationIntent(openAIResponsesEndpoint, originalModel, payload)
+			}
+			return nil
+		},
+	}
 
 	serverErrCh := make(chan error, 1)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -394,7 +402,7 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "test-token", firstMessage, nil)
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "test-token", firstMessage, hooks)
 	}))
 	defer wsServer.Close()
 
@@ -428,6 +436,12 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 	}
 
 	require.Len(t, captureConn.writes, 1)
+	select {
+	case imageIntent := <-finalPayloadImageIntent:
+		require.True(t, imageIntent, "turn hook must observe the bridge-injected final payload")
+	default:
+		t.Fatal("turn hook was not called for the first payload")
+	}
 	return requestToJSONString(captureConn.writes[0])
 }
 

@@ -313,7 +313,7 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing
 	require.Zero(t, billingRepo.lastCmd.AccountQuotaCost)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_MissingPricingRecordsZeroCostUsageLog(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_MissingPricingFailsClosed(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	userRepo := &openAIRecordUsageUserRepoStub{}
@@ -337,8 +337,9 @@ func TestOpenAIGatewayServiceRecordUsage_MissingPricingRecordsZeroCostUsageLog(t
 		APIKeyService: quotaSvc,
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, 1, billingRepo.calls)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+	require.Equal(t, 0, billingRepo.calls)
 	require.Equal(t, 1, usageRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
 	require.Equal(t, 0, subRepo.incrementCalls)
@@ -346,22 +347,31 @@ func TestOpenAIGatewayServiceRecordUsage_MissingPricingRecordsZeroCostUsageLog(t
 	require.Equal(t, 0, quotaSvc.rateLimitCalls)
 
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, "resp_missing_pricing", usageRepo.lastLog.RequestID)
-	require.Equal(t, "pricing-missing-test-model", usageRepo.lastLog.Model)
-	require.Equal(t, "pricing-missing-test-model", usageRepo.lastLog.RequestedModel)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModePricingPending), *usageRepo.lastLog.BillingMode)
 	require.Equal(t, 1200, usageRepo.lastLog.InputTokens)
 	require.Equal(t, 300, usageRepo.lastLog.OutputTokens)
-	require.Zero(t, usageRepo.lastLog.TotalCost)
-	require.Zero(t, usageRepo.lastLog.ActualCost)
-	require.NotNil(t, usageRepo.lastLog.BillingMode)
-	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
+	require.Nil(t, billingRepo.lastCmd)
+}
 
-	require.NotNil(t, billingRepo.lastCmd)
-	require.Zero(t, billingRepo.lastCmd.BalanceCost)
-	require.Zero(t, billingRepo.lastCmd.SubscriptionCost)
-	require.Zero(t, billingRepo.lastCmd.APIKeyQuotaCost)
-	require.Zero(t, billingRepo.lastCmd.APIKeyRateLimitCost)
-	require.Zero(t, billingRepo.lastCmd.AccountQuotaCost)
+func TestOpenAIGatewayServiceValidateOpenAIUsagePricing(t *testing.T) {
+	cfg := &config.Config{}
+	svc := &OpenAIGatewayService{
+		cfg:            cfg,
+		billingService: NewBillingService(cfg, nil),
+	}
+	apiKey := &APIKey{ID: 1, Group: &Group{ID: 2, RateMultiplier: 1}}
+
+	require.NoError(t, svc.ValidateOpenAIUsagePricing(context.Background(), apiKey, nil, "", false, "gpt-5.4"))
+	err := svc.ValidateOpenAIUsagePricing(context.Background(), apiKey, nil, "", false, "pricing-missing-test-model")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+
+	account := &Account{Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"model_mapping": map[string]any{"private-alias": "gpt-5.4"},
+	}}
+	require.NoError(t, svc.ValidateOpenAIUsagePricing(context.Background(), apiKey, account, "", false, "private-alias"))
+	require.NoError(t, svc.ValidateOpenAIUsagePricing(context.Background(), apiKey, account, "", false, "gpt-image-2"))
 }
 
 func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T) {
@@ -1479,7 +1489,7 @@ func TestOpenAIGatewayServiceRecordUsage_FallsBackToUpstreamModelWhenPrimaryUnpr
 	require.InDelta(t, expectedCost.ActualCost, userRepo.lastAmount, 1e-12)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_UnpricedTokenModelFallsBackToZeroCostUsageLog(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_UnpricedTokenModelFailsClosed(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
@@ -1497,14 +1507,14 @@ func TestOpenAIGatewayServiceRecordUsage_UnpricedTokenModelFallsBackToZeroCostUs
 		Account: &Account{ID: 30},
 	})
 
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, "not-priceable-alias", usageRepo.lastLog.Model)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModePricingPending), *usageRepo.lastLog.BillingMode)
 	require.Equal(t, 20, usageRepo.lastLog.InputTokens)
 	require.Equal(t, 10, usageRepo.lastLog.OutputTokens)
-	require.Zero(t, usageRepo.lastLog.TotalCost)
-	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 0, userRepo.deductCalls)
 	require.Equal(t, 0, subRepo.incrementCalls)
 }

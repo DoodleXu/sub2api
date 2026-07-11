@@ -313,6 +313,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// goroutine）之间同步当前 turn 的 usage metadata。
 	usageMeta.initFromFirstFrame(firstClientMessage, capturedSessionModel)
 	promptCacheKey := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "prompt_cache_key").String())
+	if hooks != nil {
+		if hooks.BeforeTurn != nil {
+			if err := hooks.BeforeTurn(1); err != nil {
+				return err
+			}
+		}
+		if hooks.BeforeRequest != nil {
+			if err := hooks.BeforeRequest(1, firstClientMessage, requestModel); err != nil {
+				return err
+			}
+		}
+	}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
 	if err != nil {

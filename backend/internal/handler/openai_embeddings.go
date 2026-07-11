@@ -97,7 +97,6 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		h.errorResponse(c, status, code, message)
 		return
 	}
-
 	failedAccountIDs := make(map[int64]struct{})
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
@@ -154,6 +153,16 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 
 		accountReleaseFunc, accountAcquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, "", selection, false, &streamStarted, reqLog)
 		if !accountAcquired {
+			return
+		}
+		if err := h.gatewayService.ValidateOpenAIUsagePricing(
+			c.Request.Context(), apiKey, account, "", false, channelMapping.MappedModel, reqModel,
+		); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_embeddings.pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.errorResponse(c, http.StatusServiceUnavailable, "billing_error", "Pricing is unavailable for the requested model")
 			return
 		}
 

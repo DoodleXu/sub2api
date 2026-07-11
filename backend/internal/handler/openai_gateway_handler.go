@@ -273,6 +273,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
 		return
 	}
+	// 显式图片请求可以在账号选择前尽早限流；普通文本请求则由 Forward 在
+	// Codex bridge/账号模型归一化后通过 final-payload hook 再判断，避免漏限。
 	var imageReleaseFunc func()
 	if imageIntent {
 		var imageAcquired bool
@@ -284,7 +286,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			defer imageReleaseFunc()
 		}
 	}
-
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
@@ -326,7 +327,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.handleStreamingAwareError(c, status, code, message, streamStarted)
 		return
 	}
-
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
@@ -367,16 +367,25 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
-				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available OpenAI accounts support /responses/compact", streamStarted)
 					return
 				}
 				if requiresNativeResponses {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					h.handleStreamingAwareError(c, http.StatusFailedDependency, service.OpenAIResponsesRequiredErrorCode, service.OpenAIResponsesRequiredErrorMessage, streamStarted)
 					return
 				}
-				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+				routingModel := reqModel
+				if channelMapping.Mapped {
+					routingModel = channelMapping.MappedModel
+				}
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel, requestPlatform)
+				if !cls.ModelNotFound {
+					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+				}
+				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
 			if lastFailoverErr != nil {
@@ -387,8 +396,25 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
-			markOpsRoutingCapacityLimited(c)
-			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+			if requireCompact {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available OpenAI accounts support /responses/compact", streamStarted)
+				return
+			}
+			if requiresNativeResponses {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusFailedDependency, service.OpenAIResponsesRequiredErrorCode, service.OpenAIResponsesRequiredErrorMessage, streamStarted)
+				return
+			}
+			routingModel := reqModel
+			if channelMapping.Mapped {
+				routingModel = channelMapping.MappedModel
+			}
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel, requestPlatform)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
@@ -412,6 +438,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if !acquired {
 			return
 		}
+		if err := h.gatewayService.ValidateOpenAIUsagePricing(
+			c.Request.Context(), apiKey, account, gjson.GetBytes(body, "service_tier").String(), requireCompact,
+			channelMapping.MappedModel, reqModel,
+		); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai.pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "billing_error", "Pricing is unavailable for the requested model", streamStarted)
+			return
+		}
 
 		// Forward request
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
@@ -425,7 +462,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(c.Request.Context(), c, account, forwardBody)
+			forwardCtx := c.Request.Context()
+			if !imageIntent {
+				forwardCtx = service.WithOpenAIImageGenerationSlotAcquirer(
+					forwardCtx,
+					func(context.Context) (func(), error) {
+						release, acquired := h.acquireImageGenerationSlot(c, streamStarted)
+						if !acquired {
+							return nil, service.ErrOpenAIImageGenerationConcurrencyLimited
+						}
+						return release, nil
+					},
+				)
+			}
+			return h.gatewayService.Forward(forwardCtx, c, account, forwardBody)
 		}()
 		cyberBlockKeyHTTP := ""
 		if service.GetOpsCyberPolicy(c) != nil {
@@ -908,7 +958,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicStreamingAwareError(c, status, code, message, streamStarted)
 		return
 	}
-
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 	sessionHash, promptCacheKey = resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel, body)
@@ -975,6 +1024,17 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if !acquired {
+			return
+		}
+		if err := h.gatewayService.ValidateOpenAIUsagePricing(
+			c.Request.Context(), apiKey, account, gjson.GetBytes(body, "service_tier").String(), false,
+			channelMappingMsg.MappedModel, preferredMappedModel, reqModel,
+		); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Error("openai_messages.pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "billing_error", "Pricing is unavailable for the requested model", streamStarted)
 			return
 		}
 
@@ -1452,11 +1512,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	var currentUserRelease func()
 	var currentAccountRelease func()
+	var currentImageRelease func()
 	releaseAccountSlot := func() {
-		if currentAccountRelease != nil {
-			currentAccountRelease()
-			currentAccountRelease = nil
-		}
+		releaseOpenAIWSSlot(&currentAccountRelease)
+	}
+	releaseImageSlot := func() {
+		releaseOpenAIWSSlot(&currentImageRelease)
 	}
 	releaseTurnSlots := func() {
 		releaseAccountSlot()
@@ -1464,6 +1525,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			currentUserRelease()
 			currentUserRelease = nil
 		}
+		releaseImageSlot()
 	}
 	// 必须尽早注册，确保任何 early return 都能释放已获取的并发槽位。
 	defer releaseTurnSlots()
@@ -1511,7 +1573,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
 		return
 	}
-
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(
 		c,
 		firstMessage,
@@ -1608,18 +1669,42 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		hooks := &service.OpenAIWSIngressHooks{
 			InitialRequestModel: reqModel,
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
-				if turn == 1 {
-					return nil
-				}
 				if !gjson.ValidBytes(payload) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 				}
-				model := strings.TrimSpace(originalModel)
+				model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
 				if model == "" {
-					model = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+					model = strings.TrimSpace(originalModel)
 				}
 				if model == "" {
 					model = reqModel
+				}
+				if err := h.gatewayService.ValidateOpenAIUsagePricing(
+					ctx, apiKey, account, gjson.GetBytes(payload, "service_tier").String(), false, model,
+				); err != nil {
+					reqLog.Error("openai.websocket_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Int("turn", turn), zap.Error(err))
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "pricing is unavailable for the requested model", err)
+				}
+				// payload 已完成账号映射和 Codex bridge 注入；必须以这一最终形态
+				// 判断图片意图，并让槽位覆盖完整 turn（包括上游重试）。
+				if service.IsImageGenerationIntent("/v1/responses", model, payload) && h != nil && h.cfg != nil && h.imageLimiter != nil {
+					imageConcurrency := h.cfg.Gateway.ImageConcurrency
+					wait := strings.TrimSpace(imageConcurrency.OverflowMode) == config.ImageConcurrencyOverflowModeWait
+					release, acquired := h.imageLimiter.Acquire(
+						ctx,
+						imageConcurrency.Enabled,
+						imageConcurrency.MaxConcurrentRequests,
+						wait,
+						time.Duration(imageConcurrency.WaitTimeoutSeconds)*time.Second,
+						imageConcurrency.MaxWaitingRequests,
+					)
+					if !acquired {
+						return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "image generation concurrency limit exceeded, please retry later", service.ErrOpenAIImageGenerationConcurrencyLimited)
+					}
+					currentImageRelease = wrapReleaseOnDone(ctx, release)
+				}
+				if turn == 1 {
+					return nil
 				}
 				if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload); decision != nil && decision.Blocked {
 					writeContentModerationWSError(ctx, wsConn, decision)
@@ -1753,7 +1838,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
-				releaseAccountSlot()
+				releaseOpenAIWSFailoverSlots(&currentAccountRelease, &currentImageRelease)
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
 				failoverAttempts = appendOpenAIFailoverAttemptLog(failoverAttempts, account, failoverErr)
@@ -1796,6 +1881,21 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
+}
+
+func releaseOpenAIWSSlot(release *func()) {
+	if release == nil || *release == nil {
+		return
+	}
+	(*release)()
+	*release = nil
+}
+
+// releaseOpenAIWSFailoverSlots 只释放与当前上游账号/turn 绑定的槽位；
+// 用户槽保留给同一客户端连接，以便切换账号后继续首轮请求。
+func releaseOpenAIWSFailoverSlots(accountRelease, imageRelease *func()) {
+	releaseOpenAIWSSlot(accountRelease)
+	releaseOpenAIWSSlot(imageRelease)
 }
 
 func (h *OpenAIGatewayHandler) recoverResponsesPanic(c *gin.Context, streamStarted *bool) {
@@ -1902,33 +2002,13 @@ func getContextInt64(c *gin.Context, key string) (int64, bool) {
 }
 
 func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
-	if task == nil {
-		return
-	}
-	task = wrapUsageRecordTaskContext(parent, task)
-	if h.usageRecordWorkerPool != nil {
-		h.usageRecordWorkerPool.Submit(task)
-		return
-	}
-	// 回退路径：worker 池未注入时同步执行，避免退回到无界 goroutine 模式。
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			logger.L().With(
-				zap.String("component", "handler.openai_gateway.responses"),
-				zap.Any("panic", recovered),
-			).Error("openai.usage_record_task_panic_recovered")
-		}
-	}()
-	task(ctx)
+	// 所有 usage task 都是账务任务。即使 worker 池被配置为 drop/sample，
+	// 队列满或池停止时也必须同步兜底，不能让调度策略改变计费完整性。
+	h.submitMandatoryUsageRecordTask(parent, task)
 }
 
 func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask) {
-	if result != nil && result.ImageCount > 0 {
-		h.submitMandatoryUsageRecordTask(parent, task)
-		return
-	}
+	_ = result // 保留参数以兼容调用点；所有使用量记录现在都采用 mandatory 语义。
 	h.submitUsageRecordTask(parent, task)
 }
 
@@ -2211,6 +2291,9 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 		if strings.HasPrefix(msg, prefix) {
 			return true
 		}
+	}
+	if errors.Is(err, service.ErrOpenAIImageGenerationConcurrencyLimited) {
+		return true
 	}
 	return false
 }
