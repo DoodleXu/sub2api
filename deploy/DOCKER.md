@@ -61,14 +61,12 @@ volumes:
 ## Supported Architectures
 
 - `linux/amd64`
-- `linux/arm64`
 
 ## Tags
 
 - `latest` - Latest stable release
 - `x.y.z` - Specific version
-- `x.y` - Latest patch of minor version
-- `x` - Latest minor of major version
+- `x.y.z-amd64` - Specific linux/amd64 version
 
 ## Links
 

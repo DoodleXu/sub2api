@@ -375,6 +375,21 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - `backend/internal/service/batch_image_billing_recovery.go`
 - `backend/migrations/159_batch_image_foundation.sql` 及后续 `batch_image` 迁移
 
+### 发布与 bcol.cc 部署
+
+当前 fork 的发布链路按实际生产目标 `root@bcol.cc` 收敛，只发布 `linux/amd64`：
+
+- GitHub Release 保留 `sub2api_<version>_linux_amd64.tar.gz` 与 `checksums.txt`，用于在线更新和 GHCR 拉取失败时的手动兜底。
+- Docker 镜像只推送 GHCR 单架构标签：`ghcr.io/doodlexu/sub2api:<version>`、`:<version>-amd64`、`:latest`。
+- 不再发布 Windows / Darwin / Linux arm64 二进制，不再构建 arm64 镜像、DockerHub 镜像或 multi-arch manifest。
+- `CI` 和 `Security Scan` 只在分支 push / PR / schedule 跑，tag push 只触发 `Release`，避免同一发版 SHA 重复跑检查。
+- 发版 tag 必须指向已推送到默认分支且 `CI` / `Security Scan` 已通过的 commit；不要对未经过分支检查的临时 SHA 直接打 tag。
+
+同步上游注意：
+
+- 上游如恢复多架构 GoReleaser、DockerHub 或 QEMU 配置，除非生产目标变化，否则不要重新引入。
+- bcol.cc 是 Docker Compose 部署，更新时优先使用 `ghcr.io/doodlexu/sub2api:<version>`，必要时可用 linux/amd64 release asset 在服务器上重建本地镜像。
+
 ## 待关注上游 main 变更
 
 当前 fork 已合入上游最新 release `v0.1.150`，但上游 `main` 在该 release 后还有 13 个提交，后续同步时需要重点看：

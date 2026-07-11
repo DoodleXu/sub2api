@@ -436,9 +436,6 @@ detect_platform() {
         x86_64)
             ARCH="amd64"
             ;;
-        aarch64|arm64)
-            ARCH="arm64"
-            ;;
         *)
             print_error "$(msg 'unsupported_arch'): $ARCH"
             exit 1
@@ -448,9 +445,6 @@ detect_platform() {
     case "$OS" in
         linux)
             OS="linux"
-            ;;
-        darwin)
-            OS="darwin"
             ;;
         *)
             print_error "$(msg 'unsupported_os'): $OS"

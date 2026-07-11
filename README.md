@@ -221,7 +221,7 @@ One-click installation script that downloads pre-built binaries from GitHub Rele
 
 #### Prerequisites
 
-- Linux server (amd64 or arm64)
+- Linux server (amd64)
 - PostgreSQL 15+ (installed and running)
 - Redis 7+ (installed and running)
 - Root privileges
