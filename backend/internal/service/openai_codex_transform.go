@@ -269,8 +269,55 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		}
 		result.Modified = true
 	}
+	if ensureResponsesJSONModeInputInstruction(reqBody) {
+		result.Modified = true
+	}
 
 	return result
+}
+
+func ensureResponsesJSONModeInputInstruction(reqBody map[string]any) bool {
+	if !responsesRequestUsesJSONObjectMode(reqBody) || responsesInputContainsJSONKeyword(reqBody["input"]) {
+		return false
+	}
+	input, _ := reqBody["input"].([]any)
+	reqBody["input"] = append([]any{
+		map[string]any{
+			"role":    "developer",
+			"content": "Respond with a valid JSON object.",
+		},
+	}, input...)
+	return true
+}
+
+func responsesRequestUsesJSONObjectMode(reqBody map[string]any) bool {
+	text, ok := reqBody["text"].(map[string]any)
+	if !ok {
+		return false
+	}
+	format, ok := text["format"].(map[string]any)
+	if !ok {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(firstNonEmptyString(format["type"]))) == "json_object"
+}
+
+func responsesInputContainsJSONKeyword(rawInput any) bool {
+	input, ok := rawInput.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := extractTextFromContent(m["content"])
+		if strings.Contains(strings.ToLower(text), "json") {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeCodexToolChoice(reqBody map[string]any) bool {

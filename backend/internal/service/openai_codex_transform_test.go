@@ -1454,6 +1454,87 @@ func TestApplyCodexOAuthTransform_JsonObjectKeepsJsonInstructionInInput(t *testi
 	require.Equal(t, "user", user["role"])
 }
 
+func TestApplyCodexOAuthTransform_JsonObjectInjectsJsonInstructionInInput(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "symbol data without the keyword",
+			},
+		},
+		"text": map[string]any{
+			"format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+	developer, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "developer", developer["role"])
+	require.Contains(t, developer["content"], "JSON")
+	user, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "user", user["role"])
+}
+
+func TestApplyCodexOAuthTransform_JsonObjectInjectsJsonInstructionForStringInput(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": "symbol data without the keyword",
+		"text": map[string]any{
+			"format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+	developer, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "developer", developer["role"])
+	require.Contains(t, developer["content"], "JSON")
+	user, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "user", user["role"])
+	require.Equal(t, "symbol data without the keyword", user["content"])
+}
+
+func TestApplyCodexOAuthTransform_JsonObjectStringInputWithJsonDoesNotInject(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": "Return JSON for this symbol data.",
+		"text": map[string]any{
+			"format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 1)
+	user, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "user", user["role"])
+	require.Equal(t, "Return JSON for this symbol data.", user["content"])
+}
+
 func TestIsInstructionsEmpty(t *testing.T) {
 	tests := []struct {
 		name     string

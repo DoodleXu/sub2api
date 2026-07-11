@@ -304,6 +304,26 @@ func TestChatCompletionsToResponses_ResponseFormatJsonObject(t *testing.T) {
 	assert.JSONEq(t, `{"type":"json_object"}`, string(serialized.Text.Format))
 }
 
+func TestChatCompletionsToResponses_ResponseFormatJsonObjectInjectsJSONInstruction(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model:          "gpt-4o",
+		Messages:       []ChatMessage{{Role: "user", Content: json.RawMessage(`"symbol data"`)}},
+		ResponseFormat: json.RawMessage(`{"type":"json_object"}`),
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Text)
+	assert.JSONEq(t, `{"type":"json_object"}`, string(resp.Text.Format))
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 2)
+	require.Equal(t, "developer", items[0].Role)
+	require.Contains(t, string(items[0].Content), "JSON")
+	require.Equal(t, "user", items[1].Role)
+}
+
 func TestChatCompletionsToResponses_ResponseFormatJsonSchema(t *testing.T) {
 	req := &ChatCompletionsRequest{
 		Model:    "gpt-4o",

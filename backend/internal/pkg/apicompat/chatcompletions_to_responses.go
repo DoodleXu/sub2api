@@ -21,6 +21,14 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 		return nil, err
 	}
 
+	format := chatResponseFormatToResponsesTextFormat(req.ResponseFormat)
+	if responsesTextFormatIsJSONObject(format) && !responsesInputContainsJSONKeyword(input) {
+		input = append([]ResponsesInputItem{{
+			Role:    "developer",
+			Content: rawJSONString("Respond with a valid JSON object."),
+		}}, input...)
+	}
+
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
@@ -70,7 +78,7 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 		}
 	}
 
-	if format := chatResponseFormatToResponsesTextFormat(req.ResponseFormat); len(format) > 0 {
+	if len(format) > 0 {
 		if out.Text == nil {
 			out.Text = &ResponsesText{}
 		}
@@ -95,6 +103,15 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 
 	return out, nil
+}
+
+func responsesInputContainsJSONKeyword(input []ResponsesInputItem) bool {
+	for _, item := range input {
+		if strings.Contains(strings.ToLower(string(item.Content)), "json") {
+			return true
+		}
+	}
+	return false
 }
 
 // convertChatMessagesToResponsesInput converts the Chat Completions messages

@@ -1,6 +1,9 @@
 package apicompat
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 func chatResponseFormatToResponsesTextFormat(raw json.RawMessage) json.RawMessage {
 	raw = normalizedRawJSON(raw)
@@ -68,6 +71,15 @@ func responsesTextFormatToChatResponseFormat(raw json.RawMessage) json.RawMessag
 		return raw
 	}
 	return out
+}
+
+func responsesTextFormatIsJSONObject(raw json.RawMessage) bool {
+	raw = normalizedRawJSON(raw)
+	if len(raw) == 0 {
+		return false
+	}
+	obj, ok := rawJSONObject(raw)
+	return ok && strings.ToLower(rawString(obj["type"])) == "json_object"
 }
 
 func normalizedRawJSON(raw json.RawMessage) json.RawMessage {
