@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -302,8 +305,8 @@ func ensureResponsesJSONModeInputInstructionInBody(body []byte) ([]byte, bool, e
 	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "text.format.type").String())) != "json_object" {
 		return body, false, nil
 	}
-	reqBody := make(map[string]any)
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	reqBody, err := decodeJSONMapPreservingNumbers(body)
+	if err != nil {
 		return body, false, err
 	}
 	if !ensureResponsesJSONModeInputInstruction(reqBody) {
@@ -314,6 +317,23 @@ func ensureResponsesJSONModeInputInstructionInBody(body []byte) ([]byte, bool, e
 		return body, false, err
 	}
 	return normalized, true, nil
+}
+
+func decodeJSONMapPreservingNumbers(body []byte) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	reqBody := make(map[string]any)
+	if err := decoder.Decode(&reqBody); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	return reqBody, nil
 }
 
 func responsesRequestUsesJSONObjectMode(reqBody map[string]any) bool {
@@ -941,43 +961,6 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 	return modified
 }
 
-// codexImageGenerationBridgeShouldFire reports whether the current turn carries
-// an explicit image-generation signal. tools/additional_tools are capability
-// declarations and therefore do not count as user intent by themselves.
-//
-// Recognized signals:
-//   - tool_choice selects image_generation
-//   - the latest meaningful input item is image_generation_call (continuation)
-func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
-	if len(reqBody) == 0 {
-		return false
-	}
-	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
-		return true
-	}
-	return latestOpenAIInputItemIsImageGenerationCall(reqBody["input"])
-}
-
-func latestOpenAIInputItemIsImageGenerationCall(value any) bool {
-	items, ok := value.([]any)
-	if !ok {
-		return false
-	}
-	for i := len(items) - 1; i >= 0; i-- {
-		raw := items[i]
-		item, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		itemType := strings.TrimSpace(firstNonEmptyString(item["type"]))
-		if itemType == "additional_tools" {
-			continue
-		}
-		return itemType == "image_generation_call"
-	}
-	return false
-}
-
 type codexImageGenerationBridgeMutation struct {
 	Modified          bool
 	ToolInjected      bool
@@ -987,7 +970,7 @@ type codexImageGenerationBridgeMutation struct {
 
 func applyCodexImageGenerationBridge(reqBody map[string]any) codexImageGenerationBridgeMutation {
 	result := codexImageGenerationBridgeMutation{}
-	if !codexImageGenerationBridgeShouldFire(reqBody) {
+	if len(reqBody) == 0 {
 		return result
 	}
 	if normalizeCodexImageGenerationNamespaceForBridge(reqBody) {

@@ -234,8 +234,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		codexBridgeEnabled := isCodexCLI && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
 		usesJSONObjectMode := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(normalized, "text.format.type").String()), "json_object")
 		if codexBridgeEnabled || usesJSONObjectMode {
-			payloadMap := make(map[string]any)
-			if err := json.Unmarshal(normalized, &payloadMap); err != nil {
+			payloadMap, err := decodeJSONMapPreservingNumbers(normalized)
+			if err != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", err)
 			}
 			bridgeModified := false

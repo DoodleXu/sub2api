@@ -2822,14 +2822,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
-	codexImageGenerationBridgeShouldApply := false
-	if codexImageGenerationBridgeEnabled {
-		decoded, decodeErr := ensureReqBody()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		codexImageGenerationBridgeShouldApply = codexImageGenerationBridgeShouldFire(decoded)
-	}
+	codexImageGenerationBridgeShouldApply := codexImageGenerationBridgeEnabled
 	var imageIntent bool
 	if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 		decoded, decodeErr := ensureReqBody()
@@ -8398,8 +8391,8 @@ func isEmptyBase64DataURI(raw string) bool {
 }
 
 func getOpenAIRequestBodyMap(_ *gin.Context, body []byte) (map[string]any, error) {
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	reqBody, err := decodeJSONMapPreservingNumbers(body)
+	if err != nil {
 		return nil, fmt.Errorf("parse request: %w", err)
 	}
 	return reqBody, nil

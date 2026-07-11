@@ -432,7 +432,7 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImageBridge(t *testing.T) {
-	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"draw a cat","tool_choice":{"type":"image_generation"},"text":{"format":{"type":"json_object"}}}`)
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"client_metadata":{"large_id":9007199254740993},"input":"draw a cat","tool_choice":{"type":"image_generation"},"text":{"format":{"type":"json_object"}}}`)
 
 	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
 	require.Equal(t, "png", gjson.Get(upstreamPayload, `tools.#(type=="image_generation").output_format`).String())
@@ -441,15 +441,16 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 	require.Equal(t, "developer", gjson.Get(upstreamPayload, "input.0.role").String())
 	require.Contains(t, gjson.Get(upstreamPayload, "input.0.content").String(), "JSON")
 	require.Equal(t, "draw a cat", gjson.Get(upstreamPayload, "input.1.content").String())
+	require.Equal(t, "9007199254740993", gjson.Get(upstreamPayload, "client_metadata.large_id").Raw)
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_SkipsPlainCodexImageBridge(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsPlainCodexImageBridge(t *testing.T) {
 	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"write code","tools":[{"type":"namespace","name":"image_gen"}]}`)
 
-	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
-	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="namespace")`).Exists())
-	require.False(t, gjson.Get(upstreamPayload, "tool_choice").Exists())
-	require.NotContains(t, gjson.Get(upstreamPayload, "instructions").String(), codexImageGenerationBridgeMarker)
+	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
+	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="namespace")`).Exists())
+	require.Equal(t, "auto", gjson.Get(upstreamPayload, "tool_choice").String())
+	require.Contains(t, gjson.Get(upstreamPayload, "instructions").String(), codexImageGenerationBridgeMarker)
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {

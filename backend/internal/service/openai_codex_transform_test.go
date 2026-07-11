@@ -693,7 +693,7 @@ func TestStripCodexImageGenerationBridgeArtifacts_RemovesBridgeOnly(t *testing.T
 }
 
 func TestEnsureResponsesJSONModeInputInstructionInBody(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","input":[{"type":"function_call","arguments":"{\"symbol\":\"AAPL\"}"},{"role":"user","content":"symbol data"}],"text":{"format":{"type":"json_object"}}}`)
+	body := []byte(`{"model":"gpt-5.4","client_metadata":{"large_id":9007199254740993},"input":[{"type":"function_call","arguments":"{\"symbol\":\"AAPL\"}"},{"role":"user","content":"symbol data"}],"text":{"format":{"type":"json_object"}}}`)
 
 	normalized, changed, err := ensureResponsesJSONModeInputInstructionInBody(body)
 
@@ -702,6 +702,7 @@ func TestEnsureResponsesJSONModeInputInstructionInBody(t *testing.T) {
 	require.Equal(t, "developer", gjson.GetBytes(normalized, "input.0.role").String())
 	require.Contains(t, gjson.GetBytes(normalized, "input.0.content").String(), "JSON")
 	require.Equal(t, "{\"symbol\":\"AAPL\"}", gjson.GetBytes(normalized, "input.1.arguments").String())
+	require.Equal(t, "9007199254740993", gjson.GetBytes(normalized, "client_metadata.large_id").Raw)
 
 	second, changedAgain, err := ensureResponsesJSONModeInputInstructionInBody(normalized)
 	require.NoError(t, err)

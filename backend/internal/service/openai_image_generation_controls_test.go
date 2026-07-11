@@ -95,6 +95,7 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 	}{
 		{name: "disabled group skips injection for text request", allowImages: false, bridgeEnabled: true, body: plainTextBody, wantInjected: false},
 		{name: "bridge disabled skips injection even with signal", allowImages: true, bridgeEnabled: false, body: imageSignalBody, wantInjected: false},
+		{name: "bridge injects image tool for plain Codex request", allowImages: true, bridgeEnabled: true, body: plainTextBody, wantInjected: true},
 		{name: "bridge injects image tool when signal is present", allowImages: true, bridgeEnabled: true, body: imageSignalBody, wantInjected: true},
 	}
 
@@ -125,7 +126,7 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 	}
 }
 
-func TestOpenAIGatewayServiceForward_BridgeSkipsTextOnlyCodexRequest(t *testing.T) {
+func TestOpenAIGatewayServiceForward_BridgeInjectsTextOnlyCodexRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	textOnlyBodies := []struct {
@@ -169,9 +170,9 @@ func TestOpenAIGatewayServiceForward_BridgeSkipsTextOnlyCodexRequest(t *testing.
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
-			require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
+			require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
 			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
-			require.NotContains(t, instructions, codexImageGenerationBridgeMarker)
+			require.Contains(t, instructions, codexImageGenerationBridgeMarker)
 		})
 	}
 }
@@ -257,86 +258,6 @@ func TestOpenAIGatewayServiceForward_CodexBridgeFallsBackWhenAutoInjectedSignalF
 	require.Equal(t, 0, result.ImageCount)
 }
 
-func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
-	tests := []struct {
-		name string
-		body map[string]any
-		want bool
-	}{
-		{name: "nil body", body: nil, want: false},
-		{
-			name: "plain text request",
-			body: map[string]any{"model": "gpt-5.4", "input": "write code"},
-			want: false,
-		},
-		{
-			name: "tools capability alone does not select image generation",
-			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "image_generation"}}},
-			want: false,
-		},
-		{
-			name: "namespace capability alone does not select image generation",
-			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "namespace", "name": "image_gen"}}},
-			want: false,
-		},
-		{
-			name: "tool_choice selects image_generation",
-			body: map[string]any{"model": "gpt-5.4", "tool_choice": map[string]any{"type": "image_generation"}},
-			want: true,
-		},
-		{
-			name: "tool_choice string image_generation",
-			body: map[string]any{"model": "gpt-5.4", "tool_choice": "image_generation"},
-			want: true,
-		},
-		{
-			name: "input_image part alone is vision input",
-			body: map[string]any{
-				"model": "gpt-5.4",
-				"input": []any{
-					map[string]any{
-						"type": "message", "role": "user",
-						"content": []any{
-							map[string]any{"type": "input_image", "image_url": "https://x/a.png"},
-						},
-					},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "latest image_generation_call is a continuation signal",
-			body: map[string]any{
-				"model": "gpt-5.4",
-				"input": []any{map[string]any{"type": "image_generation_call", "id": "ig_prev"}},
-			},
-			want: true,
-		},
-		{
-			name: "stale image_generation_call before new user turn is not a signal",
-			body: map[string]any{
-				"model": "gpt-5.4",
-				"input": []any{
-					map[string]any{"type": "image_generation_call", "id": "ig_prev"},
-					map[string]any{"type": "message", "role": "user", "content": "write code"},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "non-image tool only",
-			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "web_search"}}},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, codexImageGenerationBridgeShouldFire(tt.body))
-		})
-	}
-}
-
 func TestApplyCodexImageGenerationBridge_NormalizesNamespaceChoice(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.5",
@@ -369,7 +290,7 @@ func TestApplyCodexImageGenerationBridge_NormalizesNamespaceChoice(t *testing.T)
 	require.Len(t, input, 1)
 }
 
-func TestApplyCodexImageGenerationBridge_SkipsCapabilityOnlyRequest(t *testing.T) {
+func TestApplyCodexImageGenerationBridge_BridgesCapabilityOnlyRequest(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.5",
 		"tools": []any{map[string]any{"type": "namespace", "name": "image_gen"}},
@@ -378,8 +299,14 @@ func TestApplyCodexImageGenerationBridge_SkipsCapabilityOnlyRequest(t *testing.T
 
 	mutation := applyCodexImageGenerationBridge(reqBody)
 
-	require.False(t, mutation.Modified)
-	require.False(t, gjson.Get(mustJSON(t, reqBody), `tools.#(type=="image_generation")`).Exists())
+	require.True(t, mutation.Modified)
+	require.True(t, mutation.ToolInjected)
+	require.True(t, mutation.ToolChoiceAuto)
+	require.True(t, mutation.InstructionsAdded)
+	payload := mustJSON(t, reqBody)
+	require.True(t, gjson.Get(payload, `tools.#(type=="image_generation")`).Exists())
+	require.False(t, gjson.Get(payload, `tools.#(type=="namespace")`).Exists())
+	require.Equal(t, "auto", gjson.Get(payload, "tool_choice").String())
 }
 
 func TestOpenAIGatewayServiceForward_ExplicitImageToolWorksWithBridgeDisabled(t *testing.T) {
