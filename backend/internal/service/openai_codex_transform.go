@@ -750,6 +750,43 @@ func stripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool
 	return rebuilt, true, nil
 }
 
+func stripCodexImageGenerationBridgeArtifacts(reqBody map[string]any, removeAutoToolChoice bool) bool {
+	if reqBody == nil {
+		return false
+	}
+	modified := stripOpenAIImageGenerationTools(reqBody)
+	if removeAutoToolChoice {
+		if choice, ok := reqBody["tool_choice"].(string); ok && strings.TrimSpace(choice) == "auto" {
+			delete(reqBody, "tool_choice")
+			modified = true
+		}
+	}
+	if removeCodexImageGenerationBridgeInstructions(reqBody) {
+		modified = true
+	}
+	return modified
+}
+
+func removeCodexImageGenerationBridgeInstructions(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	existing, ok := reqBody["instructions"].(string)
+	if !ok || !strings.Contains(existing, codexImageGenerationBridgeMarker) {
+		return false
+	}
+	updated := strings.ReplaceAll(existing, "\n\n"+codexImageGenerationBridgeText, "")
+	updated = strings.ReplaceAll(updated, codexImageGenerationBridgeText+"\n\n", "")
+	updated = strings.ReplaceAll(updated, codexImageGenerationBridgeText, "")
+	updated = strings.TrimRight(updated, " \t\r\n")
+	if strings.TrimSpace(updated) == "" {
+		delete(reqBody, "instructions")
+		return true
+	}
+	reqBody["instructions"] = updated
+	return true
+}
+
 // stripCodexSparkImageGenerationTools removes image tool declarations and choices.
 // gpt-5.3-codex-spark rejects those capabilities upstream, while Codex clients may
 // advertise them by default.
@@ -829,6 +866,44 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 		}
 	}
 	return modified
+}
+
+// codexImageGenerationBridgeShouldFire reports whether the request carries an
+// explicit image-generation signal. Without such a signal, plain Codex coding
+// requests must not get an unwanted image_generation tool injected.
+//
+// Recognized signals:
+//   - tools[] already declares image_generation (user opted in)
+//   - tool_choice selects image_generation
+//   - input contains a previous image_generation_call item (continuation turn)
+func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+	if hasOpenAIImageGenerationTool(reqBody) {
+		return true
+	}
+	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
+		return true
+	}
+	return hasOpenAIImageGenerationCallItem(reqBody["input"])
+}
+
+func hasOpenAIImageGenerationCallItem(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(firstNonEmptyString(item["type"])) == "image_generation_call" {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureOpenAIResponsesImageGenerationTool(reqBody map[string]any) bool {

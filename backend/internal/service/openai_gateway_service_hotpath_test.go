@@ -565,7 +565,7 @@ func TestOpenAIGatewayService_Forward_CodexBridgeInjectionSetsImageBilling(t *te
 	c.Set("api_key", &APIKey{Group: &Group{AllowImageGeneration: true}})
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 
-	body := []byte(`{"model":"gpt-5","stream":false,"input":"draw if needed"}`)
+	body := []byte(`{"model":"gpt-5","stream":false,"input":"draw if needed","tool_choice":{"type":"image_generation"}}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)

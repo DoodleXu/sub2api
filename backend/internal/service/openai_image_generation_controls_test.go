@@ -83,15 +83,19 @@ func TestOpenAIGatewayServiceForward_DisabledGroupAllowsTextOnlyResponses(t *tes
 func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
+	imageSignalBody := []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tool_choice":{"type":"image_generation"}}`)
+	plainTextBody := []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`)
+
 	tests := []struct {
 		name          string
 		allowImages   bool
 		bridgeEnabled bool
+		body          []byte
 		wantInjected  bool
 	}{
-		{name: "disabled group skips injection", allowImages: false, bridgeEnabled: true, wantInjected: false},
-		{name: "enabled group skips injection by default", allowImages: true, bridgeEnabled: false, wantInjected: false},
-		{name: "enabled group injects image tool when bridge enabled", allowImages: true, bridgeEnabled: true, wantInjected: true},
+		{name: "disabled group skips injection for text request", allowImages: false, bridgeEnabled: true, body: plainTextBody, wantInjected: false},
+		{name: "bridge disabled skips injection even with signal", allowImages: true, bridgeEnabled: false, body: imageSignalBody, wantInjected: false},
+		{name: "bridge injects image tool when signal is present", allowImages: true, bridgeEnabled: true, body: imageSignalBody, wantInjected: true},
 	}
 
 	for _, tt := range tests {
@@ -108,7 +112,7 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 			c, _ := newOpenAIImageGenerationControlTestContext(tt.allowImages, "codex_cli_rs/0.98.0")
 			account := newOpenAIImageGenerationControlTestAccount()
 
-			result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
 
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -117,16 +121,105 @@ func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(
 			require.Equal(t, tt.wantInjected, hasImageTool)
 			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
 			require.Equal(t, tt.wantInjected, strings.Contains(instructions, "image_generation"))
-			toolChoice := gjson.GetBytes(upstream.lastBody, "tool_choice")
-			require.Equal(t, tt.wantInjected, toolChoice.Exists())
-			if tt.wantInjected {
-				require.Equal(t, "auto", toolChoice.String())
-			}
 		})
 	}
 }
 
-func TestOpenAIGatewayServiceForward_CodexBridgeFallsBackWhenUpstreamDisablesImages(t *testing.T) {
+func TestOpenAIGatewayServiceForward_BridgeSkipsTextOnlyCodexRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	textOnlyBodies := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "input string",
+			body: []byte(`{"model":"gpt-5.4","input":"refactor this Go function","stream":false}`),
+		},
+		{
+			name: "input message array without image",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"explain this diff"}]}],"stream":false}`),
+		},
+		{
+			name: "vision input without image generation signal",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"describe this screenshot"},{"type":"input_image","image_url":"https://example.com/a.png"}]}],"stream":false}`),
+		},
+		{
+			name: "with non-image tools",
+			body: []byte(`{"model":"gpt-5.4","input":"run tests","stream":false,"tools":[{"type":"web_search"}]}`),
+		},
+	}
+
+	for _, tt := range textOnlyBodies {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_text_only","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+				},
+			}
+			svc := newOpenAIImageGenerationControlTestService(upstream)
+			svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+			c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.125.0")
+			account := newOpenAIImageGenerationControlTestAccount()
+
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
+			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
+			require.NotContains(t, instructions, codexImageGenerationBridgeMarker)
+		})
+	}
+}
+
+func TestOpenAIGatewayServiceForward_BridgeFiresOnImageSignals(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "tool_choice selects image_generation",
+			body: []byte(`{"model":"gpt-5.4","input":"draw a sunset","stream":false,"tool_choice":{"type":"image_generation"}}`),
+		},
+		{
+			name: "input continuation has image_generation_call",
+			body: []byte(`{"model":"gpt-5.4","input":[{"type":"image_generation_call","id":"ig_prev","result":"prev"}],"stream":false}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_signal","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}`)),
+				},
+			}
+			svc := newOpenAIImageGenerationControlTestService(upstream)
+			svc.cfg.Gateway.CodexImageGenerationBridgeEnabled = true
+			c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.125.0")
+			account := newOpenAIImageGenerationControlTestAccount()
+
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
+			instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
+			require.Contains(t, instructions, codexImageGenerationBridgeMarker)
+		})
+	}
+}
+
+func TestOpenAIGatewayServiceForward_CodexBridgeFallsBackWhenAutoInjectedSignalFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upstream := &httpUpstreamRecorder{
@@ -148,7 +241,8 @@ func TestOpenAIGatewayServiceForward_CodexBridgeFallsBackWhenUpstreamDisablesIma
 	c, recorder := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.98.0")
 	account := newOpenAIImageGenerationControlTestAccount()
 
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"image_generation_call","id":"ig_prev","result":"prev"}],"stream":false}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -161,6 +255,70 @@ func TestOpenAIGatewayServiceForward_CodexBridgeFallsBackWhenUpstreamDisablesIma
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "tool_choice").Exists())
 	require.NotContains(t, gjson.GetBytes(upstream.bodies[1], "instructions").String(), "image_generation")
 	require.Equal(t, 0, result.ImageCount)
+}
+
+func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]any
+		want bool
+	}{
+		{name: "nil body", body: nil, want: false},
+		{
+			name: "plain text request",
+			body: map[string]any{"model": "gpt-5.4", "input": "write code"},
+			want: false,
+		},
+		{
+			name: "tools contains image_generation",
+			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "image_generation"}}},
+			want: true,
+		},
+		{
+			name: "tool_choice selects image_generation",
+			body: map[string]any{"model": "gpt-5.4", "tool_choice": map[string]any{"type": "image_generation"}},
+			want: true,
+		},
+		{
+			name: "tool_choice string image_generation",
+			body: map[string]any{"model": "gpt-5.4", "tool_choice": "image_generation"},
+			want: true,
+		},
+		{
+			name: "input_image part alone is vision input",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"input": []any{
+					map[string]any{
+						"type": "message", "role": "user",
+						"content": []any{
+							map[string]any{"type": "input_image", "image_url": "https://x/a.png"},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "image_generation_call continuation item",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"input": []any{map[string]any{"type": "image_generation_call", "id": "ig_prev"}},
+			},
+			want: true,
+		},
+		{
+			name: "non-image tool only",
+			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "web_search"}}},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, codexImageGenerationBridgeShouldFire(tt.body))
+		})
+	}
 }
 
 func TestOpenAIGatewayServiceForward_ExplicitImageToolWorksWithBridgeDisabled(t *testing.T) {
@@ -309,13 +467,13 @@ func TestOpenAIGatewayServiceForward_ChannelBridgeOverrideEnablesCodexInjection(
 	c, _ := newOpenAIImageGenerationControlTestContext(true, "codex_cli_rs/0.98.0")
 	account := newOpenAIImageGenerationControlTestAccount()
 
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"write code","stream":false}`))
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tool_choice":{"type":"image_generation"}}`))
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
 	require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="image_generation")`).Exists())
-	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+	require.Equal(t, "image_generation", gjson.GetBytes(upstream.lastBody, "tool_choice.type").String())
 	instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
 	require.Contains(t, instructions, "image_generation")
 }

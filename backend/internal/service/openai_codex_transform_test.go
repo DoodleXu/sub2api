@@ -666,6 +666,31 @@ func TestApplyCodexImageGenerationBridgeInstructions_SkipsWithoutImageTool(t *te
 	require.Equal(t, "existing instructions", reqBody["instructions"])
 }
 
+func TestStripCodexImageGenerationBridgeArtifacts_RemovesBridgeOnly(t *testing.T) {
+	reqBody := map[string]any{
+		"instructions": "existing instructions\n\n" + codexImageGenerationBridgeText,
+		"tool_choice":  "auto",
+		"tools": []any{
+			map[string]any{"type": "image_generation", "output_format": "png"},
+			map[string]any{"type": "function", "name": "shell"},
+		},
+	}
+
+	modified := stripCodexImageGenerationBridgeArtifacts(reqBody, true)
+
+	require.True(t, modified)
+	require.Equal(t, "existing instructions", reqBody["instructions"])
+	require.NotContains(t, reqBody, "tool_choice")
+	require.False(t, hasOpenAIImageGenerationTool(reqBody))
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+	tool, ok := tools[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "function", tool["type"])
+	require.Equal(t, "shell", tool["name"])
+}
+
 func TestValidateCodexSparkInputRejectsInputImage(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.3-codex-spark",

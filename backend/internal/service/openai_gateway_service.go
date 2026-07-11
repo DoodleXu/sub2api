@@ -2813,6 +2813,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+	codexImageGenerationBridgeShouldApply := false
+	if codexImageGenerationBridgeEnabled {
+		decoded, decodeErr := ensureReqBody()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		codexImageGenerationBridgeShouldApply = codexImageGenerationBridgeShouldFire(decoded)
+	}
 	var imageIntent bool
 	if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 		decoded, decodeErr := ensureReqBody()
@@ -2827,7 +2835,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	} else {
 		imageIntent = IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
 	}
-	codexBridgeFallbackEligible := codexImageGenerationBridgeEnabled && !imageIntent
+	codexBridgeFallbackEligible := codexImageGenerationBridgeShouldApply && !imageIntent
 	codexBridgeInjectedForText := false
 	codexBridgeSetToolChoiceAuto := false
 	if imageIntent && !imageGenerationAllowed {
@@ -2888,19 +2896,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	sparkImageToolRequest := isCodexSparkModel(upstreamModel) && openAIRequestBodyHasImageGenerationTool(body)
 	// /responses/compact 是会话压缩请求：上游不接受 tool_choice（400 unknown_parameter），
 	// 注入 image_generation 工具也没有意义，整块豁免。
-	if imageGenerationAllowed && !isCompactRequest && (codexImageGenerationBridgeEnabled || isOpenAIImageGenerationModel(requestView.Model) || openAIRequestBodyImageGenerationToolNeedsNormalization(body) || isOpenAIImageGenerationModel(upstreamModel) || sparkImageToolRequest) {
+	if imageGenerationAllowed && !isCompactRequest && (codexImageGenerationBridgeShouldApply || isOpenAIImageGenerationModel(requestView.Model) || openAIRequestBodyImageGenerationToolNeedsNormalization(body) || isOpenAIImageGenerationModel(upstreamModel) || sparkImageToolRequest) {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if codexImageGenerationBridgeEnabled && ensureOpenAIResponsesImageGenerationTool(decoded) {
+		if codexImageGenerationBridgeShouldApply && ensureOpenAIResponsesImageGenerationTool(decoded) {
 			markDecodedModified()
 			if codexBridgeFallbackEligible {
 				codexBridgeInjectedForText = true
 			}
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected /responses image_generation tool for Codex client")
 		}
-		if codexImageGenerationBridgeEnabled && ensureOpenAIResponsesImageGenerationToolChoiceAuto(decoded) {
+		if codexImageGenerationBridgeShouldApply && ensureOpenAIResponsesImageGenerationToolChoiceAuto(decoded) {
 			markDecodedModified()
 			if codexBridgeFallbackEligible {
 				codexBridgeSetToolChoiceAuto = true
@@ -2930,7 +2938,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageIntent = true
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] /responses image_generation request inbound_model=%s mapped_model=%s account_type=%s", requestView.Model, upstreamModel, account.Type)
 		}
-		if codexImageGenerationBridgeEnabled && applyCodexImageGenerationBridgeInstructions(decoded) {
+		if codexImageGenerationBridgeShouldApply && applyCodexImageGenerationBridgeInstructions(decoded) {
 			markDecodedModified()
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Added Codex image_generation bridge instructions")
 		}
