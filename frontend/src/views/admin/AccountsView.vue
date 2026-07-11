@@ -543,8 +543,10 @@ const exportingData = ref(false)
 const showAccountToolsDropdown = ref(false)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier', 'scheduler_score']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
+const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
+const HIDDEN_COLUMNS_VERSION = 'scheduler-score-hidden-by-default'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -695,16 +697,23 @@ const formatSchedulerScoreGroup = (score: AccountSchedulerGroupScore): string =>
 const loadSavedColumns = () => {
   try {
     const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
+    const savedVersion = localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY)
     if (saved) {
       const parsed = JSON.parse(saved) as string[]
       parsed.forEach(key => {
         hiddenColumns.add(key)
       })
+      if (savedVersion !== HIDDEN_COLUMNS_VERSION) {
+        hiddenColumns.add('scheduler_score')
+        localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+      }
     } else {
       DEFAULT_HIDDEN_COLUMNS.forEach(key => {
         hiddenColumns.add(key)
       })
+      localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
     }
+    localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_VERSION)
   } catch (e) {
     console.error('Failed to load saved columns:', e)
     DEFAULT_HIDDEN_COLUMNS.forEach(key => {
@@ -804,9 +813,18 @@ const toggleColumn = (key: string) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
   }
+  if (key === 'scheduler_score') {
+    setSchedulerScoreParam()
+    reload()
+  }
 }
 
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
+
+const setSchedulerScoreParam = () => {
+  const requestParams = params as any
+  requestParams.include_scheduler_score = isColumnVisible('scheduler_score') ? '1' : '0'
+}
 
 const {
   items: accounts,
@@ -827,6 +845,7 @@ const {
     privacy_mode: '',
     group: '',
     search: '',
+    include_scheduler_score: hiddenColumns.has('scheduler_score') ? '0' : '1',
     sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
@@ -882,6 +901,7 @@ const load = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  setSchedulerScoreParam()
   if (isFirstLoad.value) {
     requestParams.lite = '1'
   }
@@ -898,6 +918,7 @@ const reload = async () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
+  setSchedulerScoreParam()
   await baseReload()
   await refreshTodayStatsBatch()
 }
@@ -907,6 +928,7 @@ const debouncedReload = () => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  setSchedulerScoreParam()
   baseDebouncedReload()
 }
 
@@ -915,6 +937,7 @@ const handlePageChange = (page: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  setSchedulerScoreParam()
   baseHandlePageChange(page)
 }
 
@@ -923,6 +946,7 @@ const handlePageSizeChange = (size: number) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  setSchedulerScoreParam()
   baseHandlePageSizeChange(size)
 }
 
@@ -937,6 +961,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = true
+  setSchedulerScoreParam()
   load()
 }
 
