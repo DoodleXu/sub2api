@@ -279,14 +279,18 @@ func TestApplyCodexImageGenerationBridge_NormalizesNamespaceChoice(t *testing.T)
 	require.False(t, mutation.ToolChoiceAuto)
 	require.True(t, mutation.InstructionsAdded)
 	require.True(t, gjson.Get(mustJSON(t, reqBody), `tools.#(type=="image_generation")`).Exists())
-	require.Equal(t, "image_generation", firstNonEmptyString(reqBody["tool_choice"].(map[string]any)["type"]))
-	tools := reqBody["tools"].([]any)
+	toolChoice, ok := reqBody["tool_choice"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "image_generation", firstNonEmptyString(toolChoice["type"]))
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
 	for _, rawTool := range tools {
 		tool, ok := rawTool.(map[string]any)
 		require.True(t, ok)
 		require.False(t, isImageGenNamespaceToolMap(tool))
 	}
-	input := reqBody["input"].([]any)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
 	require.Len(t, input, 1)
 }
 

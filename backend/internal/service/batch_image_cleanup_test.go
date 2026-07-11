@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -221,11 +220,4 @@ func cleanupTestJob(batchID, status string) *BatchImageJob {
 		FinishedAt:        &now,
 		SettledAt:         &now,
 	}
-}
-
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	require.NoError(t, err)
-	return string(b)
 }
