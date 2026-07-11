@@ -2292,10 +2292,7 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 			return true
 		}
 	}
-	if errors.Is(err, service.ErrOpenAIImageGenerationConcurrencyLimited) {
-		return true
-	}
-	return false
+	return errors.Is(err, service.ErrOpenAIImageGenerationConcurrencyLimited)
 }
 
 // errorResponse returns OpenAI API format error response
