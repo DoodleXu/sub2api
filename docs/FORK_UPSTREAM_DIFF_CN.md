@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-11
+最后更新：2026-07-12
 
 ## 当前对比基线
 
@@ -12,7 +12,7 @@
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
 | Fork 同步前 HEAD | `1f5efa636 chore: 准备发布 v0.1.211` | 本次 merge 前基线，fork 版本继续保留 `0.1.211` |
 | 上游最新 release 基线 | `refs/tags/upstream/v0.1.151` -> `deff3123de` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.151` |
-| 上游 main HEAD | `e316ebf52` | 上游 main 在 `v0.1.151` 后还有提交，尚未进入当前 fork |
+| 上游 main HEAD | `e316ebf52` | 已选择性回迁 Codex Responses→Chat 工具桥接修复；其余上游 main 提交尚未作为完整同步进入当前 fork |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次合并保留 fork 当前文件结构，只移植上游行为修复，避免恢复上游拆分文件引入隐性风险 |
 
 更新本文时建议先刷新引用：
@@ -33,6 +33,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
 - fork 额外修复：为 OpenAI `json_object` JSON mode 增加统一的受管请求兼容兜底，覆盖原生 API Key HTTP、Chat -> Responses、OAuth 和 WebSocket 入站；当 input 缺少 `JSON/json` 关键字时自动补最小 developer 指令，同时保留 function call `arguments` 的字符串类型和 JSON 大整数精度。raw passthrough 不做该变换。
 - 生图桥接保持上游语义：Codex hosted 生图桥接开启后，HTTP 与 WebSocket 的受管请求均自动注入 `image_generation` 工具。fork 额外在注入时将 `image_gen` namespace 归一为单一 hosted 工具，避免同名能力冲突。
+- 2026-07-12 选择性回迁上游 main 的 Codex 工具桥接修复：Responses→Chat fallback 支持 `custom`/`namespace`/`tool_search` 工具转换与回程还原，同时保留 fork 对 `image_generation`、`web_search` 等 Responses-only hosted 工具的 `responses_required` 保护。
 
 ## 核心 fork 定制功能
 
