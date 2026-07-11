@@ -163,6 +163,100 @@ func TestForwardResponses_ForceChatCompletionsAllowsMixedHostedAndCustomTools(t 
 	require.False(t, strings.Contains(string(upstream.lastBody), "image_generation"))
 }
 
+func TestForwardResponses_ForceChatCompletionsRoutesResponsesLiteTools(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"custom","name":"exec","description":"Run a shell command"},
+				{"type":"tool_search"},
+				{"type":"namespace","name":"codex_app","tools":[
+					{"type":"function","name":"read_thread_terminal","parameters":{"type":"object","properties":{}}}
+				]}
+			]},
+			{"role":"developer","content":"Use the terminal tool when needed."},
+			{"role":"user","content":"Run pwd"}
+		],
+		"stream":true
+	}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := strings.Join([]string{
+		`data: {"id":"chatcmpl_lite","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_exec","type":"function","function":{"name":"exec","arguments":"{\"input\":\"pwd\"}"}}]},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_lite","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		"",
+		`data: {"id":"chatcmpl_lite","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "exec", gjson.GetBytes(upstream.lastBody, "tools.0.function.name").String())
+	require.Equal(t, "tool_search", gjson.GetBytes(upstream.lastBody, "tools.1.function.name").String())
+	require.Equal(t, "codex_app__read_thread_terminal", gjson.GetBytes(upstream.lastBody, "tools.2.function.name").String())
+	require.NotContains(t, string(upstream.lastBody), "additional_tools")
+	require.Contains(t, rec.Body.String(), "event: response.custom_tool_call_input.done")
+	require.Contains(t, rec.Body.String(), `"type":"custom_tool_call"`)
+	require.Contains(t, rec.Body.String(), `"name":"exec"`)
+	require.Contains(t, rec.Body.String(), `"input":"pwd"`)
+}
+
+func TestRequiresNativeOpenAIResponses_ResponsesLiteAdditionalTools(t *testing.T) {
+	require.True(t, RequiresNativeOpenAIResponses([]byte(`{
+		"input":[{"type":"additional_tools","tools":[{"type":"image_generation"}]}]
+	}`)))
+	require.False(t, RequiresNativeOpenAIResponses([]byte(`{
+		"input":[{"type":"additional_tools","tools":[
+			{"type":"image_generation"},
+			{"type":"custom","name":"exec"}
+		]}]
+	}`)))
+	require.False(t, RequiresNativeOpenAIResponses([]byte(`{
+		"tools":[{"type":"image_generation"}],
+		"input":[{"type":"additional_tools","tools":["exec"]}]
+	}`)))
+	for _, choice := range []string{`"auto"`, `"required"`, `"none"`, `{"type":"auto"}`} {
+		require.True(t, RequiresNativeOpenAIResponses([]byte(`{
+			"tools":[{"type":"image_generation"}],
+			"tool_choice":`+choice+`
+		}`)), choice)
+		require.True(t, RequiresNativeOpenAIResponses([]byte(`{
+			"input":[{"type":"additional_tools","tools":[{"type":"image_generation"}]}],
+			"tool_choice":`+choice+`
+		}`)), choice)
+	}
+	require.False(t, RequiresNativeOpenAIResponses([]byte(`{
+		"input":[{"type":"additional_tools","tools":[
+			{"type":"image_generation"},
+			{"type":"custom","name":"exec"}
+		]}],
+		"tool_choice":"auto"
+	}`)))
+	require.True(t, RequiresNativeOpenAIResponses([]byte(`{
+		"input":[{"type":"additional_tools","tools":[
+			{"type":"image_generation"},
+			{"type":"custom","name":"exec"}
+		]}],
+		"tool_choice":{"type":"image_generation"}
+	}`)))
+}
+
 func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyToolChoice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -34,6 +34,40 @@ func TestResponsesToChatCompletionsRequest_CustomToolBecomesFunctionTool(t *test
 	assert.Equal(t, "wait", out.Tools[1].Function.Name)
 }
 
+func TestResponsesToChatCompletionsRequest_ResponsesLiteAdditionalTools(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: json.RawMessage(`[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"custom","name":"exec","description":"Run a shell command"},
+				{"type":"tool_search"},
+				{"type":"namespace","name":"codex_app","tools":[
+					{"type":"function","name":"read_thread_terminal","parameters":{"type":"object","properties":{}}}
+				]}
+			]},
+			{"role":"developer","content":"Use the available tools."},
+			{"role":"user","content":"Run pwd"}
+		]`),
+	}
+
+	normalized, err := ExpandResponsesLiteTools(req)
+	require.NoError(t, err)
+	require.Len(t, normalized.Tools, 3)
+	assert.NotContains(t, string(normalized.Input), "additional_tools")
+	assert.Contains(t, string(normalized.Input), "Use the available tools")
+	assert.Empty(t, req.Tools, "normalization must not mutate the caller request")
+	assert.Contains(t, string(req.Input), "additional_tools")
+
+	out, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, out.Tools, 3)
+	assert.Equal(t, "exec", out.Tools[0].Function.Name)
+	assert.Equal(t, "tool_search", out.Tools[1].Function.Name)
+	assert.Equal(t, "codex_app__read_thread_terminal", out.Tools[2].Function.Name)
+	require.Len(t, out.Messages, 2)
+	assert.Equal(t, []string{"system", "user"}, chatMessageRoles(out.Messages))
+}
+
 func TestResponsesToChatCompletionsRequest_DropsToolChoiceWhenNoConvertibleTools(t *testing.T) {
 	req := &ResponsesRequest{
 		Model: "glm-5.2",

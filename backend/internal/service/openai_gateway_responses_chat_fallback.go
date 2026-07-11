@@ -44,6 +44,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if RequiresNativeOpenAIResponses(body) {
 		return nil, newResponsesOnlyBuiltInToolFailoverError()
 	}
+	normalizedReq, err := apicompat.ExpandResponsesLiteTools(&responsesReq)
+	if err != nil {
+		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, fmt.Errorf("expand responses lite tools: %w", err)
+	}
+	responsesReq = *normalizedReq
 	// custom 工具（如 Codex 的 exec）会降级为 function 工具转发，回程必须
 	// 按原始声明还原，否则客户端无法把调用路由回本地工具。
 	customTools := apicompat.CustomToolNames(responsesReq.Tools)
@@ -123,29 +129,41 @@ const (
 func RequiresNativeOpenAIResponses(body []byte) bool {
 	hasResponsesOnlyBuiltInTool := false
 	hasChatConvertibleTool := false
-	tools := gjson.GetBytes(body, "tools")
-	if tools.IsArray() {
-		for _, tool := range tools.Array() {
-			if isResponsesOnlyBuiltInTool(tool.Get("type").String()) {
-				hasResponsesOnlyBuiltInTool = true
-				continue
-			}
-			if isChatConvertibleResponsesTool(tool) {
-				hasChatConvertibleTool = true
-			}
+	for _, tool := range responsesRequestToolResults(body) {
+		if isResponsesOnlyBuiltInTool(tool.Get("type").String()) {
+			hasResponsesOnlyBuiltInTool = true
+			continue
+		}
+		if isChatConvertibleResponsesTool(tool) {
+			hasChatConvertibleTool = true
 		}
 	}
 
 	choice := gjson.GetBytes(body, "tool_choice")
-	if choice.Type == gjson.String {
-		return isResponsesOnlyBuiltInTool(choice.String())
+	if choice.Type == gjson.String && isResponsesOnlyBuiltInTool(choice.String()) {
+		return true
 	}
 	if choice.IsObject() {
-		return isResponsesOnlyBuiltInTool(choice.Get("type").String()) ||
+		if isResponsesOnlyBuiltInTool(choice.Get("type").String()) ||
 			isResponsesOnlyBuiltInTool(choice.Get("tool.type").String()) ||
-			isResponsesOnlyBuiltInTool(choice.Get("function.name").String())
+			isResponsesOnlyBuiltInTool(choice.Get("function.name").String()) {
+			return true
+		}
 	}
 	return hasResponsesOnlyBuiltInTool && !hasChatConvertibleTool
+}
+
+func responsesRequestToolResults(body []byte) []gjson.Result {
+	tools := gjson.GetBytes(body, "tools")
+	out := append([]gjson.Result(nil), tools.Array()...)
+	input := gjson.GetBytes(body, "input")
+	for _, item := range input.Array() {
+		if strings.TrimSpace(item.Get("type").String()) != "additional_tools" {
+			continue
+		}
+		out = append(out, item.Get("tools").Array()...)
+	}
+	return out
 }
 
 func isResponsesOnlyBuiltInTool(toolType string) bool {
@@ -158,6 +176,9 @@ func isResponsesOnlyBuiltInTool(toolType string) bool {
 }
 
 func isChatConvertibleResponsesTool(tool gjson.Result) bool {
+	if tool.Type == gjson.String {
+		return strings.TrimSpace(tool.String()) != ""
+	}
 	switch strings.TrimSpace(tool.Get("type").String()) {
 	case "function", "custom", "tool_search":
 		return strings.TrimSpace(tool.Get("name").String()) != "" || strings.TrimSpace(tool.Get("type").String()) == "tool_search"

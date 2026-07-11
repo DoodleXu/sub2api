@@ -16,6 +16,11 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req == nil {
 		return nil, fmt.Errorf("responses request is nil")
 	}
+	normalizedReq, err := ExpandResponsesLiteTools(req)
+	if err != nil {
+		return nil, err
+	}
+	req = normalizedReq
 
 	messages, err := responsesInputToChatMessages(req.Instructions, req.Input)
 	if err != nil {
@@ -61,6 +66,62 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	}
 
 	return out, nil
+}
+
+// ExpandResponsesLiteTools converts Codex Responses Lite's
+// input[].type=additional_tools carrier into the regular top-level tools shape
+// consumed by the Responses-to-Chat bridge. The carrier is removed from input
+// so it cannot be mistaken for a conversation message.
+func ExpandResponsesLiteTools(req *ResponsesRequest) (*ResponsesRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("responses request is nil")
+	}
+
+	input := bytesTrimSpace(req.Input)
+	if len(input) == 0 || string(input) == "null" || input[0] != '[' {
+		return req, nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(input, &items); err != nil {
+		return nil, fmt.Errorf("parse responses input: %w", err)
+	}
+
+	tools := append([]ResponsesTool(nil), req.Tools...)
+	filtered := make([]json.RawMessage, 0, len(items))
+	found := false
+	for _, raw := range items {
+		var item struct {
+			Type  string          `json:"type"`
+			Tools json.RawMessage `json:"tools"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil || strings.TrimSpace(item.Type) != "additional_tools" {
+			filtered = append(filtered, raw)
+			continue
+		}
+
+		found = true
+		if len(bytesTrimSpace(item.Tools)) == 0 || string(bytesTrimSpace(item.Tools)) == "null" {
+			continue
+		}
+		var additional []ResponsesTool
+		if err := json.Unmarshal(item.Tools, &additional); err != nil {
+			return nil, fmt.Errorf("parse responses additional_tools: %w", err)
+		}
+		tools = append(tools, additional...)
+	}
+	if !found {
+		return req, nil
+	}
+
+	normalizedInput, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, fmt.Errorf("marshal responses input without additional_tools: %w", err)
+	}
+	clone := *req
+	clone.Tools = tools
+	clone.Input = normalizedInput
+	return &clone, nil
 }
 
 // CustomToolNames 收集 Responses 请求中 custom/freeform 工具的名字。chat 桥回程时
