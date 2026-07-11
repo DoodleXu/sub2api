@@ -232,26 +232,31 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
 		}
 		codexBridgeEnabled := isCodexCLI && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
-		if codexBridgeEnabled {
+		usesJSONObjectMode := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(normalized, "text.format.type").String()), "json_object")
+		if codexBridgeEnabled || usesJSONObjectMode {
 			payloadMap := make(map[string]any)
 			if err := json.Unmarshal(normalized, &payloadMap); err != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", err)
 			}
 			bridgeModified := false
-			if ensureOpenAIResponsesImageGenerationTool(payloadMap) {
-				bridgeModified = true
-				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_injected account_id=%d", account.ID)
-			}
-			if ensureOpenAIResponsesImageGenerationToolChoiceAuto(payloadMap) {
-				bridgeModified = true
-				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_choice_auto account_id=%d", account.ID)
-			}
-			if normalizeOpenAIResponsesImageGenerationTools(payloadMap) {
+			if ensureResponsesJSONModeInputInstruction(payloadMap) {
 				bridgeModified = true
 			}
-			if applyCodexImageGenerationBridgeInstructions(payloadMap) {
-				bridgeModified = true
-				logOpenAIWSModeInfo("ingress_ws_codex_image_bridge_instructions_added account_id=%d", account.ID)
+			if codexBridgeEnabled {
+				bridgeMutation := applyCodexImageGenerationBridge(payloadMap)
+				bridgeModified = bridgeModified || bridgeMutation.Modified
+				if bridgeMutation.ToolInjected {
+					logOpenAIWSModeInfo("ingress_ws_codex_image_tool_injected account_id=%d", account.ID)
+				}
+				if bridgeMutation.ToolChoiceAuto {
+					logOpenAIWSModeInfo("ingress_ws_codex_image_tool_choice_auto account_id=%d", account.ID)
+				}
+				if bridgeMutation.InstructionsAdded {
+					logOpenAIWSModeInfo("ingress_ws_codex_image_bridge_instructions_added account_id=%d", account.ID)
+				}
+				if normalizeOpenAIResponsesImageGenerationTools(payloadMap) {
+					bridgeModified = true
+				}
 			}
 			if bridgeModified {
 				rebuilt, marshalErr := json.Marshal(payloadMap)

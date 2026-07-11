@@ -2685,6 +2685,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
+	if !passthroughEnabled {
+		normalizedJSONBody, changed, normalizeErr := ensureResponsesJSONModeInputInstructionInBody(body)
+		if normalizeErr != nil {
+			return nil, fmt.Errorf("normalize responses JSON mode input: %w", normalizeErr)
+		}
+		if changed {
+			body = normalizedJSONBody
+		}
+	}
 
 	originalBody := body
 	requestView := newOpenAIRequestView(body)
@@ -2735,7 +2745,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		return nil, errors.New("openai ws v1 is temporarily unsupported; use ws v2")
 	}
-	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	if passthroughEnabled {
 		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 			strippedBody, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(body)
@@ -2901,19 +2910,22 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		if codexImageGenerationBridgeShouldApply && ensureOpenAIResponsesImageGenerationTool(decoded) {
-			markDecodedModified()
-			if codexBridgeFallbackEligible {
-				codexBridgeInjectedForText = true
+		if codexImageGenerationBridgeShouldApply {
+			bridgeMutation := applyCodexImageGenerationBridge(decoded)
+			if bridgeMutation.Modified {
+				markDecodedModified()
 			}
-			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected /responses image_generation tool for Codex client")
-		}
-		if codexImageGenerationBridgeShouldApply && ensureOpenAIResponsesImageGenerationToolChoiceAuto(decoded) {
-			markDecodedModified()
-			if codexBridgeFallbackEligible {
-				codexBridgeSetToolChoiceAuto = true
+			if bridgeMutation.ToolInjected {
+				codexBridgeInjectedForText = codexBridgeFallbackEligible
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected /responses image_generation tool for Codex client")
 			}
-			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Set /responses image_generation tool_choice=auto for Codex client")
+			if bridgeMutation.ToolChoiceAuto {
+				codexBridgeSetToolChoiceAuto = codexBridgeFallbackEligible
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Set /responses image_generation tool_choice=auto for Codex client")
+			}
+			if bridgeMutation.InstructionsAdded {
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Added Codex image_generation bridge instructions")
+			}
 		}
 		if normalizeOpenAIResponsesImageGenerationTools(decoded) {
 			markDecodedModified()
@@ -2937,10 +2949,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if hasOpenAIImageGenerationTool(decoded) {
 			imageIntent = true
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] /responses image_generation request inbound_model=%s mapped_model=%s account_type=%s", requestView.Model, upstreamModel, account.Type)
-		}
-		if codexImageGenerationBridgeShouldApply && applyCodexImageGenerationBridgeInstructions(decoded) {
-			markDecodedModified()
-			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Added Codex image_generation bridge instructions")
 		}
 	} else if imageGenerationAllowed && imageIntent && openAIRequestBodyHasImageGenerationTool(body) {
 		// 完整 image_generation tool 只做 raw 计费读取，校验/桥接/旧字段迁移命中时才展开大 input map。

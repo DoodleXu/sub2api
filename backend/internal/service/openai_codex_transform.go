@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/tidwall/gjson"
 )
 
 var codexModelMap = map[string]string{
@@ -281,6 +282,13 @@ func ensureResponsesJSONModeInputInstruction(reqBody map[string]any) bool {
 		return false
 	}
 	input, _ := reqBody["input"].([]any)
+	if inputText, ok := reqBody["input"].(string); ok {
+		input = []any{map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": inputText,
+		}}
+	}
 	reqBody["input"] = append([]any{
 		map[string]any{
 			"role":    "developer",
@@ -288,6 +296,24 @@ func ensureResponsesJSONModeInputInstruction(reqBody map[string]any) bool {
 		},
 	}, input...)
 	return true
+}
+
+func ensureResponsesJSONModeInputInstructionInBody(body []byte) ([]byte, bool, error) {
+	if strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "text.format.type").String())) != "json_object" {
+		return body, false, nil
+	}
+	reqBody := make(map[string]any)
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return body, false, err
+	}
+	if !ensureResponsesJSONModeInputInstruction(reqBody) {
+		return body, false, nil
+	}
+	normalized, err := json.Marshal(reqBody)
+	if err != nil {
+		return body, false, err
+	}
+	return normalized, true, nil
 }
 
 func responsesRequestUsesJSONObjectMode(reqBody map[string]any) bool {
@@ -915,40 +941,157 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 	return modified
 }
 
-// codexImageGenerationBridgeShouldFire reports whether the request carries an
-// explicit image-generation signal. Without such a signal, plain Codex coding
-// requests must not get an unwanted image_generation tool injected.
+// codexImageGenerationBridgeShouldFire reports whether the current turn carries
+// an explicit image-generation signal. tools/additional_tools are capability
+// declarations and therefore do not count as user intent by themselves.
 //
 // Recognized signals:
-//   - tools[] already declares image_generation (user opted in)
 //   - tool_choice selects image_generation
-//   - input contains a previous image_generation_call item (continuation turn)
+//   - the latest meaningful input item is image_generation_call (continuation)
 func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false
 	}
-	if hasOpenAIImageGenerationTool(reqBody) {
-		return true
-	}
 	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
 		return true
 	}
-	return hasOpenAIImageGenerationCallItem(reqBody["input"])
+	return latestOpenAIInputItemIsImageGenerationCall(reqBody["input"])
 }
 
-func hasOpenAIImageGenerationCallItem(value any) bool {
+func latestOpenAIInputItemIsImageGenerationCall(value any) bool {
 	items, ok := value.([]any)
 	if !ok {
 		return false
 	}
-	for _, raw := range items {
+	for i := len(items) - 1; i >= 0; i-- {
+		raw := items[i]
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(firstNonEmptyString(item["type"])) == "image_generation_call" {
-			return true
+		itemType := strings.TrimSpace(firstNonEmptyString(item["type"]))
+		if itemType == "additional_tools" {
+			continue
 		}
+		return itemType == "image_generation_call"
+	}
+	return false
+}
+
+type codexImageGenerationBridgeMutation struct {
+	Modified          bool
+	ToolInjected      bool
+	ToolChoiceAuto    bool
+	InstructionsAdded bool
+}
+
+func applyCodexImageGenerationBridge(reqBody map[string]any) codexImageGenerationBridgeMutation {
+	result := codexImageGenerationBridgeMutation{}
+	if !codexImageGenerationBridgeShouldFire(reqBody) {
+		return result
+	}
+	if normalizeCodexImageGenerationNamespaceForBridge(reqBody) {
+		result.Modified = true
+	}
+	if ensureOpenAIResponsesImageGenerationTool(reqBody) {
+		result.Modified = true
+		result.ToolInjected = true
+	}
+	if ensureOpenAIResponsesImageGenerationToolChoiceAuto(reqBody) {
+		result.Modified = true
+		result.ToolChoiceAuto = true
+	}
+	if applyCodexImageGenerationBridgeInstructions(reqBody) {
+		result.Modified = true
+		result.InstructionsAdded = true
+	}
+	return result
+}
+
+func normalizeCodexImageGenerationNamespaceForBridge(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	modified := stripCodexImageGenerationNamespaceToolList(reqBody, "tools")
+	if stripCodexImageGenerationNamespaceToolsFromInput(reqBody) {
+		modified = true
+	}
+	if isCodexImageGenerationNamespaceChoice(reqBody["tool_choice"]) {
+		reqBody["tool_choice"] = map[string]any{"type": "image_generation"}
+		modified = true
+	}
+	return modified
+}
+
+func stripCodexImageGenerationNamespaceToolList(container map[string]any, key string) bool {
+	rawTools, ok := container[key]
+	if !ok || rawTools == nil {
+		return false
+	}
+	tools, ok := rawTools.([]any)
+	if !ok {
+		return false
+	}
+	filtered := make([]any, 0, len(tools))
+	removed := false
+	for _, rawTool := range tools {
+		if tool, ok := rawTool.(map[string]any); ok && isImageGenNamespaceToolMap(tool) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, rawTool)
+	}
+	if !removed {
+		return false
+	}
+	if len(filtered) == 0 {
+		delete(container, key)
+	} else {
+		container[key] = filtered
+	}
+	return true
+}
+
+func stripCodexImageGenerationNamespaceToolsFromInput(reqBody map[string]any) bool {
+	input, ok := reqBody["input"].([]any)
+	if !ok {
+		return false
+	}
+	filteredInput := make([]any, 0, len(input))
+	modified := false
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "additional_tools" {
+			filteredInput = append(filteredInput, rawItem)
+			continue
+		}
+		if !stripCodexImageGenerationNamespaceToolList(item, "tools") {
+			filteredInput = append(filteredInput, rawItem)
+			continue
+		}
+		modified = true
+		if _, hasTools := item["tools"]; hasTools {
+			filteredInput = append(filteredInput, rawItem)
+		}
+	}
+	if modified {
+		reqBody["input"] = filteredInput
+	}
+	return modified
+}
+
+func isCodexImageGenerationNamespaceChoice(choice any) bool {
+	choiceMap, ok := choice.(map[string]any)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(firstNonEmptyString(choiceMap["type"])) == "namespace" &&
+		(isOpenAIImageGenNamespaceName(firstNonEmptyString(choiceMap["name"])) ||
+			isOpenAIImageGenNamespaceName(firstNonEmptyString(choiceMap["namespace"]))) {
+		return true
+	}
+	if nested, ok := choiceMap["tool"].(map[string]any); ok {
+		return isCodexImageGenerationNamespaceChoice(nested)
 	}
 	return false
 }

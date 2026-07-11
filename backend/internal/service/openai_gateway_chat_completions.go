@@ -170,6 +170,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		)
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
+	responsesBody, _, err = ensureResponsesJSONModeInputInstructionInBody(responsesBody)
+	if err != nil {
+		return nil, fmt.Errorf("normalize responses JSON mode input: %w", err)
+	}
 
 	if account.Type == AccountTypeOAuth {
 		var reqBody map[string]any

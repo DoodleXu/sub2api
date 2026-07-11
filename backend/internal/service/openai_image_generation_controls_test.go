@@ -270,9 +270,14 @@ func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "tools contains image_generation",
+			name: "tools capability alone does not select image generation",
 			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "image_generation"}}},
-			want: true,
+			want: false,
+		},
+		{
+			name: "namespace capability alone does not select image generation",
+			body: map[string]any{"model": "gpt-5.4", "tools": []any{map[string]any{"type": "namespace", "name": "image_gen"}}},
+			want: false,
 		},
 		{
 			name: "tool_choice selects image_generation",
@@ -300,12 +305,23 @@ func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "image_generation_call continuation item",
+			name: "latest image_generation_call is a continuation signal",
 			body: map[string]any{
 				"model": "gpt-5.4",
 				"input": []any{map[string]any{"type": "image_generation_call", "id": "ig_prev"}},
 			},
 			want: true,
+		},
+		{
+			name: "stale image_generation_call before new user turn is not a signal",
+			body: map[string]any{
+				"model": "gpt-5.4",
+				"input": []any{
+					map[string]any{"type": "image_generation_call", "id": "ig_prev"},
+					map[string]any{"type": "message", "role": "user", "content": "write code"},
+				},
+			},
+			want: false,
 		},
 		{
 			name: "non-image tool only",
@@ -319,6 +335,51 @@ func TestCodexImageGenerationBridgeShouldFire(t *testing.T) {
 			require.Equal(t, tt.want, codexImageGenerationBridgeShouldFire(tt.body))
 		})
 	}
+}
+
+func TestApplyCodexImageGenerationBridge_NormalizesNamespaceChoice(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{"type": "namespace", "name": "image_gen", "tools": []any{map[string]any{"type": "function", "name": "imagegen"}}},
+			map[string]any{"type": "function", "name": "shell"},
+		},
+		"input": []any{
+			map[string]any{"type": "additional_tools", "tools": []any{map[string]any{"type": "namespace", "name": "image_gen"}}},
+			map[string]any{"type": "message", "role": "user", "content": "draw"},
+		},
+		"tool_choice": map[string]any{"type": "namespace", "name": "image_gen"},
+	}
+
+	mutation := applyCodexImageGenerationBridge(reqBody)
+
+	require.True(t, mutation.Modified)
+	require.True(t, mutation.ToolInjected)
+	require.False(t, mutation.ToolChoiceAuto)
+	require.True(t, mutation.InstructionsAdded)
+	require.True(t, gjson.Get(mustJSON(t, reqBody), `tools.#(type=="image_generation")`).Exists())
+	require.Equal(t, "image_generation", firstNonEmptyString(reqBody["tool_choice"].(map[string]any)["type"]))
+	tools := reqBody["tools"].([]any)
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		require.True(t, ok)
+		require.False(t, isImageGenNamespaceToolMap(tool))
+	}
+	input := reqBody["input"].([]any)
+	require.Len(t, input, 1)
+}
+
+func TestApplyCodexImageGenerationBridge_SkipsCapabilityOnlyRequest(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{map[string]any{"type": "namespace", "name": "image_gen"}},
+		"input": []any{map[string]any{"type": "message", "role": "user", "content": "write code"}},
+	}
+
+	mutation := applyCodexImageGenerationBridge(reqBody)
+
+	require.False(t, mutation.Modified)
+	require.False(t, gjson.Get(mustJSON(t, reqBody), `tools.#(type=="image_generation")`).Exists())
 }
 
 func TestOpenAIGatewayServiceForward_ExplicitImageToolWorksWithBridgeDisabled(t *testing.T) {

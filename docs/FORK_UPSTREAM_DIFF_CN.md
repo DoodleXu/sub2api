@@ -31,7 +31,8 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 - 上游行为修复已移植：Codex identity header pairing、Codex image generation tool strip、OpenAI Fast/Flex 用户级规则、setup-token 后台刷新、Grok `reasoning_effort` 兼容、usage request_type legacy alias 过滤。
 - 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
-- fork 额外修复：为 OpenAI `json_object` JSON mode 增加兼容兜底，当 input 消息缺少 `JSON/json` 关键字时自动补最小 developer 指令，避免上游批量返回 `Response input messages must contain the word 'json'`。
+- fork 额外修复：为 OpenAI `json_object` JSON mode 增加统一的受管请求兼容兜底，覆盖原生 API Key HTTP、Chat -> Responses、OAuth 和 WebSocket 入站；当 input 缺少 `JSON/json` 关键字时自动补最小 developer 指令，同时保留 function call `arguments` 的字符串类型。raw passthrough 不做该变换。
+- fork 额外修复：Codex hosted 生图桥接收紧为“显式选择 `image_generation` 或直接续接生图轮”时才触发，HTTP 与 WebSocket 共用同一变换；桥接触发时将 `image_gen` namespace 归一为单一 hosted 工具，避免同名能力冲突。仅声明工具能力或历史中存在旧生图调用不再触发。
 
 ## 核心 fork 定制功能
 

@@ -298,7 +298,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 	require.Equal(t, "resp_omit_model_1", gjson.Get(requestToJSONString(captureConn.writes[1]), "previous_response_id").String())
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImageBridge(t *testing.T) {
+func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -407,7 +407,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.5","stream":false,"input":"draw a cat"}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(firstMessage))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -428,11 +428,28 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 	}
 
 	require.Len(t, captureConn.writes, 1)
-	upstreamPayload := requestToJSONString(captureConn.writes[0])
+	return requestToJSONString(captureConn.writes[0])
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImageBridge(t *testing.T) {
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"draw a cat","tool_choice":{"type":"image_generation"},"text":{"format":{"type":"json_object"}}}`)
+
 	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
 	require.Equal(t, "png", gjson.Get(upstreamPayload, `tools.#(type=="image_generation").output_format`).String())
-	require.Equal(t, "auto", gjson.Get(upstreamPayload, "tool_choice").String())
+	require.Equal(t, "image_generation", gjson.Get(upstreamPayload, "tool_choice.type").String())
 	require.Contains(t, gjson.Get(upstreamPayload, "instructions").String(), "image_generation")
+	require.Equal(t, "developer", gjson.Get(upstreamPayload, "input.0.role").String())
+	require.Contains(t, gjson.Get(upstreamPayload, "input.0.content").String(), "JSON")
+	require.Equal(t, "draw a cat", gjson.Get(upstreamPayload, "input.1.content").String())
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_SkipsPlainCodexImageBridge(t *testing.T) {
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"write code","tools":[{"type":"namespace","name":"image_gen"}]}`)
+
+	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
+	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="namespace")`).Exists())
+	require.False(t, gjson.Get(upstreamPayload, "tool_choice").Exists())
+	require.NotContains(t, gjson.Get(upstreamPayload, "instructions").String(), codexImageGenerationBridgeMarker)
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {

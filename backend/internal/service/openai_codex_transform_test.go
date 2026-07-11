@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
@@ -689,6 +690,33 @@ func TestStripCodexImageGenerationBridgeArtifacts_RemovesBridgeOnly(t *testing.T
 	require.True(t, ok)
 	require.Equal(t, "function", tool["type"])
 	require.Equal(t, "shell", tool["name"])
+}
+
+func TestEnsureResponsesJSONModeInputInstructionInBody(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"function_call","arguments":"{\"symbol\":\"AAPL\"}"},{"role":"user","content":"symbol data"}],"text":{"format":{"type":"json_object"}}}`)
+
+	normalized, changed, err := ensureResponsesJSONModeInputInstructionInBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "developer", gjson.GetBytes(normalized, "input.0.role").String())
+	require.Contains(t, gjson.GetBytes(normalized, "input.0.content").String(), "JSON")
+	require.Equal(t, "{\"symbol\":\"AAPL\"}", gjson.GetBytes(normalized, "input.1.arguments").String())
+
+	second, changedAgain, err := ensureResponsesJSONModeInputInstructionInBody(normalized)
+	require.NoError(t, err)
+	require.False(t, changedAgain)
+	require.Equal(t, normalized, second)
+}
+
+func TestEnsureResponsesJSONModeInputInstructionInBodySkipsOtherFormats(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":"symbol data","text":{"format":{"type":"json_schema"}}}`)
+
+	normalized, changed, err := ensureResponsesJSONModeInputInstructionInBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, body, normalized)
 }
 
 func TestValidateCodexSparkInputRejectsInputImage(t *testing.T) {
