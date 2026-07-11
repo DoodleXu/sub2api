@@ -1387,7 +1387,9 @@ func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
 	return strings.Join(texts, "\n\n")
 }
 
-// defaultCodexSynthInstructions 返回合成路径在 instructions 为空时应填入的默认提示词。
+// defaultCodexSynthInstructions 返回按模型匹配的 Codex base prompt。
+// 仅供显式需要合成 base instructions 的兼容路径/测试使用；Codex OAuth
+// /responses 主路径在 instructions 为空时只补空字符串，避免覆盖客户端工具环境提示。
 //
 // 按 model 选择真实 Codex CLI 的 base instructions（codex 系→GPT-5-Codex，
 // gpt-5.2→GPT-5.2，gpt-5.1/gpt-5→GPT-5.1），使合成请求在提示词层面贴近真实 Codex 行为；
@@ -1468,13 +1470,14 @@ func applyCodexClientMetadata(reqBody map[string]any, account *Account) bool {
 	}
 }
 
-// applyInstructions 处理 instructions 字段：仅在 instructions 为空时填充默认值。
+// applyInstructions 处理 instructions 字段：Codex 后端要求该字段存在，但 Codex App
+// 已经在 input/developer messages 和 tools 中携带真实运行环境。这里仅补空字符串，
+// 避免网关注入过时的 base prompt 干扰模型对可用工具的判断。
 func applyInstructions(reqBody map[string]any, isCodexCLI bool) bool {
 	if !isInstructionsEmpty(reqBody) {
 		return false
 	}
-	model, _ := reqBody["model"].(string)
-	reqBody["instructions"] = defaultCodexSynthInstructions(model)
+	reqBody["instructions"] = ""
 	return true
 }
 

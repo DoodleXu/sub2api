@@ -1154,8 +1154,8 @@ func TestApplyCodexOAuthTransform_CodexCLI_PreservesExistingInstructions(t *test
 	_ = result
 }
 
-func TestApplyCodexOAuthTransform_CodexCLI_SuppliesDefaultWhenEmpty(t *testing.T) {
-	// Codex CLI 场景：无 instructions 时补充默认值
+func TestApplyCodexOAuthTransform_CodexCLI_SuppliesEmptyInstructionsWhenMissing(t *testing.T) {
+	// Codex CLI 场景：无 instructions 时仅补空字符串，避免覆盖客户端携带的工具环境提示
 
 	reqBody := map[string]any{
 		"model": "gpt-5.1",
@@ -1166,11 +1166,11 @@ func TestApplyCodexOAuthTransform_CodexCLI_SuppliesDefaultWhenEmpty(t *testing.T
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
-	require.NotEmpty(t, instructions)
+	require.Equal(t, "", instructions)
 	require.True(t, result.Modified)
 }
 
-func TestApplyCodexOAuthTransform_GPT55SuppliesModelSpecificInstructions(t *testing.T) {
+func TestApplyCodexOAuthTransform_EmptyInstructionsDoNotInjectModelPrompt(t *testing.T) {
 	reqBody := map[string]any{
 		"model":        "gpt-5.5",
 		"instructions": "   ",
@@ -1180,9 +1180,37 @@ func TestApplyCodexOAuthTransform_GPT55SuppliesModelSpecificInstructions(t *test
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
-	require.Contains(t, instructions, "You are Codex, a coding agent based on GPT-5")
+	require.Equal(t, "", instructions)
+	require.NotContains(t, instructions, "You are Codex, a coding agent based on GPT-5")
 	require.NotContains(t, instructions, "You are GPT-5.1 running in the Codex CLI")
 	require.True(t, result.Modified)
+}
+
+func TestApplyCodexOAuthTransform_GPT56PreservesNamespaceToolsWithEmptyInstructions(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.6-sol",
+		"tools": []any{
+			map[string]any{
+				"type": "namespace",
+				"name": "collaboration",
+				"tools": []any{
+					map[string]any{"type": "function", "name": "spawn_agent"},
+				},
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true, false)
+
+	require.True(t, result.Modified)
+	require.Equal(t, "", reqBody["instructions"])
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+	namespaceTool, ok := tools[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "namespace", namespaceTool["type"])
+	require.Equal(t, "collaboration", namespaceTool["name"])
 }
 
 func TestApplyCodexOAuthTransform_NonCodexCLI_PreservesExistingInstructions(t *testing.T) {
