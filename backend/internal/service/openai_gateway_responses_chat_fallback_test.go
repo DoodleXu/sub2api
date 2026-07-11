@@ -134,6 +134,35 @@ func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyBuiltInTools(t
 	require.Nil(t, upstream.lastReq)
 }
 
+func TestForwardResponses_ForceChatCompletionsAllowsMixedHostedAndCustomTools(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.6-sol","input":"run pwd","stream":false,"tools":[{"type":"image_generation"},{"type":"custom","name":"exec","description":"Run a shell command"}]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/chat/completions", upstream.lastReq.URL.String())
+	require.Len(t, gjson.GetBytes(upstream.lastBody, "tools").Array(), 1)
+	require.Equal(t, "exec", gjson.GetBytes(upstream.lastBody, "tools.0.function.name").String())
+	require.JSONEq(t, `{"type":"object","properties":{"input":{"type":"string","description":"The raw input for this tool, passed through verbatim."}},"required":["input"]}`, gjson.GetBytes(upstream.lastBody, "tools.0.function.parameters").Raw)
+	require.False(t, strings.Contains(string(upstream.lastBody), "image_generation"))
+}
+
 func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyToolChoice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

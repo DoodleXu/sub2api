@@ -121,11 +121,17 @@ const (
 )
 
 func RequiresNativeOpenAIResponses(body []byte) bool {
+	hasResponsesOnlyBuiltInTool := false
+	hasChatConvertibleTool := false
 	tools := gjson.GetBytes(body, "tools")
 	if tools.IsArray() {
 		for _, tool := range tools.Array() {
 			if isResponsesOnlyBuiltInTool(tool.Get("type").String()) {
-				return true
+				hasResponsesOnlyBuiltInTool = true
+				continue
+			}
+			if isChatConvertibleResponsesTool(tool) {
+				hasChatConvertibleTool = true
 			}
 		}
 	}
@@ -139,13 +145,33 @@ func RequiresNativeOpenAIResponses(body []byte) bool {
 			isResponsesOnlyBuiltInTool(choice.Get("tool.type").String()) ||
 			isResponsesOnlyBuiltInTool(choice.Get("function.name").String())
 	}
-	return false
+	return hasResponsesOnlyBuiltInTool && !hasChatConvertibleTool
 }
 
 func isResponsesOnlyBuiltInTool(toolType string) bool {
 	switch strings.TrimSpace(toolType) {
 	case "image_generation", "web_search", "web_search_preview", "web_search_20250305", "file_search", "computer_use_preview", "code_interpreter":
 		return true
+	default:
+		return false
+	}
+}
+
+func isChatConvertibleResponsesTool(tool gjson.Result) bool {
+	switch strings.TrimSpace(tool.Get("type").String()) {
+	case "function", "custom", "tool_search":
+		return strings.TrimSpace(tool.Get("name").String()) != "" || strings.TrimSpace(tool.Get("type").String()) == "tool_search"
+	case "namespace":
+		children := tool.Get("tools")
+		if !children.IsArray() {
+			children = tool.Get("children")
+		}
+		for _, child := range children.Array() {
+			if strings.TrimSpace(child.Get("type").String()) == "function" && strings.TrimSpace(child.Get("name").String()) != "" {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

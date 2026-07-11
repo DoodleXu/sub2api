@@ -33,7 +33,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
 - fork 额外修复：为 OpenAI `json_object` JSON mode 增加统一的受管请求兼容兜底，覆盖原生 API Key HTTP、Chat -> Responses、OAuth 和 WebSocket 入站；当 input 缺少 `JSON/json` 关键字时自动补最小 developer 指令，同时保留 function call `arguments` 的字符串类型和 JSON 大整数精度。raw passthrough 不做该变换。
 - 生图桥接保持上游语义：Codex hosted 生图桥接开启后，HTTP 与 WebSocket 的受管请求均自动注入 `image_generation` 工具。fork 额外在注入时将 `image_gen` namespace 归一为单一 hosted 工具，避免同名能力冲突。
-- 2026-07-12 选择性回迁上游 main 的 Codex 工具桥接修复：Responses→Chat fallback 支持 `custom`/`namespace`/`tool_search` 工具转换与回程还原，同时保留 fork 对 `image_generation`、`web_search` 等 Responses-only hosted 工具的 `responses_required` 保护。
+- 2026-07-12 选择性回迁上游 main 的 Codex 工具桥接修复：Responses→Chat fallback 支持 `custom`/`namespace`/`tool_search` 工具转换与回程还原。fork 继续对纯 `image_generation`、`web_search` 等 Responses-only hosted 工具保留 `responses_required` 保护，但混合 Codex 本地工具时允许 fallback 丢弃 hosted 工具并保留终端/SSH/MCP 工具能力。
 
 ## 核心 fork 定制功能
 
