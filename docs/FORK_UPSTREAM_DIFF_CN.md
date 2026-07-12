@@ -32,9 +32,10 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - 上游行为修复已移植：Codex identity header pairing、Codex image generation tool strip、OpenAI Fast/Flex 用户级规则、setup-token 后台刷新、Grok `reasoning_effort` 兼容、usage request_type legacy alias 过滤。
 - 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
 - fork 额外修复：为 OpenAI `json_object` JSON mode 增加统一的受管请求兼容兜底，覆盖原生 API Key HTTP、Chat -> Responses、OAuth 和 WebSocket 入站；当 input 缺少 `JSON/json` 关键字时自动补最小 developer 指令，同时保留 function call `arguments` 的字符串类型和 JSON 大整数精度。raw passthrough 不做该变换。
-- 生图桥接保持上游语义：Codex hosted 生图桥接开启后，HTTP 与 WebSocket 的受管请求均自动注入 `image_generation` 工具。fork 额外在注入时将 `image_gen` namespace 归一为单一 hosted 工具，避免同名能力冲突。
+- 生图桥接保持历史兼容：Codex hosted 生图桥接开启后，非 Responses Lite 的 HTTP 与 WebSocket 受管请求继续自动注入 `image_generation` 工具，并将顶层 `image_gen` namespace 归一为单一 hosted 工具，避免改变既有生图能力。
 - 2026-07-12 选择性回迁上游 main 的 Codex 工具桥接修复：Responses→Chat fallback 支持 `custom`/`namespace`/`tool_search` 工具转换与回程还原。fork 继续对纯 `image_generation`、`web_search` 等 Responses-only hosted 工具保留 `responses_required` 保护，但混合 Codex 本地工具时允许 fallback 丢弃 hosted 工具并保留终端/SSH/MCP 工具能力。
 - 2026-07-12 fork 继续补齐上游尚未覆盖的 Codex Responses Lite：`gpt-5.6-sol` 等模型将工具放在 `input[].type=additional_tools` 而非顶层 `tools`；Chat fallback 现会提取并合并这些工具、移除已消费的载体，并使用同一有效工具集合完成 custom/tool_search/namespace 回程还原与 Responses-native 资格判断，避免 macOS Codex 经 Chat 上游时丢失 `exec`/终端/MCP 工具。
+- 2026-07-12 fork 对 Responses Lite 单独隔离 Codex 生图桥接：当 `input[]` 含 `type=additional_tools` 时，其中的 `image_gen` 只视为能力声明，不触发图片权限、计费或并发槽，也不自动混入顶层 `image_generation`、`tool_choice=auto` 或生图提示；仅在当前轮显式选择生图工具或最新有效输入为 `image_generation_call` 时允许桥接。非 Lite 请求继续保留历史自动桥接行为。该规则避免原生 Responses 上游忽略 Lite 载体中的 `exec`/SSH/MCP 工具：同一 `gpt-5.6-sol` 请求走账号 399 的 Chat fallback 时工具正常，走账号 1011 的原生 Responses 且命中无条件生图注入时退化为纯文本；1011 上带 Codex UA 的 8 次复现均提示无 `exec`，绕过生图桥接后同账号 4 次均返回 `custom_tool_call`。后续同步上游或调整生图能力时必须保留 Responses Lite 的协议形状门控、非 Lite 兼容行为，以及 HTTP/WebSocket 原生透传回归。
 
 ## 核心 fork 定制功能
 

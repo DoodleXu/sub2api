@@ -961,6 +961,55 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 	return modified
 }
 
+// codexImageGenerationBridgeShouldFire preserves the legacy bridge for regular
+// Codex requests while isolating Responses Lite capability declarations.
+// Explicit image signals still take precedence for Lite requests.
+func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
+		return true
+	}
+	if latestOpenAIInputItemIsImageGenerationCall(reqBody["input"]) {
+		return true
+	}
+	return !responsesInputContainsAdditionalTools(reqBody["input"])
+}
+
+func responsesInputContainsAdditionalTools(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if ok && strings.TrimSpace(firstNonEmptyString(item["type"])) == "additional_tools" {
+			return true
+		}
+	}
+	return false
+}
+
+func latestOpenAIInputItemIsImageGenerationCall(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		item, ok := items[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		itemType := strings.TrimSpace(firstNonEmptyString(item["type"]))
+		if itemType == "additional_tools" {
+			continue
+		}
+		return itemType == "image_generation_call"
+	}
+	return false
+}
+
 type codexImageGenerationBridgeMutation struct {
 	Modified          bool
 	ToolInjected      bool
@@ -970,7 +1019,7 @@ type codexImageGenerationBridgeMutation struct {
 
 func applyCodexImageGenerationBridge(reqBody map[string]any) codexImageGenerationBridgeMutation {
 	result := codexImageGenerationBridgeMutation{}
-	if len(reqBody) == 0 {
+	if !codexImageGenerationBridgeShouldFire(reqBody) {
 		return result
 	}
 	if normalizeCodexImageGenerationNamespaceForBridge(reqBody) {

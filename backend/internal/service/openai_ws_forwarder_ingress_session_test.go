@@ -297,7 +297,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 	require.Equal(t, "resp_omit_model_1", gjson.Get(requestToJSONString(captureConn.writes[1]), "previous_response_id").String())
 }
 
-func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string {
+func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string, wantImageIntent bool) string {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -438,7 +438,7 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 	require.Len(t, captureConn.writes, 1)
 	select {
 	case imageIntent := <-finalPayloadImageIntent:
-		require.True(t, imageIntent, "turn hook must observe the bridge-injected final payload")
+		require.Equal(t, wantImageIntent, imageIntent, "turn hook must observe the final payload image intent")
 	default:
 		t.Fatal("turn hook was not called for the first payload")
 	}
@@ -446,7 +446,7 @@ func runOpenAIWSIngressImageBridgeTest(t *testing.T, firstMessage string) string
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImageBridge(t *testing.T) {
-	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"client_metadata":{"large_id":9007199254740993},"input":"draw a cat","tool_choice":{"type":"image_generation"},"text":{"format":{"type":"json_object"}}}`)
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"client_metadata":{"large_id":9007199254740993},"input":"draw a cat","tool_choice":{"type":"image_generation"},"text":{"format":{"type":"json_object"}}}`, true)
 
 	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
 	require.Equal(t, "png", gjson.Get(upstreamPayload, `tools.#(type=="image_generation").output_format`).String())
@@ -458,13 +458,23 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsCodexImag
 	require.Equal(t, "9007199254740993", gjson.Get(upstreamPayload, "client_metadata.large_id").Raw)
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InjectsPlainCodexImageBridge(t *testing.T) {
-	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"write code","tools":[{"type":"namespace","name":"image_gen"}]}`)
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_BridgesNonLiteCodexTools(t *testing.T) {
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"write code","tools":[{"type":"namespace","name":"image_gen"}]}`, true)
 
 	require.True(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
 	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="namespace")`).Exists())
 	require.Equal(t, "auto", gjson.Get(upstreamPayload, "tool_choice").String())
 	require.Contains(t, gjson.Get(upstreamPayload, "instructions").String(), codexImageGenerationBridgeMarker)
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreservesResponsesLiteAdditionalTools(t *testing.T) {
+	upstreamPayload := runOpenAIWSIngressImageBridgeTest(t, `{"type":"response.create","model":"gpt-5.6-sol","stream":false,"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"},{"type":"namespace","name":"image_gen"}]},{"role":"user","content":"run pwd"}],"tool_choice":"auto"}`, false)
+
+	require.False(t, gjson.Get(upstreamPayload, `tools.#(type=="image_generation")`).Exists())
+	require.Equal(t, "exec", gjson.Get(upstreamPayload, "input.0.tools.0.name").String())
+	require.Equal(t, "image_gen", gjson.Get(upstreamPayload, "input.0.tools.1.name").String())
+	require.Equal(t, "auto", gjson.Get(upstreamPayload, "tool_choice").String())
+	require.NotContains(t, gjson.Get(upstreamPayload, "instructions").String(), codexImageGenerationBridgeMarker)
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {

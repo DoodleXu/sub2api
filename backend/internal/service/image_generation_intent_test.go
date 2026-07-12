@@ -88,7 +88,7 @@ func TestIsImageGenerationIntent(t *testing.T) {
 			endpoint: "/v1/responses",
 			model:    "gpt-5.5",
 			body:     []byte(`{"model":"gpt-5.5","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}]}]}`),
-			want:     true,
+			want:     false,
 		},
 		{
 			name:     "non-image namespace tool is not flagged",
@@ -137,7 +137,7 @@ func TestIsImageGenerationIntentMap_NamespaceImageGen(t *testing.T) {
 					},
 				},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "custom namespace with nested imagegen function is not image intent",
