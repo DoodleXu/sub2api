@@ -405,7 +405,9 @@ func TestApplyCodexImageGenerationBridge_NormalizesNamespaceChoice(t *testing.T)
 	remainingTools, ok := additionalTools["tools"].([]any)
 	require.True(t, ok)
 	require.Len(t, remainingTools, 1)
-	require.Equal(t, "exec", firstNonEmptyString(remainingTools[0].(map[string]any)["name"]))
+	remainingTool, ok := remainingTools[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "exec", firstNonEmptyString(remainingTool["name"]))
 }
 
 func TestApplyCodexImageGenerationBridge_BridgesNonLiteCapabilityRequest(t *testing.T) {
