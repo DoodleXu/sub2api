@@ -63,6 +63,7 @@ const (
 	openAIWSRetryBackoffMaxDefault     = 2 * time.Second
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
+	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
 	codexCLIVersion                    = "0.144.1"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
@@ -80,6 +81,7 @@ var openaiAllowedHeaders = map[string]bool{
 	"user-agent":            true,
 	"originator":            true,
 	"session_id":            true,
+	"x-codex-beta-features": true,
 	"x-codex-turn-state":    true,
 	"x-codex-turn-metadata": true,
 }
@@ -95,6 +97,7 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"user-agent":            true,
 	"originator":            true,
 	"session_id":            true,
+	"x-codex-beta-features": true,
 	"x-codex-turn-state":    true,
 	"x-codex-turn-metadata": true,
 }
@@ -237,6 +240,9 @@ type OpenAIForwardResult struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Empty when no mapping was applied (requested model was used as-is).
 	UpstreamModel string
+	// UpstreamEndpoint is the actual upstream API path used for this request.
+	// It avoids guessing when one downstream protocol can use multiple upstream endpoints.
+	UpstreamEndpoint string
 	// ServiceTier records the OpenAI Responses API service tier, e.g. "priority" / "flex".
 	// Nil means the request did not specify a recognized tier.
 	ServiceTier *string
@@ -261,9 +267,38 @@ type OpenAIForwardResult struct {
 	VideoResolution    string
 	// VideoDurationSeconds is the requested generated video duration normalized to 1-15 seconds.
 	VideoDurationSeconds int
+	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
+	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
+	WebSearchCalls int
 
 	wsReplayInput       []json.RawMessage
 	wsReplayInputExists bool
+}
+
+// SetActualOpenAIUpstreamEndpoint records the endpoint selected by the current
+// forwarding attempt. It covers error paths where no OpenAIForwardResult is
+// available for usage and operations logging.
+func SetActualOpenAIUpstreamEndpoint(c *gin.Context, endpoint string) {
+	if c == nil {
+		return
+	}
+	if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
+		c.Set(openAIUpstreamEndpointContextKey, endpoint)
+	}
+}
+
+// GetActualOpenAIUpstreamEndpoint returns the endpoint recorded by the latest
+// forwarding attempt in this request.
+func GetActualOpenAIUpstreamEndpoint(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	value, exists := c.Get(openAIUpstreamEndpointContextKey)
+	if !exists {
+		return ""
+	}
+	endpoint, _ := value.(string)
+	return strings.TrimSpace(endpoint)
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -1241,17 +1276,7 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 // ExtractSessionID extracts the raw session ID from headers or body without hashing.
 // Used by ForwardAsAnthropic to pass as prompt_cache_key for upstream cache.
 func (s *OpenAIGatewayService) ExtractSessionID(c *gin.Context, body []byte) string {
-	if c == nil {
-		return ""
-	}
-	sessionID := strings.TrimSpace(c.GetHeader("session_id"))
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
-	}
-	if sessionID == "" && len(body) > 0 {
-		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
-	}
-	return sessionID
+	return explicitOpenAIRequestSessionID(c, body)
 }
 
 func explicitOpenAISessionID(c *gin.Context, body []byte) string {
@@ -1269,11 +1294,31 @@ func explicitOpenAISessionID(c *gin.Context, body []byte) string {
 	return sessionID
 }
 
+// explicitOpenAIRequestSessionID extends common OpenAI session signals with
+// Grok's native conversation header only for Grok-authenticated requests.
+func explicitOpenAIRequestSessionID(c *gin.Context, body []byte) string {
+	if c == nil {
+		return ""
+	}
+
+	sessionID := strings.TrimSpace(c.GetHeader("session_id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
+	}
+	if sessionID == "" && isGrokRequestContext(c) {
+		sessionID = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
+	}
+	if sessionID == "" && len(body) > 0 {
+		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+	}
+	return sessionID
+}
+
 // GenerateExplicitSessionHash generates a sticky-session hash only from explicit
 // client session signals. It intentionally skips content-derived fallback and is
 // used by stateless endpoints such as /v1/images.
 func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body []byte) string {
-	sessionID := explicitOpenAISessionID(c, body)
+	sessionID := explicitOpenAIRequestSessionID(c, body)
 	if sessionID == "" {
 		return ""
 	}
@@ -1295,7 +1340,7 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 		return ""
 	}
 
-	sessionID := explicitOpenAISessionID(c, body)
+	sessionID := explicitOpenAIRequestSessionID(c, body)
 	if sessionID == "" && len(body) > 0 {
 		sessionID = deriveOpenAIContentSessionSeed(body)
 	}
@@ -6868,7 +6913,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
-	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
+	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier)
 	if err != nil {
 		// 上游已经完成时不能只返回异步错误，否则既没有扣费，也没有可追溯记录。
 		// 先持久化 pricing_pending 行，保留原始用量和完整路由信息供后续对账；
@@ -7139,10 +7184,14 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	multiplier float64,
 	imageMultiplier float64,
 	videoMultiplier float64,
+	webSearchMultiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
+	if result != nil && result.WebSearchCalls > 0 {
+		return s.billingService.CalculateWebSearchCost(result.WebSearchCalls, webSearchPricePerCallFromAPIKey(apiKey), webSearchMultiplier), nil
+	}
 	if isGrokVideoUsageResult(result, billingModels) {
 		// Grok video results may also contain image_count for compatibility metadata;
 		// video pricing must win so duration/resolution costs are not billed as images.

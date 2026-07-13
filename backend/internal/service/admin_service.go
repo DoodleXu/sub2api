@@ -240,8 +240,10 @@ type CreateGroupInput struct {
 	VideoPrice480P     *float64
 	VideoPrice720P     *float64
 	VideoPrice1080P    *float64
-	ClaudeCodeOnly     bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID    *int64 // 降级分组 ID
+	// Codex alpha/search 网页搜索单次价格（USD/次，仅 openai 平台使用）；nil/负数按默认价 0.01 处理
+	WebSearchPricePerCall *float64
+	ClaudeCodeOnly        bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID       *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -294,8 +296,10 @@ type UpdateGroupInput struct {
 	VideoPrice480P     *float64
 	VideoPrice720P     *float64
 	VideoPrice1080P    *float64
-	ClaudeCodeOnly     *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID    *int64 // 降级分组 ID
+	// Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示不修改，负数表示清除回默认价 0.01
+	WebSearchPricePerCall *float64
+	ClaudeCodeOnly        *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID       *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -1945,6 +1949,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	videoPrice480P := normalizePrice(input.VideoPrice480P)
 	videoPrice720P := normalizePrice(input.VideoPrice720P)
 	videoPrice1080P := normalizePrice(input.VideoPrice1080P)
+	webSearchPricePerCall := normalizePrice(input.WebSearchPricePerCall)
 	imageRateMultiplier := 1.0
 	if input.ImageRateMultiplier != nil {
 		if *input.ImageRateMultiplier < 0 {
@@ -2074,6 +2079,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		VideoPrice480P:                  videoPrice480P,
 		VideoPrice720P:                  videoPrice720P,
 		VideoPrice1080P:                 videoPrice1080P,
+		WebSearchPricePerCall:           webSearchPricePerCall,
 		ClaudeCodeOnly:                  input.ClaudeCodeOnly,
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
@@ -2341,6 +2347,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.VideoPrice1080P != nil {
 		group.VideoPrice1080P = normalizePrice(input.VideoPrice1080P)
+	}
+	if input.WebSearchPricePerCall != nil {
+		group.WebSearchPricePerCall = normalizePrice(input.WebSearchPricePerCall)
 	}
 
 	// Claude Code 客户端限制

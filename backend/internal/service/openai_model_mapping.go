@@ -13,23 +13,14 @@ func resolveOpenAIForwardModel(account *Account, requestedModel, defaultMappedMo
 		return requestedModel
 	}
 
-	if account.Platform == PlatformGrok && isGrokOAuthDefaultModelAlias(requestedModel) {
-		return grokQuotaDefaultModel
-	}
 	mappedModel, matched := account.ResolveMappedModel(requestedModel)
+	if matched {
+		return mappedModel
+	}
 	if !matched && defaultMappedModel != "" && claudeMessagesDispatchFamily(requestedModel) != "" {
 		return defaultMappedModel
 	}
 	return mappedModel
-}
-
-func isGrokOAuthDefaultModelAlias(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "grok", "grok-latest":
-		return true
-	default:
-		return false
-	}
 }
 
 // openAIOAuthForeignModelPrefixes 列出明确属于其他厂商家族的模型名前缀。

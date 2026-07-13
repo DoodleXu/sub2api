@@ -130,6 +130,38 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			defaultMappedModel: "gpt-5.4",
 			expectedModel:      "gpt-5.5-openai-compact",
 		},
+		{
+			name: "maps Grok OAuth default alias to cache-capable model",
+			account: &Account{
+				Platform:    PlatformGrok,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{},
+			},
+			requestedModel: "grok",
+			expectedModel:  "grok-4.5",
+		},
+		{
+			name: "maps Grok API key default alias through official mapping",
+			account: &Account{
+				Platform:    PlatformGrok,
+				Type:        AccountTypeAPIKey,
+				Credentials: map[string]any{},
+			},
+			requestedModel: "grok",
+			expectedModel:  "grok-4.5",
+		},
+		{
+			name: "preserves explicit Grok OAuth model mapping",
+			account: &Account{
+				Platform: PlatformGrok,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"grok": "grok-4.3"},
+				},
+			},
+			requestedModel: "grok",
+			expectedModel:  "grok-4.3",
+		},
 	}
 
 	for _, tt := range tests {

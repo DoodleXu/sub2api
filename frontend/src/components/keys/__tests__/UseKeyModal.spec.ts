@@ -54,7 +54,6 @@ describe('UseKeyModal', () => {
     const opencodeTab = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.cliTabs.opencode')
     )
-
     expect(opencodeTab).toBeDefined()
     await opencodeTab!.trigger('click')
     await nextTick()
@@ -92,6 +91,58 @@ describe('UseKeyModal', () => {
     expect(codeBlock.exists()).toBe(true)
     expect(codeBlock.text()).toContain('"claude-opus-4-6"')
     expect(codeBlock.text()).toContain('"claude-sonnet-4-6"')
+  })
+
+  it('renders Grok Build and OpenCode setup for Grok groups', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-grok-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'grok'
+      },
+      global: globalStubs
+    })
+
+    const grokTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.grokCli')
+    )
+    expect(grokTab).toBeDefined()
+
+    const grokConfig = wrapper.findAll('pre code')
+      .map((code) => code.text())
+      .find((content) => content.includes('[model."sub2api-grok"]'))
+    expect(grokConfig).toBeDefined()
+    expect(grokConfig).toContain('model = "grok-4.5"')
+    expect(grokConfig).toContain('base_url = "https://example.com/v1"')
+    expect(grokConfig).toContain('api_key = "sk-grok-test"')
+    expect(grokConfig).toContain('api_backend = "responses"')
+
+    const windowsTab = wrapper.findAll('button').find(
+      (button) => button.text().trim() === 'Windows'
+    )
+    expect(windowsTab).toBeDefined()
+    await windowsTab!.trigger('click')
+    await nextTick()
+    expect(wrapper.text()).toContain('%userprofile%\\.grok/config.toml')
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const parsed = JSON.parse(wrapper.find('pre code').text())
+    expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai')
+    expect(parsed.provider.grok.options).toEqual({
+      baseURL: 'https://example.com/v1',
+      apiKey: 'sk-grok-test'
+    })
+    expect(parsed.provider.grok.models['grok-4.5']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-build-0.1']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-composer-2.5-fast']).toBeDefined()
+    expect(parsed.provider.grok.models['gpt-5.6']).toBeUndefined()
   })
 
   it('renders GPT-5.5 and goals feature in OpenAI Codex config', () => {

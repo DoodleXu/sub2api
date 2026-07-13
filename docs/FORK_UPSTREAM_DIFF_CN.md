@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-12
+最后更新：2026-07-13
 
 ## 当前对比基线
 
@@ -10,24 +10,33 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `1f5efa636 chore: 准备发布 v0.1.211` | 本次 merge 前基线，fork 版本继续保留 `0.1.211` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.151` -> `deff3123de` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.151` |
-| 上游 main HEAD | `e316ebf52` | 已选择性回迁 Codex Responses→Chat 工具桥接修复；其余上游 main 提交尚未作为完整同步进入当前 fork |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次合并保留 fork 当前文件结构，只移植上游行为修复，避免恢复上游拆分文件引入隐性风险 |
+| Fork 同步前 HEAD | `fc1c27d06 chore: 准备发布 v0.1.221` | 本次 merge 前基线，fork 版本继续保留 `0.1.221` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.153` -> `a2bc133747` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.153` |
+| 上游 main HEAD | `7d239d62e` | `v0.1.153` 发布后的 main 仍有后续提交，尚未作为完整同步进入当前 fork |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次解决 21 个冲突文件，继续保留 fork 聚合文件结构和六类核心定制行为，同时迁入上游 Grok、Codex 工具桥、WebSocket 与网页搜索计费能力 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.151:refs/tags/upstream/v0.1.151 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.151^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
+git fetch upstream refs/tags/v0.1.153:refs/tags/upstream/v0.1.153 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.153^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.151` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.153` 替换为新的官方 release tag，再更新本节。
 
-本次 `v0.1.151` 合并说明：
+本次 `v0.1.153` 合并说明：
+
+- Codex Responses→Chat 的 `input[].type=additional_tools` 已改由上游官方 `EffectiveResponsesTools` 统一读取，移除 fork 重复的 `ExpandResponsesLiteTools` 路径；fork 继续保留 Responses Lite 生图桥接门控、`responses_required`、custom/namespace/tool_search 回程还原和字符串形式 `web_search_call.action` 兼容。
+- Grok 正式迁入 xAI API Key、OAuth prompt cache、第三方 base URL、Chat→Responses 缓存桥、限流持久化、视频编辑/延长与模型同步。`grok` 默认别名重新交由 xAI 官方映射解析为 `grok-4.5`，显式账号映射仍优先，避免 fork 旧的 `grok-4.3` 强制别名阻断新缓存桥。
+- Codex `/alpha/search` 网页搜索按次计费已迁入 fork 聚合结构：分组支持 `web_search_price_per_call`，API Key auth snapshot 升至 v16，计费使用不含高峰因子的基础倍率；未恢复 `admin_group.go`、`openai_gateway_usage.go` 等已删除拆分文件。
+- OpenAI WebSocket 入站会话加入按 API Key 的有界 lifecycle lease；同时吸收真实 upstream endpoint 记录、平台感知的无账号诊断、用量日期本地化和 API Key 最近使用 IP 查询索引优化。
+- 部署继续遵循本 fork 的 `linux/amd64` + GHCR 生产约束。上游 Apple Container 固定依赖 `linux/arm64` 且默认使用上游镜像，因此本次未保留其脚本、文档、CI 与环境变量入口；保留手动部署 `.env` 的 `chmod 600` 加固。
+- merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号调度继续过滤 `archived_at`，人民币成本小时聚合和今日实际成本字段仍保留。
+
+历史 `v0.1.151` 合并说明：
 
 - 上游行为修复已移植：Codex identity header pairing、Codex image generation tool strip、OpenAI Fast/Flex 用户级规则、setup-token 后台刷新、Grok `reasoning_effort` 兼容、usage request_type legacy alias 过滤。
 - 冲突解决策略：不恢复 fork 已删除的上游拆分文件，保留当前 fork 文件结构，在现有模块内移植对应行为和测试。
@@ -409,7 +418,14 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方最新 release `v0.1.151`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 OpenAI 计费、Responses/WS 协议、图片工具 namespace、setup-token 刷新与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方最新 release `v0.1.153`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 Grok OAuth/media 路由、OpenAI 计费、Responses/WS 协议、图片工具 namespace、setup-token 刷新与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.153 合并验证
+
+- 后端：修复支付 handler 测试调用与上游构造函数签名漂移后，`TZ=UTC go test -tags=unit -count=1 ./...` 全量通过。
+- OpenAI/Grok：模型映射、Grok Chat/Responses bridge、Responses Lite 工具兼容专项测试通过；保留 fork 原生 Responses 路由与严格优先级诊断。
+- 前端：`vue-tsc --noEmit`、账号状态/密钥使用/价格配置专项 Vitest 和生产构建通过。
+- 部署：保留 `.env` 权限加固，不引入上游仅适配 Apple Container、`linux/arm64` 和官方镜像的部署入口；fork 继续维持 `linux/amd64` 发布口径。
 
 ## v0.1.150 合并验证
 
@@ -455,13 +471,13 @@ pnpm --dir frontend run build
 
 ```bash
 # 查看 fork 自有提交
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.151^{}...HEAD
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.153^{}...HEAD
 
 # 按关键词找功能提交
 git log --oneline --grep='签到\|运营\|成本\|归档\|创作台\|生图' --regexp-ignore-case
 
 # 查看与上游 release 的文件差异
-git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
+git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 
 # 查看某个功能的代码入口
 rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|OperationsCenter'

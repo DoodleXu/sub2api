@@ -16,11 +16,6 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req == nil {
 		return nil, fmt.Errorf("responses request is nil")
 	}
-	normalizedReq, err := ExpandResponsesLiteTools(req)
-	if err != nil {
-		return nil, err
-	}
-	req = normalizedReq
 
 	messages, err := responsesInputToChatMessages(req.Instructions, req.Input)
 	if err != nil {
@@ -40,8 +35,12 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}
-	if len(req.Tools) > 0 {
-		tools, err := responsesToolsToChatTools(req.Tools)
+	effectiveTools, err := EffectiveResponsesTools(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(effectiveTools) > 0 {
+		tools, err := responsesToolsToChatTools(effectiveTools)
 		if err != nil {
 			return nil, err
 		}
@@ -68,60 +67,42 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	return out, nil
 }
 
-// ExpandResponsesLiteTools converts Codex Responses Lite's
-// input[].type=additional_tools carrier into the regular top-level tools shape
-// consumed by the Responses-to-Chat bridge. The carrier is removed from input
-// so it cannot be mistaken for a conversation message.
-func ExpandResponsesLiteTools(req *ResponsesRequest) (*ResponsesRequest, error) {
+// EffectiveResponsesTools returns every client-executable tool declared by a
+// Responses request. Newer Codex clients place their runtime tools in an
+// input item shaped as {"type":"additional_tools","tools":[...]} instead of
+// the top-level tools field. Chat-only upstreams must receive both forms.
+func EffectiveResponsesTools(req *ResponsesRequest) ([]ResponsesTool, error) {
 	if req == nil {
-		return nil, fmt.Errorf("responses request is nil")
-	}
-
-	input := bytesTrimSpace(req.Input)
-	if len(input) == 0 || string(input) == "null" || input[0] != '[' {
-		return req, nil
-	}
-
-	var items []json.RawMessage
-	if err := json.Unmarshal(input, &items); err != nil {
-		return nil, fmt.Errorf("parse responses input: %w", err)
+		return nil, nil
 	}
 
 	tools := append([]ResponsesTool(nil), req.Tools...)
-	filtered := make([]json.RawMessage, 0, len(items))
-	found := false
+	inputRaw := bytesTrimSpace(req.Input)
+	if len(inputRaw) == 0 || string(inputRaw) == "null" || inputRaw[0] != '[' {
+		return tools, nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(inputRaw, &items); err != nil {
+		return nil, fmt.Errorf("parse responses input for additional tools: %w", err)
+	}
 	for _, raw := range items {
+		raw = bytesTrimSpace(raw)
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
 		var item struct {
 			Type  string          `json:"type"`
-			Tools json.RawMessage `json:"tools"`
+			Tools []ResponsesTool `json:"tools"`
 		}
-		if err := json.Unmarshal(raw, &item); err != nil || strings.TrimSpace(item.Type) != "additional_tools" {
-			filtered = append(filtered, raw)
-			continue
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, fmt.Errorf("parse responses additional tools item: %w", err)
 		}
-
-		found = true
-		if len(bytesTrimSpace(item.Tools)) == 0 || string(bytesTrimSpace(item.Tools)) == "null" {
-			continue
+		if item.Type == "additional_tools" {
+			tools = append(tools, item.Tools...)
 		}
-		var additional []ResponsesTool
-		if err := json.Unmarshal(item.Tools, &additional); err != nil {
-			return nil, fmt.Errorf("parse responses additional_tools: %w", err)
-		}
-		tools = append(tools, additional...)
 	}
-	if !found {
-		return req, nil
-	}
-
-	normalizedInput, err := json.Marshal(filtered)
-	if err != nil {
-		return nil, fmt.Errorf("marshal responses input without additional_tools: %w", err)
-	}
-	clone := *req
-	clone.Tools = tools
-	clone.Input = normalizedInput
-	return &clone, nil
+	return tools, nil
 }
 
 // CustomToolNames 收集 Responses 请求中 custom/freeform 工具的名字。chat 桥回程时

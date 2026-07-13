@@ -375,6 +375,7 @@ func TestAPIContracts(t *testing.T) {
 						"video_price_480p": null,
 						"video_price_720p": null,
 						"video_price_1080p": null,
+						"web_search_price_per_call": null,
 						"allow_image_generation": false,
 						"allow_batch_image_generation": false,
 						"batch_image_discount_multiplier": 0,
@@ -1513,7 +1514,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	paymentClient := newContractPaymentClient(t)
 	paymentConfigService := service.NewPaymentConfigService(paymentClient, settingRepo, nil)
 	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
-	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService, nil)
+	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)

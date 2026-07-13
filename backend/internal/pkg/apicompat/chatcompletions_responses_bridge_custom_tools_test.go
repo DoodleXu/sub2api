@@ -34,7 +34,52 @@ func TestResponsesToChatCompletionsRequest_CustomToolBecomesFunctionTool(t *test
 	assert.Equal(t, "wait", out.Tools[1].Function.Name)
 }
 
-func TestResponsesToChatCompletionsRequest_ResponsesLiteAdditionalTools(t *testing.T) {
+func TestResponsesToChatCompletionsRequest_AdditionalToolsItem(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "gpt-test",
+		Input: json.RawMessage(`[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"custom","name":"exec","description":"Run PowerShell","format":{"type":"text"}},
+				{"type":"function","name":"wait","parameters":{"type":"object","properties":{}}},
+				{"type":"namespace","name":"collaboration","tools":[
+					{"type":"function","name":"send_message","parameters":{"type":"object","properties":{}}}
+				]}
+			]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"run Get-Location"}]}
+		]`),
+		ToolChoice: json.RawMessage(`"auto"`),
+	}
+
+	effective, err := EffectiveResponsesTools(req)
+	require.NoError(t, err)
+	require.Len(t, effective, 3)
+	assert.True(t, CustomToolNames(effective)["exec"])
+	assert.Equal(t, NamespacedToolName{Namespace: "collaboration", Name: "send_message"}, NamespaceToolNames(effective)["collaboration__send_message"])
+
+	out, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, out.Tools, 3)
+	assert.Equal(t, "exec", out.Tools[0].Function.Name)
+	assert.Equal(t, "wait", out.Tools[1].Function.Name)
+	assert.Equal(t, "collaboration__send_message", out.Tools[2].Function.Name)
+	assert.JSONEq(t, `"auto"`, string(out.ToolChoice))
+
+	require.Len(t, out.Messages, 1, "additional_tools must not become a chat message")
+	assert.Equal(t, "user", out.Messages[0].Role)
+}
+
+func TestEffectiveResponsesTools_SkipsStringInputItems(t *testing.T) {
+	req := &ResponsesRequest{
+		Input: json.RawMessage(`["plain input",{"type":"additional_tools","tools":[{"type":"custom","name":"exec"}]}]`),
+	}
+
+	tools, err := EffectiveResponsesTools(req)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	assert.Equal(t, "exec", tools[0].Name)
+}
+
+func TestResponsesToChatCompletionsRequest_ResponsesLiteToolSearchAndNamespace(t *testing.T) {
 	req := &ResponsesRequest{
 		Model: "gpt-5.6-sol",
 		Input: json.RawMessage(`[
@@ -50,13 +95,10 @@ func TestResponsesToChatCompletionsRequest_ResponsesLiteAdditionalTools(t *testi
 		]`),
 	}
 
-	normalized, err := ExpandResponsesLiteTools(req)
+	effective, err := EffectiveResponsesTools(req)
 	require.NoError(t, err)
-	require.Len(t, normalized.Tools, 3)
-	assert.NotContains(t, string(normalized.Input), "additional_tools")
-	assert.Contains(t, string(normalized.Input), "Use the available tools")
-	assert.Empty(t, req.Tools, "normalization must not mutate the caller request")
-	assert.Contains(t, string(req.Input), "additional_tools")
+	require.Len(t, effective, 3)
+	assert.Empty(t, req.Tools, "tool resolution must not mutate the caller request")
 
 	out, err := ResponsesToChatCompletionsRequest(req)
 	require.NoError(t, err)

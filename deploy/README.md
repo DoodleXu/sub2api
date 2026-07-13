@@ -76,6 +76,7 @@ cd sub2api/deploy
 
 # Configure environment
 cp .env.example .env
+chmod 600 .env
 nano .env  # Set POSTGRES_PASSWORD and other required variables
 
 # Generate secure secrets (recommended)

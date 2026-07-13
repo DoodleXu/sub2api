@@ -40,21 +40,22 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 
 	clientStream := responsesReq.Stream
 	serviceTier := extractOpenAIServiceTierFromBody(body)
-
 	if RequiresNativeOpenAIResponses(body) {
 		return nil, newResponsesOnlyBuiltInToolFailoverError()
 	}
-	normalizedReq, err := apicompat.ExpandResponsesLiteTools(&responsesReq)
+
+	// custom 工具（如 codex 的 exec）降级为 function 工具转发，回程需按名字还原为
+	// custom_tool_call 项，先记下名字集合；tool_search 工具同理，回程还原为
+	// tool_search_call 项；namespace 子工具（如 MCP 工具）摊平转发，回程按映射还原
+	// 为带 namespace 字段的 function_call 项。
+	effectiveTools, err := apicompat.EffectiveResponsesTools(&responsesReq)
 	if err != nil {
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return nil, fmt.Errorf("expand responses lite tools: %w", err)
+		return nil, fmt.Errorf("resolve responses tools: %w", err)
 	}
-	responsesReq = *normalizedReq
-	// custom 工具（如 Codex 的 exec）会降级为 function 工具转发，回程必须
-	// 按原始声明还原，否则客户端无法把调用路由回本地工具。
-	customTools := apicompat.CustomToolNames(responsesReq.Tools)
-	toolSearch := apicompat.HasToolSearchTool(responsesReq.Tools)
-	namespaceTools := apicompat.NamespaceToolNames(responsesReq.Tools)
+	customTools := apicompat.CustomToolNames(effectiveTools)
+	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
+	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
 
 	chatReq, err := apicompat.ResponsesToChatCompletionsRequest(&responsesReq)
 	if err != nil {
@@ -101,7 +102,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent())
+	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent(), "")
 	if err != nil {
 		return nil, err
 	}

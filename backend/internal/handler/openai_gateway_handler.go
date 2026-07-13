@@ -364,7 +364,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		)
 		if err != nil {
 			reqLog.Warn("openai.account_select_failed",
-				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
+				openAIAccountSelectFailedLogFields(openAICompatibleSelectionErrorForLog(err, requestPlatform), len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
@@ -578,7 +578,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
@@ -731,21 +731,33 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 	return strings.HasSuffix(normalizedPath, "/responses")
 }
 
-// normalizeOpenAIResponsesCompactRequest 统一处理两种入站 compact 形态：
-// path-based（POST /v1/responses/compact）与 Codex remote compact v2 的
-// body-signal（普通 POST /v1/responses 的 input 中携带 type=compaction_trigger，
-// 见 #3777）。body-signal 命中时在 stream 解析、compact body 归一化与
-// requireCompact 调度判定之前改写 URL path，使后续全部链路（含 passthrough
-// 分支与上游 URL 构建）与 path-based 完全一致。
+func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
+	stream, valid := parseOpenAICompatibleStream(body)
+	if !valid || !stream || c == nil || c.Request == nil {
+		return false
+	}
+	for _, header := range c.Request.Header.Values("x-codex-beta-features") {
+		for _, feature := range strings.Split(header, ",") {
+			if strings.TrimSpace(feature) == "remote_compaction_v2" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeOpenAIResponsesCompactRequest keeps Codex remote compaction v2 on
+// its native streaming /responses wire and preserves the legacy body-signal
+// promotion for clients that do not explicitly advertise that protocol.
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
 	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
+		if isOpenAIRemoteCompactionV2Request(c, body) {
+			return body, true
+		}
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
 		isCompactRequest = true
-		// Codex remote compact v2 的原始请求是流式 /responses：白名单归一化会删除
-		// stream 并让上游走 unary JSON，但客户端仍按 SSE 消费响应。记录原始
-		// stream 意图，响应写回阶段据此把 JSON 合成回 SSE（#3875）。
 		clientStream := gjson.GetBytes(body, "stream").Bool()
 		if clientStream {
 			service.MarkOpenAICompactClientStream(c)
@@ -994,12 +1006,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		)
 		if err != nil {
 			reqLog.Warn("openai_messages.account_select_failed",
-				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
+				openAIAccountSelectFailedLogFields(openAICompatibleSelectionErrorForLog(err, requestPlatform), len(failedAccountIDs), failoverAttempts)...,
 			)
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
-					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-					h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "Service temporarily unavailable", streamStarted)
+					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, requestPlatform)
+					if !cls.ModelNotFound {
+						markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+					}
+					h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 					return
 				}
 			} else {
@@ -1012,8 +1027,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}
 		}
 		if selection == nil || selection.Account == nil {
-			markOpsRoutingCapacityLimited(c)
-			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No available accounts", streamStarted)
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, requestPlatform)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+			h.anthropicStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
 		account := selection.Account
@@ -1146,7 +1164,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
 		inboundEndpoint := GetInboundEndpoint(c)
-		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		cyberBlocked := service.GetOpsCyberPolicy(c) != nil
@@ -1439,10 +1457,36 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
 
 	ctx := c.Request.Context()
+	maxIngressConnections := 0
+	if h.cfg != nil {
+		maxIngressConnections = h.cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey
+	}
+	ingressLease, ingressLeaseAcquired, ingressLeaseErr := h.concurrencyHelper.AcquireOpenAIWSIngressLease(ctx, apiKey.ID, maxIngressConnections)
+	if ingressLeaseErr != nil {
+		reqLog.Error("openai.websocket_ingress_lease_acquire_failed", zap.Error(ingressLeaseErr))
+		closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "failed to reserve websocket ingress capacity")
+		return
+	}
+	if !ingressLeaseAcquired {
+		reqLog.Info("openai.websocket_ingress_capacity_rejected", zap.Int("max_ingress_connections_per_api_key", maxIngressConnections))
+		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "too many open websocket connections, please retry later")
+		return
+	}
+	if ingressLease != nil {
+		defer ingressLease.Release()
+		ctx = ingressLease.Context()
+		c.Request = c.Request.WithContext(ctx)
+	}
+
 	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	msgType, firstMessage, err := wsConn.Read(readCtx)
 	cancel()
 	if err != nil {
+		if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
+			reqLog.Warn("openai.websocket_ingress_lease_lost_before_first_message", zap.Error(err))
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
+			return
+		}
 		closeStatus, closeReason := summarizeWSCloseErrorForLog(err)
 		reqLog.Warn("openai.websocket_read_first_message_failed",
 			zap.Error(err),
@@ -1601,7 +1645,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		)
 		if err != nil {
 			reqLog.Warn("openai.websocket_account_select_failed",
-				openAIAccountSelectFailedLogFields(err, len(failedAccountIDs), failoverAttempts)...,
+				openAIAccountSelectFailedLogFields(openAICompatibleSelectionErrorForLog(err, requestPlatform), len(failedAccountIDs), failoverAttempts)...,
 			)
 			if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
@@ -1784,7 +1828,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
-				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account)
+				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
@@ -1861,6 +1905,25 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				continue
 			}
 
+			if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
+				reqLog.Warn("openai.websocket_ingress_lease_lost",
+					zap.Int64("account_id", account.ID),
+					zap.Error(err),
+				)
+				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
+				return
+			}
+
+			var closeErr *service.OpenAIWSClientCloseError
+			if errors.As(err, &closeErr) && closeErr.StatusCode() == coderws.StatusNormalClosure {
+				reqLog.Info("openai.websocket_ingress_closed_normally",
+					zap.Int64("account_id", account.ID),
+					zap.String("reason", closeErr.Reason()),
+				)
+				closeOpenAIClientWS(wsConn, closeErr.StatusCode(), closeErr.Reason())
+				return
+			}
+
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 			closeStatus, closeReason := summarizeWSCloseErrorForLog(err)
 			reqLog.Warn("openai.websocket_proxy_failed",
@@ -1869,7 +1932,6 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.String("close_status", closeStatus),
 				zap.String("close_reason", closeReason),
 			)
-			var closeErr *service.OpenAIWSClientCloseError
 			if errors.As(err, &closeErr) {
 				closeOpenAIClientWS(wsConn, closeErr.StatusCode(), closeErr.Reason())
 				return
@@ -2677,7 +2739,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	var accountID int64
 	if account != nil {
 		accountID = account.ID
-		upstreamEndpoint = resolveOpenAIUpstreamEndpoint(c, account)
+		upstreamEndpoint = resolveOpenAIUpstreamEndpoint(c, account, nil)
 	}
 	stream := false
 	if v, ok := c.Get(opsStreamKey); ok {
