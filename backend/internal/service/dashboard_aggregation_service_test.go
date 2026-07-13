@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ type dashboardAggregationRepoTestStub struct {
 	cleanupUsageErr      error
 	cleanupDedupErr      error
 	ensurePartitionErr   error
+	accountCostRanges    [][2]time.Time
+	accountCoverageStart time.Time
+	accountCoverageEnd   time.Time
 }
 
 func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, start, end time.Time) error {
@@ -33,6 +37,11 @@ func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, s
 	return s.aggregateErr
 }
 
+func (s *dashboardAggregationRepoTestStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
+	s.accountCostRanges = append(s.accountCostRanges, [2]time.Time{start, end})
+	return nil
+}
+
 func (s *dashboardAggregationRepoTestStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
 	s.recomputeCalls++
 	return s.AggregateRange(ctx, start, end)
@@ -40,6 +49,14 @@ func (s *dashboardAggregationRepoTestStub) RecomputeRange(ctx context.Context, s
 
 func (s *dashboardAggregationRepoTestStub) GetAggregationWatermark(ctx context.Context) (time.Time, error) {
 	return s.watermark, nil
+}
+
+func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error) {
+	if !s.accountCoverageStart.IsZero() || !s.accountCoverageEnd.IsZero() {
+		return s.accountCoverageStart, s.accountCoverageEnd, nil
+	}
+	epoch := time.Unix(0, 0).UTC()
+	return epoch, epoch, nil
 }
 
 func (s *dashboardAggregationRepoTestStub) UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error {
@@ -86,6 +103,77 @@ func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesRetentionS
 	require.Equal(t, 1, repo.aggregateCalls)
 	require.False(t, repo.lastEnd.IsZero())
 	require.Equal(t, truncateToDayUTC(repo.lastEnd.AddDate(0, 0, -1)), repo.lastStart)
+}
+
+func TestDashboardAggregationService_BackfillsAccountCostInDailyChunksWithoutGlobalReaggregation(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{}
+	svc := &DashboardAggregationService{
+		repo:                       repo,
+		accountCostBackfillYieldFn: func(context.Context) bool { return true },
+		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
+			Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 2,
+			},
+		},
+	}
+
+	svc.backfillAccountCostAggregates()
+
+	require.NotEmpty(t, repo.accountCostRanges)
+	require.Equal(t, 0, repo.aggregateCalls)
+	for _, window := range repo.accountCostRanges {
+		require.True(t, window[1].After(window[0]))
+		require.LessOrEqual(t, window[1].Sub(window[0]), 24*time.Hour)
+	}
+}
+
+func TestDashboardAggregationService_ResumesPartialAccountCostBackfillForward(t *testing.T) {
+	now := time.Now().UTC()
+	coverageStart := truncateToDayUTC(now.AddDate(0, 0, -2))
+	coverageEnd := coverageStart.Add(24 * time.Hour)
+	repo := &dashboardAggregationRepoTestStub{
+		accountCoverageStart: coverageStart,
+		accountCoverageEnd:   coverageEnd,
+	}
+	svc := &DashboardAggregationService{
+		repo:                       repo,
+		accountCostBackfillYieldFn: func(context.Context) bool { return true },
+		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
+			Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 2,
+			},
+		},
+	}
+
+	svc.backfillAccountCostAggregates()
+
+	require.NotEmpty(t, repo.accountCostRanges)
+	require.True(t, repo.accountCostRanges[0][0].Equal(coverageEnd))
+	require.Equal(t, 0, repo.aggregateCalls)
+}
+
+func TestDashboardAggregationService_BackfillsRetentionWindowWithinSafetyCap(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{}
+	svc := &DashboardAggregationService{
+		repo:                       repo,
+		accountCostBackfillYieldFn: func(context.Context) bool { return true },
+		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
+			Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 30,
+			},
+		},
+	}
+
+	svc.backfillAccountCostAggregates()
+
+	require.NotEmpty(t, repo.accountCostRanges)
+	require.LessOrEqual(t, len(repo.accountCostRanges), accountCostBackfillMaxChunks)
+	require.Greater(t, len(repo.accountCostRanges), 7, "fast backfill should not be artificially limited to seven days")
+	require.Zero(t, atomic.LoadInt32(&svc.running))
+	require.Zero(t, atomic.LoadInt32(&svc.accountCostBackfillRunning))
 }
 
 func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *testing.T) {

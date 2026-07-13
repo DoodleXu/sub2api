@@ -1930,7 +1930,14 @@ func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stat
 	args := []any{service.PlatformAnthropic, service.PlatformOpenAI, todayStart, todayEnd}
 
 	query := `
-		WITH cny_by_platform AS (
+		WITH coverage AS (
+			SELECT
+				account_cost_hourly_aggregated_from AS start_time,
+				account_cost_hourly_last_aggregated_at AS end_time
+			FROM usage_dashboard_aggregation_watermark
+			WHERE id = 1
+		),
+		cny_by_platform AS (
 			SELECT
 				a.platform,
 				SUM(a.total_cost_cny) AS total_cost_cny
@@ -1939,20 +1946,55 @@ func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stat
 				AND a.total_cost_cny > 0
 			GROUP BY a.platform
 		),
-	account_cost_by_account AS (
+		aggregated_cost_by_account AS (
+			SELECT
+				h.account_id,
+				COALESCE(SUM(h.account_cost), 0) AS total_account_cost,
+				COALESCE(SUM(h.account_cost) FILTER (
+					WHERE h.bucket_start >= $3::timestamptz AND h.bucket_start < $4::timestamptz
+				), 0) AS today_account_cost
+			FROM usage_dashboard_account_cost_hourly h
+			CROSS JOIN coverage
+			WHERE h.bucket_start >= coverage.start_time
+				AND h.bucket_start < coverage.end_time
+			GROUP BY h.account_id
+		),
+		raw_cost_by_account AS (
+			SELECT
+				ul.account_id,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
+					WHERE ul.created_at >= $3::timestamptz AND ul.created_at < $4::timestamptz
+				), 0) AS today_account_cost
+			FROM usage_logs ul
+			CROSS JOIN coverage
+			WHERE ul.created_at < coverage.start_time
+				OR ul.created_at >= coverage.end_time
+			GROUP BY ul.account_id
+		),
+		combined_cost_by_account AS (
+			SELECT
+				account_id,
+				SUM(total_account_cost) AS total_account_cost,
+				SUM(today_account_cost) AS today_account_cost
+			FROM (
+				SELECT * FROM aggregated_cost_by_account
+				UNION ALL
+				SELECT * FROM raw_cost_by_account
+			) costs
+			GROUP BY account_id
+		),
+		account_cost_by_account AS (
 		SELECT
 			a.id,
 			a.platform,
 			a.total_cost_cny,
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost,
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
-				WHERE ul.created_at >= $3::timestamptz AND ul.created_at < $4::timestamptz
-			), 0) AS today_account_cost
+			COALESCE(cost.total_account_cost, 0) AS total_account_cost,
+			COALESCE(cost.today_account_cost, 0) AS today_account_cost
 		FROM accounts a
-		LEFT JOIN usage_logs ul ON ul.account_id = a.id
+		LEFT JOIN combined_cost_by_account cost ON cost.account_id = a.id
 		WHERE a.deleted_at IS NULL
 			AND a.total_cost_cny > 0
-		GROUP BY a.id, a.platform, a.total_cost_cny
 	),
 	account_cost_costed_by_platform AS (
 		SELECT

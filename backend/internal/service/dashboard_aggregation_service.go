@@ -24,6 +24,10 @@ const (
 	// dashboardAggregationLeaderLockTTL must exceed the job's worst-case runtime
 	// (defaultDashboardAggregationTimeout) so the lock never expires mid-run.
 	dashboardAggregationLeaderLockTTL = 5 * time.Minute
+	accountCostBackfillRunBudget      = 2 * time.Minute
+	accountCostBackfillMaxChunks      = 128
+	accountCostBackfillYield          = 100 * time.Millisecond
+	accountCostBackfillLogTimeout     = 5 * time.Second
 )
 
 var (
@@ -37,10 +41,12 @@ var (
 // DashboardAggregationRepository 定义仪表盘预聚合仓储接口。
 type DashboardAggregationRepository interface {
 	AggregateRange(ctx context.Context, start, end time.Time) error
+	AggregateAccountCostRange(ctx context.Context, start, end time.Time) error
 	// RecomputeRange 重新计算指定时间范围内的聚合数据（包含活跃用户等派生表）。
 	// 设计目的：当 usage_logs 被批量删除/回滚后，确保聚合表可恢复一致性。
 	RecomputeRange(ctx context.Context, start, end time.Time) error
 	GetAggregationWatermark(ctx context.Context) (time.Time, error)
+	GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error)
 	UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error
 	CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error
 	CleanupUsageLogs(ctx context.Context, cutoff time.Time) error
@@ -50,11 +56,13 @@ type DashboardAggregationRepository interface {
 
 // DashboardAggregationService 负责定时聚合与回填。
 type DashboardAggregationService struct {
-	repo                 DashboardAggregationRepository
-	timingWheel          *TimingWheelService
-	cfg                  config.DashboardAggregationConfig
-	running              int32
-	lastRetentionCleanup atomic.Value // time.Time
+	repo                       DashboardAggregationRepository
+	timingWheel                *TimingWheelService
+	cfg                        config.DashboardAggregationConfig
+	running                    int32
+	accountCostBackfillRunning int32
+	lastRetentionCleanup       atomic.Value // time.Time
+	accountCostBackfillYieldFn func(context.Context) bool
 
 	lockCache  LeaderLockCache
 	db         *sql.DB
@@ -102,16 +110,172 @@ func (s *DashboardAggregationService) Start() {
 	}
 
 	if s.cfg.RecomputeDays > 0 {
-		go s.recomputeRecentDays()
+		go func() {
+			s.backfillAccountCostAggregates()
+			s.recomputeRecentDays()
+		}()
+	} else {
+		go s.backfillAccountCostAggregates()
 	}
 
 	s.timingWheel.ScheduleRecurring("dashboard:aggregation", interval, func() {
 		s.runScheduledAggregation()
 	})
+	s.timingWheel.ScheduleRecurring("dashboard:account-cost-backfill", 10*time.Minute, func() {
+		s.backfillAccountCostAggregates()
+	})
 	logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合作业启动 (interval=%v, lookback=%ds)", interval, s.cfg.LookbackSeconds)
 	if !s.cfg.BackfillEnabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 回填已禁用，如需补齐保留窗口以外历史数据请手动回填")
 	}
+}
+
+func (s *DashboardAggregationService) backfillAccountCostAggregates() {
+	if s == nil || s.repo == nil || !s.cfg.Enabled {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&s.accountCostBackfillRunning, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&s.accountCostBackfillRunning, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillRunBudget)
+	defer cancel()
+
+	now := time.Now().UTC()
+	retentionDays := s.cfg.Retention.UsageLogsDays
+	if retentionDays <= 0 {
+		retentionDays = 1
+	}
+	targetStart := truncateToDayUTC(now.AddDate(0, 0, -retentionDays))
+	coverageStart, coverageEnd, err := s.repo.GetAccountCostAggregationCoverage(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取账号成本聚合覆盖范围失败: %v", err)
+		return
+	}
+
+	epoch := time.Unix(0, 0).UTC()
+	runStartedAt := time.Now()
+	deadline := runStartedAt.Add(accountCostBackfillRunBudget)
+	processedChunks := 0
+	defer func() {
+		s.logAccountCostBackfillProgress(targetStart, now, processedChunks, runStartedAt)
+	}()
+	aggregateChunk := func(start, end time.Time) bool {
+		if processedChunks >= accountCostBackfillMaxChunks || (processedChunks > 0 && time.Now().After(deadline)) {
+			return false
+		}
+		if !s.aggregateAccountCostBackfillChunk(ctx, start, end) {
+			return false
+		}
+		processedChunks++
+		if processedChunks < accountCostBackfillMaxChunks && !s.yieldAccountCostBackfill(ctx) {
+			return false
+		}
+		return true
+	}
+	if !coverageEnd.After(epoch) || !coverageEnd.After(coverageStart) {
+		cursor := targetStart
+		for cursor.Before(now) {
+			windowEnd := cursor.Add(24 * time.Hour)
+			if windowEnd.After(now) {
+				windowEnd = now
+			}
+			if !aggregateChunk(cursor, windowEnd) {
+				return
+			}
+			cursor = windowEnd
+		}
+		return
+	}
+
+	cursor := coverageStart
+	for cursor.After(targetStart) {
+		windowStart := cursor.Add(-24 * time.Hour)
+		if windowStart.Before(targetStart) {
+			windowStart = targetStart
+		}
+		if !aggregateChunk(windowStart, cursor) {
+			return
+		}
+		cursor = windowStart
+	}
+
+	cursor = coverageEnd
+	for cursor.Before(now) {
+		windowEnd := cursor.Add(24 * time.Hour)
+		if windowEnd.After(now) {
+			windowEnd = now
+		}
+		if !aggregateChunk(cursor, windowEnd) {
+			return
+		}
+		cursor = windowEnd
+	}
+}
+
+func (s *DashboardAggregationService) yieldAccountCostBackfill(ctx context.Context) bool {
+	if s.accountCostBackfillYieldFn != nil {
+		return s.accountCostBackfillYieldFn(ctx)
+	}
+	timer := time.NewTimer(accountCostBackfillYield)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *DashboardAggregationService) logAccountCostBackfillProgress(targetStart, targetEnd time.Time, processedChunks int, startedAt time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
+	defer cancel()
+	coverageStart, coverageEnd, err := s.repo.GetAccountCostAggregationCoverage(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取账号成本回填进度失败: %v", err)
+		return
+	}
+	complete := !coverageStart.After(targetStart) && !coverageEnd.Before(targetEnd)
+	logger.LegacyPrintf(
+		"service.dashboard_aggregation",
+		"[DashboardAggregation] 账号成本回填进度 (chunks=%d coverage_start=%s coverage_end=%s target_start=%s complete=%t duration=%s)",
+		processedChunks,
+		coverageStart.UTC().Format(time.RFC3339),
+		coverageEnd.UTC().Format(time.RFC3339),
+		targetStart.UTC().Format(time.RFC3339),
+		complete,
+		time.Since(startedAt).String(),
+	)
+}
+
+func (s *DashboardAggregationService) aggregateAccountCostBackfillChunk(ctx context.Context, start, end time.Time) bool {
+	// Use the regular in-process and cross-replica lock only for one bounded
+	// chunk. This preserves cleanup mutual exclusion without starving realtime
+	// dashboard aggregation for the entire historical backfill.
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		return false
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+
+	release, ok := tryAcquireSingletonLeaderLock(
+		ctx,
+		s.lockCache,
+		s.db,
+		dashboardAggregationLeaderLockKey,
+		s.instanceID,
+		dashboardAggregationLeaderLockTTL,
+	)
+	if !ok {
+		return false
+	}
+	defer release()
+
+	if err := s.repo.AggregateAccountCostRange(ctx, start, end); err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 账号成本聚合块失败 (start=%s end=%s): %v", start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), err)
+		return false
+	}
+	return true
 }
 
 // TriggerBackfill 触发回填（异步）。

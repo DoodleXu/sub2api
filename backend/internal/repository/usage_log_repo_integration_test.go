@@ -928,6 +928,97 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts(
 	s.Require().Equal(0.0, stats.AverageCostCNYPerUSD)
 }
 
+func (s *UsageLogRepoSuite) TestDashboardCostCNYCombinesAggregatesAndRawTail() {
+	todayStart := timezone.Today()
+	aggregateEnd := todayStart.Add(2*time.Hour + 15*time.Minute)
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-tail@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny-tail", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "costed-account-with-tail",
+		Platform:     service.PlatformOpenAI,
+		TotalCostCNY: 12,
+	})
+
+	for _, log := range []*service.UsageLog{
+		{
+			UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+			Model: "gpt-4o", TotalCost: 2, ActualCost: 2,
+			CreatedAt: todayStart.Add(30 * time.Minute),
+		},
+		{
+			UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+			Model: "gpt-4o", TotalCost: 1, ActualCost: 1,
+			CreatedAt: aggregateEnd.Add(15 * time.Minute),
+		},
+	} {
+		_, err := s.repo.Create(s.ctx, log)
+		s.Require().NoError(err)
+	}
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart.Add(time.Hour), aggregateEnd))
+	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, todayStart, todayStart.Add(time.Hour)))
+	var coverageStart, coverageEnd time.Time
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT account_cost_hourly_aggregated_from, account_cost_hourly_last_aggregated_at
+		 FROM usage_dashboard_aggregation_watermark WHERE id = 1`,
+		nil,
+		&coverageStart,
+		&coverageEnd,
+	))
+	s.Require().True(coverageStart.Equal(todayStart))
+	s.Require().True(coverageEnd.Equal(aggregateEnd))
+
+	stats := &DashboardStats{}
+	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
+	s.Require().InEpsilon(12.0, stats.TotalCostCNY, 0.0001)
+	s.Require().InEpsilon(4.0, stats.AverageCostCNYPerUSD, 0.0001)
+	s.Require().InEpsilon(4.0, stats.OpenAICostCNYPerUSD, 0.0001)
+	s.Require().InEpsilon(12.0, stats.TodayRealCostCNY, 0.0001)
+}
+
+func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupKeepsPartialHourInRawPrefix() {
+	todayStart := timezone.Today()
+	cutoff := todayStart.Add(12*time.Hour + 34*time.Minute)
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-cleanup@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny-cleanup", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "costed-account-cleanup-boundary",
+		Platform:     service.PlatformOpenAI,
+		TotalCostCNY: 6,
+	})
+
+	_, err := s.repo.Create(s.ctx, &service.UsageLog{
+		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+		Model: "gpt-4o", TotalCost: 1, ActualCost: 1,
+		CreatedAt: cutoff.Add(11 * time.Minute),
+	})
+	s.Require().NoError(err)
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, cutoff.Truncate(time.Hour), cutoff.Add(26*time.Minute)))
+	s.Require().NoError(aggRepo.CleanupUsageLogs(s.ctx, cutoff))
+
+	var coverageStart time.Time
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT account_cost_hourly_aggregated_from
+		 FROM usage_dashboard_aggregation_watermark WHERE id = 1`,
+		nil,
+		&coverageStart,
+	))
+	s.Require().True(coverageStart.Equal(cutoff.Truncate(time.Hour).Add(time.Hour)))
+
+	stats := &DashboardStats{}
+	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
+	s.Require().InEpsilon(6.0, stats.TotalCostCNY, 0.0001)
+	s.Require().InEpsilon(6.0, stats.AverageCostCNYPerUSD, 0.0001)
+	s.Require().InEpsilon(6.0, stats.TodayRealCostCNY, 0.0001)
+}
+
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)

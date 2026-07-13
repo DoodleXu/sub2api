@@ -101,6 +101,10 @@ func (s *dashboardAggregationRepoStub) AggregateRange(ctx context.Context, start
 	return nil
 }
 
+func (s *dashboardAggregationRepoStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
+	return nil
+}
+
 func (s *dashboardAggregationRepoStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
 	return nil
 }
@@ -110,6 +114,10 @@ func (s *dashboardAggregationRepoStub) GetAggregationWatermark(ctx context.Conte
 		return time.Time{}, s.err
 	}
 	return s.watermark, nil
+}
+
+func (s *dashboardAggregationRepoStub) GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error) {
+	return time.Time{}, time.Time{}, s.err
 }
 
 func (s *dashboardAggregationRepoStub) UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error {
