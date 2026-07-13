@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -19,27 +20,30 @@ import (
 // schedulable OAuth account's credentials, so clients pointed at the gateway
 // see the account's real, always-current model entitlements instead of a
 // frozen local cache.
-func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
+func (h *OpenAIGatewayHandler) TryCodexModels(c *gin.Context) bool {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok || apiKey.Group == nil {
 		h.errorResponse(c, http.StatusUnauthorized, "invalid_request_error", "API key group is required")
-		return
+		return true
 	}
 	if apiKey.Group.Platform != service.PlatformOpenAI {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Codex models manifest is only available for OpenAI groups")
-		return
+		return true
 	}
 
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, "", "")
+	account, err := h.gatewayService.SelectCodexModelsAccount(c.Request.Context(), apiKey.GroupID)
 	if err != nil {
-		h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available OpenAI accounts")
-		return
+		if errors.Is(err, service.ErrNoAvailableCodexModelsAccount) {
+			return false
+		}
+		h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
+		return true
 	}
 
 	manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
 	if err != nil {
 		h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
-		return
+		return true
 	}
 
 	if manifest.ETag != "" {
@@ -47,7 +51,17 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 	if manifest.NotModified {
 		c.Status(http.StatusNotModified)
-		return
+		return true
 	}
 	c.Data(http.StatusOK, "application/json", manifest.Body)
+	return true
+}
+
+// CodexModels serves direct handler users that cannot provide a local-list
+// fallback. Gateway routes call TryCodexModels and fall back to an empty Codex
+// manifest so API-key clients retain their bundled model catalog.
+func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
+	if !h.TryCodexModels(c) {
+		h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", service.ErrNoAvailableCodexModelsAccount.Error())
+	}
 }

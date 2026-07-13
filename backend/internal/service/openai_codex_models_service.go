@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +17,10 @@ import (
 // Package-level variable so tests can point it at a stub server.
 var chatgptCodexModelsURL = "https://chatgpt.com/backend-api/codex/models"
 
+// ErrNoAvailableCodexModelsAccount tells routing code to return an empty
+// manifest so API-key clients retain their bundled Codex catalog.
+var ErrNoAvailableCodexModelsAccount = errors.New("no available OpenAI OAuth account with Codex backend access token")
+
 const codexModelsManifestBodyLimit int64 = 8 << 20
 
 // CodexModelsManifest carries the raw upstream manifest payload plus caching
@@ -24,6 +29,34 @@ type CodexModelsManifest struct {
 	Body        []byte
 	ETag        string
 	NotModified bool
+}
+
+// SelectCodexModelsAccount selects a schedulable account whose resolved
+// credentials can actually call the ChatGPT Codex backend. OpenAI groups may
+// mix OAuth accounts, Spark shadows and API-key-compatible channels; the
+// generic model selector intentionally supports all of them, while the Codex
+// manifest endpoint specifically requires an OAuth backend access token.
+func (s *OpenAIGatewayService) SelectCodexModelsAccount(ctx context.Context, groupID *int64) (*Account, error) {
+	excludedIDs := make(map[int64]struct{})
+	for {
+		account, err := s.SelectAccountForModelWithExclusions(ctx, groupID, "", "", excludedIDs)
+		if err != nil {
+			if errors.Is(err, ErrNoAvailableAccounts) {
+				return nil, ErrNoAvailableCodexModelsAccount
+			}
+			return nil, err
+		}
+
+		credentialAccount, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if resolveErr != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", resolveErr)
+		}
+		if credentialAccount != nil && credentialAccount.IsOpenAIOAuth() && strings.TrimSpace(credentialAccount.GetOpenAIAccessToken()) != "" {
+			return account, nil
+		}
+
+		excludedIDs[account.ID] = struct{}{}
+	}
 }
 
 // FetchCodexModelsManifest fetches the live Codex models manifest from the
@@ -40,6 +73,9 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", err)
+	}
+	if credAccount == nil || !credAccount.IsOpenAIOAuth() {
+		return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_OAUTH_REQUIRED", "account is not an OpenAI OAuth account")
 	}
 	accessToken := credAccount.GetOpenAIAccessToken()
 	if accessToken == "" {

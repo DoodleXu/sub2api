@@ -1040,6 +1040,15 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	})
 }
 
+// CodexModels writes an empty, valid Codex manifest for groups without a
+// ChatGPT OAuth credential. API-key-authenticated Codex clients merge an empty
+// remote manifest with their bundled catalog. Returning synthesized entries
+// here would instead replace bundled metadata (including model instructions)
+// with incomplete gateway metadata.
+func (h *GatewayHandler) CodexModels(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"models": []any{}})
+}
+
 func writeModelsList(c *gin.Context, modelIDs []string) {
 	models := make([]claude.Model, 0, len(modelIDs))
 	for _, modelID := range modelIDs {

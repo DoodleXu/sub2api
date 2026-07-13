@@ -24,6 +24,10 @@ type gatewayModelsResponseForTest struct {
 	Data   []gatewayModelItemForTest `json:"data"`
 }
 
+type gatewayCodexModelsResponseForTest struct {
+	Models []json.RawMessage `json:"models"`
+}
+
 type gatewayModelItemForTest struct {
 	ID        string `json:"id"`
 	Object    string `json:"object"`
@@ -50,6 +54,23 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHand
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		),
 	}
+}
+
+func TestGatewayCodexModels_WritesEmptyManifestForBundledCatalogFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/backend-api/codex/models", nil)
+	h.CodexModels(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotContains(t, rec.Body.String(), `"object":"list"`)
+	var got gatewayCodexModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Empty(t, got.Models)
 }
 
 func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {

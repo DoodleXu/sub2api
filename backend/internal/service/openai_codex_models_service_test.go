@@ -136,3 +136,13 @@ func TestFetchCodexModelsManifestMissingToken(t *testing.T) {
 		t.Fatal("expected error for missing access token, got nil")
 	}
 }
+
+func TestFetchCodexModelsManifestRejectsAPIKeyAccountEvenWithAccessTokenField(t *testing.T) {
+	account := newCodexModelsTestAccount()
+	account.Type = AccountTypeAPIKey
+
+	s := &OpenAIGatewayService{}
+	if _, err := s.FetchCodexModelsManifest(context.Background(), account, "0.137.0", ""); err == nil {
+		t.Fatal("expected error for API-key account, got nil")
+	}
+}
