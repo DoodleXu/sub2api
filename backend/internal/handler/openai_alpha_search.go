@@ -79,6 +79,14 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	setOpsRequestContext(c, requestedModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
 
+	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIAlphaSearch, requestedModel, body); decision != nil && decision.Blocked {
+		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		return
+	}
+	if h.rejectIfCyberSessionBlocked(c, apiKey, body, requestedModel, cyberBlockFormatResponses) {
+		return
+	}
+
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, requestedModel)
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
@@ -104,6 +112,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	searchID := strings.TrimSpace(gjson.GetBytes(body, "id").String())
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(c, nil, searchID)
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	switchCount := 0
 	routingStart := time.Now()
@@ -179,6 +188,24 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if c.Writer.Size() != writerSizeBeforeForward {
 			h.handleFailoverExhausted(c, failoverErr, true)
 			return
+		}
+		if failoverErr.RetryableOnSameAccount {
+			retryLimit := account.GetPoolModeRetryCount()
+			if sameAccountRetryCount[account.ID] < retryLimit {
+				sameAccountRetryCount[account.ID]++
+				reqLog.Warn("openai_alpha_search.pool_mode_same_account_retry",
+					zap.Int64("account_id", account.ID),
+					zap.Int("upstream_status", failoverErr.StatusCode),
+					zap.Int("retry_limit", retryLimit),
+					zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+				)
+				select {
+				case <-c.Request.Context().Done():
+					return
+				case <-time.After(sameAccountRetryDelay):
+				}
+				continue
+			}
 		}
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}

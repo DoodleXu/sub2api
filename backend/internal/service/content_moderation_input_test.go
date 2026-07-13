@@ -8,6 +8,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestExtractContentModerationInput_OpenAIAlphaSearchIncludesInputAndQueries(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"benign wrapper"}]}],
+		"commands":{"search_query":[{"q":"blocked search phrase"},"second query"]}
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIAlphaSearch, body)
+
+	require.Equal(t, "openai_alpha_search", input.Source)
+	require.Contains(t, input.Text, "benign wrapper")
+	require.Contains(t, input.Text, "blocked search phrase")
+	require.Contains(t, input.Text, "second query")
+}
+
 // 当数组末尾是工具结果时（典型场景：Agent 工具循环结束于 tool/assistant），
 // 应回找最近一条真实用户文本，而不是审计工具输出或直接跳过。
 

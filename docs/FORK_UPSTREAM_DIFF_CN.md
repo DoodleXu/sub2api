@@ -428,6 +428,7 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 - 部署：保留 `.env` 权限加固，不引入上游仅适配 Apple Container、`linux/arm64` 和官方镜像的部署入口；fork 继续维持 `linux/amd64` 发布口径。
 - 合并后审核修复：将 v0.1.153 新增文案补入 fork 实际加载的中英文单体语言包；恢复站点 Logo、文档 URL 安全过滤和侧栏滚动位置持久化；补齐 Gemini 批量生图配置、平台动态价格提示与对应回归测试。
 - Grok 错误处理：`/v1/messages` 上游错误统一经过 Grok 专用限流策略，并在 failover 错误中保留响应头；新增 429 `Retry-After` 回归测试。
+- 二次审核修复：`/v1/alpha/search` 接入 fork 内容审计和 cyber 会话屏蔽，审计输入同时覆盖 Responses `input` 与 `commands.search_query[].q`；恢复 pool-mode 的同账号重试次数与取消语义，并补充 handler 级阻断、重试回归测试。
 - 修复后验证：前端 Vitest `161` 个测试文件、`1088` 项用例全量通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过。
 
 ## v0.1.150 合并验证

@@ -26,6 +26,12 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
 	case ContentModerationProtocolOpenAIResponses:
 		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
+	case ContentModerationProtocolOpenAIAlphaSearch:
+		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
+		collectOpenAIAlphaSearchQueries(gjson.GetBytes(body, "commands.search_query"), &collector)
+		if !collector.isEmpty() {
+			collector.source = "openai_alpha_search"
+		}
 	case ContentModerationProtocolGemini:
 		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
 	case ContentModerationProtocolOpenAIImages:
@@ -47,6 +53,28 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 	}
 	out.Normalize()
 	return out
+}
+
+func collectOpenAIAlphaSearchQueries(queries gjson.Result, collector *contentModerationInputCollector) {
+	if collector == nil || !queries.Exists() {
+		return
+	}
+	collectQuery := func(query gjson.Result) {
+		switch {
+		case query.Type == gjson.String:
+			collector.AddText(query.String())
+		case query.IsObject():
+			collector.AddText(query.Get("q").String())
+		}
+	}
+	if queries.IsArray() {
+		queries.ForEach(func(_, query gjson.Result) bool {
+			collectQuery(query)
+			return true
+		})
+		return
+	}
+	collectQuery(queries)
 }
 
 type contentModerationInputCollector struct {
