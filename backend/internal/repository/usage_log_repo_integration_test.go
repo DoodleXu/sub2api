@@ -1001,16 +1001,24 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupKeepsPartialHourInRawPref
 	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, cutoff.Truncate(time.Hour), cutoff.Add(26*time.Minute)))
 	s.Require().NoError(aggRepo.CleanupUsageLogs(s.ctx, cutoff))
 
-	var coverageStart time.Time
+	var coverageStart, coverageEnd time.Time
 	s.Require().NoError(scanSingleRow(
 		s.ctx,
 		s.tx,
-		`SELECT account_cost_hourly_aggregated_from
+		`SELECT account_cost_hourly_aggregated_from, account_cost_hourly_last_aggregated_at
 		 FROM usage_dashboard_aggregation_watermark WHERE id = 1`,
 		nil,
 		&coverageStart,
+		&coverageEnd,
 	))
-	s.Require().True(coverageStart.Equal(cutoff.Truncate(time.Hour).Add(time.Hour)))
+	accountCostCutoff := cutoff.Truncate(time.Hour).Add(time.Hour)
+	s.Require().False(
+		coverageEnd.After(coverageStart) && coverageStart.Before(accountCostCutoff),
+		"cleanup must not claim aggregate coverage before the retained raw prefix: start=%s end=%s cutoff=%s",
+		coverageStart,
+		coverageEnd,
+		accountCostCutoff,
+	)
 
 	stats := &DashboardStats{}
 	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
