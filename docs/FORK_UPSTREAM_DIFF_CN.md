@@ -123,6 +123,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 - 账号上增加 `total_cost_cny`，支持创建、更新、批量更新和增量成本录入。
 - usage/dashboard 聚合返回 `total_account_cost`、`total_cost_cny`、`average_cost_cny_per_usd`、`today_real_cost_cny` 等字段。
+- dashboard 的人民币成本卡使用账号维度小时聚合，并仅对尚未进入连续覆盖区间的明细前缀/尾部读取 `usage_logs`，避免首屏反复全表分组；历史账号成本使用独立水位按天分块、按时间预算连续回填，逐块释放常规聚合锁并输出覆盖进度，不重跑其他 dashboard 聚合维度，也不饿死实时指标。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
 - 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。
 
@@ -145,6 +146,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - `backend/migrations/142_remove_dashboard_cost_trend.sql`
 - `backend/migrations/150_restore_dashboard_account_cost_columns.sql`
 - `backend/migrations/152_usage_dashboard_user_stats.sql`
+- `backend/migrations/174_dashboard_account_cost_hourly.sql`
 
 相关提交线索：
 
@@ -157,7 +159,7 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 
 同步上游注意：
 
-- 上游若重构 usage log、dashboard aggregation 或 account schema，必须保留 `total_cost_cny` 和账号成本聚合兜底逻辑。
+- 上游若重构 usage log、dashboard aggregation 或 account schema，必须保留 `total_cost_cny`、账号成本小时聚合，以及“聚合覆盖区间 + 原始尾部”的不重不漏逻辑。
 - 成本口径涉及经营数据，合并后至少跑 dashboard/usage/account 相关测试，并人工检查后台金额单位是否仍为 `¥`。
 
 ### 4. 账号归档
@@ -348,6 +350,8 @@ git diff --name-status refs/tags/upstream/v0.1.151^{}..HEAD
 - OpenAI 请求在账号选定后，按渠道映射、账号映射和 compact 映射得到的最终模型预检价格；图片模型交由媒体计费链路。上游完成后若仍缺价，会持久化 `pricing_pending` 原始用量供对账，不再生成零费用已结算账单。所有计费任务在 worker 队列拒绝或停止时同步兜底，`drop/sample` 配置不再影响账务完整性。
 - Responses 显式图片请求继续在路由前抢占图片并发槽；Codex bridge 自动注入的图片工具则按最终账号归一化 payload 抢槽。WebSocket 每个 turn 使用同一最终 payload 语义，并在 turn 结束或上游早期 failover 时释放槽位。
 - Responses 流读取超时、单行超限和异常 EOF 不再由 service 注入非终态 `type:error`；由 handler 统一发出一个规范的 `response.failed` 终态。
+- Responses→Chat 缓冲转换兼容上游将 `web_search_call.action` 返回为字符串，避免整条终态事件因非关键字段反序列化失败而被丢弃。
+- Codex models manifest 只从组内选择可解析出 backend access token 的 OpenAI OAuth/影子账号；纯 API Key 组返回合法空 manifest，让客户端保留随版本发布的内置模型 catalog，避免 `/v1/models?client_version=...` 持续返回 502/503，也避免不完整元数据覆盖 Codex 内置指令。
 - Chat Completions 与 Responses 恢复 `model_not_found` / 临时容量不足分类；compact 与 Responses 原生能力不足仍保留专用错误语义。
 - 图片归档把启用检查、记录创建、解码和存储统一纳入有界后台任务，并设置总超时；超时后使用独立 cleanup context 持久化失败终态，避免请求完成后无界保活 base64 数据或记录永久停在 pending/running。
 - 非流式响应体与 SSE 单行默认上限统一为 `128MB`，部署样例和中文文档使用同一口径，兼顾 4K base64 图片与内存保护。
