@@ -359,6 +359,27 @@ type WebSearchAction struct {
 	Query string `json:"query,omitempty"` // primary search query
 }
 
+// UnmarshalJSON accepts both the canonical object form and provider-compatible
+// string forms observed in Responses SSE payloads. Some compatible upstreams
+// emit action:"search"; rejecting that non-essential shape would discard the
+// entire event, including a response.completed terminal event.
+func (a *WebSearchAction) UnmarshalJSON(data []byte) error {
+	type webSearchActionAlias WebSearchAction
+
+	var actionType string
+	if err := json.Unmarshal(data, &actionType); err == nil {
+		*a = WebSearchAction{Type: actionType}
+		return nil
+	}
+
+	var object webSearchActionAlias
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	*a = WebSearchAction(object)
+	return nil
+}
+
 // ResponsesSummary is a summary text block inside a reasoning output.
 type ResponsesSummary struct {
 	Type string `json:"type"` // "summary_text"
