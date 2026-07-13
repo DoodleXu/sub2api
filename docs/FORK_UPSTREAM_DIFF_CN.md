@@ -426,6 +426,9 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 - OpenAI/Grok：模型映射、Grok Chat/Responses bridge、Responses Lite 工具兼容专项测试通过；保留 fork 原生 Responses 路由与严格优先级诊断。
 - 前端：`vue-tsc --noEmit`、账号状态/密钥使用/价格配置专项 Vitest 和生产构建通过。
 - 部署：保留 `.env` 权限加固，不引入上游仅适配 Apple Container、`linux/arm64` 和官方镜像的部署入口；fork 继续维持 `linux/amd64` 发布口径。
+- 合并后审核修复：将 v0.1.153 新增文案补入 fork 实际加载的中英文单体语言包；恢复站点 Logo、文档 URL 安全过滤和侧栏滚动位置持久化；补齐 Gemini 批量生图配置、平台动态价格提示与对应回归测试。
+- Grok 错误处理：`/v1/messages` 上游错误统一经过 Grok 专用限流策略，并在 failover 错误中保留响应头；新增 429 `Retry-After` 回归测试。
+- 修复后验证：前端 Vitest `161` 个测试文件、`1088` 项用例全量通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过。
 
 ## v0.1.150 合并验证
 

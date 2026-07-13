@@ -811,6 +811,7 @@ export default {
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
+        grokCli: 'Grok CLI',
         opencode: 'OpenCode',
       },
       antigravity: {
@@ -824,6 +825,12 @@ export default {
         description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
         modelComment: 'If you have Gemini 3 access, you can use: gemini-3-pro-preview',
         note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
+      },
+      grok: {
+        description: 'Configure Grok Build or OpenCode to send Responses API traffic through your Sub2API Grok group.',
+        configTomlHint: 'Back up an existing config.toml before merging this model entry. Run grok inspect after saving to verify the effective configuration.',
+        note: 'Save the file as ~/.grok/config.toml, then run grok inspect and select sub2api-grok from /model.',
+        noteWindows: 'Save the file as %USERPROFILE%\\.grok\\config.toml, then run grok inspect and select sub2api-grok from /model.',
       },
       opencode: {
         title: 'OpenCode Example',
@@ -2330,6 +2337,7 @@ export default {
       failedToLoad: 'Failed to load groups',
       failedToCreate: 'Failed to create group',
       failedToUpdate: 'Failed to update group',
+      failedToSave: 'Failed to save group',
       failedToDelete: 'Failed to delete group',
       nameRequired: 'Please enter group name',
       rateMultipliers: 'Rate Multipliers',
@@ -2392,11 +2400,32 @@ export default {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
+        allowBatchImageGeneration: 'Allow batch image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
+        batchDiscountMultiplier: 'Batch image discount',
+        batchHoldMultiplier: 'Batch hold price ratio',
+        batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
+        batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
+        batchGeminiOnlyHint: 'Batch image generation is currently available only for Gemini groups.',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
+      },
+      videoPricing: {
+        title: 'Video Generation Pricing',
+        description: 'Configure Grok video generation prices in USD per second of output video. Leave empty to use the default per-second rates (grok-imagine-video: $0.05/s 480p, $0.07/s 720p; video-1.5: $0.08/s 480p, $0.14/s 720p, $0.25/s 1080p).',
+        independentMultiplier: 'Use independent video multiplier',
+        videoMultiplier: 'Video multiplier',
+        modeHint: 'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
+        finalPricePreview: 'Final per-second price preview',
+        notConfigured: 'Not configured'
+      },
+      webSearchPricing: {
+        title: 'Codex Web Search Pricing',
+        pricePerCall: 'Price per search call (USD)',
+        pricePerCallHint: 'Leave empty to use the default $0.01 per call (official pricing: $10 per 1,000 calls); 0 means free. The group rate multiplier is applied on top.',
+        finalPricePreview: 'Per-call price after current multiplier: {price}'
       },
       peakRate: {
         enable: 'Enable peak rate multiplier',
@@ -3775,6 +3804,9 @@ export default {
         responsesStatusAutoUnknown: 'Auto probe: unknown',
         responsesStatusForcedResponses: 'Forced Responses',
         responsesStatusForcedChatCompletions: 'Forced Chat Completions',
+        planType: 'Plan tier (manual override)',
+        planTypeDesc: "Manually correct this account's ChatGPT plan tier (Plus / Pro / Free). Note: a token refresh near expiry or a 429 rate-limit response will auto-overwrite this with the real tier.",
+        planTypeClear: 'Clear (auto-detect)',
         codexCLIOnly: 'Codex official clients only',
         codexCLIOnlyDesc:
           'Only applies to OpenAI OAuth. When enabled, only Codex official client families are allowed; when disabled, the gateway bypasses this restriction and keeps existing behavior.',
@@ -5228,6 +5260,7 @@ export default {
       lastRun: 'last_run:',
       lastSuccess: 'last_success:',
       lastError: 'last_error:',
+      result: 'Result',
       noData: 'No data.',
       loadingText: 'loading',
       ready: 'ready',
@@ -5348,7 +5381,8 @@ export default {
         '6h': 'Last 6 hours',
         '24h': 'Last 24 hours',
         '7d': 'Last 7 days',
-        '30d': 'Last 30 days'
+        '30d': 'Last 30 days',
+        custom: 'Custom'
       },
       openaiTokenStats: {
         title: 'OpenAI Token Request Stats',
@@ -5369,6 +5403,10 @@ export default {
           avgDurationMs: 'Avg Duration (ms)',
           requestsWithFirstToken: 'Requests With First Token'
         }
+      },
+      customTimeRange: {
+        startTime: 'Start time',
+        endTime: 'End time'
       },
       fullscreen: {
         enter: 'Enter Fullscreen'
@@ -7201,12 +7239,20 @@ export default {
         action: 'Action',
         actionPass: 'Pass (keep service_tier)',
         actionFilter: 'Filter (remove service_tier)',
+        actionForcePriority: 'Force priority (fast)',
         actionBlock: 'Block (reject request)',
         scope: 'Scope',
         scopeAll: 'All accounts',
         scopeOAuth: 'OAuth only',
         scopeAPIKey: 'API Key only',
         scopeBedrock: 'Bedrock only',
+        userIds: 'Specific users',
+        userIdsHint: 'Type any part of a user email to search. Leave empty to apply to all Sub2API users. Selected users match requests from their API keys and take precedence over global rules.',
+        userSearchPlaceholder: 'Search by user email',
+        userSearchEmpty: 'No matching users found',
+        userDeleted: '(deleted)',
+        userIdFallback: 'User #{id}',
+        removeUser: 'Remove user',
         errorMessage: 'Error message',
         errorMessagePlaceholder: 'Custom error message when blocked',
         errorMessageHint: 'Leave empty for the default message.',

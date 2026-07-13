@@ -758,10 +758,10 @@
           <label
             class="block mb-2 font-medium text-gray-700 dark:text-gray-300"
           >
-            {{ t("admin.groups.imagePricing.title") }}
+            {{ t(imagePricingI18nKey(createForm.platform, "title")) }}
           </label>
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-            {{ t("admin.groups.imagePricing.description") }}
+            {{ t(imagePricingI18nKey(createForm.platform, "description")) }}
           </p>
           <div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -770,7 +770,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              {{ t("admin.groups.imagePricing.allowImageGeneration") }}
+              {{ t(imagePricingI18nKey(createForm.platform, "allowImageGeneration")) }}
             </label>
             <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
               <input
@@ -778,7 +778,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              {{ t("admin.groups.imagePricing.independentMultiplier") }}
+              {{ t(imagePricingI18nKey(createForm.platform, "independentMultiplier")) }}
             </label>
           </div>
           <div
@@ -786,7 +786,7 @@
             class="mb-4"
           >
             <label class="input-label">{{
-              t("admin.groups.imagePricing.imageMultiplier")
+              t(imagePricingI18nKey(createForm.platform, "imageMultiplier"))
             }}</label>
             <input
               v-model.number="createForm.image_rate_multiplier"
@@ -806,7 +806,7 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.134"
+                :placeholder="getImagePricePlaceholder(createForm.platform, 'image_price_1k')"
               />
             </div>
             <div>
@@ -817,7 +817,7 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.201"
+                :placeholder="getImagePricePlaceholder(createForm.platform, 'image_price_2k')"
               />
             </div>
             <div>
@@ -828,16 +828,16 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.268"
+                :placeholder="getImagePricePlaceholder(createForm.platform, 'image_price_4k')"
               />
             </div>
           </div>
           <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            {{ t("admin.groups.imagePricing.modeHint") }}
+            {{ t(imagePricingI18nKey(createForm.platform, "modeHint")) }}
           </p>
           <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
             <div class="mb-1 font-medium">
-              {{ t("admin.groups.imagePricing.finalPricePreview") }}
+              {{ t(imagePricingI18nKey(createForm.platform, "finalPricePreview")) }}
             </div>
             <div class="grid grid-cols-3 gap-2">
               <div
@@ -848,6 +848,59 @@
               </div>
             </div>
           </div>
+          <div
+            v-if="createForm.platform === 'gemini' && createForm.allow_image_generation"
+            class="mt-4 border-t border-dashed border-gray-200 pt-4 dark:border-dark-700"
+          >
+            <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <input
+                v-model="createForm.allow_batch_image_generation"
+                type="checkbox"
+                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              {{ t("admin.groups.imagePricing.allowBatchImageGeneration") }}
+            </label>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t("admin.groups.imagePricing.batchSectionHint") }}
+            </p>
+            <div
+              v-if="createForm.allow_batch_image_generation"
+              class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"
+            >
+              <div>
+                <label class="input-label">{{
+                  t("admin.groups.imagePricing.batchDiscountMultiplier")
+                }}</label>
+                <input
+                  v-model.number="createForm.batch_image_discount_multiplier"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  class="input"
+                  placeholder="0.5"
+                />
+              </div>
+              <div>
+                <label class="input-label">{{
+                  t("admin.groups.imagePricing.batchHoldMultiplier")
+                }}</label>
+                <input
+                  v-model.number="createForm.batch_image_hold_multiplier"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  class="input"
+                  placeholder="0.6"
+                />
+              </div>
+            </div>
+          </div>
+          <p
+            v-else-if="createForm.platform !== 'gemini'"
+            class="mt-4 border-t border-dashed border-gray-200 pt-4 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400"
+          >
+            {{ t("admin.groups.imagePricing.batchGeminiOnlyHint") }}
+          </p>
         </div>
 
         <!-- 视频生成计费配置（仅 Grok 平台） -->
@@ -2210,10 +2263,10 @@
           <label
             class="block mb-2 font-medium text-gray-700 dark:text-gray-300"
           >
-            {{ t("admin.groups.imagePricing.title") }}
+            {{ t(imagePricingI18nKey(editForm.platform, "title")) }}
           </label>
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-            {{ t("admin.groups.imagePricing.description") }}
+            {{ t(imagePricingI18nKey(editForm.platform, "description")) }}
           </p>
           <div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -2222,7 +2275,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              {{ t("admin.groups.imagePricing.allowImageGeneration") }}
+              {{ t(imagePricingI18nKey(editForm.platform, "allowImageGeneration")) }}
             </label>
             <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
               <input
@@ -2230,7 +2283,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              {{ t("admin.groups.imagePricing.independentMultiplier") }}
+              {{ t(imagePricingI18nKey(editForm.platform, "independentMultiplier")) }}
             </label>
           </div>
           <div
@@ -2238,7 +2291,7 @@
             class="mb-4"
           >
             <label class="input-label">{{
-              t("admin.groups.imagePricing.imageMultiplier")
+              t(imagePricingI18nKey(editForm.platform, "imageMultiplier"))
             }}</label>
             <input
               v-model.number="editForm.image_rate_multiplier"
@@ -2258,7 +2311,7 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.134"
+                :placeholder="getImagePricePlaceholder(editForm.platform, 'image_price_1k')"
               />
             </div>
             <div>
@@ -2269,7 +2322,7 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.201"
+                :placeholder="getImagePricePlaceholder(editForm.platform, 'image_price_2k')"
               />
             </div>
             <div>
@@ -2280,16 +2333,16 @@
                 step="0.001"
                 min="0"
                 class="input"
-                placeholder="0.268"
+                :placeholder="getImagePricePlaceholder(editForm.platform, 'image_price_4k')"
               />
             </div>
           </div>
           <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            {{ t("admin.groups.imagePricing.modeHint") }}
+            {{ t(imagePricingI18nKey(editForm.platform, "modeHint")) }}
           </p>
           <div class="mt-2 rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300">
             <div class="mb-1 font-medium">
-              {{ t("admin.groups.imagePricing.finalPricePreview") }}
+              {{ t(imagePricingI18nKey(editForm.platform, "finalPricePreview")) }}
             </div>
             <div class="grid grid-cols-3 gap-2">
               <div
@@ -2300,6 +2353,59 @@
               </div>
             </div>
           </div>
+          <div
+            v-if="editForm.platform === 'gemini' && editForm.allow_image_generation"
+            class="mt-4 border-t border-dashed border-gray-200 pt-4 dark:border-dark-700"
+          >
+            <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <input
+                v-model="editForm.allow_batch_image_generation"
+                type="checkbox"
+                class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              {{ t("admin.groups.imagePricing.allowBatchImageGeneration") }}
+            </label>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              {{ t("admin.groups.imagePricing.batchSectionHint") }}
+            </p>
+            <div
+              v-if="editForm.allow_batch_image_generation"
+              class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"
+            >
+              <div>
+                <label class="input-label">{{
+                  t("admin.groups.imagePricing.batchDiscountMultiplier")
+                }}</label>
+                <input
+                  v-model.number="editForm.batch_image_discount_multiplier"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  class="input"
+                  placeholder="0.5"
+                />
+              </div>
+              <div>
+                <label class="input-label">{{
+                  t("admin.groups.imagePricing.batchHoldMultiplier")
+                }}</label>
+                <input
+                  v-model.number="editForm.batch_image_hold_multiplier"
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  class="input"
+                  placeholder="0.6"
+                />
+              </div>
+            </div>
+          </div>
+          <p
+            v-else-if="editForm.platform !== 'gemini'"
+            class="mt-4 border-t border-dashed border-gray-200 pt-4 text-xs text-gray-500 dark:border-dark-700 dark:text-gray-400"
+          >
+            {{ t("admin.groups.imagePricing.batchGeminiOnlyHint") }}
+          </p>
         </div>
 
         <!-- 视频生成计费配置（仅 Grok 平台） -->
@@ -3415,7 +3521,9 @@ import {
 import {
   getDefaultImagePreviewPrice,
   getDefaultVideoPreviewPrice,
+  getImagePricePlaceholder,
   getVideoPricePlaceholder,
+  imagePricingI18nKey,
   supportsImagePricingPlatform,
   supportsVideoPricingPlatform,
   videoPricingI18nKey,
@@ -4964,8 +5072,23 @@ watch(
       createForm.require_oauth_only = false;
       createForm.require_privacy_set = false;
     }
+    resetDisabledBatchImagePricing(createForm);
     resetModelsListState(createModelsListState);
     loadModelsListCandidates("create", 0, newVal);
+  },
+);
+
+watch(
+  () => createForm.allow_image_generation,
+  () => {
+    resetDisabledBatchImagePricing(createForm);
+  },
+);
+
+watch(
+  () => createForm.allow_batch_image_generation,
+  () => {
+    resetDisabledBatchImagePricing(createForm);
   },
 );
 
@@ -4982,6 +5105,7 @@ watch(
       editForm.require_oauth_only = false;
       editForm.require_privacy_set = false;
     }
+    resetDisabledBatchImagePricing(editForm);
     if (editingGroup.value) {
       resetModelsListState(editModelsListState, editForm.platform === editingGroup.value.platform ? editingGroup.value.models_list_config : undefined);
       loadModelsListCandidates("edit", editingGroup.value.id, newVal);
@@ -4990,17 +5114,18 @@ watch(
 );
 
 watch(
-  () => editForm.platform,
-  (newVal) => {
-    if (!['anthropic', 'antigravity'].includes(newVal)) {
-      editForm.fallback_group_id_on_invalid_request = null
-    }
-    if (newVal !== 'openai') {
-      editForm.allow_messages_dispatch = false
-      editForm.default_mapped_model = ''
-    }
-  }
-)
+  () => editForm.allow_image_generation,
+  () => {
+    resetDisabledBatchImagePricing(editForm);
+  },
+);
+
+watch(
+  () => editForm.allow_batch_image_generation,
+  () => {
+    resetDisabledBatchImagePricing(editForm);
+  },
+);
 
 // 点击外部关闭账号搜索下拉框
 const handleClickOutside = (event: MouseEvent) => {

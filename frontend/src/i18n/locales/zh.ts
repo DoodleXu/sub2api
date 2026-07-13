@@ -811,6 +811,7 @@ export default {
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
+        grokCli: 'Grok CLI',
         opencode: 'OpenCode'
       },
       antigravity: {
@@ -827,6 +828,12 @@ export default {
           '将以下环境变量添加到您的终端配置文件或直接在终端中运行，以配置 Gemini CLI 访问。',
         modelComment: '如果你有 Gemini 3 权限可以填：gemini-3-pro-preview',
         note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。'
+      },
+      grok: {
+        description: '配置 Grok Build 或 OpenCode，让 Responses API 请求通过当前 Sub2API Grok 分组发送。',
+        configTomlHint: '如已有 config.toml，请先备份再合并此模型配置。保存后运行 grok inspect 验证生效配置。',
+        note: '保存为 ~/.grok/config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。',
+        noteWindows: '保存为 %USERPROFILE%\\.grok\\config.toml，然后运行 grok inspect，并在 /model 中选择 sub2api-grok。'
       },
       opencode: {
         title: 'OpenCode 配置示例',
@@ -1563,6 +1570,7 @@ export default {
       totalRequests: '总请求数',
       todayCost: '今日消费',
       totalCost: '总消费',
+      newUsersToday: '今日新增用户',
       actual: '实际',
       standard: '标准',
       accountCost: '成本',
@@ -1575,6 +1583,10 @@ export default {
       performance: '性能指标',
       avgResponse: '平均响应',
       averageTime: '平均时间',
+      active: '活跃',
+      ok: '正常',
+      err: '错误',
+      create: '创建',
       timeRange: '时间范围',
       granularity: '粒度',
       day: '按天',
@@ -1584,6 +1596,7 @@ export default {
       metricTokens: '按 Token',
       metricActualCost: '按实际消费',
       tokenUsageTrend: 'Token 使用趋势',
+      userUsageTrend: '用户使用趋势（Top 12）',
       noDataAvailable: '暂无数据',
       model: '模型',
       group: '分组',
@@ -2475,11 +2488,32 @@ export default {
         title: '图片生成计费',
         description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
         allowImageGeneration: '允许当前分组生图',
+        allowBatchImageGeneration: '允许当前分组批量生图',
         independentMultiplier: '生图倍率独立',
         imageMultiplier: '生图独立倍率',
+        batchDiscountMultiplier: '批量生图折扣倍率',
+        batchHoldMultiplier: '批量冻结价格比例',
+        batchSectionHint: '批量生图仅影响批量任务：结算价格会叠加批量折扣倍率，提交时冻结金额按普通生图原价 × 批量冻结价格比例计算。参考图也会产生上游输入 token 消耗，建议批量生图折扣倍率设置大于 0.5。',
+        batchDisabledHint: '请先启用当前分组的生图能力，再开启批量生图。',
+        batchGeminiOnlyHint: '批量生图当前仅支持 Gemini 分组。',
         modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
         finalPricePreview: '最终单张价格预览',
         notConfigured: '未配置'
+      },
+      videoPricing: {
+        title: '视频生成计费',
+        description: '配置 Grok 视频生成每秒单价（USD/秒）。留空使用默认每秒价格（grok-imagine-video：480p $0.05/s、720p $0.07/s；video-1.5：480p $0.08/s、720p $0.14/s、1080p $0.25/s）。',
+        independentMultiplier: '视频倍率独立',
+        videoMultiplier: '视频独立倍率',
+        modeHint: '视频按秒计费：费用 = 每秒价格 × 时长（1-15 秒，未指定默认 8 秒）。默认叠加当前分组有效倍率；开启独立倍率后改用视频独立倍率。',
+        finalPricePreview: '最终每秒价格预览',
+        notConfigured: '未配置'
+      },
+      webSearchPricing: {
+        title: 'Codex 网页搜索计费',
+        pricePerCall: '搜索单次价格（USD/次）',
+        pricePerCallHint: '留空使用默认价 $0.01/次（官方定价 $10/1000 次）；填 0 表示免费。实际扣费会叠加分组费率倍数。',
+        finalPricePreview: '应用当前倍率后的单次价格：{price}'
       },
       peakRate: {
         enable: '启用高峰倍率',
@@ -2562,6 +2596,13 @@ export default {
         noRulesHint: '添加路由规则以将特定模型请求优先路由到指定账号',
         searchAccountPlaceholder: '搜索账号...',
         accountsHint: '选择此模型模式优先使用的账号'
+      },
+      claudeMaxSimulation: {
+        title: 'Claude Max 用量模拟',
+        tooltip: '启用后，对于没有上游缓存写入用量的 Claude 模型，系统会确定性地将 token 映射为少量输入加 1h 缓存创建，同时保持总 token 不变。',
+        enabled: '已启用（模拟 1h 缓存）',
+        disabled: '已禁用',
+        hint: '仅调整用量计费日志中的 token 类别。不会持久化每个请求的映射状态。'
       },
       mcpXml: {
         title: 'MCP XML 协议注入',
@@ -3950,6 +3991,9 @@ export default {
         responsesStatusAutoUnknown: '自动探测：未探测',
         responsesStatusForcedResponses: '已强制 Responses',
         responsesStatusForcedChatCompletions: '已强制 Chat Completions',
+        planType: '订阅档位（手动覆盖）',
+        planTypeDesc: '手动纠正本账号的 ChatGPT 订阅档位（Plus / Pro / Free）。注意：令牌临期刷新或命中 429 限流时，会用真实档位自动覆盖此处设置。',
+        planTypeClear: '清空（自动识别）',
         codexCLIOnly: '仅允许 Codex 官方客户端',
         codexCLIOnlyDesc: '仅对 OpenAI OAuth 生效。开启后仅允许 Codex 官方客户端家族访问；关闭后完全绕过并保持原逻辑。',
         codexCLIOnlyAppServer: '允许 Codex app-server 客户端',
@@ -7355,12 +7399,20 @@ export default {
         action: '处理方式',
         actionPass: '透传（保留 service_tier）',
         actionFilter: '过滤（移除 service_tier）',
+        actionForcePriority: '强制 priority（fast）',
         actionBlock: '拦截（拒绝请求）',
         scope: '生效范围',
         scopeAll: '全部账号',
         scopeOAuth: '仅 OAuth 账号',
         scopeAPIKey: '仅 API Key 账号',
         scopeBedrock: '仅 Bedrock 账号',
+        userIds: '指定用户',
+        userIdsHint: '输入任意邮箱关键词进行模糊搜索。留空表示对全部 Sub2API 用户生效；选中用户的 API Key 请求优先匹配用户规则。',
+        userSearchPlaceholder: '输入用户邮箱搜索',
+        userSearchEmpty: '未找到匹配用户',
+        userDeleted: '（已删除）',
+        userIdFallback: '用户 #{id}',
+        removeUser: '移除用户',
         errorMessage: '错误消息',
         errorMessagePlaceholder: '拦截时返回的自定义错误消息',
         errorMessageHint: '留空则使用默认错误消息。',

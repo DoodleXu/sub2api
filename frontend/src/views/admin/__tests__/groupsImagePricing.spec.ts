@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +14,9 @@ import {
   supportsVideoPricingPlatform,
   videoPricingI18nKey,
 } from "../groupsImagePricing";
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const groupsViewSource = readFileSync(resolve(currentDir, "../GroupsView.vue"), "utf8");
 
 describe("groups image pricing platform support", () => {
   it("includes Grok image groups", () => {
@@ -48,5 +54,21 @@ describe("groups image pricing platform support", () => {
     expect(getImagePricePlaceholder("openai", "image_price_1k")).toBe("0.134");
     expect(getDefaultImagePreviewPrice("openai", "image_price_2k")).toBe(0.201);
     expect(getDefaultVideoPreviewPrice("openai", "video_price_480p")).toBeNull();
+  });
+
+  it("uses platform-aware image placeholders in both group forms", () => {
+    expect(groupsViewSource).toContain(
+      ":placeholder=\"getImagePricePlaceholder(createForm.platform, 'image_price_1k')\"",
+    );
+    expect(groupsViewSource).toContain(
+      ":placeholder=\"getImagePricePlaceholder(editForm.platform, 'image_price_1k')\"",
+    );
+  });
+
+  it("renders batch image controls in both group forms", () => {
+    expect(groupsViewSource.match(/v-model=\"createForm\.allow_batch_image_generation\"/g)).toHaveLength(1);
+    expect(groupsViewSource.match(/v-model=\"editForm\.allow_batch_image_generation\"/g)).toHaveLength(1);
+    expect(groupsViewSource).toContain("resetDisabledBatchImagePricing(createForm)");
+    expect(groupsViewSource).toContain("resetDisabledBatchImagePricing(editForm)");
   });
 });
