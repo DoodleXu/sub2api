@@ -2,11 +2,15 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
+
+const opsLatencyHistogramQueryTimeout = 5 * time.Second
 
 func (r *opsRepository) GetLatencyHistogram(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsLatencyHistogramResponse, error) {
 	if r == nil || r.db == nil {
@@ -23,49 +27,93 @@ func (r *opsRepository) GetLatencyHistogram(ctx context.Context, filter *service
 	end := filter.EndTime.UTC()
 
 	join, where, args, _ := buildUsageWhere(filter, start, end, 1)
-	rangeExpr := latencyHistogramRangeCaseExpr("ul.duration_ms")
-	orderExpr := latencyHistogramRangeOrderCaseExpr("ul.duration_ms")
 
+	// Keep bounds and bucket aggregation as two indexable range scans. A single
+	// WindowAgg scan would have to retain every duration in the selected window
+	// and can spill a large custom range to PostgreSQL temporary files.
 	q := `
+WITH bounds AS (
+  SELECT
+    MIN(ul.duration_ms::BIGINT) AS min_ms,
+    MAX(ul.duration_ms::BIGINT) AS max_ms,
+    COUNT(*) AS total_requests
+  FROM usage_logs ul
+  ` + join + `
+  ` + where + `
+    AND ul.duration_ms IS NOT NULL
+),
+bucketed AS (
+  SELECT
+    bounds.min_ms,
+    bounds.max_ms,
+    bounds.total_requests,
+    CASE
+      WHEN bounds.min_ms = bounds.max_ms THEN 0
+      WHEN bounds.max_ms - bounds.min_ms + 1 > ` + fmt.Sprint(latencyHistogramLinearSpanThreshold) + ` THEN LEAST(
+        FLOOR(
+          LN((ul.duration_ms::BIGINT - bounds.min_ms + 1)::DOUBLE PRECISION)
+            * ` + fmt.Sprint(latencyHistogramMaxBucketCount) + `::DOUBLE PRECISION
+            / LN((bounds.max_ms - bounds.min_ms + 1)::DOUBLE PRECISION)
+        )::BIGINT,
+        ` + fmt.Sprint(latencyHistogramMaxBucketCount-1) + `::BIGINT
+      )
+      ELSE LEAST(
+        ((ul.duration_ms::BIGINT - bounds.min_ms) * LEAST(` + fmt.Sprint(latencyHistogramMaxBucketCount) + `::BIGINT, bounds.max_ms - bounds.min_ms + 1))
+          / (bounds.max_ms - bounds.min_ms + 1),
+        LEAST(` + fmt.Sprint(latencyHistogramMaxBucketCount) + `::BIGINT, bounds.max_ms - bounds.min_ms + 1) - 1
+      )
+    END AS bucket_index
+  FROM usage_logs ul
+  ` + join + `
+  CROSS JOIN bounds
+  ` + where + `
+    AND ul.duration_ms IS NOT NULL
+    AND bounds.total_requests > 0
+)
 SELECT
-  ` + rangeExpr + ` AS range,
-  COALESCE(COUNT(*), 0) AS count,
-  ` + orderExpr + ` AS ord
-FROM usage_logs ul
-` + join + `
-` + where + `
-AND ul.duration_ms IS NOT NULL
-GROUP BY 1, 3
-ORDER BY 3 ASC`
+  min_ms,
+  max_ms,
+  total_requests,
+  bucket_index,
+  COUNT(*) AS bucket_count
+FROM bucketed
+GROUP BY min_ms, max_ms, total_requests, bucket_index
+ORDER BY bucket_index ASC`
 
-	rows, err := r.db.QueryContext(ctx, q, args...)
+	queryCtx, cancel := context.WithTimeout(ctx, opsLatencyHistogramQueryTimeout)
+	defer cancel()
+
+	rows, err := r.db.QueryContext(queryCtx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	counts := make(map[string]int64, len(latencyHistogramOrderedRanges))
+	counts := make(map[int64]int64, latencyHistogramMaxBucketCount)
+	var minMs sql.NullInt64
+	var maxMs sql.NullInt64
 	var total int64
 	for rows.Next() {
-		var label string
+		var rowMinMs sql.NullInt64
+		var rowMaxMs sql.NullInt64
+		var bucketIndex sql.NullInt64
 		var count int64
-		var _ord int
-		if err := rows.Scan(&label, &count, &_ord); err != nil {
+		if err := rows.Scan(&rowMinMs, &rowMaxMs, &total, &bucketIndex, &count); err != nil {
 			return nil, err
 		}
-		counts[label] = count
-		total += count
+		minMs = rowMinMs
+		maxMs = rowMaxMs
+		if bucketIndex.Valid {
+			counts[bucketIndex.Int64] = count
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	buckets := make([]*service.OpsLatencyHistogramBucket, 0, len(latencyHistogramOrderedRanges))
-	for _, label := range latencyHistogramOrderedRanges {
-		buckets = append(buckets, &service.OpsLatencyHistogramBucket{
-			Range: label,
-			Count: counts[label],
-		})
+	var buckets []*service.OpsLatencyHistogramBucket
+	if minMs.Valid && maxMs.Valid {
+		buckets = buildDynamicLatencyHistogramBuckets(minMs.Int64, maxMs.Int64, counts)
 	}
 
 	return &service.OpsLatencyHistogramResponse{

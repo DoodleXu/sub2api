@@ -65,6 +65,7 @@ export interface OpsDashboardOverview {
 
   duration: OpsPercentiles
   ttft: OpsPercentiles
+  image_generation_ttft_avg_ms?: number | null
 }
 
 export interface OpsPercentiles {

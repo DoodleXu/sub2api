@@ -2,63 +2,65 @@ package repository
 
 import (
 	"fmt"
-	"strings"
+	"math"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-type latencyHistogramBucket struct {
-	upperMs int
-	label   string
-}
+const (
+	latencyHistogramMaxBucketCount      int64 = 6
+	latencyHistogramLinearSpanThreshold int64 = 64
+)
 
-var latencyHistogramBuckets = []latencyHistogramBucket{
-	{upperMs: 100, label: "0-100ms"},
-	{upperMs: 200, label: "100-200ms"},
-	{upperMs: 500, label: "200-500ms"},
-	{upperMs: 1000, label: "500-1000ms"},
-	{upperMs: 2000, label: "1000-2000ms"},
-	{upperMs: 0, label: "2000ms+"}, // default bucket
-}
-
-var latencyHistogramOrderedRanges = func() []string {
-	out := make([]string, 0, len(latencyHistogramBuckets))
-	for _, b := range latencyHistogramBuckets {
-		out = append(out, b.label)
+// buildDynamicLatencyHistogramBuckets partitions the inclusive [minMs, maxMs]
+// range into at most six integer buckets. Narrow spans use equal widths; wider
+// spans use logarithmic widths so long-tail latency does not collapse nearly all
+// requests into the first bucket. The SQL query uses the same transformation.
+func buildDynamicLatencyHistogramBuckets(minMs, maxMs int64, counts map[int64]int64) []*service.OpsLatencyHistogramBucket {
+	if maxMs < minMs {
+		return nil
 	}
-	return out
-}()
 
-func latencyHistogramRangeCaseExpr(column string) string {
-	var sb strings.Builder
-	_, _ = sb.WriteString("CASE\n")
+	span := maxMs - minMs + 1
+	bucketCount := min(span, latencyHistogramMaxBucketCount)
+	buckets := make([]*service.OpsLatencyHistogramBucket, 0, bucketCount)
 
-	for _, b := range latencyHistogramBuckets {
-		if b.upperMs <= 0 {
-			continue
+	for i := int64(0); i < bucketCount; i++ {
+		lowerOffset := latencyHistogramBoundary(span, i, bucketCount)
+		upperOffset := latencyHistogramBoundary(span, i+1, bucketCount) - 1
+		lowerMs := minMs + lowerOffset
+		upperMs := minMs + upperOffset
+		label := fmt.Sprintf("%d-%dms", lowerMs, upperMs)
+		if lowerMs == upperMs {
+			label = fmt.Sprintf("%dms", lowerMs)
 		}
-		fmt.Fprintf(&sb, "\tWHEN %s < %d THEN '%s'\n", column, b.upperMs, b.label)
+		buckets = append(buckets, &service.OpsLatencyHistogramBucket{
+			Range: label,
+			Count: counts[i],
+		})
 	}
 
-	// Default bucket.
-	last := latencyHistogramBuckets[len(latencyHistogramBuckets)-1]
-	fmt.Fprintf(&sb, "\tELSE '%s'\n", last.label)
-	_, _ = sb.WriteString("END")
-	return sb.String()
+	return buckets
 }
 
-func latencyHistogramRangeOrderCaseExpr(column string) string {
-	var sb strings.Builder
-	_, _ = sb.WriteString("CASE\n")
-
-	order := 1
-	for _, b := range latencyHistogramBuckets {
-		if b.upperMs <= 0 {
-			continue
-		}
-		fmt.Fprintf(&sb, "\tWHEN %s < %d THEN %d\n", column, b.upperMs, order)
-		order++
+func latencyHistogramBoundary(span, boundaryIndex, bucketCount int64) int64 {
+	if boundaryIndex <= 0 {
+		return 0
+	}
+	if boundaryIndex >= bucketCount {
+		return span
+	}
+	if span <= latencyHistogramLinearSpanThreshold {
+		return ceilDiv(boundaryIndex*span, bucketCount)
 	}
 
-	fmt.Fprintf(&sb, "\tELSE %d\n", order)
-	_, _ = sb.WriteString("END")
-	return sb.String()
+	raw := math.Pow(float64(span), float64(boundaryIndex)/float64(bucketCount)) - 1
+	// Move one representable float toward -Inf before Ceil so exact integer
+	// boundaries are not rounded into the following millisecond by FP noise.
+	boundary := int64(math.Ceil(math.Nextafter(raw, math.Inf(-1))))
+	return max(0, min(boundary, span))
+}
+
+func ceilDiv(numerator, denominator int64) int64 {
+	return (numerator + denominator - 1) / denominator
 }

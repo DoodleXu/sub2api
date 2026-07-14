@@ -35,6 +35,10 @@ WITH usage_base AS (
     ul.group_id AS group_id,
     ul.duration_ms AS duration_ms,
     ul.first_token_ms AS first_token_ms,
+    CASE
+      WHEN ul.image_count > 0 AND COALESCE(ul.video_count, 0) = 0 THEN ul.first_token_ms
+      ELSE NULL
+    END AS image_generation_first_token_ms,
     (ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens) AS tokens
   FROM usage_logs ul
   JOIN groups g ON g.id = ul.group_id
@@ -47,6 +51,7 @@ usage_agg AS (
     CASE WHEN GROUPING(group_id) = 1 THEN NULL ELSE group_id END AS group_id,
     COUNT(*) AS success_count,
     COUNT(*) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_sample_count,
+    COUNT(*) FILTER (WHERE image_generation_first_token_ms IS NOT NULL) AS image_generation_ttft_sample_count,
     COALESCE(SUM(tokens), 0) AS token_consumed,
 
     percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS duration_p50_ms,
@@ -61,7 +66,8 @@ usage_agg AS (
     percentile_cont(0.95) WITHIN GROUP (ORDER BY first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_p95_ms,
     percentile_cont(0.99) WITHIN GROUP (ORDER BY first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_p99_ms,
     AVG(first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_avg_ms,
-    MAX(first_token_ms) AS ttft_max_ms
+    MAX(first_token_ms) AS ttft_max_ms,
+    AVG(image_generation_first_token_ms) FILTER (WHERE image_generation_first_token_ms IS NOT NULL) AS image_generation_ttft_avg_ms
   FROM usage_base
   GROUP BY GROUPING SETS (
     (bucket_start),
@@ -112,6 +118,7 @@ combined AS (
 
     COALESCE(u.success_count, 0) AS success_count,
     COALESCE(u.ttft_sample_count, 0) AS ttft_sample_count,
+    COALESCE(u.image_generation_ttft_sample_count, 0) AS image_generation_ttft_sample_count,
     COALESCE(e.error_count_total, 0) AS error_count_total,
     COALESCE(e.business_limited_count, 0) AS business_limited_count,
     COALESCE(e.error_count_sla, 0) AS error_count_sla,
@@ -133,7 +140,8 @@ combined AS (
     u.ttft_p95_ms,
     u.ttft_p99_ms,
     u.ttft_avg_ms,
-    u.ttft_max_ms
+    u.ttft_max_ms,
+    u.image_generation_ttft_avg_ms
   FROM usage_agg u
   FULL OUTER JOIN error_agg e
     ON u.bucket_start = e.bucket_start
@@ -146,6 +154,7 @@ INSERT INTO ops_metrics_hourly (
   group_id,
   success_count,
   ttft_sample_count,
+  image_generation_ttft_sample_count,
   error_count_total,
   business_limited_count,
   error_count_sla,
@@ -165,6 +174,7 @@ INSERT INTO ops_metrics_hourly (
   ttft_p99_ms,
   ttft_avg_ms,
   ttft_max_ms,
+  image_generation_ttft_avg_ms,
   computed_at
 )
 SELECT
@@ -173,6 +183,7 @@ SELECT
   group_id,
   success_count,
   ttft_sample_count,
+  image_generation_ttft_sample_count,
   error_count_total,
   business_limited_count,
   error_count_sla,
@@ -192,6 +203,7 @@ SELECT
   ttft_p99_ms::int,
   ttft_avg_ms,
   ttft_max_ms::int,
+  image_generation_ttft_avg_ms,
   NOW()
 FROM combined
 WHERE bucket_start IS NOT NULL
@@ -199,6 +211,7 @@ WHERE bucket_start IS NOT NULL
 ON CONFLICT (bucket_start, COALESCE(platform, ''), COALESCE(group_id, 0)) DO UPDATE SET
   success_count = EXCLUDED.success_count,
   ttft_sample_count = EXCLUDED.ttft_sample_count,
+  image_generation_ttft_sample_count = EXCLUDED.image_generation_ttft_sample_count,
   error_count_total = EXCLUDED.error_count_total,
   business_limited_count = EXCLUDED.business_limited_count,
   error_count_sla = EXCLUDED.error_count_sla,
@@ -220,6 +233,7 @@ ON CONFLICT (bucket_start, COALESCE(platform, ''), COALESCE(group_id, 0)) DO UPD
   ttft_p99_ms = EXCLUDED.ttft_p99_ms,
   ttft_avg_ms = EXCLUDED.ttft_avg_ms,
   ttft_max_ms = EXCLUDED.ttft_max_ms,
+  image_generation_ttft_avg_ms = EXCLUDED.image_generation_ttft_avg_ms,
 
   computed_at = NOW()
 `
@@ -246,6 +260,7 @@ INSERT INTO ops_metrics_daily (
   group_id,
   success_count,
   ttft_sample_count,
+  image_generation_ttft_sample_count,
   error_count_total,
   business_limited_count,
   error_count_sla,
@@ -265,6 +280,7 @@ INSERT INTO ops_metrics_daily (
   ttft_p99_ms,
   ttft_avg_ms,
   ttft_max_ms,
+  image_generation_ttft_avg_ms,
   computed_at
 )
 SELECT
@@ -274,6 +290,7 @@ SELECT
 
   COALESCE(SUM(success_count), 0) AS success_count,
   COALESCE(SUM(ttft_sample_count), 0) AS ttft_sample_count,
+  COALESCE(SUM(image_generation_ttft_sample_count), 0) AS image_generation_ttft_sample_count,
   COALESCE(SUM(error_count_total), 0) AS error_count_total,
   COALESCE(SUM(business_limited_count), 0) AS business_limited_count,
   COALESCE(SUM(error_count_sla), 0) AS error_count_sla,
@@ -305,6 +322,14 @@ SELECT
     / NULLIF(SUM(ttft_sample_count) FILTER (WHERE ttft_avg_ms IS NOT NULL), 0) AS ttft_avg_ms,
   MAX(ttft_max_ms) AS ttft_max_ms,
 
+  SUM(image_generation_ttft_avg_ms * image_generation_ttft_sample_count)
+    FILTER (WHERE image_generation_ttft_avg_ms IS NOT NULL)
+    / NULLIF(
+        SUM(image_generation_ttft_sample_count)
+          FILTER (WHERE image_generation_ttft_avg_ms IS NOT NULL),
+        0
+      ) AS image_generation_ttft_avg_ms,
+
   NOW()
 FROM ops_metrics_hourly
 WHERE bucket_start >= $1 AND bucket_start < $2
@@ -312,6 +337,7 @@ GROUP BY 1, 2, 3
 ON CONFLICT (bucket_date, COALESCE(platform, ''), COALESCE(group_id, 0)) DO UPDATE SET
   success_count = EXCLUDED.success_count,
   ttft_sample_count = EXCLUDED.ttft_sample_count,
+  image_generation_ttft_sample_count = EXCLUDED.image_generation_ttft_sample_count,
   error_count_total = EXCLUDED.error_count_total,
   business_limited_count = EXCLUDED.business_limited_count,
   error_count_sla = EXCLUDED.error_count_sla,
@@ -333,6 +359,7 @@ ON CONFLICT (bucket_date, COALESCE(platform, ''), COALESCE(group_id, 0)) DO UPDA
   ttft_p99_ms = EXCLUDED.ttft_p99_ms,
   ttft_avg_ms = EXCLUDED.ttft_avg_ms,
   ttft_max_ms = EXCLUDED.ttft_max_ms,
+  image_generation_ttft_avg_ms = EXCLUDED.image_generation_ttft_avg_ms,
 
   computed_at = NOW()
 `

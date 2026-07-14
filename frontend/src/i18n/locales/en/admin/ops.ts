@@ -85,6 +85,7 @@ export default {
       avgTps: 'Avg TPS',
       avgLatency: 'Avg Request Duration',
       avgTtft: 'Avg TTFT',
+      imageGenerationAvg: 'Image Avg',
       exceptions: 'Exceptions',
       requestErrors: 'Request Errors',
       errorCount: 'Error Count',
@@ -776,7 +777,8 @@ export default {
         totalRequests: 'Total number of requests (including both successful and failed requests) in the selected time window.',
         throughputTrend: 'Requests/QPS + Tokens/TPS in the selected window.',
         switchRateTrend: 'Trend of account switches / total requests over the last 5 hours (avg switches).',
-        latencyHistogram: 'Request duration distribution (ms) for successful requests.',
+        latencyHistogram:
+          'Request duration distribution for successful requests; the range adapts to the minimum and maximum in the selected time window.',
         errorTrend: 'Error counts over time (SLA scope excludes business limits; upstream excludes 429/529).',
         errorDistribution: 'Error distribution by status code (SLA scope, excluding business limits).',
         goroutines:
@@ -792,7 +794,7 @@ export default {
         errors: 'Error statistics, including total errors, error rate, and upstream error rate.',
         upstreamErrors: 'Upstream error statistics, excluding rate limit errors (429/529).',
         latency: 'Request duration statistics, including p50, p90, p95, p99 percentiles.',
-        ttft: 'Time To First Token, measuring the speed of first token return in streaming responses.',
+        ttft: 'Time To First Token measures the first meaningful output in streaming responses; “Image Avg” is the average for requests that produced images, excluding video.',
         health: 'System health score (0-100), considering SLA, error rate, and resource usage.'
       },
       charts: {

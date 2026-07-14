@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-13
+最后更新：2026-07-14
 
 ## 当前对比基线
 
@@ -35,6 +35,8 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 - OpenAI WebSocket 入站会话加入按 API Key 的有界 lifecycle lease；同时吸收真实 upstream endpoint 记录、平台感知的无账号诊断、用量日期本地化和 API Key 最近使用 IP 查询索引优化。
 - 部署继续遵循本 fork 的 `linux/amd64` + GHCR 生产约束。上游 Apple Container 固定依赖 `linux/arm64` 且默认使用上游镜像，因此本次未保留其脚本、文档、CI 与环境变量入口；保留手动部署 `.env` 的 `chmod 600` 加固。
 - merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号调度继续过滤 `archived_at`，人民币成本小时聚合和今日实际成本字段仍保留。
+- 2026-07-14 fork 调整官方 Ops Monitoring 的请求时长分布：移除固定 `0-100ms` 至 `2000ms+` 桶，改为按当前所选时间窗口及平台/分组筛选结果的实际最小、最大请求时长动态生成最多 6 个对数桶；窄范围继续使用等宽桶，并为原始日志查询设置 5 秒上限，兼顾长尾辨识度和大窗口资源保护。后续同步上游若改动 `ops_repo_histograms.go` 或 `OpsLatencyChart.vue`，需保留动态量程行为。
+- 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 TTFT 仍保留全部流式请求口径，同时按 `usage_logs.image_count > 0`、`first_token_ms IS NOT NULL` 且排除视频请求，单独计算流式生图首个有效输出的平均等待时间；小时/日预聚合均保存样本数和加权平均值，迁移按现有小时聚合保留范围一次性回填历史数据，避免长时间窗口静默遗漏旧样本或回退到全量原始日志扫描。
 
 历史 `v0.1.151` 合并说明：
 

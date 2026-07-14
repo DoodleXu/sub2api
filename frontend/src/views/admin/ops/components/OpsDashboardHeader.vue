@@ -421,6 +421,7 @@ const ttftP90Ms = computed(() => overview.value?.ttft?.p90_ms ?? null)
 const ttftP50Ms = computed(() => overview.value?.ttft?.p50_ms ?? null)
 const ttftAvgMs = computed(() => overview.value?.ttft?.avg_ms ?? null)
 const ttftMaxMs = computed(() => overview.value?.ttft?.max_ms ?? null)
+const imageGenerationTTFTAvgMs = computed(() => overview.value?.image_generation_ttft_avg_ms ?? null)
 
 // --- Health Score & Diagnosis (primary) ---
 
@@ -1373,6 +1374,11 @@ function handleToolbarRefresh() {
             <div class="flex items-baseline gap-1 whitespace-nowrap">
               <span class="text-gray-500">Max:</span>
               <span class="font-bold" :class="getThresholdColorClass(getTTFTThresholdLevel(ttftMaxMs))">{{ ttftMaxMs ?? '-' }}</span>
+              <span class="text-gray-400">ms</span>
+            </div>
+            <div class="flex items-baseline gap-1 whitespace-nowrap">
+              <span class="text-gray-500">{{ t('admin.ops.imageGenerationAvg') }}:</span>
+              <span class="font-bold" :class="getThresholdColorClass(getTTFTThresholdLevel(imageGenerationTTFTAvgMs))">{{ imageGenerationTTFTAvgMs ?? '-' }}</span>
               <span class="text-gray-400">ms</span>
             </div>
           </div>

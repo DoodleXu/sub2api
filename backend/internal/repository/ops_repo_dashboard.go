@@ -58,13 +58,14 @@ func (r *opsRepository) getDashboardOverviewRaw(ctx context.Context, filter *ser
 	}
 
 	latencyCtx, cancelLatency := context.WithTimeout(ctx, opsRawLatencyQueryTimeout)
-	duration, ttft, _, err := r.queryUsageLatency(latencyCtx, filter, start, end)
+	duration, ttft, _, imageGenerationTTFTAvgMs, _, err := r.queryUsageLatency(latencyCtx, filter, start, end)
 	cancelLatency()
 	if err != nil {
 		if isQueryTimeoutErr(err) {
 			degraded = true
 			duration = service.OpsPercentiles{}
 			ttft = service.OpsPercentiles{}
+			imageGenerationTTFTAvgMs = nil
 		} else {
 			return nil, err
 		}
@@ -158,15 +159,18 @@ func (r *opsRepository) getDashboardOverviewRaw(ctx context.Context, filter *ser
 
 		Duration: duration,
 		TTFT:     ttft,
+
+		ImageGenerationTTFTAvgMs: imageGenerationTTFTAvgMs,
 	}, nil
 }
 
 type opsDashboardPartial struct {
-	successCount         int64
-	ttftSampleCount      int64
-	errorCountTotal      int64
-	businessLimitedCount int64
-	errorCountSLA        int64
+	successCount                   int64
+	ttftSampleCount                int64
+	imageGenerationTTFTSampleCount int64
+	errorCountTotal                int64
+	businessLimitedCount           int64
+	errorCountSLA                  int64
 
 	upstreamErrorCountExcl429529 int64
 	upstream429Count             int64
@@ -174,8 +178,9 @@ type opsDashboardPartial struct {
 
 	tokenConsumed int64
 
-	duration service.OpsPercentiles
-	ttft     service.OpsPercentiles
+	duration                 service.OpsPercentiles
+	ttft                     service.OpsPercentiles
+	imageGenerationTTFTAvgMs *int
 }
 
 func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsDashboardOverview, error) {
@@ -254,6 +259,11 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 		{weight: preagg.ttftSampleCount, p: preagg.ttft},
 		{weight: head.ttftSampleCount, p: head.ttft},
 		{weight: tail.ttftSampleCount, p: tail.ttft},
+	})
+	imageGenerationTTFTAvgMs := weightedAverageInt([]opsWeightedAverageSegment{
+		{weight: preagg.imageGenerationTTFTSampleCount, value: preagg.imageGenerationTTFTAvgMs},
+		{weight: head.imageGenerationTTFTSampleCount, value: head.imageGenerationTTFTAvgMs},
+		{weight: tail.imageGenerationTTFTSampleCount, value: tail.imageGenerationTTFTAvgMs},
 	})
 
 	windowSeconds := end.Sub(start).Seconds()
@@ -341,17 +351,20 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 
 		Duration: duration,
 		TTFT:     ttft,
+
+		ImageGenerationTTFTAvgMs: imageGenerationTTFTAvgMs,
 	}, nil
 }
 
 type opsHourlyMetricsRow struct {
 	bucketStart time.Time
 
-	successCount         int64
-	ttftSampleCount      int64
-	errorCountTotal      int64
-	businessLimitedCount int64
-	errorCountSLA        int64
+	successCount                   int64
+	ttftSampleCount                int64
+	imageGenerationTTFTSampleCount int64
+	errorCountTotal                int64
+	businessLimitedCount           int64
+	errorCountSLA                  int64
 
 	upstreamErrorCountExcl429529 int64
 	upstream429Count             int64
@@ -372,6 +385,8 @@ type opsHourlyMetricsRow struct {
 	ttftP99 sql.NullInt64
 	ttftAvg sql.NullFloat64
 	ttftMax sql.NullInt64
+
+	imageGenerationTTFTAvg sql.NullFloat64
 }
 
 func (r *opsRepository) listHourlyMetricsRows(ctx context.Context, filter *service.OpsDashboardFilter, start, end time.Time) ([]opsHourlyMetricsRow, error) {
@@ -434,7 +449,9 @@ SELECT
   ttft_p99_ms,
   ttft_avg_ms,
   ttft_max_ms,
-  ttft_sample_count
+  ttft_sample_count,
+  image_generation_ttft_sample_count,
+  image_generation_ttft_avg_ms
 FROM ops_metrics_hourly
 WHERE ` + where + `
 ORDER BY bucket_start ASC`
@@ -471,6 +488,8 @@ ORDER BY bucket_start ASC`
 			&row.ttftAvg,
 			&row.ttftMax,
 			&row.ttftSampleCount,
+			&row.imageGenerationTTFTSampleCount,
+			&row.imageGenerationTTFTAvg,
 		); err != nil {
 			return nil, err
 		}
@@ -503,6 +522,9 @@ func aggregateHourlyRows(rows []opsHourlyMetricsRow) opsDashboardPartial {
 		ttftP90W   int64
 		ttftAvgSum float64
 		ttftAvgW   int64
+
+		imageGenerationTTFTAvgSum    float64
+		imageGenerationTTFTAvgWeight int64
 	)
 
 	var (
@@ -518,6 +540,7 @@ func aggregateHourlyRows(rows []opsHourlyMetricsRow) opsDashboardPartial {
 	for _, row := range rows {
 		out.successCount += row.successCount
 		out.ttftSampleCount += row.ttftSampleCount
+		out.imageGenerationTTFTSampleCount += row.imageGenerationTTFTSampleCount
 		out.errorCountTotal += row.errorCountTotal
 		out.businessLimitedCount += row.businessLimitedCount
 		out.errorCountSLA += row.errorCountSLA
@@ -559,6 +582,10 @@ func aggregateHourlyRows(rows []opsHourlyMetricsRow) opsDashboardPartial {
 				ttftAvgSum += row.ttftAvg.Float64 * float64(row.ttftSampleCount)
 				ttftAvgW += row.ttftSampleCount
 			}
+		}
+		if row.imageGenerationTTFTSampleCount > 0 && row.imageGenerationTTFTAvg.Valid {
+			imageGenerationTTFTAvgSum += row.imageGenerationTTFTAvg.Float64 * float64(row.imageGenerationTTFTSampleCount)
+			imageGenerationTTFTAvgWeight += row.imageGenerationTTFTSampleCount
 		}
 
 		if row.durationP95.Valid {
@@ -633,6 +660,10 @@ func aggregateHourlyRows(rows []opsHourlyMetricsRow) opsDashboardPartial {
 		out.ttft.Avg = &v
 	}
 	out.ttft.Max = ttftMaxMax
+	if imageGenerationTTFTAvgWeight > 0 {
+		v := int(math.Round(imageGenerationTTFTAvgSum / float64(imageGenerationTTFTAvgWeight)))
+		out.imageGenerationTTFTAvgMs = &v
+	}
 
 	return out
 }
@@ -644,13 +675,15 @@ func (r *opsRepository) queryRawPartial(ctx context.Context, filter *service.Ops
 	}
 
 	latencyCtx, cancelLatency := context.WithTimeout(ctx, opsRawLatencyQueryTimeout)
-	duration, ttft, ttftSampleCount, err := r.queryUsageLatency(latencyCtx, filter, start, end)
+	duration, ttft, ttftSampleCount, imageGenerationTTFTAvgMs, imageGenerationTTFTSampleCount, err := r.queryUsageLatency(latencyCtx, filter, start, end)
 	cancelLatency()
 	if err != nil {
 		if isQueryTimeoutErr(err) {
 			duration = service.OpsPercentiles{}
 			ttft = service.OpsPercentiles{}
 			ttftSampleCount = 0
+			imageGenerationTTFTAvgMs = nil
+			imageGenerationTTFTSampleCount = 0
 		} else {
 			return nil, err
 		}
@@ -662,17 +695,19 @@ func (r *opsRepository) queryRawPartial(ctx context.Context, filter *service.Ops
 	}
 
 	return &opsDashboardPartial{
-		successCount:                 successCount,
-		ttftSampleCount:              ttftSampleCount,
-		errorCountTotal:              errorTotal,
-		businessLimitedCount:         businessLimited,
-		errorCountSLA:                errorCountSLA,
-		upstreamErrorCountExcl429529: upstreamExcl,
-		upstream429Count:             upstream429,
-		upstream529Count:             upstream529,
-		tokenConsumed:                tokenConsumed,
-		duration:                     duration,
-		ttft:                         ttft,
+		successCount:                   successCount,
+		ttftSampleCount:                ttftSampleCount,
+		imageGenerationTTFTSampleCount: imageGenerationTTFTSampleCount,
+		errorCountTotal:                errorTotal,
+		businessLimitedCount:           businessLimited,
+		errorCountSLA:                  errorCountSLA,
+		upstreamErrorCountExcl429529:   upstreamExcl,
+		upstream429Count:               upstream429,
+		upstream529Count:               upstream529,
+		tokenConsumed:                  tokenConsumed,
+		duration:                       duration,
+		ttft:                           ttft,
+		imageGenerationTTFTAvgMs:       imageGenerationTTFTAvgMs,
 	}, nil
 }
 
@@ -703,6 +738,28 @@ func (r *opsRepository) rawOpsDataExists(ctx context.Context, filter *service.Op
 type opsPercentileSegment struct {
 	weight int64
 	p      service.OpsPercentiles
+}
+
+type opsWeightedAverageSegment struct {
+	weight int64
+	value  *int
+}
+
+func weightedAverageInt(segments []opsWeightedAverageSegment) *int {
+	var sum float64
+	var weight int64
+	for _, segment := range segments {
+		if segment.weight <= 0 || segment.value == nil {
+			continue
+		}
+		sum += float64(*segment.value) * float64(segment.weight)
+		weight += segment.weight
+	}
+	if weight == 0 {
+		return nil
+	}
+	v := int(math.Round(sum / float64(weight)))
+	return &v
 }
 
 func combineApproxPercentiles(segments []opsPercentileSegment) service.OpsPercentiles {
@@ -809,7 +866,7 @@ FROM usage_logs ul
 	return successCount, tokenConsumed, nil
 }
 
-func (r *opsRepository) queryUsageLatency(ctx context.Context, filter *service.OpsDashboardFilter, start, end time.Time) (duration service.OpsPercentiles, ttft service.OpsPercentiles, ttftSampleCount int64, err error) {
+func (r *opsRepository) queryUsageLatency(ctx context.Context, filter *service.OpsDashboardFilter, start, end time.Time) (duration service.OpsPercentiles, ttft service.OpsPercentiles, ttftSampleCount int64, imageGenerationTTFTAvgMs *int, imageGenerationTTFTSampleCount int64, err error) {
 	join, where, args, _ := buildUsageWhere(filter, start, end, 1)
 	q := `
 SELECT
@@ -825,7 +882,16 @@ SELECT
   percentile_cont(0.99) WITHIN GROUP (ORDER BY first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_p99,
   AVG(first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_avg,
   MAX(first_token_ms) AS ttft_max,
-  COUNT(first_token_ms) AS ttft_sample_count
+  COUNT(first_token_ms) AS ttft_sample_count,
+  AVG(first_token_ms) FILTER (
+    WHERE first_token_ms IS NOT NULL
+      AND image_count > 0
+      AND COALESCE(video_count, 0) = 0
+  ) AS image_generation_ttft_avg,
+  COUNT(first_token_ms) FILTER (
+    WHERE image_count > 0
+      AND COALESCE(video_count, 0) = 0
+  ) AS image_generation_ttft_sample_count
 FROM usage_logs ul
 ` + join + `
 ` + where
@@ -837,11 +903,14 @@ FROM usage_logs ul
 	var tAvg sql.NullFloat64
 	var tMax sql.NullInt64
 	var tCount int64
+	var imageGenerationTAvg sql.NullFloat64
+	var imageGenerationTCount int64
 	if err := r.db.QueryRowContext(ctx, q, args...).Scan(
 		&dP50, &dP90, &dP95, &dP99, &dAvg, &dMax,
 		&tP50, &tP90, &tP95, &tP99, &tAvg, &tMax, &tCount,
+		&imageGenerationTAvg, &imageGenerationTCount,
 	); err != nil {
-		return service.OpsPercentiles{}, service.OpsPercentiles{}, 0, err
+		return service.OpsPercentiles{}, service.OpsPercentiles{}, 0, nil, 0, err
 	}
 
 	duration.P50 = floatToIntPtr(dP50)
@@ -863,8 +932,9 @@ FROM usage_logs ul
 		v := int(tMax.Int64)
 		ttft.Max = &v
 	}
+	imageGenerationTTFTAvgMs = floatToIntPtr(imageGenerationTAvg)
 
-	return duration, ttft, tCount, nil
+	return duration, ttft, tCount, imageGenerationTTFTAvgMs, imageGenerationTCount, nil
 }
 
 func (r *opsRepository) queryErrorCounts(ctx context.Context, filter *service.OpsDashboardFilter, start, end time.Time) (

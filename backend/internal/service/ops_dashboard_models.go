@@ -67,6 +67,10 @@ type OpsDashboardOverview struct {
 
 	Duration OpsPercentiles `json:"duration"`
 	TTFT     OpsPercentiles `json:"ttft"`
+
+	// ImageGenerationTTFTAvgMs is the average first meaningful output latency
+	// for successful image-generation requests that contributed to TTFT.
+	ImageGenerationTTFTAvgMs *int `json:"image_generation_ttft_avg_ms"`
 }
 
 type OpsLatencyHistogramBucket struct {
@@ -74,8 +78,9 @@ type OpsLatencyHistogramBucket struct {
 	Count int64  `json:"count"`
 }
 
-// OpsLatencyHistogramResponse is a coarse latency distribution histogram (success requests only).
-// It is used by the Ops dashboard to quickly identify tail latency regressions.
+// OpsLatencyHistogramResponse is a latency distribution histogram (success requests only).
+// Its bucket range dynamically covers the observed minimum and maximum duration
+// for the selected dashboard time window.
 type OpsLatencyHistogramResponse struct {
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`

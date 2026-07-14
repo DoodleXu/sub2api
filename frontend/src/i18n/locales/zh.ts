@@ -5486,6 +5486,7 @@ export default {
       avgTps: '平均 TPS',
       avgLatency: '平均请求时长',
       avgTtft: '平均首 Token 延迟',
+      imageGenerationAvg: '生图 Avg',
       exceptions: '异常数',
       requestErrors: '请求错误',
       errorCount: '错误数',
@@ -6180,7 +6181,7 @@ export default {
         totalRequests: '当前时间窗口内的总请求数和Token消耗量。',
         throughputTrend: '当前窗口内的请求/QPS 与 token/TPS 趋势。',
         switchRateTrend: '近5小时内账号切换次数 / 请求总数的趋势（平均切换次数）。',
-        latencyHistogram: '成功请求的请求时长分布（毫秒）。',
+        latencyHistogram: '成功请求的请求时长分布；量程会根据当前筛选时间窗口内的最小值和最大值动态调整。',
         errorTrend: '错误趋势（SLA 口径排除业务限制；上游错误率排除 429/529）。',
         errorDistribution: '按状态码统计的错误分布（SLA 口径，排除业务限制）。',
         upstreamErrors: '上游服务返回的错误，包括API提供商的错误响应（排除429/529限流错误）。',
@@ -6196,7 +6197,7 @@ export default {
         sla: '服务等级协议达成率，排除业务限制（如余额不足、配额超限）的成功请求占比。',
         errors: '错误统计，包括总错误数、错误率和上游错误率。',
         latency: '请求时长统计，包括 p50、p90、p95、p99 等百分位数。',
-        ttft: '首 Token 延迟（Time To First Token），衡量流式响应的首 Token 返回速度。',
+        ttft: '首 Token 延迟（Time To First Token），衡量流式响应的首个有效输出速度；“生图 Avg”是其中实际产出生图且排除视频请求的平均值。',
         health: '系统健康评分（0-100），综合考虑 SLA、错误率和资源使用情况。'
       },
       charts: {
