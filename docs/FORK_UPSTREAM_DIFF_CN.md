@@ -429,6 +429,12 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 - 合并后审核修复：将 v0.1.153 新增文案补入 fork 实际加载的中英文单体语言包；恢复站点 Logo、文档 URL 安全过滤和侧栏滚动位置持久化；补齐 Gemini 批量生图配置、平台动态价格提示与对应回归测试。
 - Grok 错误处理：`/v1/messages` 上游错误统一经过 Grok 专用限流策略，并在 failover 错误中保留响应头；新增 429 `Retry-After` 回归测试。
 - 二次审核修复：`/v1/alpha/search` 接入 fork 内容审计和 cyber 会话屏蔽，审计输入同时覆盖 Responses `input` 与 `commands.search_query[].q`；恢复 pool-mode 的同账号重试次数与取消语义，并补充 handler 级阻断、重试回归测试。
+- 三次审核修复：Alpha Search 上游 `cyber_policy` 现复用 fork 风控记录、通知、用量与会话屏蔽写入链，body `id` 作为该端点的显式会话键 fallback；非 failover 错误保持默认原样透传，但接入错误规则和 Ops 上游上下文，failover 尝试补记 Ops 事件并保留诊断响应头。
+- 四次审核修复：cyber 会话屏蔽改为使用独立短超时、在异步落库/邮件/计费前同步写入，避免立即重试抢跑或共享 context 超时后丢失；Alpha Search 错误规则改为先于账号冷却副作用匹配，规则改写响应在 Ops 中标记为非原样透传。
+- 五次审核修复：Alpha Search 非 failover 错误复用按端点上限读取的完整响应体，避免共享错误处理再次按默认 512 KiB 日志读取上限截断客户端响应；日志与 Ops 明细仍独立按配置截断。
+- 六次审核修复：补充 cyber 会话屏蔽运行时设置的 deadline 回归覆盖，并同步更正 Alpha Search 的 2xx、3xx、普通错误与 failover 返回值契约注释；最终并发等待策略见下一条。
+- 七次审核修复：cyber 会话屏蔽运行时设置的 singleflight 等待改为 `DoChan` + 调用方 context 选择，首调用者和重复调用者均按自身 deadline 返回；共享刷新继续使用独立 5 秒上限，短调用不会中止刷新或污染缓存，并补充两类并发时序回归测试。同步安全门未写入时在 30 秒审计链内使用独立 7 秒预算做一次幂等补写，避免超时路径永久丢失屏蔽且不耗尽后续审计任务时间。
+- 发版前 gate 修复：Alpha Search Ops 事件测试改用显式 `Get + comma-ok` 类型断言；恢复 fork 在 `v0.1.221` 前已执行的 Grok 清理策略，移除上游合并重新带回但未接入真实路由的 `forwardGrokResponses` 草稿及其专用测试，避免以 lint 豁免掩盖死代码。
 - 修复后验证：前端 Vitest `161` 个测试文件、`1088` 项用例全量通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过。
 
 ## v0.1.150 合并验证

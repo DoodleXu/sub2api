@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -149,6 +154,82 @@ func TestRecordCyberPolicyIfMarked_BlockKeyPlumbed(t *testing.T) {
 	require.NotPanics(t, func() {
 		h.recordCyberPolicyIfMarked(c, nil, nil, nil, "gpt-5", true, "deadbeef", service.ChannelUsageFields{}, "")
 	})
+}
+
+type cyberBlockRetryCache struct {
+	service.GatewayCache
+	mu        sync.Mutex
+	setCalls  int
+	blocked   bool
+	succeeded chan struct{}
+	once      sync.Once
+}
+
+func (c *cyberBlockRetryCache) SetCyberSessionBlocked(_ context.Context, _ string, _ time.Duration) error {
+	c.mu.Lock()
+	c.setCalls++
+	call := c.setCalls
+	if call > 1 {
+		c.blocked = true
+	}
+	c.mu.Unlock()
+	if call == 1 {
+		return errors.New("transient cyber block write failure")
+	}
+	c.once.Do(func() { close(c.succeeded) })
+	return nil
+}
+
+func (c *cyberBlockRetryCache) IsCyberSessionBlocked(context.Context, string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.blocked, nil
+}
+
+func (c *cyberBlockRetryCache) snapshot() (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.setCalls, c.blocked
+}
+
+type cyberBlockRetrySettingRepo struct {
+	service.SettingRepository
+}
+
+func (r *cyberBlockRetrySettingRepo) GetValue(_ context.Context, key string) (string, error) {
+	switch key {
+	case service.SettingKeyCyberSessionBlockEnabled:
+		return "true", nil
+	case service.SettingKeyCyberSessionBlockTTLSeconds:
+		return "60", nil
+	default:
+		return "", service.ErrSettingNotFound
+	}
+}
+
+func TestRecordCyberPolicyIfMarked_RetriesFailedSynchronousBlockWrite(t *testing.T) {
+	c := newTestGinContext()
+	c.Request = httptest.NewRequest("POST", "/v1/alpha/search", strings.NewReader(`{}`))
+	service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{Message: "blocked", UpstreamStatus: 400})
+
+	cfg := &config.Config{}
+	cache := &cyberBlockRetryCache{succeeded: make(chan struct{})}
+	settingSvc := service.NewSettingService(&cyberBlockRetrySettingRepo{}, cfg)
+	gatewaySvc := service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, cache, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, settingSvc, nil,
+	)
+	h := &OpenAIGatewayHandler{gatewayService: gatewaySvc}
+
+	h.recordCyberPolicyIfMarked(c, nil, nil, nil, "gpt-5", false, "retry-key", service.ChannelUsageFields{}, "")
+
+	select {
+	case <-cache.succeeded:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous cyber block retry did not succeed")
+	}
+	setCalls, blocked := cache.snapshot()
+	require.Equal(t, 2, setCalls)
+	require.True(t, blocked)
 }
 
 // TestBuildCyberPolicyOpsErrorEntry_StatusCode verifies F6: the ops error log

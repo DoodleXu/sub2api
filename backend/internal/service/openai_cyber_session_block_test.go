@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,11 @@ func TestCyberSessionBlockKey(t *testing.T) {
 	// No explicit signal → empty key → caller must skip blocking entirely.
 	c5, b5 := newCyberBlockTestCtx(nil, `{"input":"hello world"}`)
 	require.Empty(t, CyberSessionBlockKey(101, c5, b5))
+	require.NotEmpty(t, CyberSessionBlockKeyWithFallback(101, c5, b5, "alpha-search-id"))
+	require.Empty(t, CyberSessionBlockKey(101, c5, b5), "endpoint fallback must not change the generic helper")
+
+	// Existing explicit signals keep priority over an endpoint-specific fallback.
+	require.Equal(t, k1, CyberSessionBlockKeyWithFallback(101, c1, b1, "different-alpha-id"))
 
 	// conversation_id header counts as explicit; key is stable and non-empty.
 	c6, b6 := newCyberBlockTestCtx(map[string]string{"conversation_id": "conv-xyz"}, `{}`)
@@ -110,6 +116,139 @@ func (r *fakeSettingRepo) Delete(_ context.Context, _ string) error {
 }
 
 var _ SettingRepository = (*fakeSettingRepo)(nil)
+
+type blockingRuntimeSettingRepo struct {
+	SettingRepository
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingRuntimeSettingRepo) GetValue(ctx context.Context, key string) (string, error) {
+	if key == SettingKeyCyberSessionBlockEnabled {
+		select {
+		case r.started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.release:
+			return "true", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	if key == SettingKeyCyberSessionBlockTTLSeconds {
+		return "60", nil
+	}
+	return "", ErrSettingNotFound
+}
+
+type runtimeSettingResult struct {
+	enabled bool
+	ttl     time.Duration
+	elapsed time.Duration
+}
+
+func newBlockingRuntimeSettingRepo() (*blockingRuntimeSettingRepo, func()) {
+	repo := &blockingRuntimeSettingRepo{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	return repo, func() { releaseOnce.Do(func() { close(repo.release) }) }
+}
+
+func TestGetCyberSessionBlockRuntimeCallerDeadlineDoesNotCancelRefresh(t *testing.T) {
+	repo, release := newBlockingRuntimeSettingRepo()
+	defer release()
+	svc := &SettingService{settingRepo: repo}
+
+	callerResult := make(chan runtimeSettingResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		startedAt := time.Now()
+		enabled, ttl := svc.GetCyberSessionBlockRuntime(ctx)
+		callerResult <- runtimeSettingResult{enabled: enabled, ttl: ttl, elapsed: time.Since(startedAt)}
+	}()
+
+	select {
+	case <-repo.started:
+	case <-time.After(time.Second):
+		t.Fatal("runtime refresh did not start")
+	}
+
+	var caller runtimeSettingResult
+	select {
+	case caller = <-callerResult:
+	case <-time.After(500 * time.Millisecond):
+		release()
+		<-callerResult
+		t.Fatal("caller waited for the detached runtime refresh past its own deadline")
+	}
+	require.False(t, caller.enabled)
+	require.Equal(t, time.Hour, caller.ttl)
+	require.Less(t, caller.elapsed, 500*time.Millisecond)
+
+	// Caller timeout only stops waiting. The detached refresh still completes and
+	// populates the cache for the next request.
+	release()
+	enabled, ttl := svc.GetCyberSessionBlockRuntime(context.Background())
+	require.True(t, enabled)
+	require.Equal(t, time.Minute, ttl)
+}
+
+func TestGetCyberSessionBlockRuntimeDuplicateCallerHonorsOwnDeadline(t *testing.T) {
+	repo, release := newBlockingRuntimeSettingRepo()
+	defer release()
+
+	svc := &SettingService{settingRepo: repo}
+	firstResult := make(chan runtimeSettingResult, 1)
+	go func() {
+		enabled, ttl := svc.GetCyberSessionBlockRuntime(context.Background())
+		firstResult <- runtimeSettingResult{enabled: enabled, ttl: ttl}
+	}()
+
+	select {
+	case <-repo.started:
+	case <-time.After(time.Second):
+		t.Fatal("initial runtime refresh did not start")
+	}
+
+	duplicateResult := make(chan runtimeSettingResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		startedAt := time.Now()
+		enabled, ttl := svc.GetCyberSessionBlockRuntime(ctx)
+		duplicateResult <- runtimeSettingResult{enabled: enabled, ttl: ttl, elapsed: time.Since(startedAt)}
+	}()
+
+	var duplicate runtimeSettingResult
+	select {
+	case duplicate = <-duplicateResult:
+	case <-time.After(500 * time.Millisecond):
+		release()
+		<-duplicateResult
+		t.Fatal("duplicate caller waited for the existing singleflight refresh past its own deadline")
+	}
+	require.False(t, duplicate.enabled)
+	require.Equal(t, time.Hour, duplicate.ttl)
+	require.Less(t, duplicate.elapsed, 500*time.Millisecond)
+
+	// The timed-out waiter must not cancel the shared refresh. Once released, the
+	// original caller completes and the refreshed value remains available in cache.
+	release()
+	select {
+	case first := <-firstResult:
+		require.True(t, first.enabled)
+		require.Equal(t, time.Minute, first.ttl)
+	case <-time.After(time.Second):
+		t.Fatal("initial runtime refresh did not finish after release")
+	}
+	enabled, ttl := svc.GetCyberSessionBlockRuntime(context.Background())
+	require.True(t, enabled)
+	require.Equal(t, time.Minute, ttl)
+}
 
 // comboCacheAndStore implements both GatewayCache (no-op stubs) and
 // CyberSessionBlockStore (delegates to fakeCyberBlockStore) so it can be
@@ -182,7 +321,7 @@ func TestCyberSessionBlock_RoundTrip(t *testing.T) {
 	require.False(t, svc.IsCyberSessionBlocked(ctx, testKey))
 
 	// Mark as blocked.
-	svc.MarkCyberSessionBlocked(ctx, testKey)
+	require.True(t, svc.MarkCyberSessionBlocked(ctx, testKey))
 
 	// After marking: blocked.
 	require.True(t, svc.IsCyberSessionBlocked(ctx, testKey))

@@ -22,9 +22,9 @@ const (
 // ForwardAlphaSearch proxies Codex standalone web search without binding the
 // evolving alpha request or response schema.
 //
-// 返回值约定：仅当上游返回 2xx（一次真实成功的搜索）时返回非 nil 的
-// *OpenAIForwardResult（WebSearchCalls=1，供按次计费）；上游错误被原样透传
-// 给客户端时返回 (nil, nil)，不产生计费。
+// 返回值约定：2xx 返回非 nil 的 *OpenAIForwardResult（WebSearchCalls=1，供按次计费）；
+// 3xx 原样透传并返回 (nil, nil)；非 failover 4xx/5xx 在写入响应后返回 (nil, error)；
+// 可切换账号的错误返回 *UpstreamFailoverError。所有非 2xx 响应均不产生计费。
 func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
@@ -70,14 +70,36 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) {
+			upstreamDetail := ""
+			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+				maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+				if maxBytes <= 0 {
+					maxBytes = 2048
+				}
+				upstreamDetail = truncateString(string(respBody), maxBytes)
+			}
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				UpstreamRequestID:  resp.Header.Get("x-request-id"),
+				UpstreamURL:        safeUpstreamURL(req.URL.String()),
+				Kind:               "failover",
+				Message:            upstreamMessage,
+				Detail:             upstreamDetail,
+			})
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
+
+		return nil, s.handleErrorResponsePassthroughWithRulesBody(ctx, resp, c, account, body, respBody)
 	}
 
 	if !account.IsShadow() {

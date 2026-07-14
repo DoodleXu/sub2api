@@ -4049,8 +4049,32 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	account *Account,
 	requestBody []byte,
 ) error {
+	return s.handleErrorResponsePassthroughBodyMode(ctx, resp, c, account, requestBody, s.readUpstreamErrorBody(resp), false)
+}
+
+// handleErrorResponsePassthroughWithRulesBody 用于调用方已经按端点上限读取完整错误体的场景，
+// 避免再次通过通用错误日志上限读取并截断客户端响应。
+func (s *OpenAIGatewayService) handleErrorResponsePassthroughWithRulesBody(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+	responseBody []byte,
+) error {
+	return s.handleErrorResponsePassthroughBodyMode(ctx, resp, c, account, requestBody, responseBody, true)
+}
+
+func (s *OpenAIGatewayService) handleErrorResponsePassthroughBodyMode(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+	requestBody []byte,
+	body []byte,
+	applyRules bool,
+) error {
 	MarkResponseCommitted(c)
-	body := s.readUpstreamErrorBody(resp)
 
 	// cyber_policy：透传账号本就把原始 body 回给客户端（下方 c.Data），此处仅打标记，
 	// 供 handler 事后写风控/邮件。cyber 是上游网络安全策略拦截，不冷却账号，
@@ -4077,9 +4101,25 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
+	ruleStatus := resp.StatusCode
+	ruleErrType := "upstream_error"
+	ruleErrMsg := upstreamMsg
+	ruleMatched := false
+	if applyRules && !cyberHit {
+		ruleStatus, ruleErrType, ruleErrMsg, ruleMatched = applyErrorPassthroughRule(
+			c,
+			PlatformOpenAI,
+			resp.StatusCode,
+			body,
+			resp.StatusCode,
+			"upstream_error",
+			upstreamMsg,
+		)
+	}
 	// 透传模式保留原始上游错误响应，但运行态账号状态仍需更新，
-	// 避免粘性路由继续复用刚被限流的账号。cyber 例外：不冷却账号。
-	if !cyberHit {
+	// 避免粘性路由继续复用刚被限流的账号。cyber 与已命中错误规则的响应例外：
+	// 前者是内容策略而非账号故障，后者与标准 OpenAI 错误路径一致，由规则接管。
+	if !cyberHit && !ruleMatched {
 		reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 		_ = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, reqModel)
 	}
@@ -4089,12 +4129,16 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		AccountName:          account.Name,
 		UpstreamStatusCode:   resp.StatusCode,
 		UpstreamRequestID:    resp.Header.Get("x-request-id"),
-		Passthrough:          true,
+		Passthrough:          !ruleMatched,
 		Kind:                 "http_error",
 		Message:              upstreamMsg,
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
 	})
+	if ruleMatched {
+		c.JSON(ruleStatus, gin.H{"error": gin.H{"type": ruleErrType, "message": ruleErrMsg}})
+		return fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+	}
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := resp.Header.Get("Content-Type")

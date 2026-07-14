@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -23,7 +24,17 @@ type CyberSessionBlockStore interface {
 // sha256。无显式标识返回空串——调用方必须放行（粒度决策：不退化到
 // user/apikey/内容派生）。
 func CyberSessionBlockKey(apiKeyID int64, c *gin.Context, body []byte) string {
+	return CyberSessionBlockKeyWithFallback(apiKeyID, c, body, "")
+}
+
+// CyberSessionBlockKeyWithFallback 保持显式 header/body 会话标识优先，仅当它们
+// 均为空时使用调用方提供的端点专用显式标识。当前供 Alpha Search 的 body.id
+// 使用；其他 Responses 路径继续调用 CyberSessionBlockKey，不会退化到内容派生。
+func CyberSessionBlockKeyWithFallback(apiKeyID int64, c *gin.Context, body []byte, fallback string) string {
 	raw := explicitOpenAISessionID(c, body)
+	if raw == "" {
+		raw = strings.TrimSpace(fallback)
+	}
 	if raw == "" {
 		return ""
 	}
@@ -57,23 +68,26 @@ func (s *OpenAIGatewayService) CyberSessionBlockRuntime(ctx context.Context) (bo
 	return s.settingService.GetCyberSessionBlockRuntime(ctx)
 }
 
-// MarkCyberSessionBlocked 把会话写入屏蔽表（写入点：cyber 命中后）。
-// 开关关闭、key 为空或存储不可用时静默跳过。
-func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, key string) {
+// MarkCyberSessionBlocked 把会话写入屏蔽表（写入点：cyber 命中后），返回是否
+// 已成功写入。开关关闭、key 为空、存储不可用或写入失败时返回 false，调用方可
+// 在异步审计 context 中做一次幂等补写。
+func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, key string) bool {
 	if key == "" {
-		return
+		return false
 	}
 	enabled, ttl := s.CyberSessionBlockRuntime(ctx)
 	if !enabled {
-		return
+		return false
 	}
 	store := s.cyberSessionBlockStore()
 	if store == nil {
-		return
+		return false
 	}
 	if err := store.SetCyberSessionBlocked(ctx, key, ttl); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session block write failed: err=%v", err)
+		return false
 	}
+	return true
 }
 
 // IsCyberSessionBlocked 查询会话是否被屏蔽（拦截点）。开关关闭、key 为空、

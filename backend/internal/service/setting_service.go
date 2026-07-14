@@ -722,12 +722,15 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 			return cached.enabled, cached.ttl
 		}
 	}
-	result, _, _ := s.cyberSessionBlockRuntimeSF.Do("cyber_session_block_runtime", func() (any, error) {
+	resultCh := s.cyberSessionBlockRuntimeSF.DoChan("cyber_session_block_runtime", func() (any, error) {
 		if cached, ok := s.cyberSessionBlockRuntimeCache.Load().(*cachedCyberSessionBlockRuntime); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return cached, nil
 			}
 		}
+		// 共享刷新脱离首个调用者的取消与 deadline，独立受内部 5s 上限约束；
+		// 每个等待者的返回时限由下方 select 单独控制，短请求不会终止所有调用者
+		// 共用的刷新或把临时超时结果写入缓存。
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cyberSessionBlockRuntimeDBTimeout)
 		defer cancel()
 
@@ -762,6 +765,18 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 		s.cyberSessionBlockRuntimeCache.Store(entry)
 		return entry, nil
 	})
+	var result any
+	select {
+	case callResult := <-resultCh:
+		if callResult.Err != nil {
+			return false, time.Hour
+		}
+		result = callResult.Val
+	case <-ctx.Done():
+		// DoChan 的结果通道有缓冲；当前等待者可以按自己的 deadline 返回，
+		// 已在执行的共享刷新仍会继续并更新缓存，不会因客户端取消而中止。
+		return false, time.Hour
+	}
 	if entry, ok := result.(*cachedCyberSessionBlockRuntime); ok && entry != nil {
 		return entry.enabled, entry.ttl
 	}

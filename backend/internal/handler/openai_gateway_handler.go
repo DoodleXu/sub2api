@@ -2503,7 +2503,11 @@ func writeCyberSessionBlockedWSError(ctx context.Context, conn *coderws.Conn) {
 
 // cyberPolicyRecordedKey guards against double-firing recordCyberPolicyIfMarked
 // within one request (e.g. in a retry/failover loop).
-const cyberPolicyRecordedKey = "ops_cyber_recorded"
+const (
+	cyberPolicyRecordedKey        = "ops_cyber_recorded"
+	cyberSessionBlockWriteTimeout = 2 * time.Second
+	cyberSessionBlockRetryTimeout = 7 * time.Second
+)
 
 // cyberPolicyOpsErrorMeta carries request-scoped fields captured outside the
 // async goroutine for building the cyber ops_error_logs entry.
@@ -2632,6 +2636,10 @@ const (
 // written + ops entry enqueued). Fail-open: disabled switch / empty key /
 // store error → false.
 func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKey *service.APIKey, body []byte, model string, format cyberSessionBlockFormat) bool {
+	return h.rejectIfCyberSessionBlockedWithFallback(c, apiKey, body, model, format, "")
+}
+
+func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlockedWithFallback(c *gin.Context, apiKey *service.APIKey, body []byte, model string, format cyberSessionBlockFormat, fallbackSessionID string) bool {
 	if h == nil || h.gatewayService == nil || apiKey == nil {
 		return false
 	}
@@ -2639,7 +2647,7 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 	if enabled, _ := h.gatewayService.CyberSessionBlockRuntime(c.Request.Context()); !enabled {
 		return false
 	}
-	key := service.CyberSessionBlockKey(apiKey.ID, c, body)
+	key := service.CyberSessionBlockKeyWithFallback(apiKey.ID, c, body, fallbackSessionID)
 	if key == "" {
 		return false
 	}
@@ -2783,9 +2791,24 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		ClientIP:        clientIPStr,
 		CreatedAt:       time.Now(),
 	}
+	// 优先在响应返回前写入会话安全门；使用独立短超时限制快路径延迟，失败时
+	// 由下方异步审计链做一次有界补写。
+	cyberBlockWritten := false
+	if gwSvc != nil && cyberBlockKey != "" {
+		blockCtx, blockCancel := context.WithTimeout(context.Background(), cyberSessionBlockWriteTimeout)
+		cyberBlockWritten = gwSvc.MarkCyberSessionBlocked(blockCtx, cyberBlockKey)
+		blockCancel()
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// 同步安全门若因设置刷新或 Redis 暂时失败未写入，复用审计 context
+		// 做一次有界幂等补写；不重复写入已成功的快路径，也不耗尽后续审计任务预算。
+		if !cyberBlockWritten && gwSvc != nil && cyberBlockKey != "" {
+			retryCtx, retryCancel := context.WithTimeout(ctx, cyberSessionBlockRetryTimeout)
+			gwSvc.MarkCyberSessionBlocked(retryCtx, cyberBlockKey)
+			retryCancel()
+		}
 		if cmSvc != nil {
 			cmSvc.RecordCyberPolicyEvent(ctx, service.CyberPolicyRecordInput{
 				RequestID:       requestID,
@@ -2822,9 +2845,6 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				APIKeyService:      apiKeySvc,
 				ChannelUsageFields: channelFields,
 			})
-		}
-		if gwSvc != nil && cyberBlockKey != "" {
-			gwSvc.MarkCyberSessionBlocked(ctx, cyberBlockKey)
 		}
 		if opsSvc != nil {
 			enqueueOpsErrorLog(opsSvc, buildCyberPolicyOpsErrorEntry(opsMeta, mark))
