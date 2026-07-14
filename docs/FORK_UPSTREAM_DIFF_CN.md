@@ -33,7 +33,7 @@ git diff --name-status refs/tags/upstream/v0.1.155^{}..HEAD
 - OpenAI 长上下文计费改为账号级布尔开关且默认关闭，字段、迁移、API、CRS 同步、影子账号继承和 usage log 审计标记已移植进 fork 聚合文件；人民币成本小时聚合与实际成本口径保持不变。
 - Codex models manifest 采用上游 API Key 自定义上游、短期缓存与账号故障转移，同时保留 fork 的 `TryCodexModels` 回退，避免无可用 manifest 账号时破坏客户端内置模型列表。
 - 原生 Responses namespace 的请求展平与响应还原覆盖 HTTP、passthrough 和 WSv2；fork 继续保留 Responses Lite `additional_tools`、function arguments 字符串、JSON 大整数、JSON mode 与 hosted 生图隔离行为。
-- Grok Responses 官方转发现已接入 fork 聚合入口，并吸收 `reasoning.content=null` 清洗、滚动 24 小时免费额度、Web SSO 批量导入、OAuth 新账号探活与监控中心 Grok 支持。
+- Grok Responses 官方转发现已接入 fork 聚合入口，并吸收 `reasoning.content=null` 清洗、滚动 24 小时免费额度、Web SSO 批量导入、OAuth 新账号探活与监控中心 Grok 支持；文生视频继续按上游规则把无输入图片的 `grok-imagine-video-1.5` 改写为 `grok-imagine-video`，图生视频则保留 1.5 模型。
 - 生图链路加入非流式 JSON keepalive、流式最终状态修正与客户端 Lite 图片工具保留；fork 的生图并发槽、异步归档队列、Web 创作台恢复态和管理端资产安全访问继续保留。
 - 调度器全量重建合并、账号/代理到期事件处理、系统日志 host 筛选、HTTP/2 keepalive PING、reset credits 检测和 `/v1/messages` 精确映射修复已合入。
 - 冲突解决未恢复 `usage_log_repo_insert.go`、`admin_account.go`、`openai_gateway_forward.go`、`openai_gateway_usage.go` 等上游拆分文件；相关行为均移植到 fork 现有聚合模块，减少结构漂移带来的隐性回归。
