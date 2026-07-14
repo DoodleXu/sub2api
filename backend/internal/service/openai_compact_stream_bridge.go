@@ -250,6 +250,9 @@ func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
 		items = append(items, json.RawMessage(item.Raw))
 	}
 	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+		if normalized, changed := normalizeCompletedImageGenerationStatus(data); changed {
+			data = normalized
+		}
 		if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.done" {
 			return
 		}

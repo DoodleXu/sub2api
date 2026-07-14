@@ -10,24 +10,39 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `fc1c27d06 chore: 准备发布 v0.1.221` | 本次 merge 前基线，fork 版本继续保留 `0.1.221` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.153` -> `a2bc133747` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.153` |
-| 上游 main HEAD | `7d239d62e` | `v0.1.153` 发布后的 main 仍有后续提交，尚未作为完整同步进入当前 fork |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次解决 21 个冲突文件，继续保留 fork 聚合文件结构和六类核心定制行为，同时迁入上游 Grok、Codex 工具桥、WebSocket 与网页搜索计费能力 |
+| Fork 同步前 HEAD | `e84ea48d1 feat: 完善 Ops 延迟监控` | 本次 merge 前基线，fork 版本继续保留 `0.1.222` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.155` -> `41cec0db05` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.155` |
+| 上游 main HEAD | `7c717365e` | 仅比 `v0.1.155` 多版本文件同步提交，未作为独立功能同步 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次解决 24 个冲突文件，继续保留 fork 聚合文件结构和六类核心定制行为，同时迁入上游 Server-Timing、Grok 监控与导入、长上下文计费、Responses namespace、Codex manifest 和生图链路修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.153:refs/tags/upstream/v0.1.153 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.153^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
+git fetch upstream refs/tags/v0.1.155:refs/tags/upstream/v0.1.155 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.155^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.155^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.153` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.155` 替换为新的官方 release tag，再更新本节。
 
-本次 `v0.1.153` 合并说明：
+本次 `v0.1.155` 合并说明：
+
+- 上游 Admin UI 请求级 Server-Timing 已合入，默认关闭；启用后通过响应头展示 total/app/db/redis/dependency 耗时。fork 的 Ops 动态直方图与生图 TTFT 聚合继续保留，两者分别观察“单次后台请求内部耗时”和“历史网关请求延迟”，不共享持久化口径。
+- OpenAI 长上下文计费改为账号级布尔开关且默认关闭，字段、迁移、API、CRS 同步、影子账号继承和 usage log 审计标记已移植进 fork 聚合文件；人民币成本小时聚合与实际成本口径保持不变。
+- Codex models manifest 采用上游 API Key 自定义上游、短期缓存与账号故障转移，同时保留 fork 的 `TryCodexModels` 回退，避免无可用 manifest 账号时破坏客户端内置模型列表。
+- 原生 Responses namespace 的请求展平与响应还原覆盖 HTTP、passthrough 和 WSv2；fork 继续保留 Responses Lite `additional_tools`、function arguments 字符串、JSON 大整数、JSON mode 与 hosted 生图隔离行为。
+- Grok Responses 官方转发现已接入 fork 聚合入口，并吸收 `reasoning.content=null` 清洗、滚动 24 小时免费额度、Web SSO 批量导入、OAuth 新账号探活与监控中心 Grok 支持。
+- 生图链路加入非流式 JSON keepalive、流式最终状态修正与客户端 Lite 图片工具保留；fork 的生图并发槽、异步归档队列、Web 创作台恢复态和管理端资产安全访问继续保留。
+- 调度器全量重建合并、账号/代理到期事件处理、系统日志 host 筛选、HTTP/2 keepalive PING、reset credits 检测和 `/v1/messages` 精确映射修复已合入。
+- 冲突解决未恢复 `usage_log_repo_insert.go`、`admin_account.go`、`openai_gateway_forward.go`、`openai_gateway_usage.go` 等上游拆分文件；相关行为均移植到 fork 现有聚合模块，减少结构漂移带来的隐性回归。
+- 部署继续遵循 fork 的 `linux/amd64` + GHCR 生产约束，未恢复 Apple Container、DockerHub 或多架构发布路线；`VERSION` 继续保持 fork 的 `0.1.222`。
+- merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号 OAuth 更新继续拒绝归档账号，调度与批量操作仍过滤 `archived_at`。
+- 2026-07-14 fork 调整官方 Ops Monitoring 的请求时长分布：移除固定 `0-100ms` 至 `2000ms+` 桶，改为按当前所选时间窗口及平台/分组筛选结果的实际最小、最大请求时长动态生成最多 6 个对数桶；窄范围继续使用等宽桶，并为原始日志查询设置 5 秒上限，兼顾长尾辨识度和大窗口资源保护。后续同步上游若改动 `ops_repo_histograms.go` 或 `OpsLatencyChart.vue`，需保留动态量程行为。
+- 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 TTFT 仍保留全部流式请求口径，同时按 `usage_logs.image_count > 0`、`first_token_ms IS NOT NULL` 且排除视频请求，单独计算流式生图首个有效输出的平均等待时间；小时/日预聚合均保存样本数和加权平均值，迁移按现有小时聚合保留范围一次性回填历史数据。
+
+历史 `v0.1.153` 合并说明：
 
 - Codex Responses→Chat 的 `input[].type=additional_tools` 已改由上游官方 `EffectiveResponsesTools` 统一读取，移除 fork 重复的 `ExpandResponsesLiteTools` 路径；fork 继续保留 Responses Lite 生图桥接门控、`responses_required`、custom/namespace/tool_search 回程还原和字符串形式 `web_search_call.action` 兼容。
 - Grok 正式迁入 xAI API Key、OAuth prompt cache、第三方 base URL、Chat→Responses 缓存桥、限流持久化、视频编辑/延长与模型同步。`grok` 默认别名重新交由 xAI 官方映射解析为 `grok-4.5`，显式账号映射仍优先，避免 fork 旧的 `grok-4.3` 强制别名阻断新缓存桥。
@@ -35,8 +50,6 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 - OpenAI WebSocket 入站会话加入按 API Key 的有界 lifecycle lease；同时吸收真实 upstream endpoint 记录、平台感知的无账号诊断、用量日期本地化和 API Key 最近使用 IP 查询索引优化。
 - 部署继续遵循本 fork 的 `linux/amd64` + GHCR 生产约束。上游 Apple Container 固定依赖 `linux/arm64` 且默认使用上游镜像，因此本次未保留其脚本、文档、CI 与环境变量入口；保留手动部署 `.env` 的 `chmod 600` 加固。
 - merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号调度继续过滤 `archived_at`，人民币成本小时聚合和今日实际成本字段仍保留。
-- 2026-07-14 fork 调整官方 Ops Monitoring 的请求时长分布：移除固定 `0-100ms` 至 `2000ms+` 桶，改为按当前所选时间窗口及平台/分组筛选结果的实际最小、最大请求时长动态生成最多 6 个对数桶；窄范围继续使用等宽桶，并为原始日志查询设置 5 秒上限，兼顾长尾辨识度和大窗口资源保护。后续同步上游若改动 `ops_repo_histograms.go` 或 `OpsLatencyChart.vue`，需保留动态量程行为。
-- 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 TTFT 仍保留全部流式请求口径，同时按 `usage_logs.image_count > 0`、`first_token_ms IS NOT NULL` 且排除视频请求，单独计算流式生图首个有效输出的平均等待时间；小时/日预聚合均保存样本数和加权平均值，迁移按现有小时聚合保留范围一次性回填历史数据，避免长时间窗口静默遗漏旧样本或回退到全量原始日志扫描。
 
 历史 `v0.1.151` 合并说明：
 

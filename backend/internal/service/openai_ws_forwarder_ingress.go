@@ -238,7 +238,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if isCodexCLI {
 			codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
 		}
-		codexBridgeEnabled := isCodexCLI && imageGenerationAllowed && codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+		codexBridgeEnabled := isCodexCLI &&
+			!isOpenAIResponsesLiteWebSocketPayload(normalized) &&
+			imageGenerationAllowed &&
+			codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
+			s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
 		usesJSONObjectMode := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(normalized, "text.format.type").String()), "json_object")
 		if codexBridgeEnabled || usesJSONObjectMode {
 			payloadMap, err := decodeJSONMapPreservingNumbers(normalized)
