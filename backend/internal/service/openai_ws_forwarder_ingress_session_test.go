@@ -733,8 +733,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
 	upstreamConn := &openAIWSCaptureConn{
+		readDelays: []time.Duration{0, 100 * time.Millisecond},
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_1","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":3}}}`),
+			[]byte(`{"type":"error","event_id":"evt_upstream_rejection","error":{"event_id":"evt_rejected_turn","type":"invalid_request_error","code":"invalid_value","message":"rejected first turn"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_1","model":"gpt-5.1","output":[{"id":"ig_passthrough_1","type":"image_generation_call","result":"ZmluYWw="}],"usage":{"input_tokens":2,"output_tokens":3,"output_tokens_details":{"image_tokens":1}}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
@@ -817,11 +819,23 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"service_tier":"fast","reasoning":{"effort":"HIGH"}}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","event_id":"evt_rejected_turn","model":"gpt-4o","stream":false}`))
 	cancelWrite()
 	require.NoError(t, err)
 
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, rejectedEvent, readErr := clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, readErr)
+	require.Equal(t, "error", gjson.GetBytes(rejectedEvent, "type").String())
+	require.Equal(t, "evt_rejected_turn", gjson.GetBytes(rejectedEvent, "error.event_id").String())
+
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","event_id":"evt_valid_image_turn","model":"gpt-5.1","stream":false,"service_tier":"fast","reasoning":{"effort":"HIGH"},"tools":[{"type":"image_generation","model":"gpt-image-2","size":"1536x1024"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead = context.WithTimeout(context.Background(), 3*time.Second)
 	_, event, readErr := clientConn.Read(readCtx)
 	cancelRead()
 	require.NoError(t, readErr)
@@ -847,6 +861,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.True(t, result.OpenAIWSMode)
 		require.Equal(t, 2, result.Usage.InputTokens)
 		require.Equal(t, 3, result.Usage.OutputTokens)
+		require.Equal(t, 1, result.Usage.ImageOutputTokens)
+		require.Equal(t, 1, result.ImageCount)
+		require.Equal(t, "gpt-5.1", result.Model)
+		require.Equal(t, "gpt-5.1", result.UpstreamModel)
+		require.Equal(t, "gpt-image-2", result.BillingModel)
+		require.Equal(t, ImageBillingSize2K, result.ImageSize)
+		require.Equal(t, "1536x1024", result.ImageInputSize)
+		require.NotNil(t, result.ImageFirstOutputMs)
 		require.NotNil(t, result.ServiceTier)
 		require.Equal(t, "priority", *result.ServiceTier)
 		require.NotNil(t, result.ReasoningEffort)
@@ -856,7 +878,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}
 
 	require.Equal(t, 1, captureDialer.DialCount(), "passthrough 模式应直接建立上游 websocket")
-	require.Len(t, upstreamConn.writes, 1, "passthrough 模式应透传首条 response.create")
+	require.Len(t, upstreamConn.writes, 2, "passthrough 模式应在首轮被拒后继续透传下一条 response.create")
+	require.Equal(t, "evt_rejected_turn", firstNonEmptyString(upstreamConn.writes[0]["event_id"]))
+	require.Equal(t, "evt_valid_image_turn", firstNonEmptyString(upstreamConn.writes[1]["event_id"]))
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeadersUsePromptCacheAndTurnState(t *testing.T) {

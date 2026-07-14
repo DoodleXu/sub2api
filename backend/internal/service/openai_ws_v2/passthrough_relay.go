@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,8 @@ type RelayResult struct {
 	RequestID               string
 	TerminalEventType       string
 	FirstTokenMs            *int
+	ImageFirstOutputMs      *int
+	ImageCount              int
 	Duration                time.Duration
 	ClientToUpstreamFrames  int64
 	UpstreamToClientFrames  int64
@@ -41,12 +44,15 @@ type RelayResult struct {
 }
 
 type RelayTurnResult struct {
-	RequestModel      string
-	Usage             Usage
-	RequestID         string
-	TerminalEventType string
-	Duration          time.Duration
-	FirstTokenMs      *int
+	TurnSequence       uint64
+	RequestModel       string
+	Usage              Usage
+	RequestID          string
+	TerminalEventType  string
+	Duration           time.Duration
+	FirstTokenMs       *int
+	ImageFirstOutputMs *int
+	ImageCount         int
 }
 
 type RelayExit struct {
@@ -61,7 +67,10 @@ type RelayOptions struct {
 	UpstreamDrainTimeout            time.Duration
 	FirstMessageType                coderws.MessageType
 	FirstMessageSent                bool
+	FirstMessageWrittenAt           time.Time
 	StartClientAfterFirstDownstream bool
+	OnResponseCreateRegistered      func(sequence uint64, payload []byte)
+	OnResponseCreateAborted         func(sequence uint64)
 	OnUsageParseFailure             func(eventType string, usageRaw string)
 	OnTurnComplete                  func(turn RelayTurnResult)
 	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
@@ -81,13 +90,18 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	usage             Usage
-	requestModel      string
-	lastResponseID    string
-	terminalEventType string
-	firstTokenMs      *int
-	turnTimingByID    map[string]*relayTurnTiming
-	activeTurn        *relayTurnTiming
+	turnMu             sync.Mutex
+	usage              Usage
+	requestModel       string
+	lastResponseID     string
+	terminalEventType  string
+	firstTokenMs       *int
+	imageFirstOutputMs *int
+	imageTracker       relayImageOutputTracker
+	turnTimingByID     map[string]*relayTurnTiming
+	pendingTurns       []*relayTurnTiming
+	nextTurnSequence   uint64
+	activeTurn         *relayTurnTiming
 }
 
 type relayExitSignal struct {
@@ -98,17 +112,27 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
-	terminal   bool
-	eventType  string
-	responseID string
-	usage      Usage
-	duration   time.Duration
-	firstToken *int
+	turnSequence     uint64
+	abortedSequence  uint64
+	requestModel     string
+	terminal         bool
+	eventType        string
+	responseID       string
+	usage            Usage
+	duration         time.Duration
+	firstToken       *int
+	imageFirstOutput *int
+	imageCount       int
 }
 
 type relayTurnTiming struct {
-	startAt      time.Time
-	firstTokenMs *int
+	sequence           uint64
+	clientEventID      string
+	requestModel       string
+	startAt            time.Time
+	firstTokenMs       *int
+	imageFirstOutputMs *int
+	imageTracker       relayImageOutputTracker
 }
 
 func Relay(
@@ -175,6 +199,14 @@ func Relay(
 		MessageType:  relayMessageTypeString(firstMessageType),
 	})
 
+	firstMessageWrittenAt := options.FirstMessageWrittenAt
+	if firstMessageWrittenAt.IsZero() {
+		firstMessageWrittenAt = nowFn()
+	}
+	firstSequence, firstRegistered := openAIWSRelayRegisterPendingTurn(state, firstClientMessage, firstMessageWrittenAt)
+	if firstRegistered && options.OnResponseCreateRegistered != nil {
+		options.OnResponseCreateRegistered(firstSequence, firstClientMessage)
+	}
 	if options.FirstMessageSent {
 		emitRelayTrace(onTrace, RelayTraceEvent{
 			Stage:        "write_first_message_skipped",
@@ -184,6 +216,12 @@ func Relay(
 		})
 	} else {
 		if err := writeUpstream(firstMessageType, firstClientMessage); err != nil {
+			if firstRegistered {
+				openAIWSRelayDiscardPendingTurn(state, firstSequence)
+				if options.OnResponseCreateAborted != nil {
+					options.OnResponseCreateAborted(firstSequence)
+				}
+			}
 			result.Duration = nowFn().Sub(startAt)
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:        "write_first_message_failed",
@@ -211,7 +249,7 @@ func Relay(
 		if !clientReaderStarted.CompareAndSwap(false, true) {
 			return
 		}
-		go runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeUpstream, markActivity, clientToUpstreamFrames, onTrace, exitCh)
+		go runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeUpstream, markActivity, clientToUpstreamFrames, state, nowFn, options.OnResponseCreateRegistered, options.OnResponseCreateAborted, onTrace, exitCh)
 	}
 	if !options.StartClientAfterFirstDownstream {
 		startClientReader()
@@ -225,6 +263,7 @@ func Relay(
 		state,
 		options.OnUsageParseFailure,
 		options.OnTurnComplete,
+		options.OnResponseCreateAborted,
 		options.BeforeWriteClient,
 		func() {
 			if options.StartClientAfterFirstDownstream {
@@ -373,6 +412,10 @@ func runClientToUpstream(
 	writeUpstream func(msgType coderws.MessageType, payload []byte) error,
 	markActivity func(),
 	forwardedFrames *atomic.Int64,
+	state *relayState,
+	nowFn func() time.Time,
+	onResponseCreateRegistered func(sequence uint64, payload []byte),
+	onResponseCreateAborted func(sequence uint64),
 	onTrace func(event RelayTraceEvent),
 	exitCh chan<- relayExitSignal,
 ) {
@@ -394,7 +437,21 @@ func runClientToUpstream(
 			return
 		}
 		markActivity()
+		writtenAt := time.Now()
+		if nowFn != nil {
+			writtenAt = nowFn()
+		}
+		sequence, registered := openAIWSRelayRegisterPendingTurn(state, payload, writtenAt)
+		if registered && onResponseCreateRegistered != nil {
+			onResponseCreateRegistered(sequence, payload)
+		}
 		if err := writeUpstream(msgType, payload); err != nil {
+			if registered {
+				openAIWSRelayDiscardPendingTurn(state, sequence)
+				if onResponseCreateAborted != nil {
+					onResponseCreateAborted(sequence)
+				}
+			}
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:        "write_upstream_failed",
 				Direction:    "client_to_upstream",
@@ -421,6 +478,7 @@ func runUpstreamToClient(
 	state *relayState,
 	onUsageParseFailure func(eventType string, usageRaw string),
 	onTurnComplete func(turn RelayTurnResult),
+	onResponseCreateAborted func(sequence uint64),
 	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
 	afterWriteClient func(),
 	dropDownstreamWrites *atomic.Bool,
@@ -474,6 +532,9 @@ func runUpstreamToClient(
 			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
+		}
+		if observedEvent.abortedSequence > 0 && onResponseCreateAborted != nil {
+			onResponseCreateAborted(observedEvent.abortedSequence)
 		}
 		emitTurnComplete(onTurnComplete, state, observedEvent)
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
@@ -612,6 +673,13 @@ func observeUpstreamMessage(
 	if eventType == "" {
 		return observedUpstreamEvent{}
 	}
+	abortedSequence := uint64(0)
+	if eventType == "error" {
+		clientEventID := strings.TrimSpace(gjson.GetBytes(message, "error.event_id").String())
+		if sequence, ok := openAIWSRelayDiscardPendingTurnByClientEventID(state, clientEventID); ok {
+			abortedSequence = sequence
+		}
+	}
 	responseID := strings.TrimSpace(values[1].String())
 	if responseID == "" {
 		responseID = strings.TrimSpace(values[2].String())
@@ -621,28 +689,44 @@ func observeUpstreamMessage(
 		responseID = strings.TrimSpace(values[3].String())
 	}
 	now := nowFn()
+	turnTiming := openAIWSRelayActiveTurn(state)
+	if responseID != "" {
+		turnTiming = openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
+	}
+	if state.imageTracker.Observe(message) && state.imageFirstOutputMs == nil {
+		ms := int(now.Sub(startAt).Milliseconds())
+		if ms >= 0 {
+			state.imageFirstOutputMs = &ms
+		}
+	}
+	if turnTiming != nil && turnTiming.imageTracker.Observe(message) && turnTiming.imageFirstOutputMs == nil {
+		ms := int(now.Sub(turnTiming.startAt).Milliseconds())
+		if ms >= 0 {
+			turnTiming.imageFirstOutputMs = &ms
+		}
+	}
 
 	if state.firstTokenMs == nil && isTokenEvent(eventType) {
 		ms := int(now.Sub(startAt).Milliseconds())
 		if ms >= 0 {
 			state.firstTokenMs = &ms
 		}
-		if state.activeTurn != nil && state.activeTurn.firstTokenMs == nil {
-			tms := int(now.Sub(state.activeTurn.startAt).Milliseconds())
+		if turnTiming != nil && turnTiming.firstTokenMs == nil {
+			tms := int(now.Sub(turnTiming.startAt).Milliseconds())
 			if tms >= 0 {
-				state.activeTurn.firstTokenMs = &tms
+				turnTiming.firstTokenMs = &tms
 			}
 		}
 	}
 	parsedUsage := parseUsageAndAccumulate(state, message, eventType, onUsageParseFailure)
 	observed := observedUpstreamEvent{
-		eventType:  eventType,
-		responseID: responseID,
-		usage:      parsedUsage,
+		eventType:       eventType,
+		responseID:      responseID,
+		usage:           parsedUsage,
+		abortedSequence: abortedSequence,
 	}
-	if responseID != "" {
-		turnTiming := openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
-		if turnTiming != nil && turnTiming.firstTokenMs == nil && isTokenEvent(eventType) {
+	if turnTiming != nil {
+		if turnTiming.firstTokenMs == nil && isTokenEvent(eventType) {
 			ms := int(now.Sub(turnTiming.startAt).Milliseconds())
 			if ms >= 0 {
 				turnTiming.firstTokenMs = &ms
@@ -663,6 +747,10 @@ func observeUpstreamMessage(
 			}
 			observed.duration = duration
 			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
+			observed.imageFirstOutput = openAIWSRelayCloneIntPtr(turnTiming.imageFirstOutputMs)
+			observed.imageCount = turnTiming.imageTracker.Count()
+			observed.turnSequence = turnTiming.sequence
+			observed.requestModel = turnTiming.requestModel
 		}
 	}
 	return observed
@@ -680,17 +768,20 @@ func emitTurnComplete(
 	if responseID == "" {
 		return
 	}
-	requestModel := ""
-	if state != nil {
+	requestModel := observed.requestModel
+	if requestModel == "" && state != nil {
 		requestModel = state.requestModel
 	}
 	onTurnComplete(RelayTurnResult{
-		RequestModel:      requestModel,
-		Usage:             observed.usage,
-		RequestID:         responseID,
-		TerminalEventType: observed.eventType,
-		Duration:          observed.duration,
-		FirstTokenMs:      openAIWSRelayCloneIntPtr(observed.firstToken),
+		TurnSequence:       observed.turnSequence,
+		RequestModel:       requestModel,
+		Usage:              observed.usage,
+		RequestID:          responseID,
+		TerminalEventType:  observed.eventType,
+		Duration:           observed.duration,
+		FirstTokenMs:       openAIWSRelayCloneIntPtr(observed.firstToken),
+		ImageFirstOutputMs: openAIWSRelayCloneIntPtr(observed.imageFirstOutput),
+		ImageCount:         observed.imageCount,
 	})
 }
 
@@ -698,12 +789,20 @@ func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now 
 	if state == nil {
 		return nil
 	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
 	if state.turnTimingByID == nil {
 		state.turnTimingByID = make(map[string]*relayTurnTiming, 8)
 	}
 	timing, ok := state.turnTimingByID[responseID]
 	if !ok || timing == nil || timing.startAt.IsZero() {
-		timing = &relayTurnTiming{startAt: now}
+		if len(state.pendingTurns) > 0 {
+			timing = state.pendingTurns[0]
+			state.pendingTurns[0] = nil
+			state.pendingTurns = state.pendingTurns[1:]
+		} else {
+			timing = &relayTurnTiming{startAt: now, requestModel: state.requestModel}
+		}
 		state.turnTimingByID[responseID] = timing
 		state.activeTurn = timing
 		return timing
@@ -712,7 +811,12 @@ func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now 
 }
 
 func openAIWSRelayDeleteTurnTiming(state *relayState, responseID string) (relayTurnTiming, bool) {
-	if state == nil || state.turnTimingByID == nil {
+	if state == nil {
+		return relayTurnTiming{}, false
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	if state.turnTimingByID == nil {
 		return relayTurnTiming{}, false
 	}
 	timing, ok := state.turnTimingByID[responseID]
@@ -724,6 +828,77 @@ func openAIWSRelayDeleteTurnTiming(state *relayState, responseID string) (relayT
 		state.activeTurn = nil
 	}
 	return *timing, true
+}
+
+func openAIWSRelayRegisterPendingTurn(state *relayState, payload []byte, writtenAt time.Time) (uint64, bool) {
+	if state == nil || len(payload) == 0 || strings.TrimSpace(gjson.GetBytes(payload, "type").String()) != "response.create" {
+		return 0, false
+	}
+	requestModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+	clientEventID := strings.TrimSpace(gjson.GetBytes(payload, "event_id").String())
+	if requestModel == "" {
+		requestModel = state.requestModel
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	state.nextTurnSequence++
+	timing := &relayTurnTiming{
+		sequence:      state.nextTurnSequence,
+		clientEventID: clientEventID,
+		requestModel:  requestModel,
+		startAt:       writtenAt,
+	}
+	state.pendingTurns = append(state.pendingTurns, timing)
+	return timing.sequence, true
+}
+
+func openAIWSRelayActiveTurn(state *relayState) *relayTurnTiming {
+	if state == nil {
+		return nil
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	return state.activeTurn
+}
+
+func openAIWSRelayDiscardPendingTurn(state *relayState, sequence uint64) {
+	if state == nil || sequence == 0 {
+		return
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	openAIWSRelayDiscardPendingTurnLocked(state, func(timing *relayTurnTiming) bool {
+		return timing != nil && timing.sequence == sequence
+	})
+}
+
+func openAIWSRelayDiscardPendingTurnByClientEventID(state *relayState, clientEventID string) (uint64, bool) {
+	clientEventID = strings.TrimSpace(clientEventID)
+	if state == nil || clientEventID == "" {
+		return 0, false
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	return openAIWSRelayDiscardPendingTurnLocked(state, func(timing *relayTurnTiming) bool {
+		return timing != nil && timing.clientEventID == clientEventID
+	})
+}
+
+func openAIWSRelayDiscardPendingTurnLocked(state *relayState, matches func(timing *relayTurnTiming) bool) (uint64, bool) {
+	if state == nil || matches == nil {
+		return 0, false
+	}
+	for i, timing := range state.pendingTurns {
+		if !matches(timing) {
+			continue
+		}
+		sequence := timing.sequence
+		copy(state.pendingTurns[i:], state.pendingTurns[i+1:])
+		state.pendingTurns[len(state.pendingTurns)-1] = nil
+		state.pendingTurns = state.pendingTurns[:len(state.pendingTurns)-1]
+		return sequence, true
+	}
+	return 0, false
 }
 
 func openAIWSRelayCloneIntPtr(v *int) *int {
@@ -848,6 +1023,8 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	result.RequestID = state.lastResponseID
 	result.TerminalEventType = state.terminalEventType
 	result.FirstTokenMs = state.firstTokenMs
+	result.ImageFirstOutputMs = state.imageFirstOutputMs
+	result.ImageCount = state.imageTracker.Count()
 }
 
 func isDisconnectError(err error) bool {

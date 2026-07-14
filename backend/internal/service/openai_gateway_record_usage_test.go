@@ -1303,6 +1303,7 @@ func TestOpenAIGatewayServiceRecordUsage_UsesRequestedModelAndUpstreamModelMetad
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
 	serviceTier := "priority"
 	reasoning := "high"
+	imageFirstOutputMs := 480
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
@@ -1316,8 +1317,9 @@ func TestOpenAIGatewayServiceRecordUsage_UsesRequestedModelAndUpstreamModelMetad
 				InputTokens:  20,
 				OutputTokens: 10,
 			},
-			Duration:     2 * time.Second,
-			FirstTokenMs: func() *int { v := 120; return &v }(),
+			Duration:           2 * time.Second,
+			FirstTokenMs:       func() *int { v := 120; return &v }(),
+			ImageFirstOutputMs: &imageFirstOutputMs,
 		},
 		APIKey:    &APIKey{ID: 10, GroupID: i64p(11), Group: &Group{ID: 11, RateMultiplier: 1.2}},
 		User:      &User{ID: 20},
@@ -1340,6 +1342,8 @@ func TestOpenAIGatewayServiceRecordUsage_UsesRequestedModelAndUpstreamModelMetad
 	require.Equal(t, "codex-cli/1.0", *usageRepo.lastLog.UserAgent)
 	require.NotNil(t, usageRepo.lastLog.IPAddress)
 	require.Equal(t, "127.0.0.1", *usageRepo.lastLog.IPAddress)
+	require.NotNil(t, usageRepo.lastLog.ImageFirstOutputMs)
+	require.Equal(t, imageFirstOutputMs, *usageRepo.lastLog.ImageFirstOutputMs)
 	require.NotNil(t, usageRepo.lastLog.GroupID)
 	require.Equal(t, int64(11), *usageRepo.lastLog.GroupID)
 	require.Equal(t, 1, userRepo.deductCalls)
@@ -1701,6 +1705,53 @@ func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.
 	require.Equal(t, 2, usageRepo.lastLog.ImageCount)
 	require.NotNil(t, usageRepo.lastLog.ImageSize)
 	require.Equal(t, "1K", *usageRepo.lastLog.ImageSize)
+	require.NotNil(t, usageRepo.lastLog.BillingMode)
+	require.Equal(t, string(BillingModeImage), *usageRepo.lastLog.BillingMode)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_WSPassthroughImageTurnUsesCapturedBillingMetadata(t *testing.T) {
+	imagePrice2K := 0.37
+	groupID := int64(1200)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	body := []byte(`{"type":"response.create","model":"gpt-5.1","tools":[{"type":"image_generation","model":"gpt-image-2","size":"1536x1024"}]}`)
+	metaStore := newOpenAIWSPassthroughUsageMeta("gpt-5.1", body)
+	metaStore.captureWrittenTurn(1, body, "gpt-5.1")
+	turnMeta, ok := metaStore.takeTurn(1)
+	require.True(t, ok)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:      "resp_ws_passthrough_image_billing",
+			Model:          turnMeta.requestModel,
+			UpstreamModel:  turnMeta.upstreamModel,
+			BillingModel:   turnMeta.imageModel,
+			ImageCount:     1,
+			ImageSize:      turnMeta.imageSizeTier,
+			ImageInputSize: turnMeta.imageInputSize,
+			Duration:       time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      11200,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 1.0,
+				ImagePrice2K:   &imagePrice2K,
+			},
+		},
+		User:    &User{ID: 21200},
+		Account: &Account{ID: 31200},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "gpt-5.1", usageRepo.lastLog.Model)
+	require.NotNil(t, usageRepo.lastLog.ImageSize)
+	require.Equal(t, ImageBillingSize2K, *usageRepo.lastLog.ImageSize)
+	require.NotNil(t, usageRepo.lastLog.ImageInputSize)
+	require.Equal(t, "1536x1024", *usageRepo.lastLog.ImageInputSize)
+	require.InDelta(t, imagePrice2K, usageRepo.lastLog.ActualCost, 1e-12)
 	require.NotNil(t, usageRepo.lastLog.BillingMode)
 	require.Equal(t, string(BillingModeImage), *usageRepo.lastLog.BillingMode)
 }

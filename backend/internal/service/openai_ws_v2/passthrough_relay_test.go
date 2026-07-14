@@ -496,6 +496,167 @@ func TestRelay_OnTurnComplete_ProvidesTurnMetrics(t *testing.T) {
 	require.Greater(t, result.Duration.Milliseconds(), int64(0))
 }
 
+func TestRelay_OnTurnComplete_ProvidesImageOutputMetrics(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.created","response":{"id":"resp_image_metric"}}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.image_generation_call.partial_image","response_id":"resp_image_metric","partial_image_b64":"cGFydGlhbA=="}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.output_item.done","response_id":"resp_image_metric","item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw="}}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.completed","response":{"id":"resp_image_metric","output":[{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw="}],"usage":{"input_tokens":2,"output_tokens":1,"output_tokens_details":{"image_tokens":1}}}}`),
+		},
+	}, true)
+
+	firstPayload := []byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	base := time.Unix(0, 0)
+	var nowTick atomic.Int64
+	nowFn := func() time.Time {
+		step := nowTick.Add(1)
+		return base.Add(time.Duration(step) * 5 * time.Millisecond)
+	}
+
+	var turn RelayTurnResult
+	result, relayExit := Relay(ctx, clientConn, upstreamConn, firstPayload, RelayOptions{
+		Now: nowFn,
+		OnTurnComplete: func(current RelayTurnResult) {
+			turn = current
+		},
+	})
+
+	require.Nil(t, relayExit)
+	require.Equal(t, "resp_image_metric", turn.RequestID)
+	require.Equal(t, 1, turn.ImageCount)
+	require.NotNil(t, turn.ImageFirstOutputMs)
+	require.NotNil(t, turn.FirstTokenMs)
+	require.Less(t, *turn.ImageFirstOutputMs, *turn.FirstTokenMs)
+	require.Equal(t, 1, result.ImageCount)
+	require.NotNil(t, result.ImageFirstOutputMs)
+}
+
+func TestRelay_OnTurnComplete_IncludesQueueDelayBeforeResponseCreated(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamBase := newPassthroughTestFrameConn([]passthroughTestFrame{
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.created","response":{"id":"resp_queue_delay"}}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.image_generation_call.partial_image","response_id":"resp_queue_delay","partial_image_b64":"cGFydGlhbA=="}`),
+		},
+		{
+			msgType: coderws.MessageText,
+			payload: []byte(`{"type":"response.completed","response":{"id":"resp_queue_delay","output":[{"id":"ig_queue_delay","type":"image_generation_call","result":"ZmluYWw="}]}}`),
+		},
+	}, true)
+	upstreamConn := &delayedReadFrameConn{base: upstreamBase, firstDelay: 60 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var turn RelayTurnResult
+	_, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
+		RelayOptions{OnTurnComplete: func(current RelayTurnResult) { turn = current }},
+	)
+
+	require.Nil(t, relayExit)
+	require.Equal(t, "resp_queue_delay", turn.RequestID)
+	require.NotNil(t, turn.ImageFirstOutputMs)
+	require.GreaterOrEqual(t, *turn.ImageFirstOutputMs, 50, "首图耗时必须包含 response.created 前的上游排队时间")
+	require.GreaterOrEqual(t, turn.Duration.Milliseconds(), int64(50))
+}
+
+func TestRelay_OnTurnComplete_BindsPerTurnSequenceAndRequestModel(t *testing.T) {
+	t.Parallel()
+
+	base := time.Unix(0, 0)
+	state := &relayState{requestModel: "gpt-5.4"}
+	sequence1, ok := openAIWSRelayRegisterPendingTurn(state, []byte(`{"type":"response.create","model":"gpt-5.4","input":[]}`), base)
+	require.True(t, ok)
+	sequence2, ok := openAIWSRelayRegisterPendingTurn(state, []byte(`{"type":"response.create","model":"gpt-5.5","input":[]}`), base.Add(10*time.Millisecond))
+	require.True(t, ok)
+	turns := make([]RelayTurnResult, 0, 2)
+	observed1 := observeUpstreamMessage(state, []byte(`{"type":"response.completed","response":{"id":"resp_sequence_1"}}`), base, func() time.Time { return base.Add(20 * time.Millisecond) }, nil)
+	emitTurnComplete(func(turn RelayTurnResult) { turns = append(turns, turn) }, state, observed1)
+	observed2 := observeUpstreamMessage(state, []byte(`{"type":"response.completed","response":{"id":"resp_sequence_2"}}`), base, func() time.Time { return base.Add(30 * time.Millisecond) }, nil)
+	emitTurnComplete(func(turn RelayTurnResult) { turns = append(turns, turn) }, state, observed2)
+
+	require.Len(t, turns, 2)
+	require.Equal(t, sequence1, turns[0].TurnSequence)
+	require.Equal(t, "gpt-5.4", turns[0].RequestModel)
+	require.Equal(t, sequence2, turns[1].TurnSequence)
+	require.Equal(t, "gpt-5.5", turns[1].RequestModel)
+}
+
+func TestObserveUpstreamMessage_ErrorDiscardsOnlyCorrelatedPendingTurn(t *testing.T) {
+	t.Parallel()
+
+	base := time.Unix(0, 0)
+	state := &relayState{requestModel: "gpt-5.4"}
+	rejectedSequence, ok := openAIWSRelayRegisterPendingTurn(
+		state,
+		[]byte(`{"type":"response.create","event_id":"evt_rejected","model":"gpt-5.4"}`),
+		base,
+	)
+	require.True(t, ok)
+	validSequence, ok := openAIWSRelayRegisterPendingTurn(
+		state,
+		[]byte(`{"type":"response.create","event_id":"evt_valid","model":"gpt-5.5"}`),
+		base.Add(10*time.Millisecond),
+	)
+	require.True(t, ok)
+
+	uncorrelated := observeUpstreamMessage(
+		state,
+		[]byte(`{"type":"error","error":{"event_id":"evt_session_update","type":"invalid_request_error"}}`),
+		base,
+		func() time.Time { return base.Add(15 * time.Millisecond) },
+		nil,
+	)
+	require.Zero(t, uncorrelated.abortedSequence)
+
+	rejected := observeUpstreamMessage(
+		state,
+		[]byte(`{"type":"error","error":{"event_id":"evt_rejected","type":"invalid_request_error"}}`),
+		base,
+		func() time.Time { return base.Add(20 * time.Millisecond) },
+		nil,
+	)
+	require.Equal(t, rejectedSequence, rejected.abortedSequence)
+
+	completed := observeUpstreamMessage(
+		state,
+		[]byte(`{"type":"response.completed","response":{"id":"resp_valid"}}`),
+		base,
+		func() time.Time { return base.Add(30 * time.Millisecond) },
+		nil,
+	)
+	require.Equal(t, validSequence, completed.turnSequence)
+	require.Equal(t, "gpt-5.5", completed.requestModel)
+	require.Equal(t, 20*time.Millisecond, completed.duration)
+}
+
 func TestRelay_BinaryFramePassthrough(t *testing.T) {
 	t.Parallel()
 

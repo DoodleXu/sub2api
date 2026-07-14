@@ -323,6 +323,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	responseID := ""
 	var finalResponse []byte
 	wroteDownstream := false
@@ -504,6 +505,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
 		imageCounter.AddSSEData(message)
+		if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(message) {
+			ms := int(time.Since(startTime).Milliseconds())
+			imageFirstOutputMs = &ms
+		}
 
 		if eventType == "response.failed" {
 			if hit, code, msg := detectOpenAICyberPolicy(message); hit {
@@ -685,19 +690,20 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	return &OpenAIForwardResult{
-		RequestID:        responseID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    mappedModel,
-		ImageCount:       imageCounter.Count(),
-		ImageOutputSizes: imageCounter.Sizes(),
-		ServiceTier:      extractOpenAIServiceTier(reqBody),
-		ReasoningEffort:  extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
-		Stream:           reqStream,
-		OpenAIWSMode:     true,
-		ResponseHeaders:  lease.HandshakeHeaders(),
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
+		RequestID:          responseID,
+		Usage:              *usage,
+		Model:              originalModel,
+		UpstreamModel:      mappedModel,
+		ImageCount:         imageCounter.Count(),
+		ImageOutputSizes:   imageCounter.Sizes(),
+		ServiceTier:        extractOpenAIServiceTier(reqBody),
+		ReasoningEffort:    extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+		Stream:             reqStream,
+		OpenAIWSMode:       true,
+		ResponseHeaders:    lease.HandshakeHeaders(),
+		Duration:           time.Since(startTime),
+		FirstTokenMs:       firstTokenMs,
+		ImageFirstOutputMs: imageFirstOutputMs,
 	}, nil
 }
 

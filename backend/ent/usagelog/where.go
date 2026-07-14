@@ -215,6 +215,11 @@ func FirstTokenMs(v int) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldFirstTokenMs, v))
 }
 
+// ImageFirstOutputMs applies equality check predicate on the "image_first_output_ms" field. It's identical to ImageFirstOutputMsEQ.
+func ImageFirstOutputMs(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldImageFirstOutputMs, v))
+}
+
 // UserAgent applies equality check predicate on the "user_agent" field. It's identical to UserAgentEQ.
 func UserAgent(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUserAgent, v))
@@ -1678,6 +1683,56 @@ func FirstTokenMsIsNil() predicate.UsageLog {
 // FirstTokenMsNotNil applies the NotNil predicate on the "first_token_ms" field.
 func FirstTokenMsNotNil() predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldNotNull(FieldFirstTokenMs))
+}
+
+// ImageFirstOutputMsEQ applies the EQ predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsNEQ applies the NEQ predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsNEQ(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsIn applies the In predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldImageFirstOutputMs, vs...))
+}
+
+// ImageFirstOutputMsNotIn applies the NotIn predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsNotIn(vs ...int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldImageFirstOutputMs, vs...))
+}
+
+// ImageFirstOutputMsGT applies the GT predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsGT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsGTE applies the GTE predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsGTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsLT applies the LT predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsLT(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsLTE applies the LTE predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsLTE(v int) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldImageFirstOutputMs, v))
+}
+
+// ImageFirstOutputMsIsNil applies the IsNil predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldImageFirstOutputMs))
+}
+
+// ImageFirstOutputMsNotNil applies the NotNil predicate on the "image_first_output_ms" field.
+func ImageFirstOutputMsNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldImageFirstOutputMs))
 }
 
 // UserAgentEQ applies the EQ predicate on the "user_agent" field.

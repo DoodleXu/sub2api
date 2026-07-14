@@ -36,9 +36,9 @@ WITH usage_base AS (
     ul.duration_ms AS duration_ms,
     ul.first_token_ms AS first_token_ms,
     CASE
-      WHEN ul.image_count > 0 AND COALESCE(ul.video_count, 0) = 0 THEN ul.first_token_ms
+      WHEN ul.image_count > 0 AND COALESCE(ul.video_count, 0) = 0 THEN ul.image_first_output_ms
       ELSE NULL
-    END AS image_generation_first_token_ms,
+    END AS image_generation_first_output_ms,
     (ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens) AS tokens
   FROM usage_logs ul
   JOIN groups g ON g.id = ul.group_id
@@ -51,7 +51,7 @@ usage_agg AS (
     CASE WHEN GROUPING(group_id) = 1 THEN NULL ELSE group_id END AS group_id,
     COUNT(*) AS success_count,
     COUNT(*) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_sample_count,
-    COUNT(*) FILTER (WHERE image_generation_first_token_ms IS NOT NULL) AS image_generation_ttft_sample_count,
+    COUNT(*) FILTER (WHERE image_generation_first_output_ms IS NOT NULL) AS image_generation_ttft_sample_count,
     COALESCE(SUM(tokens), 0) AS token_consumed,
 
     percentile_cont(0.50) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS duration_p50_ms,
@@ -67,7 +67,7 @@ usage_agg AS (
     percentile_cont(0.99) WITHIN GROUP (ORDER BY first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_p99_ms,
     AVG(first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_avg_ms,
     MAX(first_token_ms) AS ttft_max_ms,
-    AVG(image_generation_first_token_ms) FILTER (WHERE image_generation_first_token_ms IS NOT NULL) AS image_generation_ttft_avg_ms
+    AVG(image_generation_first_output_ms) FILTER (WHERE image_generation_first_output_ms IS NOT NULL) AS image_generation_ttft_avg_ms
   FROM usage_base
   GROUP BY GROUPING SETS (
     (bucket_start),

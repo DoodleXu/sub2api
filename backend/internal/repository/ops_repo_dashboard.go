@@ -883,12 +883,12 @@ SELECT
   AVG(first_token_ms) FILTER (WHERE first_token_ms IS NOT NULL) AS ttft_avg,
   MAX(first_token_ms) AS ttft_max,
   COUNT(first_token_ms) AS ttft_sample_count,
-  AVG(first_token_ms) FILTER (
-    WHERE first_token_ms IS NOT NULL
+  AVG(image_first_output_ms) FILTER (
+    WHERE image_first_output_ms IS NOT NULL
       AND image_count > 0
       AND COALESCE(video_count, 0) = 0
   ) AS image_generation_ttft_avg,
-  COUNT(first_token_ms) FILTER (
+  COUNT(image_first_output_ms) FILTER (
     WHERE image_count > 0
       AND COALESCE(video_count, 0) = 0
   ) AS image_generation_ttft_sample_count

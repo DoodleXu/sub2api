@@ -256,6 +256,7 @@ type OpenAIForwardResult struct {
 	ResponseHeaders    http.Header
 	Duration           time.Duration
 	FirstTokenMs       *int
+	ImageFirstOutputMs *int
 	ClientDisconnect   bool
 	ImageCount         int
 	ImageSize          string
@@ -3537,6 +3538,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Handle normal response
 		var usage *OpenAIUsage
 		var firstTokenMs *int
+		var imageFirstOutputMs *int
 		responseID := ""
 		imageCount := 0
 		var imageOutputSizes []string
@@ -3548,6 +3550,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			usage = streamResult.usage
 			firstTokenMs = streamResult.firstTokenMs
+			imageFirstOutputMs = streamResult.imageFirstOutputMs
 			responseID = strings.TrimSpace(streamResult.responseID)
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
@@ -3562,6 +3565,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			imageArchiveInputs = nonStreamResult.archiveInputs
+			if imageCount > 0 {
+				ms := int(time.Since(startTime).Milliseconds())
+				imageFirstOutputMs = &ms
+			}
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
@@ -3578,18 +3585,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		forwardResult := &OpenAIForwardResult{
-			RequestID:       resp.Header.Get("x-request-id"),
-			ResponseID:      responseID,
-			Usage:           *usage,
-			Model:           originalModel,
-			BillingModel:    billingModel,
-			UpstreamModel:   upstreamModel,
-			ServiceTier:     serviceTier,
-			ReasoningEffort: reasoningEffort,
-			Stream:          reqStream,
-			OpenAIWSMode:    false,
-			Duration:        time.Since(startTime),
-			FirstTokenMs:    firstTokenMs,
+			RequestID:          resp.Header.Get("x-request-id"),
+			ResponseID:         responseID,
+			Usage:              *usage,
+			Model:              originalModel,
+			BillingModel:       billingModel,
+			UpstreamModel:      upstreamModel,
+			ServiceTier:        serviceTier,
+			ReasoningEffort:    reasoningEffort,
+			Stream:             reqStream,
+			OpenAIWSMode:       false,
+			Duration:           time.Since(startTime),
+			FirstTokenMs:       firstTokenMs,
+			ImageFirstOutputMs: imageFirstOutputMs,
 		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount
@@ -3796,6 +3804,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	var usage *OpenAIUsage
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	responseID := ""
 	imageCount := 0
 	var imageOutputSizes []string
@@ -3807,6 +3816,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		usage = result.usage
 		firstTokenMs = result.firstTokenMs
+		imageFirstOutputMs = result.imageFirstOutputMs
 		responseID = strings.TrimSpace(result.responseID)
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
@@ -3821,6 +3831,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		imageArchiveInputs = result.archiveInputs
+		if imageCount > 0 {
+			ms := int(time.Since(startTime).Milliseconds())
+			imageFirstOutputMs = &ms
+		}
 	}
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
@@ -3836,17 +3850,18 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	forwardResult := &OpenAIForwardResult{
-		RequestID:       resp.Header.Get("x-request-id"),
-		ResponseID:      responseID,
-		Usage:           *usage,
-		Model:           reqModel,
-		UpstreamModel:   upstreamPassthroughModel,
-		ServiceTier:     serviceTier,
-		ReasoningEffort: reasoningEffort,
-		Stream:          reqStream,
-		OpenAIWSMode:    false,
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
+		RequestID:          resp.Header.Get("x-request-id"),
+		ResponseID:         responseID,
+		Usage:              *usage,
+		Model:              reqModel,
+		UpstreamModel:      upstreamPassthroughModel,
+		ServiceTier:        serviceTier,
+		ReasoningEffort:    reasoningEffort,
+		Stream:             reqStream,
+		OpenAIWSMode:       false,
+		Duration:           time.Since(startTime),
+		FirstTokenMs:       firstTokenMs,
+		ImageFirstOutputMs: imageFirstOutputMs,
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -4216,12 +4231,13 @@ func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
 }
 
 type openaiStreamingResultPassthrough struct {
-	usage            *OpenAIUsage
-	firstTokenMs     *int
-	responseID       string
-	imageCount       int
-	imageOutputSizes []string
-	archiveInputs    []ArchivedImageInput
+	usage              *OpenAIUsage
+	firstTokenMs       *int
+	imageFirstOutputMs *int
+	responseID         string
+	imageCount         int
+	imageOutputSizes   []string
+	archiveInputs      []ArchivedImageInput
 }
 
 type openaiNonStreamingResultPassthrough struct {
@@ -4446,6 +4462,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	responseID := ""
 	clientDisconnected := false
 	sawDone := false
@@ -4482,12 +4499,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	streamArchiveInputs := make([]ArchivedImageInput, 0, 1)
 	resultWithUsage := func() *openaiStreamingResultPassthrough {
 		return &openaiStreamingResultPassthrough{
-			usage:            usage,
-			firstTokenMs:     firstTokenMs,
-			responseID:       responseID,
-			imageCount:       imageCounter.Count(),
-			imageOutputSizes: imageCounter.Sizes(),
-			archiveInputs:    dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
+			usage:              usage,
+			firstTokenMs:       firstTokenMs,
+			imageFirstOutputMs: imageFirstOutputMs,
+			responseID:         responseID,
+			imageCount:         imageCounter.Count(),
+			imageOutputSizes:   imageCounter.Sizes(),
+			archiveInputs:      dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
 		}
 	}
 
@@ -4564,6 +4582,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
 			imageCounter.AddSSEData(dataBytes)
+			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(dataBytes) {
+				ms := int(time.Since(startTime).Milliseconds())
+				imageFirstOutputMs = &ms
+			}
 			streamArchiveInputs = append(streamArchiveInputs, collectOpenAIArchiveImages(dataBytes)...)
 			if imageOutput, ok := extractImageGenerationOutputFromSSEData(dataBytes, streamSeenImages); ok {
 				streamImageOutputs = append(streamImageOutputs, imageOutput)
@@ -5303,12 +5325,13 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 // openaiStreamingResult streaming response result
 type openaiStreamingResult struct {
-	usage            *OpenAIUsage
-	firstTokenMs     *int
-	responseID       string
-	imageCount       int
-	imageOutputSizes []string
-	archiveInputs    []ArchivedImageInput
+	usage              *OpenAIUsage
+	firstTokenMs       *int
+	imageFirstOutputMs *int
+	responseID         string
+	imageCount         int
+	imageOutputSizes   []string
+	archiveInputs      []ArchivedImageInput
 }
 
 type openaiNonStreamingResult struct {
@@ -5353,6 +5376,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	responseID := ""
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -5411,12 +5435,13 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	streamArchiveInputs := make([]ArchivedImageInput, 0, 1)
 	resultWithUsage := func() *openaiStreamingResult {
 		return &openaiStreamingResult{
-			usage:            usage,
-			firstTokenMs:     firstTokenMs,
-			responseID:       responseID,
-			imageCount:       imageCounter.Count(),
-			imageOutputSizes: imageCounter.Sizes(),
-			archiveInputs:    dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
+			usage:              usage,
+			firstTokenMs:       firstTokenMs,
+			imageFirstOutputMs: imageFirstOutputMs,
+			responseID:         responseID,
+			imageCount:         imageCounter.Count(),
+			imageOutputSizes:   imageCounter.Sizes(),
+			archiveInputs:      dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
 		}
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
@@ -5525,6 +5550,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				line = "data: " + data
 			}
 			imageCounter.AddSSEData(dataBytes)
+			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(dataBytes) {
+				ms := int(time.Since(startTime).Milliseconds())
+				imageFirstOutputMs = &ms
+			}
 			streamArchiveInputs = append(streamArchiveInputs, collectOpenAIArchiveImages(dataBytes)...)
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
@@ -7138,6 +7167,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.OpenAIWSMode = result.OpenAIWSMode
 	usageLog.DurationMs = &durationMs
 	usageLog.FirstTokenMs = result.FirstTokenMs
+	usageLog.ImageFirstOutputMs = result.ImageFirstOutputMs
 	usageLog.CreatedAt = time.Now()
 	// 设置渠道信息
 	usageLog.ChannelID = optionalInt64Ptr(input.ChannelID)
@@ -7273,6 +7303,7 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 		OpenAIWSMode:          result.OpenAIWSMode,
 		DurationMs:            &durationMs,
 		FirstTokenMs:          result.FirstTokenMs,
+		ImageFirstOutputMs:    result.ImageFirstOutputMs,
 		UserAgent:             optionalTrimmedStringPtr(input.UserAgent),
 		IPAddress:             optionalTrimmedStringPtr(input.IPAddress),
 		ImageCount:            result.ImageCount,

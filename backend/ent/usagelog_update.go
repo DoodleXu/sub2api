@@ -672,6 +672,33 @@ func (_u *UsageLogUpdate) ClearFirstTokenMs() *UsageLogUpdate {
 	return _u
 }
 
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (_u *UsageLogUpdate) SetImageFirstOutputMs(v int) *UsageLogUpdate {
+	_u.mutation.ResetImageFirstOutputMs()
+	_u.mutation.SetImageFirstOutputMs(v)
+	return _u
+}
+
+// SetNillableImageFirstOutputMs sets the "image_first_output_ms" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableImageFirstOutputMs(v *int) *UsageLogUpdate {
+	if v != nil {
+		_u.SetImageFirstOutputMs(*v)
+	}
+	return _u
+}
+
+// AddImageFirstOutputMs adds value to the "image_first_output_ms" field.
+func (_u *UsageLogUpdate) AddImageFirstOutputMs(v int) *UsageLogUpdate {
+	_u.mutation.AddImageFirstOutputMs(v)
+	return _u
+}
+
+// ClearImageFirstOutputMs clears the value of the "image_first_output_ms" field.
+func (_u *UsageLogUpdate) ClearImageFirstOutputMs() *UsageLogUpdate {
+	_u.mutation.ClearImageFirstOutputMs()
+	return _u
+}
+
 // SetUserAgent sets the "user_agent" field.
 func (_u *UsageLogUpdate) SetUserAgent(v string) *UsageLogUpdate {
 	_u.mutation.SetUserAgent(v)
@@ -1251,6 +1278,15 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.FirstTokenMsCleared() {
 		_spec.ClearField(usagelog.FieldFirstTokenMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ImageFirstOutputMs(); ok {
+		_spec.SetField(usagelog.FieldImageFirstOutputMs, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageFirstOutputMs(); ok {
+		_spec.AddField(usagelog.FieldImageFirstOutputMs, field.TypeInt, value)
+	}
+	if _u.mutation.ImageFirstOutputMsCleared() {
+		_spec.ClearField(usagelog.FieldImageFirstOutputMs, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UserAgent(); ok {
 		_spec.SetField(usagelog.FieldUserAgent, field.TypeString, value)
@@ -2129,6 +2165,33 @@ func (_u *UsageLogUpdateOne) ClearFirstTokenMs() *UsageLogUpdateOne {
 	return _u
 }
 
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (_u *UsageLogUpdateOne) SetImageFirstOutputMs(v int) *UsageLogUpdateOne {
+	_u.mutation.ResetImageFirstOutputMs()
+	_u.mutation.SetImageFirstOutputMs(v)
+	return _u
+}
+
+// SetNillableImageFirstOutputMs sets the "image_first_output_ms" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableImageFirstOutputMs(v *int) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetImageFirstOutputMs(*v)
+	}
+	return _u
+}
+
+// AddImageFirstOutputMs adds value to the "image_first_output_ms" field.
+func (_u *UsageLogUpdateOne) AddImageFirstOutputMs(v int) *UsageLogUpdateOne {
+	_u.mutation.AddImageFirstOutputMs(v)
+	return _u
+}
+
+// ClearImageFirstOutputMs clears the value of the "image_first_output_ms" field.
+func (_u *UsageLogUpdateOne) ClearImageFirstOutputMs() *UsageLogUpdateOne {
+	_u.mutation.ClearImageFirstOutputMs()
+	return _u
+}
+
 // SetUserAgent sets the "user_agent" field.
 func (_u *UsageLogUpdateOne) SetUserAgent(v string) *UsageLogUpdateOne {
 	_u.mutation.SetUserAgent(v)
@@ -2738,6 +2801,15 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.FirstTokenMsCleared() {
 		_spec.ClearField(usagelog.FieldFirstTokenMs, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ImageFirstOutputMs(); ok {
+		_spec.SetField(usagelog.FieldImageFirstOutputMs, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageFirstOutputMs(); ok {
+		_spec.AddField(usagelog.FieldImageFirstOutputMs, field.TypeInt, value)
+	}
+	if _u.mutation.ImageFirstOutputMsCleared() {
+		_spec.ClearField(usagelog.FieldImageFirstOutputMs, field.TypeInt)
 	}
 	if value, ok := _u.mutation.UserAgent(); ok {
 		_spec.SetField(usagelog.FieldUserAgent, field.TypeString, value)

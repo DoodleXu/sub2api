@@ -753,6 +753,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		usage := OpenAIUsage{}
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
+		var imageFirstOutputMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
 		turnPreviousResponseID := openAIWSPayloadStringFromRaw(payload, "previous_response_id")
 		turnPreviousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(turnPreviousResponseID)
@@ -883,6 +884,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 			}
 			imageCounter.AddSSEData(upstreamMessage)
+			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(upstreamMessage) {
+				ms := int(time.Since(turnStart).Milliseconds())
+				imageFirstOutputMs = &ms
+			}
 
 			if eventType == "response.failed" {
 				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
@@ -958,17 +963,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				imageCount := imageCounter.Count()
 				result := &OpenAIForwardResult{
-					RequestID:       responseID,
-					Usage:           usage,
-					Model:           originalModel,
-					UpstreamModel:   mappedModel,
-					ServiceTier:     extractOpenAIServiceTierFromBody(payload),
-					ReasoningEffort: ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
-					Stream:          reqStream,
-					OpenAIWSMode:    true,
-					ResponseHeaders: lease.HandshakeHeaders(),
-					Duration:        time.Since(turnStart),
-					FirstTokenMs:    firstTokenMs,
+					RequestID:          responseID,
+					Usage:              usage,
+					Model:              originalModel,
+					UpstreamModel:      mappedModel,
+					ServiceTier:        extractOpenAIServiceTierFromBody(payload),
+					ReasoningEffort:    ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
+					Stream:             reqStream,
+					OpenAIWSMode:       true,
+					ResponseHeaders:    lease.HandshakeHeaders(),
+					Duration:           time.Since(turnStart),
+					FirstTokenMs:       firstTokenMs,
+					ImageFirstOutputMs: imageFirstOutputMs,
 				}
 				if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 					result.wsReplayInput = replayInput

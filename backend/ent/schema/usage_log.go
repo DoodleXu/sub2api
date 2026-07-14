@@ -121,6 +121,10 @@ func (UsageLog) Fields() []ent.Field {
 		field.Int("first_token_ms").
 			Optional().
 			Nillable(),
+		field.Int("image_first_output_ms").
+			Optional().
+			Nillable().
+			Comment("Delay until the first partial or final image output"),
 		field.String("user_agent").
 			MaxLen(512).
 			Optional().

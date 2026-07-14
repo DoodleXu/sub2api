@@ -296,6 +296,18 @@ func TestOpenAIImageOutputCounterCountsImagesAPIStreamShapes(t *testing.T) {
 	dataCounter.AddSSEData([]byte(`{"data":[{"b64_json":"a"},{"b64_json":"b"}]}`))
 	dataCounter.AddSSEData([]byte(`{"data":[{"b64_json":"a"},{"b64_json":"b"},{"b64_json":"c"}]}`))
 	require.Equal(t, 3, dataCounter.Count())
+
+	outputArrayCounter := newOpenAIImageOutputCounter()
+	outputArrayCounter.AddSSEData([]byte(`{"type":"image_generation.completed","output":[{"b64_json":"a"},{"url":"https://example.com/b.png"}]}`))
+	require.Equal(t, 2, outputArrayCounter.Count())
+}
+
+func TestOpenAISSEDataContainsImageOutputIgnoresLifecycleEvents(t *testing.T) {
+	require.False(t, openAISSEDataContainsImageOutput([]byte(`{"type":"response.created","response":{"id":"resp_1"}}`)))
+	require.False(t, openAISSEDataContainsImageOutput([]byte(`{"type":"response.image_generation_call.partial_image","partial_image_b64":""}`)))
+	require.True(t, openAISSEDataContainsImageOutput([]byte(`{"type":"response.image_generation_call.partial_image","partial_image_b64":"cGFydGlhbA=="}`)))
+	require.True(t, openAISSEDataContainsImageOutput([]byte(`{"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw="}}`)))
+	require.True(t, openAISSEDataContainsImageOutput([]byte(`{"type":"image_generation.completed","output":[{"b64_json":"ZmluYWw="}]}`)))
 }
 
 func TestOpenAIImageOutputCounterCountsMultilineSSEDataPayload(t *testing.T) {

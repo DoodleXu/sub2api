@@ -40,7 +40,7 @@ git diff --name-status refs/tags/upstream/v0.1.155^{}..HEAD
 - 部署继续遵循 fork 的 `linux/amd64` + GHCR 生产约束，未恢复 Apple Container、DockerHub 或多架构发布路线；`VERSION` 继续保持 fork 的 `0.1.222`。
 - merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号 OAuth 更新继续拒绝归档账号，调度与批量操作仍过滤 `archived_at`。
 - 2026-07-14 fork 调整官方 Ops Monitoring 的请求时长分布：移除固定 `0-100ms` 至 `2000ms+` 桶，改为按当前所选时间窗口及平台/分组筛选结果的实际最小、最大请求时长动态生成最多 6 个对数桶；窄范围继续使用等宽桶，并为原始日志查询设置 5 秒上限，兼顾长尾辨识度和大窗口资源保护。后续同步上游若改动 `ops_repo_histograms.go` 或 `OpsLatencyChart.vue`，需保留动态量程行为。
-- 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 TTFT 仍保留全部流式请求口径，同时按 `usage_logs.image_count > 0`、`first_token_ms IS NOT NULL` 且排除视频请求，单独计算流式生图首个有效输出的平均等待时间；小时/日预聚合均保存样本数和加权平均值，迁移按现有小时聚合保留范围一次性回填历史数据。
+- 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 `first_token_ms` 继续保留全部流式请求的首 token 口径，另以 `usage_logs.image_first_output_ms` 记录流式首次 partial/final 图片或非流式完整图片响应的真实可用输出时间，并统一 API Key、OAuth、Responses、HTTP passthrough 与 WS v2 direct passthrough 入口，同时排除视频请求；WS direct relay 按成功写入的 `response.create` 为每个 turn 分配序号并登记起点，收到 `response_id` 后再绑定，因此首 token、首图和 duration 均包含 `response.created` 前的上游排队时间；适配层按同一序号保存 request/upstream/image billing model、size、service tier 与 reasoning effort 快照，终态不会串用其他轮次或退化为聊天模型/default size。每个 direct passthrough `response.create` 还会保留客户端 `event_id`，缺失时注入内部唯一值；若上游以可恢复 `error.error.event_id` 拒绝该轮但不生成 `response_id`，relay 会精确撤销对应 timing 与计费快照，避免下一轮错绑。首图与最终图片数按 turn 跟踪，重复出现于 `output_item.done`/`response.completed` 的同一图片不会重复计数。小时/日预聚合保存独立样本数和加权平均值。历史行无法从 lifecycle 事件到达时间还原真实首图时间，因此保持 NULL；已提交的 `175_ops_image_generation_ttft_average.sql` 保持 checksum 不变，新增 `177_add_usage_log_image_first_output_ms.sql` 负责清理早期草稿基于 `first_token_ms` 生成的不可信聚合值，后续仅统计新产生的可信样本。
 
 历史 `v0.1.153` 合并说明：
 

@@ -8,7 +8,7 @@ import (
 )
 
 func TestImageGenerationTTFTMigrationBackfillsExistingAggregates(t *testing.T) {
-	sqlBytes, err := os.ReadFile("../../migrations/175_ops_image_generation_ttft_average.sql")
+	sqlBytes, err := os.ReadFile("../../migrations/177_add_usage_log_image_first_output_ms.sql")
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}
@@ -22,6 +22,7 @@ func TestImageGenerationTTFTMigrationBackfillsExistingAggregates(t *testing.T) {
 		"IS DISTINCT FROM backfill.sample_count",
 		"ul.image_count > 0",
 		"COALESCE(ul.video_count, 0) = 0",
+		"ul.image_first_output_ms IS NOT NULL",
 	} {
 		if !strings.Contains(sqlText, expected) {
 			t.Fatalf("migration missing historical backfill clause %q", expected)

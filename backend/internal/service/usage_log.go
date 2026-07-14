@@ -161,8 +161,12 @@ type UsageLog struct {
 	OpenAIWSMode bool
 	DurationMs   *int
 	FirstTokenMs *int
-	UserAgent    *string
-	IPAddress    *string
+	// ImageFirstOutputMs records the first partial or final image output delay.
+	// It is independent from FirstTokenMs so mixed text+image responses retain
+	// their original text TTFT semantics.
+	ImageFirstOutputMs *int
+	UserAgent          *string
+	IPAddress          *string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool

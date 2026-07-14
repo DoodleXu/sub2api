@@ -435,6 +435,20 @@ func (_c *UsageLogCreate) SetNillableFirstTokenMs(v *int) *UsageLogCreate {
 	return _c
 }
 
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (_c *UsageLogCreate) SetImageFirstOutputMs(v int) *UsageLogCreate {
+	_c.mutation.SetImageFirstOutputMs(v)
+	return _c
+}
+
+// SetNillableImageFirstOutputMs sets the "image_first_output_ms" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableImageFirstOutputMs(v *int) *UsageLogCreate {
+	if v != nil {
+		_c.SetImageFirstOutputMs(*v)
+	}
+	return _c
+}
+
 // SetUserAgent sets the "user_agent" field.
 func (_c *UsageLogCreate) SetUserAgent(v string) *UsageLogCreate {
 	_c.mutation.SetUserAgent(v)
@@ -1041,6 +1055,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FirstTokenMs(); ok {
 		_spec.SetField(usagelog.FieldFirstTokenMs, field.TypeInt, value)
 		_node.FirstTokenMs = &value
+	}
+	if value, ok := _c.mutation.ImageFirstOutputMs(); ok {
+		_spec.SetField(usagelog.FieldImageFirstOutputMs, field.TypeInt, value)
+		_node.ImageFirstOutputMs = &value
 	}
 	if value, ok := _c.mutation.UserAgent(); ok {
 		_spec.SetField(usagelog.FieldUserAgent, field.TypeString, value)
@@ -1786,6 +1804,30 @@ func (u *UsageLogUpsert) AddFirstTokenMs(v int) *UsageLogUpsert {
 // ClearFirstTokenMs clears the value of the "first_token_ms" field.
 func (u *UsageLogUpsert) ClearFirstTokenMs() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldFirstTokenMs)
+	return u
+}
+
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (u *UsageLogUpsert) SetImageFirstOutputMs(v int) *UsageLogUpsert {
+	u.Set(usagelog.FieldImageFirstOutputMs, v)
+	return u
+}
+
+// UpdateImageFirstOutputMs sets the "image_first_output_ms" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateImageFirstOutputMs() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldImageFirstOutputMs)
+	return u
+}
+
+// AddImageFirstOutputMs adds v to the "image_first_output_ms" field.
+func (u *UsageLogUpsert) AddImageFirstOutputMs(v int) *UsageLogUpsert {
+	u.Add(usagelog.FieldImageFirstOutputMs, v)
+	return u
+}
+
+// ClearImageFirstOutputMs clears the value of the "image_first_output_ms" field.
+func (u *UsageLogUpsert) ClearImageFirstOutputMs() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldImageFirstOutputMs)
 	return u
 }
 
@@ -2698,6 +2740,34 @@ func (u *UsageLogUpsertOne) UpdateFirstTokenMs() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearFirstTokenMs() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (u *UsageLogUpsertOne) SetImageFirstOutputMs(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageFirstOutputMs(v)
+	})
+}
+
+// AddImageFirstOutputMs adds v to the "image_first_output_ms" field.
+func (u *UsageLogUpsertOne) AddImageFirstOutputMs(v int) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddImageFirstOutputMs(v)
+	})
+}
+
+// UpdateImageFirstOutputMs sets the "image_first_output_ms" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateImageFirstOutputMs() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageFirstOutputMs()
+	})
+}
+
+// ClearImageFirstOutputMs clears the value of the "image_first_output_ms" field.
+func (u *UsageLogUpsertOne) ClearImageFirstOutputMs() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearImageFirstOutputMs()
 	})
 }
 
@@ -3812,6 +3882,34 @@ func (u *UsageLogUpsertBulk) UpdateFirstTokenMs() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearFirstTokenMs() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearFirstTokenMs()
+	})
+}
+
+// SetImageFirstOutputMs sets the "image_first_output_ms" field.
+func (u *UsageLogUpsertBulk) SetImageFirstOutputMs(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetImageFirstOutputMs(v)
+	})
+}
+
+// AddImageFirstOutputMs adds v to the "image_first_output_ms" field.
+func (u *UsageLogUpsertBulk) AddImageFirstOutputMs(v int) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddImageFirstOutputMs(v)
+	})
+}
+
+// UpdateImageFirstOutputMs sets the "image_first_output_ms" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateImageFirstOutputMs() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateImageFirstOutputMs()
+	})
+}
+
+// ClearImageFirstOutputMs clears the value of the "image_first_output_ms" field.
+func (u *UsageLogUpsertBulk) ClearImageFirstOutputMs() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearImageFirstOutputMs()
 	})
 }
 

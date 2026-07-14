@@ -1149,7 +1149,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	responseFormat string,
 	streamPrefix string,
 	fallbackModel string,
-) (OpenAIUsage, int, []string, *int, error) {
+) (OpenAIUsage, int, []string, *int, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -1158,7 +1158,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		return OpenAIUsage{}, 0, nil, nil, fmt.Errorf("streaming is not supported by response writer")
+		return OpenAIUsage{}, 0, nil, nil, nil, fmt.Errorf("streaming is not supported by response writer")
 	}
 
 	format := strings.ToLower(strings.TrimSpace(responseFormat))
@@ -1170,6 +1170,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	imageCount := 0
 	var imageOutputSizes []string
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	emitted := make(map[string]struct{})
 	pendingResults := make([]openAIResponsesImageResult, 0, 1)
 	pendingSeen := make(map[string]struct{})
@@ -1193,6 +1194,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 		s.parseSSEUsageBytes(dataBytes, &usage)
 		if !gjson.ValidBytes(dataBytes) {
 			return
+		}
+		if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(dataBytes) {
+			ms := int(time.Since(startTime).Milliseconds())
+			imageFirstOutputMs = &ms
 		}
 		if meta, eventCreatedAt, ok := extractOpenAIResponsesImageMetaFromLifecycleEvent(dataBytes); ok {
 			mergeOpenAIResponsesImageMeta(&streamMeta, meta)
@@ -1352,33 +1357,33 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 			line, err := reader.ReadBytes('\n')
 			done, processErr := processLine(line)
 			if processErr != nil {
-				return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 			}
 			if done {
-				return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 			}
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
 				if done, processErr := flushData(); processErr != nil {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 				} else if done {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 				}
 				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(err.Error()))
-				return usage, imageCount, imageOutputSizes, firstTokenMs, err
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, err
 			}
 		}
 		if done, processErr := flushData(); processErr != nil {
-			return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+			return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 		} else if done {
-			return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+			return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 		}
 		if err := finalizePending(); err != nil {
-			return usage, imageCount, imageOutputSizes, firstTokenMs, err
+			return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, err
 		}
-		return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+		return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 	}
 
 	type readEvent struct {
@@ -1444,30 +1449,30 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 		case ev, ok := <-events:
 			if !ok {
 				if done, processErr := flushData(); processErr != nil {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 				} else if done {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 				}
 				if err := finalizePending(); err != nil {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, err
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, err
 				}
-				return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 			}
 			if ev.err != nil {
 				if done, processErr := flushData(); processErr != nil {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 				} else if done {
-					return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+					return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 				}
 				s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(ev.err.Error()))
-				return usage, imageCount, imageOutputSizes, firstTokenMs, ev.err
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, ev.err
 			}
 			done, processErr := processLine(ev.line)
 			if processErr != nil {
-				return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, processErr
 			}
 			if done {
-				return usage, imageCount, imageOutputSizes, firstTokenMs, nil
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, nil
 			}
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
@@ -1475,11 +1480,11 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				continue
 			}
 			if clientDisconnected {
-				return usage, imageCount, imageOutputSizes, firstTokenMs, fmt.Errorf("image stream incomplete after timeout")
+				return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, fmt.Errorf("image stream incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images responses stream data interval timeout: interval=%s", streamInterval)
 			s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(fmt.Sprintf("upstream image stream idle for %s", streamInterval)))
-			return usage, imageCount, imageOutputSizes, firstTokenMs, fmt.Errorf("image stream data interval timeout")
+			return usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, fmt.Errorf("image stream data interval timeout")
 		case <-keepaliveCh:
 			if clientDisconnected || time.Since(lastDownstreamWriteAt) < keepaliveInterval {
 				continue
@@ -1590,31 +1595,33 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	defer func() { _ = resp.Body.Close() }()
 
 	var (
-		usage            OpenAIUsage
-		imageCount       int
-		imageOutputSizes []string
-		firstTokenMs     *int
+		usage              OpenAIUsage
+		imageCount         int
+		imageOutputSizes   []string
+		firstTokenMs       *int
+		imageFirstOutputMs *int
 	)
 	// 与 handleOpenAIImagesOAuthResponseError 的比较端同口径：排除非流式 JSON
 	// keepalive 心跳字节，避免 failover 第 2 轮起把上一轮心跳残留误判为已写响应。
 	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 	if parsed.Stream {
-		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
+		usage, imageCount, imageOutputSizes, firstTokenMs, imageFirstOutputMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
 		if err != nil {
 			if imageCount > 0 {
 				return &OpenAIForwardResult{
-					RequestID:        resp.Header.Get("x-request-id"),
-					Usage:            usage,
-					Model:            requestModel,
-					UpstreamModel:    requestModel,
-					Stream:           parsed.Stream,
-					ResponseHeaders:  resp.Header.Clone(),
-					Duration:         time.Since(startTime),
-					FirstTokenMs:     firstTokenMs,
-					ImageCount:       imageCount,
-					ImageSize:        parsed.SizeTier,
-					ImageInputSize:   parsed.Size,
-					ImageOutputSizes: imageOutputSizes,
+					RequestID:          resp.Header.Get("x-request-id"),
+					Usage:              usage,
+					Model:              requestModel,
+					UpstreamModel:      requestModel,
+					Stream:             parsed.Stream,
+					ResponseHeaders:    resp.Header.Clone(),
+					Duration:           time.Since(startTime),
+					FirstTokenMs:       firstTokenMs,
+					ImageFirstOutputMs: imageFirstOutputMs,
+					ImageCount:         imageCount,
+					ImageSize:          parsed.SizeTier,
+					ImageInputSize:     parsed.Size,
+					ImageOutputSizes:   imageOutputSizes,
 				}, err
 			}
 			return nil, s.handleOpenAIImagesOAuthResponseError(
@@ -1642,23 +1649,28 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				err,
 			)
 		}
+		if imageCount > 0 {
+			ms := int(time.Since(startTime).Milliseconds())
+			imageFirstOutputMs = &ms
+		}
 	}
 	if imageCount <= 0 {
 		imageCount = parsed.N
 	}
 	return &OpenAIForwardResult{
-		RequestID:        resp.Header.Get("x-request-id"),
-		Usage:            usage,
-		Model:            requestModel,
-		UpstreamModel:    requestModel,
-		Stream:           parsed.Stream,
-		ResponseHeaders:  resp.Header.Clone(),
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ImageCount:       imageCount,
-		ImageSize:        parsed.SizeTier,
-		ImageInputSize:   parsed.Size,
-		ImageOutputSizes: imageOutputSizes,
+		RequestID:          resp.Header.Get("x-request-id"),
+		Usage:              usage,
+		Model:              requestModel,
+		UpstreamModel:      requestModel,
+		Stream:             parsed.Stream,
+		ResponseHeaders:    resp.Header.Clone(),
+		Duration:           time.Since(startTime),
+		FirstTokenMs:       firstTokenMs,
+		ImageFirstOutputMs: imageFirstOutputMs,
+		ImageCount:         imageCount,
+		ImageSize:          parsed.SizeTier,
+		ImageInputSize:     parsed.Size,
+		ImageOutputSizes:   imageOutputSizes,
 	}, nil
 }
 

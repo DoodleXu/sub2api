@@ -243,6 +243,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	usage := OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
+	var imageFirstOutputMs *int
 	reqStream := openAIWSPayloadBoolFromRaw(body, "stream", true)
 	eventCount := 0
 	tokenEventCount := 0
@@ -267,17 +268,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	resultWithUsage := func() *OpenAIForwardResult {
 		imageCount := imageCounter.Count()
 		result := &OpenAIForwardResult{
-			RequestID:       responseID,
-			Usage:           usage,
-			Model:           originalModel,
-			UpstreamModel:   mappedModel,
-			ServiceTier:     extractOpenAIServiceTierFromBody(body),
-			ReasoningEffort: ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
-			Stream:          reqStream,
-			OpenAIWSMode:    true,
-			ResponseHeaders: cloneHeader(resp.Header),
-			Duration:        time.Since(turnStart),
-			FirstTokenMs:    firstTokenMs,
+			RequestID:          responseID,
+			Usage:              usage,
+			Model:              originalModel,
+			UpstreamModel:      mappedModel,
+			ServiceTier:        extractOpenAIServiceTierFromBody(body),
+			ReasoningEffort:    ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
+			Stream:             reqStream,
+			OpenAIWSMode:       true,
+			ResponseHeaders:    cloneHeader(resp.Header),
+			Duration:           time.Since(turnStart),
+			FirstTokenMs:       firstTokenMs,
+			ImageFirstOutputMs: imageFirstOutputMs,
 		}
 		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 			result.wsReplayInput = replayInput
@@ -340,6 +342,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 		}
 		imageCounter.AddSSEData(upstreamMessage)
+		if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(upstreamMessage) {
+			ms := int(time.Since(turnStart).Milliseconds())
+			imageFirstOutputMs = &ms
+		}
 
 		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
 			upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)

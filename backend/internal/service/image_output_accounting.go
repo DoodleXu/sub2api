@@ -80,11 +80,82 @@ func (c *openAIImageOutputCounter) AddSSEData(data []byte) {
 			return
 		}
 		if output := root.Get("output"); output.Exists() {
+			if output.IsArray() {
+				c.addOutputArray(output)
+				return
+			}
 			c.addImageOutputItem(output)
 			return
 		}
 		c.addImageOutputItem(root)
 	}
+}
+
+// openAISSEDataContainsImageOutput reports whether an SSE payload contains the
+// first client-usable image bytes or URL. Lifecycle events such as
+// response.created are intentionally excluded; partial images count because
+// they are the first visible generation output.
+func openAISSEDataContainsImageOutput(data []byte) bool {
+	if len(data) == 0 || strings.TrimSpace(string(data)) == "[DONE]" || !gjson.ValidBytes(data) {
+		return false
+	}
+	root := gjson.ParseBytes(data)
+	if root.Get("data").IsArray() {
+		found := false
+		root.Get("data").ForEach(func(_, item gjson.Result) bool {
+			found = imageOutputItemHasContent(item)
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	switch strings.TrimSpace(root.Get("type").String()) {
+	case "response.image_generation_call.partial_image":
+		return strings.TrimSpace(root.Get("partial_image_b64").String()) != ""
+	case "response.output_item.done":
+		return imageOutputItemHasContent(root.Get("item"))
+	case "response.completed", "response.done":
+		return imageOutputArrayHasContent(root.Get("response.output"))
+	case "image_generation.completed":
+		if item := root.Get("item"); item.Exists() {
+			return imageOutputItemHasContent(item)
+		}
+		if output := root.Get("output"); output.Exists() {
+			if output.IsArray() {
+				return imageOutputArrayHasContent(output)
+			}
+			return imageOutputItemHasContent(output)
+		}
+		return imageOutputItemHasContent(root)
+	default:
+		return false
+	}
+}
+
+func imageOutputArrayHasContent(output gjson.Result) bool {
+	if !output.IsArray() {
+		return false
+	}
+	found := false
+	output.ForEach(func(_, item gjson.Result) bool {
+		found = imageOutputItemHasContent(item)
+		return !found
+	})
+	return found
+}
+
+func imageOutputItemHasContent(item gjson.Result) bool {
+	if !item.Exists() || !item.IsObject() {
+		return false
+	}
+	itemType := strings.TrimSpace(item.Get("type").String())
+	if itemType != "" && itemType != "image_generation_call" && itemType != "image_generation.completed" {
+		return false
+	}
+	return strings.TrimSpace(item.Get("result").String()) != "" ||
+		strings.TrimSpace(item.Get("b64_json").String()) != "" ||
+		strings.TrimSpace(item.Get("url").String()) != ""
 }
 
 func (c *openAIImageOutputCounter) AddSSEBody(body string) {
