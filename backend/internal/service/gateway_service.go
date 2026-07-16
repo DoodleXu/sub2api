@@ -576,17 +576,78 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int
 }
 
-// UpstreamFailoverError indicates an upstream error that should trigger account failover.
+// GatewayFailureStage identifies which request stage failed. The zero value is
+// intentionally treated as inference so existing UpstreamFailoverError callers
+// retain their current behavior.
+type GatewayFailureStage string
+
+const (
+	GatewayFailureStageInference   GatewayFailureStage = "inference"
+	GatewayFailureStageAccountAuth GatewayFailureStage = "account_auth"
+)
+
+// GatewayFailureScope identifies whether selecting another account can help.
+type GatewayFailureScope string
+
+const (
+	GatewayFailureScopeAccount  GatewayFailureScope = "account"
+	GatewayFailureScopeProvider GatewayFailureScope = "provider"
+	GatewayFailureScopeRequest  GatewayFailureScope = "request"
+)
+
+// NextAccountAction is tri-state for backwards compatibility. The zero value
+// means legacy retry behavior; only NextAccountStop explicitly short-circuits.
+type NextAccountAction uint8
+
+const (
+	NextAccountLegacyRetry NextAccountAction = iota
+	NextAccountRetry
+	NextAccountStop
+)
+
+type GatewayFailureReason string
+
+// UpstreamFailoverError indicates an upstream or credential error that may
+// trigger account failover. Additive metadata keeps existing composite literals
+// source-compatible and preserves their legacy retry-next-account behavior.
 type UpstreamFailoverError struct {
-	StatusCode             int
-	ResponseBody           []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	StatusCode               int
+	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                    GatewayFailureStage
+	Scope                    GatewayFailureScope
+	Reason                   GatewayFailureReason
+	NextAccountAction        NextAccountAction
+	ClientStatusCode         int
+	ClientMessage            string
 }
 
 func (e *UpstreamFailoverError) Error() string {
+	if e != nil && e.Stage == GatewayFailureStageAccountAuth {
+		return fmt.Sprintf("credential failure: %s (failover)", e.Reason)
+	}
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
+}
+
+func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
+	return e != nil && e.NextAccountAction != NextAccountStop
+}
+
+func (e *UpstreamFailoverError) IsCredentialFailure() bool {
+	return e != nil && e.Stage == GatewayFailureStageAccountAuth
+}
+
+// ShouldReportAccountScheduleFailure prevents provider- and request-scoped
+// credential failures from being misattributed to the selected account. Legacy
+// and inference failures retain their existing scheduler-health behavior.
+func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
+	if e == nil {
+		return false
+	}
+	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
 // sseStreamErrorEventError 表示上游 SSE 流体内出现 event:error 帧。
@@ -1427,7 +1488,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
-	if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(model), "haiku") {
+	if systemPromptInjectionEnabled {
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
@@ -4971,19 +5032,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 检测到"有 CC prompt 但无 billing block"的不一致而判为 third-party。
 		// Parrot 的 transform_request 从不检查客户端 system 内容，直接覆盖。
 		systemRewritten := false
-		if !strings.Contains(strings.ToLower(reqModel), "haiku") {
-			systemRaw, _ := parsed.SystemValue()
-			systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
-			if systemPromptInjectionEnabled {
-				if err := replaceBody(rewriteSystemForNonClaudeCodeWithPromptBlocks(body, systemRaw, systemPrompt, systemPromptBlocks)); err != nil {
-					return nil, err
-				}
-				systemRewritten = true
+		systemRaw, _ := parsed.SystemValue()
+		systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+		if systemPromptInjectionEnabled {
+			if err := replaceBody(rewriteSystemForNonClaudeCodeWithPromptBlocks(body, systemRaw, systemPrompt, systemPromptBlocks)); err != nil {
+				return nil, err
 			}
+			systemRewritten = true
 		}
 
 		// system 被重写时保留 CC prompt 的 cache_control: ephemeral（匹配真实 Claude Code 行为）；
-		// 未重写时（haiku / 注入开关关闭）剥离客户端 cache_control，与原有行为一致。
+		// 未重写时（注入开关关闭）剥离客户端 cache_control，与原有行为一致。
 		// 两种情况下 enforceCacheControlLimit 都会兜底处理上限。
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
 		if s.identityService != nil {
@@ -7290,11 +7349,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 		if mimicClaudeCode {
 			// mimic 路径：原代码跳过白名单透传，incomingBeta 总是空字符串。
 			// 这里传空 string 以严格对齐原行为。
-			requiredBetas := []string{claude.BetaOAuth, claude.BetaInterleavedThinking}
-			if !strings.Contains(strings.ToLower(modelID), "haiku") {
-				requiredBetas = claude.FullClaudeCodeMimicryBetas()
-			}
-			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
+			return mergeAnthropicBetaDropping(claude.FullClaudeCodeMimicryBetas(), "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
 		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
@@ -9009,6 +9064,11 @@ func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID,
 		)
 	}
 	return resolver.Resolve(ctx, userID, groupID, groupDefaultMultiplier)
+}
+
+// ResolveUserGroupRateMultiplier resolves the same cached multiplier used by usage billing.
+func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
+	return s.getUserGroupRateMultiplier(ctx, userID, groupID, groupDefaultMultiplier)
 }
 
 // RecordUsageInput 记录使用量的输入参数。

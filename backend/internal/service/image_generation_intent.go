@@ -47,13 +47,68 @@ func IsImageGenerationIntent(endpoint string, requestedModel string, body []byte
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return false
 	}
-	if model := strings.TrimSpace(gjson.GetBytes(body, "model").String()); isOpenAIImageGenerationModel(model) {
+	var modelSeen, toolsSeen, toolChoiceSeen bool
+	imageIntent := false
+	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "model":
+			if !modelSeen {
+				modelSeen = true
+				imageIntent = isOpenAIImageGenerationModel(strings.TrimSpace(value.String()))
+			}
+		case "tools":
+			if !toolsSeen {
+				toolsSeen = true
+				imageIntent = openAIJSONToolsContainImageGeneration(value)
+			}
+		case "tool_choice":
+			if !toolChoiceSeen {
+				toolChoiceSeen = true
+				imageIntent = openAIJSONToolChoiceSelectsImageGeneration(value)
+			}
+		}
+		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
+	})
+	return imageIntent
+}
+
+func IsImageGenerationIntentForPlatform(endpoint string, requestedModel string, body []byte, platform string) bool {
+	if !strings.EqualFold(strings.TrimSpace(platform), PlatformGrok) {
+		return IsImageGenerationIntent(endpoint, requestedModel, body)
+	}
+	return isExplicitGrokImageGenerationIntent(endpoint, requestedModel, body)
+}
+
+func isExplicitGrokImageGenerationIntent(endpoint string, requestedModel string, body []byte) bool {
+	if IsImageGenerationEndpoint(endpoint) || isOpenAIImageGenerationModel(requestedModel) {
 		return true
 	}
-	if openAIJSONToolsContainImageGeneration(gjson.GetBytes(body, "tools")) {
-		return true
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return false
 	}
-	return openAIJSONToolChoiceSelectsImageGeneration(gjson.GetBytes(body, "tool_choice"))
+	var modelSeen, toolsSeen, toolChoiceSeen bool
+	imageIntent := false
+	parseRawJSONView(body).ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "model":
+			if !modelSeen {
+				modelSeen = true
+				imageIntent = isOpenAIImageGenerationModel(strings.TrimSpace(value.String()))
+			}
+		case "tools":
+			if !toolsSeen {
+				toolsSeen = true
+				imageIntent = openAIJSONToolsContainNativeImageGeneration(value)
+			}
+		case "tool_choice":
+			if !toolChoiceSeen {
+				toolChoiceSeen = true
+				imageIntent = openAIJSONToolChoiceSelectsExplicitImageGeneration(value)
+			}
+		}
+		return !imageIntent && (!modelSeen || !toolsSeen || !toolChoiceSeen)
+	})
+	return imageIntent
 }
 
 // IsImageGenerationIntentMap is the map-backed variant used after service-side request mutation.
@@ -113,6 +168,18 @@ func openAIJSONToolsContainImageGeneration(tools gjson.Result) bool {
 			return false
 		}
 		return true
+	})
+	return found
+}
+
+func openAIJSONToolsContainNativeImageGeneration(tools gjson.Result) bool {
+	if !tools.IsArray() {
+		return false
+	}
+	found := false
+	tools.ForEach(func(_, item gjson.Result) bool {
+		found = isOpenAIImageGenerationType(openAIJSONString(item.Get("type")))
+		return !found
 	})
 	return found
 }
@@ -214,6 +281,33 @@ func openAIJSONToolChoiceSelectsImageGeneration(choice gjson.Result) bool {
 		return true
 	}
 	return false
+}
+
+func openAIJSONToolChoiceSelectsExplicitImageGeneration(choice gjson.Result) bool {
+	if openAIJSONToolChoiceSelectsImageGeneration(choice) {
+		return true
+	}
+	if !choice.IsObject() {
+		return false
+	}
+	if tool := choice.Get("tool"); tool.IsObject() && openAIJSONToolChoiceSelectsExplicitImageGeneration(tool) {
+		return true
+	}
+	if isOpenAIImageGenFunctionReference(openAIJSONString(choice.Get("namespace")), openAIJSONString(choice.Get("name"))) {
+		return true
+	}
+	if fn := choice.Get("function"); fn.IsObject() {
+		return isOpenAIImageGenFunctionReference(openAIJSONString(fn.Get("namespace")), openAIJSONString(fn.Get("name")))
+	}
+	return false
+}
+
+func isOpenAIImageGenFunctionReference(namespace, name string) bool {
+	namespace, name = strings.TrimSpace(namespace), strings.TrimSpace(name)
+	if namespace == "image_gen" && name == "imagegen" {
+		return true
+	}
+	return name == "image_gen.imagegen" || name == "image_gen__imagegen"
 }
 
 func openAIAnyToolChoiceSelectsImageGeneration(choice any) bool {

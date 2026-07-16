@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -136,6 +137,10 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		}
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
+		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
+		// 异步生图任务查询只读取已归属当前 API Key 的结果；即使生成完成后
+		// 消耗了剩余额度，也应允许客户端继续轮询任务结果。
+		skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
 
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
@@ -147,20 +152,19 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			})
 			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
 			setGroupContext(c, apiKey.Group)
-			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+			if !billingInfoRequest {
+				_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+			}
 			c.Next()
 			return
 		}
 
 		// ── 5. 加载订阅（订阅模式时始终加载） ───────────────────────
 
-		// skipBilling: /v1/usage 只需鉴权，跳过所有计费执行
-		skipBilling := c.Request.URL.Path == "/v1/usage"
-
 		var subscription *service.UserSubscription
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 
-		if isSubscriptionType && subscriptionService != nil {
+		if isSubscriptionType && subscriptionService != nil && !billingInfoRequest {
 			sub, subErr := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey)
 			if subErr != nil {
 				if !skipBilling {
@@ -241,10 +245,19 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		})
 		c.Set(string(ContextKeyUserRole), apiKey.User.Role)
 		setGroupContext(c, apiKey.Group)
-		_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+		if !billingInfoRequest {
+			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+		}
 
 		c.Next()
 	}
+}
+
+func isAsyncImageTaskRead(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	return strings.HasPrefix(path, "/v1/images/tasks/") || strings.HasPrefix(path, "/images/tasks/")
 }
 
 func resolveAPIKeySubscription(ctx context.Context, subscriptionService *service.SubscriptionService, apiKey *service.APIKey) (*service.UserSubscription, error) {

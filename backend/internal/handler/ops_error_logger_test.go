@@ -139,6 +139,16 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+// setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
+func setupOpsErrorLogTestQueue(t *testing.T, size int) {
+	t.Helper()
+	resetOpsErrorLoggerStateForTest(t)
+	opsErrorLogOnce.Do(func() {})
+	opsErrorLogMu.Lock()
+	opsErrorLogQueue = make(chan opsErrorLogJob, size)
+	opsErrorLogMu.Unlock()
+}
+
 func TestOpsErrorLoggerMiddleware_SkipsRecoveredUpstreamWhenMarked(t *testing.T) {
 	resetOpsErrorLoggerStateForTest(t)
 	opsErrorLogOnce.Do(func() {})

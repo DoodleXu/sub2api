@@ -6562,7 +6562,7 @@ export default {
         claudeOAuthSystemPromptPlaceholder: '留空时使用内置 Claude Code 扩展提示词。',
         claudeOAuthSystemPromptHint: '兼容旧配置：仅控制第三个注入的 system block。',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
-        claudeOAuthSystemPromptBlocksPlaceholder: '留空时使用内置 3 个 blocks。支持数组或 {"blocks": [...]}。',
+        claudeOAuthSystemPromptBlocksPlaceholder: '留空时使用内置 3 个 blocks。支持数组或带 blocks 字段的对象。',
         claudeOAuthSystemPromptBlocksHint: '每个 block 会保存为带 enabled、type、text、可选 cache_control 的 JSON。{billing_header} 会按请求动态生成；Claude Code 身份提示词和扩展提示词可直接编辑，也可用预设恢复默认值。',
         systemBlockTitle: 'System Block {index}',
         systemBlockPreset: '预设',

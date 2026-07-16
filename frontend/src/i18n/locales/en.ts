@@ -6404,7 +6404,7 @@ export default {
         claudeOAuthSystemPromptPlaceholder: 'Leave empty to use the built-in Claude Code expansion prompt.',
         claudeOAuthSystemPromptHint: 'Legacy compatibility: controls only the third injected system block.',
         claudeOAuthSystemPromptBlocks: 'Claude OAuth System Blocks',
-        claudeOAuthSystemPromptBlocksPlaceholder: 'Leave empty to use the built-in 3 blocks. Supports an array or {"blocks": [...]}.',
+        claudeOAuthSystemPromptBlocksPlaceholder: 'Leave empty to use the built-in 3 blocks. Supports an array or an object with a blocks field.',
         claudeOAuthSystemPromptBlocksHint: 'Each block is saved as JSON with enabled, type, text, and optional cache_control. {billing_header} stays dynamic per request; the Claude Code identity and expansion prompts can be edited directly or restored from presets.',
         systemBlockTitle: 'System Block {index}',
         systemBlockPreset: 'Preset',

@@ -609,6 +609,8 @@ func TestAPIContracts(t *testing.T) {
 							"duration_ms": 100,
 							"first_token_ms": 50,
 							"image_count": 0,
+							"image_input_tokens": 0,
+							"image_input_cost": 0,
 							"image_size": null,
 							"image_input_size": null,
 							"image_output_size": null,
@@ -889,6 +891,7 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_freeze_hours": 0,
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
+					"affiliate_admin_recharge_enabled": false,
 					"default_user_rpm_limit": 0,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
@@ -941,6 +944,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_weight_queue": "",
 					"openai_advanced_scheduler_weight_error_rate": "",
 					"openai_advanced_scheduler_weight_ttft": "",
+					"openai_advanced_scheduler_weight_upstream_cost": "",
 					"openai_advanced_scheduler_weight_reset": "",
 					"openai_advanced_scheduler_weight_quota_headroom": "",
 					"openai_advanced_scheduler_weight_previous_response": "",
@@ -951,11 +955,14 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_queue": "0.7",
 					"openai_advanced_scheduler_effective_weight_error_rate": "0.8",
 					"openai_advanced_scheduler_effective_weight_ttft": "0.5",
+					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
 					"openai_advanced_scheduler_effective_weight_reset": "0",
 					"openai_advanced_scheduler_effective_weight_quota_headroom": "0",
 					"openai_advanced_scheduler_effective_weight_previous_response": "5",
 					"openai_advanced_scheduler_effective_weight_session_sticky": "3",
 					"openai_codex_user_agent":           "",
+					"openai_low_upstream_rate_priority_enabled": false,
+					"openai_oauth_scheduling_rate_multiplier": 1,
 					"openai_fast_policy_settings": {
 						"rules": []
 					},
@@ -993,6 +1000,8 @@ func TestAPIContracts(t *testing.T) {
 					"channel_monitor_default_interval_seconds": 60,
 					"available_channels_enabled": false,
 					"risk_control_enabled": false,
+					"audit_log_retention_days": 180,
+					"session_binding_enabled": true,
 					"cyber_session_block_enabled": false,
 					"cyber_session_block_ttl_seconds": 3600,
 					"affiliate_enabled": false,
@@ -1057,6 +1066,13 @@ func TestAPIContracts(t *testing.T) {
 				"code": 0,
 				"message": "success",
 				"data": {
+					"affiliate_admin_recharge_enabled": false,
+					"audit_log_retention_days": 180,
+					"openai_advanced_scheduler_weight_upstream_cost": "",
+					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
+					"openai_low_upstream_rate_priority_enabled": false,
+					"openai_oauth_scheduling_rate_multiplier": 1,
+					"session_binding_enabled": true,
 					"registration_enabled": true,
 					"email_verify_enabled": false,
 					"registration_email_suffix_whitelist": [],
@@ -1517,12 +1533,12 @@ func newContractDeps(t *testing.T) *contractDeps {
 	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
 	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil, dailyCheckinService)
-	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
@@ -1767,6 +1783,9 @@ func (r *stubUserRepo) UpdateConcurrency(ctx context.Context, id int64, amount i
 
 func (r *stubUserRepo) BatchSetConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
 func (r *stubUserRepo) BatchAddConcurrency(context.Context, []int64, int) (int, error) { return 0, nil }
+func (r *stubUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
 
 func (r *stubUserRepo) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	return false, errors.New("not implemented")
@@ -1874,6 +1893,14 @@ func (stubGroupRepo) Create(ctx context.Context, group *service.Group) error {
 	return errors.New("not implemented")
 }
 
+func (stubGroupRepo) FindByDuplicateOperationID(context.Context, string) (*service.Group, error) {
+	return nil, nil
+}
+
+func (stubGroupRepo) CreateFromSource(context.Context, *service.Group, int64) error {
+	return errors.New("not implemented")
+}
+
 func (stubGroupRepo) GetByID(ctx context.Context, id int64) (*service.Group, error) {
 	return nil, service.ErrGroupNotFound
 }
@@ -1954,6 +1981,10 @@ func (s *stubAccountRepo) SetAccounts(accounts []service.Account) {
 }
 
 func (s *stubAccountRepo) Create(ctx context.Context, account *service.Account) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) CreateWithAccountGroups(context.Context, *service.Account, []service.AccountGroup) error {
 	return errors.New("not implemented")
 }
 

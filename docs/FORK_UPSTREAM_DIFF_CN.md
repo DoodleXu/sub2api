@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-14
+最后更新：2026-07-16
 
 ## 当前对比基线
 
@@ -10,24 +10,36 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `e84ea48d1 feat: 完善 Ops 延迟监控` | 本次 merge 前基线，fork 版本继续保留 `0.1.222` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.155` -> `41cec0db05` | 本次已合入，release 页面：`https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.155` |
-| 上游 main HEAD | `7c717365e` | 仅比 `v0.1.155` 多版本文件同步提交，未作为独立功能同步 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次解决 24 个冲突文件，继续保留 fork 聚合文件结构和六类核心定制行为，同时迁入上游 Server-Timing、Grok 监控与导入、长上下文计费、Responses namespace、Codex manifest 和生图链路修复 |
+| Fork 同步前 HEAD | `95591d977 chore: 准备发布 v0.1.223` | 本次 merge 前基线，fork 版本继续保留 `0.1.223` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.158` -> `26abd19a28` | 本次同时合入 2026-07-16 发布的 `v0.1.157`（`a2779cd5f3`）与 `v0.1.158`，并包含此前未同步的 `v0.1.156` |
+| 上游 main HEAD | `bc2244c83f` | 高于 `v0.1.158` 的 main 变更未作为本次 release 同步范围 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次预检共 68 个冲突（50 个内容冲突、18 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游安全审计、账号复制、上游计费探测、Grok endpoint、Responses/WS 与图片 token 计费修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.155:refs/tags/upstream/v0.1.155 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.155^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.155^{}..HEAD
+git fetch upstream refs/tags/v0.1.157:refs/tags/upstream/v0.1.157 --force
+git fetch upstream refs/tags/v0.1.158:refs/tags/upstream/v0.1.158 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.158^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.158^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.155` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.158` 替换为新的官方 release tag，再更新本节。
 
-本次 `v0.1.155` 合并说明：
+本次 `v0.1.157` + `v0.1.158` 合并说明：
+
+- 安全与管理面迁入上游 session binding、管理员 step-up 2FA、操作审计日志与保留周期设置；前端保留 fork 运营中心入口，并新增独立 `/admin/audit-logs` 路由和侧栏项，避免与 `/admin/ops`、`/admin/operations` 混用。
+- 账号、分组和渠道监控模板复制能力已接入；账号列表同时保留 fork 的归档/取消归档和批量归档操作，并加入上游 API Key 计费倍率探测、自动探测设置、单账号/批量探测和可信度提示。
+- OpenAI Responses 吸收 Agent Identity、invalid task 单次恢复、显式拒绝字段逐项重试、API Key 5xx/413 failover、错误响应脱敏、首输出等待、拼接 JSON 修复和 `response.failed` 调度语义；fork 的 Responses Lite `additional_tools`、字符串 arguments、JSON mode、生图归档与首图 TTFT 字段继续保留。
+- WS v2 合并畸形事件拒绝、终态尾随文档连接隔离、握手/终态模型级瞬时冷却和 idle close；同时继续保留 fork 每 turn 图片计费快照、`image_first_output_ms`、归档输入和 direct relay 生命周期绑定。
+- Grok OAuth 自定义 base URL 现按上游 v0.1.158 行为生效，图片/视频媒体请求仍按 endpoint 类型切换官方 API；健康状态对账要求测试夹具和真实账号同时具备 active/schedulable、refresh token 与未过期 token，避免陈旧账号状态静默复用。
+- 图片计费新增 `image_input_tokens` / `image_input_cost`，后端 usage 提取、计费和前端明细展示已接入；fork 的人民币成本、实际成本、图片归档和 Ops 生图 Avg 口径保持不变。
+- 上游异步图片任务、S3 存储、订阅币种、审计日志和分组复制迁移与服务均已接入；迁移 runner 按完整文件名记录，因此 fork 已存在的同数字前缀迁移不需要重编号。
+- 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义，没有恢复已被 fork 删除的聚合拆分文件；`VERSION` 保持 `0.1.223`，部署仍维持 `linux/amd64` + GHCR 约束。
+
+历史 `v0.1.155` 合并说明：
 
 - 上游 Admin UI 请求级 Server-Timing 已合入，默认关闭；启用后通过响应头展示 total/app/db/redis/dependency 耗时。fork 的 Ops 动态直方图与生图 TTFT 聚合继续保留，两者分别观察“单次后台请求内部耗时”和“历史网关请求延迟”，不共享持久化口径。
 - OpenAI 长上下文计费改为账号级布尔开关且默认关闭，字段、迁移、API、CRS 同步、影子账号继承和 usage log 审计标记已移植进 fork 聚合文件；人民币成本小时聚合与实际成本口径保持不变。
@@ -433,7 +445,14 @@ git diff --name-status refs/tags/upstream/v0.1.155^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方最新 release `v0.1.153`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 Grok OAuth/media 路由、OpenAI 计费、Responses/WS 协议、图片工具 namespace、setup-token 刷新与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.158`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 Agent Identity、Grok OAuth/media 路由、OpenAI 计费探测、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.157 + v0.1.158 合并验证
+
+- 冲突预检：`git merge-tree` 确认 68 个冲突，其中 50 个内容冲突、18 个 modify/delete；按 fork 差异台账逐项移植上游拆分文件语义。
+- 后端：补齐聚合文件覆盖上游拆分文件后遗漏的异步生图任务鉴权、倍率自省、审计/step-up 路由、Grok OAuth 凭证换号、Responses/WS failover、首帧超时、图片 JSON keepalive、上游成本调度设置等语义；`TZ=UTC go test -tags=unit ./... -count=1` 全量通过。
+- 前端：`vue-tsc --noEmit` 通过；账号复制、上游计费探测、审计日志入口、i18n 编译和高级调度 fork 文案的 46 项定向测试通过；全量 Vitest 共 `182` 个测试文件、`1299` 项用例通过，生产构建通过。
+- 保留性检查：签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理及 Ops 生图 Avg 关键入口仍存在；账号页同时展示上游复制/计费探测与 fork 归档能力。
 
 ## v0.1.153 合并验证
 

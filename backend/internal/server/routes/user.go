@@ -18,6 +18,7 @@ func RegisterUserRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
 	jwtAuth servermiddleware.JWTAuthMiddleware,
+	auditLog servermiddleware.AuditLogMiddleware,
 	redisClient *redis.Client,
 	settingService *service.SettingService,
 ) {
@@ -25,6 +26,8 @@ func RegisterUserRoutes(
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(servermiddleware.BackendModeUserGuard(settingService))
+	// 用户管理面变更类操作入审计（含 TOTP 启用/禁用、step-up 验证、密码修改等安全事件）。
+	authenticated.Use(gin.HandlerFunc(auditLog))
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
