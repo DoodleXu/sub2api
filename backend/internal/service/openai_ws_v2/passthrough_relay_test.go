@@ -1,6 +1,7 @@
 package openai_ws_v2
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -197,6 +198,29 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.Len(t, clientWrites, 1)
 	require.Equal(t, coderws.MessageText, clientWrites[0].msgType)
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`, string(clientWrites[0].payload))
+}
+
+func TestRelay_BeforeWriteClientCanRedactPayload(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: []byte(`{"type":"response.failed","response":{"id":"resp_failed","error":{"message":"credential-secret"}}}`),
+	}}, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, relayExit := Relay(ctx, clientConn, upstreamConn, []byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`), RelayOptions{
+		BeforeWriteClient: func(_ coderws.MessageType, payload []byte, _ bool) ([]byte, error) {
+			return bytes.ReplaceAll(payload, []byte("credential-secret"), []byte("[redacted]")), nil
+		},
+	})
+	require.Nil(t, relayExit)
+	clientWrites := clientConn.Writes()
+	require.Len(t, clientWrites, 1)
+	require.NotContains(t, string(clientWrites[0].payload), "credential-secret")
+	require.Contains(t, string(clientWrites[0].payload), "[redacted]")
 }
 
 func TestRelay_FunctionCallOutputBytesPreserved(t *testing.T) {

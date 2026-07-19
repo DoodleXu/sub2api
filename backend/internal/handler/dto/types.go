@@ -283,6 +283,7 @@ type Account struct {
 
 	// 影子账号回填的母账号信息（仅影子非空，源自母账号 Credentials/Extra）
 	ParentEmail                 string `json:"parent_email,omitempty"`
+	ParentAuthMode              string `json:"parent_auth_mode,omitempty"`
 	ParentPlanType              string `json:"parent_plan_type,omitempty"`
 	ParentPrivacyMode           string `json:"parent_privacy_mode,omitempty"`
 	ParentSubscriptionExpiresAt string `json:"parent_subscription_expires_at,omitempty"`

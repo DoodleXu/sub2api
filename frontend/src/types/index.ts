@@ -1039,6 +1039,7 @@ export interface Account {
   quota_dimension?: string
   // 影子账号回填的母账号信息（仅影子非空）
   parent_email?: string
+  parent_auth_mode?: string
   parent_plan_type?: string
   parent_privacy_mode?: string
   parent_subscription_expires_at?: string

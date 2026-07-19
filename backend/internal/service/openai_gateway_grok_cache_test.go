@@ -513,6 +513,34 @@ func TestApplyGrokCacheIdentityWithoutFreeTierRoutingOnlyWritesIdentity(t *testi
 	require.False(t, gjson.GetBytes(body, "tool_choice").Exists())
 }
 
+func TestApplyGrokCacheIdentityFormalGuardOnlyInjectsForKnownFreeAccounts(t *testing.T) {
+	sourceBody := []byte(`{"model":"grok-4.5","input":"hello"}`)
+	free := healthyGrokOAuthGatewayTestAccount(915, "access-token")
+	free.Credentials["subscription_tier"] = "free"
+	paid := healthyGrokOAuthGatewayTestAccount(916, "access-token")
+	paid.Credentials["subscription_tier"] = "supergrok"
+	unknown := healthyGrokOAuthGatewayTestAccount(917, "access-token")
+
+	for _, tt := range []struct {
+		name      string
+		account   *Account
+		wantTools bool
+	}{
+		{name: "known free", account: free, wantTools: true},
+		{name: "paid", account: paid},
+		{name: "unknown", account: unknown},
+		{name: "api key", account: &Account{Platform: PlatformGrok, Type: AccountTypeAPIKey}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := applyGrokResponsesCacheIdentity(sourceBody, sourceBody, "isolated-id", isKnownGrokFreeAccount(tt.account))
+			require.NoError(t, err)
+			require.Equal(t, "isolated-id", gjson.GetBytes(body, "prompt_cache_key").String())
+			require.Equal(t, tt.wantTools, gjson.GetBytes(body, "tools").Exists())
+			require.Equal(t, tt.wantTools, gjson.GetBytes(body, "tool_choice").Exists())
+		})
+	}
+}
+
 func TestGrokCompactRequestSkipsCacheIdentityAndNativeTools(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c := newGrokCacheTestContext(701)

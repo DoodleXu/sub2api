@@ -66,8 +66,9 @@ func (s *OpenAIGatewayService) newStreamHeaderWriter(c *gin.Context, upstream ht
 // readOpenAIUpstreamError 读取上游错误体并把 resp.Body 回卷为可重读的副本
 // （下游 handleXxxErrorResponse 需要再次读取），返回原始错误体与脱敏后的
 // 上游错误消息。
-func (s *OpenAIGatewayService) readOpenAIUpstreamError(resp *http.Response) ([]byte, string) {
+func (s *OpenAIGatewayService) readOpenAIUpstreamError(ctx context.Context, account *Account, resp *http.Response) ([]byte, string) {
 	respBody := s.readUpstreamErrorBody(resp)
+	respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 

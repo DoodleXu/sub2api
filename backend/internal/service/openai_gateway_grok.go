@@ -57,7 +57,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if err != nil {
 		return nil, err
 	}
-	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
+	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, isKnownGrokFreeAccount(account))
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
 	}

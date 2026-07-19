@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -137,13 +138,13 @@ func TestEnsureAgentIdentityTaskPersistsAndRedactsCredentials(t *testing.T) {
 	openAIAgentIdentityAuthAPIBaseURL = server.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
-	repo := &agentIdentityCredentialsRepo{}
 	account := &Account{ID: 7, Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{
 		"auth_mode":          OpenAIAuthModeAgentIdentity,
 		"agent_runtime_id":   key.runtimeID,
 		"agent_private_key":  privateKey,
 		"chatgpt_account_id": "account-test",
 	}}
+	repo := &agentIdentityCredentialsRepo{account: account}
 	service := &OpenAIGatewayService{accountRepo: repo}
 	require.NoError(t, service.ensureAgentIdentityTask(context.Background(), account, ""))
 	require.Equal(t, "task-persisted", account.GetCredential("task_id"))
@@ -195,6 +196,53 @@ func TestEnsureAgentIdentityTaskSharesLockAcrossServicesForSameAccount(t *testin
 	defer registerMu.Unlock()
 	require.Equal(t, 1, registerCalls)
 	require.Equal(t, "task-shared", repo.account.GetCredential("task_id"))
+}
+
+func TestEnsureAgentIdentityTaskDoesNotOverwriteChangedAuthenticationMode(t *testing.T) {
+	key, privateKey := newTestAgentIdentityKey(t)
+	stale := &Account{ID: 9002, Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{
+		"auth_mode":         OpenAIAuthModeAgentIdentity,
+		"agent_runtime_id":  key.runtimeID,
+		"agent_private_key": privateKey,
+		"task_id":           "task-stale",
+	}}
+	current := &Account{ID: stale.ID, Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{
+		"auth_mode":    OpenAIAuthModePersonalAccessToken,
+		"access_token": "current-access-token",
+	}}
+	repo := &agentIdentityCredentialsRepo{account: current}
+	registerCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		registerCalls++
+		_, _ = w.Write([]byte(`{"task_id":"must-not-be-persisted"}`))
+	}))
+	defer server.Close()
+	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	openAIAgentIdentityAuthAPIBaseURL = server.URL
+	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
+
+	err := ensureAgentIdentityTaskForAccount(context.Background(), repo, nil, &sync.Mutex{}, stale, "task-stale")
+
+	require.ErrorContains(t, err, "authentication mode changed")
+	require.Zero(t, registerCalls)
+	require.Nil(t, repo.credentials)
+	require.Equal(t, OpenAIAuthModePersonalAccessToken, current.GetCredential("auth_mode"))
+	require.Equal(t, "current-access-token", current.GetCredential("access_token"))
+}
+
+func TestEnsureAgentIdentityTaskStopsWhenLockedRefreshFails(t *testing.T) {
+	key, privateKey := newTestAgentIdentityKey(t)
+	account := &Account{ID: 9003, Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{
+		"auth_mode":         OpenAIAuthModeAgentIdentity,
+		"agent_runtime_id":  key.runtimeID,
+		"agent_private_key": privateKey,
+	}}
+	repo := &countingAgentIdentityAccountRepo{getByIDErr: errors.New("database unavailable")}
+
+	err := ensureAgentIdentityTaskForAccount(context.Background(), repo, nil, &sync.Mutex{}, account, "")
+
+	require.ErrorContains(t, err, "refresh agent identity account")
+	require.ErrorContains(t, err, "database unavailable")
 }
 
 func cloneAgentIdentityTestAccount(account *Account) *Account {

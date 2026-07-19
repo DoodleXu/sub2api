@@ -190,6 +190,85 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 }
 
+func TestOpenAIWSHTTPBridgeRecoversInvalidAgentIdentityTaskOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	key, privateKey := newTestAgentIdentityKey(t)
+	account := &Account{
+		ID:          9004,
+		Name:        "agent-identity-http-bridge",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Status:      StatusActive,
+		Credentials: map[string]any{
+			"auth_mode":         OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id":  key.runtimeID,
+			"agent_private_key": privateKey,
+			"task_id":           "task-http-bridge-old",
+		},
+	}
+	repo := &countingAgentIdentityAccountRepo{account: account}
+	registerCalls := 0
+	registerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		registerCalls++
+		_, _ = io.WriteString(w, `{"task_id":"task-http-bridge-new"}`)
+	}))
+	defer registerServer.Close()
+	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
+	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
+
+	completedBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_agent_bridge","model":"gpt-5"}}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_agent_bridge","model":"gpt-5","usage":{"input_tokens":1,"output_tokens":1}}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusUnauthorized,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_task_id","message":"task expired"}}`)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(completedBody)),
+		},
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		accountRepo:  repo,
+		httpUpstream: upstream,
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	payload := []byte(`{"type":"response.create","generate":true,"model":"gpt-5","stream":true,"input":"hi"}`)
+	var events [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "", payload, len(payload),
+		"gpt-5", "", "", "", "", 1,
+		func(message []byte) error {
+			events = append(events, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_agent_bridge", result.RequestID)
+	require.Equal(t, 1, registerCalls)
+	require.Equal(t, "task-http-bridge-new", account.GetCredential("task_id"))
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "task-http-bridge-old", agentIdentityTaskIDFromAuthorization(upstream.requests[0].Header.Get("Authorization")))
+	require.Equal(t, "task-http-bridge-new", agentIdentityTaskIDFromAuthorization(upstream.requests[1].Header.Get("Authorization")))
+	require.Len(t, events, 2)
+	require.Equal(t, "response.created", gjson.GetBytes(events[0], "type").String())
+	require.Equal(t, "response.completed", gjson.GetBytes(events[1], "type").String())
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -277,7 +356,8 @@ func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridge(t *testing.T)
 		Concurrency: 1,
 		Status:      StatusActive,
 		Credentials: map[string]any{
-			"base_url": xai.DefaultCLIBaseURL,
+			"base_url":          xai.DefaultCLIBaseURL,
+			"subscription_tier": "free",
 		},
 	}
 

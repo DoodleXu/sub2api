@@ -180,37 +180,28 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
 	}
+	identityMetadata, identityErr := s.agentIdentityRequestMetadata(ctx, account)
+	if identityErr != nil {
+		return nil, fmt.Errorf("resolve agent identity request metadata for http bridge: %w", identityErr)
+	}
+	redactSensitiveBody := identityMetadata.redactor
 
 	body, err := prepareOpenAIWSHTTPBridgeBody(payload)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
 
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
 		upstreamModel := resolveGrokWSUpstreamModel(account, body, originalModel)
 		grokIntentSourceBody := body
 		body, err = patchGrokResponsesBody(body, upstreamModel)
 		if err != nil {
-			releaseUpstreamCtx()
 			return nil, err
 		}
-		body, err = applyGrokResponsesCacheIdentity(body, grokIntentSourceBody, grokCacheIdentity, account.IsGrokOAuth())
+		body, err = applyGrokResponsesCacheIdentity(body, grokIntentSourceBody, grokCacheIdentity, isKnownGrokFreeAccount(account))
 		if err != nil {
-			releaseUpstreamCtx()
 			return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
 		}
-		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, body, token, grokCacheIdentity, s.cfg)
-	} else {
-		upstreamReq, err = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
-	}
-	releaseUpstreamCtx()
-	if err != nil {
-		return nil, err
-	}
-	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
-		upstreamReq.Header.Set(responsesLiteHeader, "true")
 	}
 
 	proxyURL := ""
@@ -223,18 +214,60 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	turnStart := time.Now()
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(http.StatusBadGateway, "Upstream request failed"))
-		return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	agentTaskRecoveryTried := false
+	var resp *http.Response
+	for {
+		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		var upstreamReq *http.Request
+		if account.Platform == PlatformGrok {
+			upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, body, token, grokCacheIdentity, s.cfg)
+		} else {
+			upstreamReq, err = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
+		}
+		releaseUpstreamCtx()
+		if err != nil {
+			return nil, err
+		}
+		identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
+		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+			upstreamReq.Header.Set(responsesLiteHeader, "true")
+		}
 
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		if err != nil {
+			safeErr := sanitizeUpstreamErrorMessage(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
+			_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(http.StatusBadGateway, "Upstream request failed"))
+			return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
+		}
+		if resp.StatusCode < http.StatusBadRequest {
+			break
+		}
+
+		rawRespBody, readErr := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read upstream http bridge error response: %w", redactAgentIdentitySensitiveErrorBoundary(redactSensitiveBody, readErr))
+		}
+		if identityMetadata.isAgentIdentity && !agentTaskRecoveryTried && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, rawRespBody) {
+			agentTaskRecoveryTried = true
+			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); recoveryErr != nil {
+				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
+			}
+			refreshedMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
+			if metadataErr != nil {
+				return nil, fmt.Errorf("refresh agent identity request metadata for http bridge: %w", metadataErr)
+			}
+			identityMetadata = refreshedMetadata
+			redactSensitiveBody = refreshedMetadata.redactor
+			continue
+		}
+
+		respBody := redactSensitiveBody(rawRespBody)
 		if account.Platform == PlatformGrok {
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		} else if shouldCooldownOpenAITransientUpstreamError(resp.StatusCode, respBody) {
+			canonicalModel := canonicalOpenAIAccountSchedulingModel(account, originalModel)
+			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, canonicalModel)
 		}
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if upstreamMsg == "" {
@@ -243,6 +276,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg))
 		return nil, fmt.Errorf("upstream http bridge error: status=%d message=%s", resp.StatusCode, upstreamMsg)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if account.Platform == PlatformGrok {
 		s.updateGrokUsageSnapshot(ctx, account, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
 	}
@@ -259,6 +293,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	replayCollector := &openAIWSToolCallReplayCollector{}
 	firstEventType := ""
 	lastEventType := ""
+	upstreamTerminalEvent := ""
 	sawDone := false
 	wroteDownstream := false
 	clientDisconnected := false
@@ -276,18 +311,19 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	resultWithUsage := func() *OpenAIForwardResult {
 		imageCount := imageCounter.Count()
 		result := &OpenAIForwardResult{
-			RequestID:          responseID,
-			Usage:              usage,
-			Model:              originalModel,
-			UpstreamModel:      mappedModel,
-			ServiceTier:        extractOpenAIServiceTierFromBody(body),
-			ReasoningEffort:    ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
-			Stream:             reqStream,
-			OpenAIWSMode:       true,
-			ResponseHeaders:    cloneHeader(resp.Header),
-			Duration:           time.Since(turnStart),
-			FirstTokenMs:       firstTokenMs,
-			ImageFirstOutputMs: imageFirstOutputMs,
+			RequestID:             responseID,
+			Usage:                 usage,
+			Model:                 originalModel,
+			UpstreamModel:         mappedModel,
+			ServiceTier:           extractOpenAIServiceTierFromBody(body),
+			ReasoningEffort:       ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
+			Stream:                reqStream,
+			OpenAIWSMode:          true,
+			UpstreamTerminalEvent: upstreamTerminalEvent,
+			ResponseHeaders:       cloneHeader(resp.Header),
+			Duration:              time.Since(turnStart),
+			FirstTokenMs:          firstTokenMs,
+			ImageFirstOutputMs:    imageFirstOutputMs,
 		}
 		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 			result.wsReplayInput = replayInput
@@ -328,7 +364,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 
 		upstreamMessage := []byte(trimmedData)
+		if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
+			upstreamMessage = normalized
+		}
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+		if isOpenAIErrorBearingEventType(eventType) {
+			upstreamMessage = redactSensitiveBody(upstreamMessage)
+		}
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
@@ -390,6 +432,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 
 		if eventType == "error" {
+			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, canonicalOpenAIAccountSchedulingModel(account, originalModel), resp.Header, upstreamMessage)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 			s.persistOpenAIWSRateLimitSignal(ctx, account, resp.Header, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMessage := strings.TrimSpace(errMsgRaw)
@@ -399,6 +442,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return resultWithUsage(), errors.New(errMessage)
 		}
 		if isOpenAIWSTerminalEvent(eventType) {
+			upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, canonicalOpenAIAccountSchedulingModel(account, originalModel), resp.Header, upstreamMessage)
 			terminalEventCount++
 			firstTokenMsValue := -1
 			if firstTokenMs != nil {
@@ -423,7 +467,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return resultWithUsage(), fmt.Errorf("read upstream http bridge stream: %w", err)
+		return resultWithUsage(), fmt.Errorf("read upstream http bridge stream: %w", redactAgentIdentitySensitiveError(redactSensitiveBody, err))
 	}
 	if sawDone && eventCount > 0 {
 		return resultWithUsage(), nil

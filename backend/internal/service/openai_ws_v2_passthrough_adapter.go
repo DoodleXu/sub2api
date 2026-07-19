@@ -319,9 +319,16 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if account == nil {
 		return errors.New("account is nil")
 	}
-	if strings.TrimSpace(token) == "" {
-		return errors.New("token is empty")
+	if err := s.validateOpenAIWSAccountToken(ctx, account, token); err != nil {
+		return err
 	}
+	identityMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
+	if metadataErr != nil {
+		return fmt.Errorf("resolve agent identity credentials for ws redaction: %w", metadataErr)
+	}
+	redactSensitiveBody := identityMetadata.redactor
+	ctx = withAgentIdentityRequestRedactor(ctx, redactSensitiveBody)
+	taskIDUsed := identityMetadata.taskIDUsed
 	requestModel := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String())
 	requestPreviousResponseID := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "previous_response_id").String())
 	logOpenAIWSV2Passthrough(
@@ -450,24 +457,59 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough dialer is nil")
 	}
 
-	dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
-	defer cancelDial()
-	upstreamConn, statusCode, handshakeHeaders, err := dialer.Dial(dialCtx, wsURL, headers, proxyURL)
+	var upstreamConn openAIWSClientConn
+	var statusCode int
+	var handshakeHeaders http.Header
+	agentTaskRecoveryTried := false
+	for {
+		refreshedHeaders, refreshErr := s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
+		if refreshErr != nil {
+			return fmt.Errorf("refresh ws authentication headers: %w", refreshErr)
+		}
+		headers = refreshedHeaders
+		if requestTaskID := agentIdentityTaskIDFromAuthorization(headers.Get("Authorization")); requestTaskID != "" {
+			taskIDUsed = requestTaskID
+			identityMetadata.redactionState.add(requestTaskID)
+		}
+		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
+		cancelDial()
+		if err == nil {
+			break
+		}
+		dialErr := normalizeOpenAIWSPassthroughDialError(err, statusCode, handshakeHeaders)
+		if !agentTaskRecoveryTried && isAgentIdentityTaskInvalidWSDialError(dialErr) && identityMetadata.isAgentIdentity {
+			agentTaskRecoveryTried = true
+			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, taskIDUsed); recoveryErr != nil {
+				return fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
+			}
+			refreshedMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
+			if metadataErr != nil {
+				return fmt.Errorf("refresh agent identity credentials for ws redaction: %w", metadataErr)
+			}
+			identityMetadata = refreshedMetadata
+			redactSensitiveBody = refreshedMetadata.redactor
+			taskIDUsed = refreshedMetadata.taskIDUsed
+			continue
+		}
+		break
+	}
 	if err != nil {
+		safeDialErr := redactAgentIdentitySensitiveErrorBoundary(redactSensitiveBody, err)
 		logOpenAIWSV2Passthrough(
 			"relay_dial_failed account_id=%d status_code=%d err=%s",
 			account.ID,
 			statusCode,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(safeDialErr.Error(), openAIWSLogValueMaxLen),
 		)
 		if statusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
+			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(safeDialErr.Error()))
 			return &UpstreamFailoverError{
 				StatusCode:      http.StatusTooManyRequests,
 				ResponseHeaders: cloneHeader(handshakeHeaders),
 			}
 		}
-		return s.mapOpenAIWSPassthroughDialError(err, statusCode, handshakeHeaders)
+		return s.mapOpenAIWSPassthroughDialErrorWithSafeCause(err, safeDialErr, statusCode, handshakeHeaders)
 	}
 	defer func() {
 		_ = upstreamConn.Close()
@@ -661,16 +703,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					hooks.AfterTurn(turnNo, turnResult, nil)
 				}
 			},
-			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
-				if msgType != coderws.MessageText || wroteDownstream {
-					return nil
+			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error) {
+				if msgType != coderws.MessageText {
+					return payload, nil
 				}
-				if eventType, _, _ := parseOpenAIWSEventEnvelope(payload); eventType != "error" {
-					return nil
+				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				if isOpenAIErrorBearingEventType(eventType) {
+					payload = redactSensitiveBody(payload)
+				}
+				if wroteDownstream || eventType != "error" {
+					return payload, nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
 				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
-					return nil
+					return payload, nil
 				}
 				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
 				logOpenAIWSV2Passthrough(
@@ -680,13 +726,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
 					truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
 				)
-				return &UpstreamFailoverError{
+				return payload, &UpstreamFailoverError{
 					StatusCode:      http.StatusTooManyRequests,
 					ResponseBody:    append([]byte(nil), payload...),
 					ResponseHeaders: cloneHeader(handshakeHeaders),
 				}
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {
+				safeTraceError := redactAgentIdentitySensitiveText(redactSensitiveBody, event.Error)
 				logOpenAIWSV2Passthrough(
 					"relay_trace account_id=%d stage=%s direction=%s msg_type=%s bytes=%d graceful=%v wrote_downstream=%v err=%s",
 					account.ID,
@@ -696,7 +743,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					event.PayloadBytes,
 					event.Graceful,
 					event.WroteDownstream,
-					truncateOpenAIWSLogValue(event.Error, openAIWSLogValueMaxLen),
+					truncateOpenAIWSLogValue(safeTraceError, openAIWSLogValueMaxLen),
 				)
 			},
 		},
@@ -752,12 +799,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		return nil
 	}
+	safeRelayErr := redactOpenAIWSPassthroughRelayError(redactSensitiveBody, relayExit.Err)
 	logOpenAIWSV2Passthrough(
 		"relay_failed account_id=%d stage=%s wrote_downstream=%v err=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",
 		account.ID,
 		truncateOpenAIWSLogValue(relayExit.Stage, openAIWSLogValueMaxLen),
 		relayExit.WroteDownstream,
-		truncateOpenAIWSLogValue(relayErrorText(relayExit.Err), openAIWSLogValueMaxLen),
+		truncateOpenAIWSLogValue(relayErrorText(safeRelayErr), openAIWSLogValueMaxLen),
 		result.Duration.Milliseconds(),
 		relayResult.ClientToUpstreamFrames,
 		relayResult.UpstreamToClientFrames,
@@ -765,7 +813,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnCount,
 	)
 
-	relayErr := relayExit.Err
+	relayErr := safeRelayErr
 	if relayExit.Stage == "idle_timeout" {
 		relayErr = NewOpenAIWSClientCloseError(
 			coderws.StatusPolicyViolation,
@@ -784,28 +832,60 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	return turnErr
 }
 
-func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialError(
-	err error,
+func redactOpenAIWSPassthroughRelayError(redactor agentIdentityBodyRedactor, rawErr error) error {
+	if rawErr == nil {
+		return nil
+	}
+	safeErr := redactAgentIdentitySensitiveError(redactor, rawErr)
+	var failoverErr *UpstreamFailoverError
+	if errors.As(rawErr, &failoverErr) && failoverErr != nil {
+		safeFailover := *failoverErr
+		safeFailover.ResponseBody = append([]byte(nil), failoverErr.ResponseBody...)
+		if redactor != nil {
+			safeFailover.ResponseBody = redactor(safeFailover.ResponseBody)
+		}
+		safeFailover.ResponseHeaders = cloneHeader(failoverErr.ResponseHeaders)
+		safeFailover.ClientMessage = redactAgentIdentitySensitiveText(redactor, failoverErr.ClientMessage)
+		return &safeFailover
+	}
+	var closeErr *OpenAIWSClientCloseError
+	if errors.As(rawErr, &closeErr) && closeErr != nil {
+		return NewOpenAIWSClientCloseError(
+			closeErr.StatusCode(),
+			redactAgentIdentitySensitiveText(redactor, closeErr.Reason()),
+			safeErr,
+		)
+	}
+	if errors.Is(rawErr, context.Canceled) {
+		return fmt.Errorf("%w: %s", context.Canceled, safeErr.Error())
+	}
+	if errors.Is(rawErr, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %s", context.DeadlineExceeded, safeErr.Error())
+	}
+	return safeErr
+}
+
+func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialErrorWithSafeCause(
+	rawErr error,
+	safeErr error,
 	statusCode int,
 	handshakeHeaders http.Header,
 ) error {
-	if err == nil {
+	if rawErr == nil {
 		return nil
 	}
-	wrappedErr := err
-	var dialErr *openAIWSDialError
-	if !errors.As(err, &dialErr) {
-		wrappedErr = &openAIWSDialError{
-			StatusCode:      statusCode,
-			ResponseHeaders: cloneHeader(handshakeHeaders),
-			Err:             err,
-		}
+	if safeErr == nil {
+		safeErr = rawErr
 	}
+	wrappedErr := error(normalizeOpenAIWSPassthroughDialError(safeErr, statusCode, handshakeHeaders))
 
-	if errors.Is(err, context.Canceled) {
-		return err
+	if errors.Is(rawErr, context.Canceled) {
+		if safeErr == rawErr {
+			return rawErr
+		}
+		return fmt.Errorf("%w: %s", context.Canceled, safeErr.Error())
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(rawErr, context.DeadlineExceeded) {
 		return NewOpenAIWSClientCloseError(
 			coderws.StatusTryAgainLater,
 			"upstream websocket connect timeout",
@@ -834,6 +914,27 @@ func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialError(
 		)
 	}
 	return fmt.Errorf("openai ws passthrough dial: %w", wrappedErr)
+}
+
+func normalizeOpenAIWSPassthroughDialError(err error, statusCode int, handshakeHeaders http.Header) *openAIWSDialError {
+	if err == nil {
+		return nil
+	}
+	var dialErr *openAIWSDialError
+	if errors.As(err, &dialErr) && dialErr != nil {
+		return dialErr
+	}
+	var handshakeErr *openAIWSHandshakeError
+	var responseBody []byte
+	if errors.As(err, &handshakeErr) && handshakeErr != nil {
+		responseBody = append([]byte(nil), handshakeErr.Body...)
+	}
+	return &openAIWSDialError{
+		StatusCode:      statusCode,
+		ResponseBody:    responseBody,
+		ResponseHeaders: cloneHeader(handshakeHeaders),
+		Err:             err,
+	}
 }
 
 func openaiwsv2RelayMessageTypeName(msgType coderws.MessageType) string {

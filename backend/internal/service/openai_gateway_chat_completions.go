@@ -2,12 +2,10 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -246,6 +244,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	identityMetadata, identityErr := s.agentIdentityRequestMetadata(ctx, account)
+	if identityErr != nil {
+		return nil, fmt.Errorf("resolve agent identity request metadata: %w", identityErr)
+	}
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -260,6 +262,8 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
+	identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
+	c.Request = c.Request.WithContext(withAgentIdentityRequestRedactor(c.Request.Context(), identityMetadata.redactor))
 
 	if promptCacheKey != "" {
 		apiKeyID := getAPIKeyIDFromContext(c)
@@ -284,15 +288,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody := s.readUpstreamErrorBody(resp)
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
-
-		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
-		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			expectedTaskID := account.GetCredential("task_id")
-			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
+		respBody, upstreamMsg := s.readOpenAIUpstreamError(c.Request.Context(), account, resp)
+		if !agentIdentityTaskRecoveryWasTried(ctx) && identityMetadata.isAgentIdentity && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			if err := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); err != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
 			}
 			return s.ForwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
@@ -445,8 +443,12 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	redactSensitiveBody, redactorErr := s.agentIdentitySensitiveBodyRedactor(c.Request.Context(), account)
+	if redactorErr != nil {
+		return nil, fmt.Errorf("resolve agent identity credentials for buffered chat redaction: %w", redactorErr)
+	}
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai chat_completions buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai chat_completions buffered", requestID, redactSensitiveBody)
 	if err != nil {
 		return nil, err
 	}
@@ -527,6 +529,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	requestBodyLen int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	redactSensitiveBody, redactorErr := s.agentIdentitySensitiveBodyRedactor(c.Request.Context(), account)
+	if redactorErr != nil {
+		return nil, fmt.Errorf("resolve agent identity credentials for chat stream redaction: %w", redactorErr)
+	}
 
 	headersWritten := false
 	writeStreamHeaders := func() {
@@ -599,6 +605,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
+		}
+		if eventType := strings.TrimSpace(gjson.Get(payload, "type").String()); isOpenAIErrorBearingEventType(eventType) {
+			payload = string(redactSensitiveBody([]byte(payload)))
 		}
 
 		var event apicompat.ResponsesStreamEvent
@@ -822,7 +831,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	handleScanErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.L().Warn("openai chat_completions stream: read error",
-				zap.Error(err),
+				zap.Error(redactAgentIdentitySensitiveError(redactSensitiveBody, err)),
 				zap.String("request_id", requestID),
 			)
 		}
@@ -861,8 +870,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, err)
 			handleScanErr(err)
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
@@ -933,8 +943,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
+				safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, ev.err)
 				handleScanErr(ev.err)
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

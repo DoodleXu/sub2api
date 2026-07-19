@@ -5,15 +5,20 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestAccountTestServiceOpenAICompactAgentIdentityUsesFreshAssertion(t *testing.T) {
@@ -185,6 +190,125 @@ func TestOpenAIAgentIdentityErrorRedactionDoesNotLeakCredentialValues(t *testing
 	require.Contains(t, string(redacted), "[redacted]")
 }
 
+func TestReadOpenAIUpstreamErrorRedactsBeforeMessageExtraction(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":        OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id": "runtime-secret",
+			"task_id":          "task-secret",
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"message":"runtime-secret task-secret AgentAssertion assertion-secret"}}`,
+		)),
+	}
+	svc := &OpenAIGatewayService{}
+
+	body, message := svc.readOpenAIUpstreamError(context.Background(), account, resp)
+	require.NotContains(t, string(body), "runtime-secret")
+	require.NotContains(t, string(body), "task-secret")
+	require.NotContains(t, string(body), "assertion-secret")
+	require.NotContains(t, message, "runtime-secret")
+	require.Contains(t, message, "[redacted]")
+	rewound, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, rewound)
+}
+
+func TestAgentIdentityStreamingErrorsAreRedactedBeforeProtocolConversion(t *testing.T) {
+	account := &Account{
+		ID:       27,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":        OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id": "runtime-stream-secret",
+			"task_id":          "task-stream-secret",
+		},
+	}
+	payload := `data: {"type":"response.failed","error":{"code":"content_policy","message":"runtime-stream-secret task-stream-secret AgentAssertion assertion-stream-secret"}}` + "\n\n"
+
+	tests := []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) error
+	}{
+		{
+			name: "chat completions",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) error {
+				_, err := svc.handleChatStreamingResponse(resp, c, account, "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now(), 0)
+				return err
+			},
+		},
+		{
+			name: "anthropic messages",
+			run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) error {
+				_, err := svc.handleAnthropicStreamingResponse(resp, c, account, "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/test", nil)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(payload)),
+			}
+			err := tt.run(&OpenAIGatewayService{cfg: &config.Config{}}, resp, c)
+			require.Error(t, err)
+			combined := err.Error() + recorder.Body.String()
+			require.NotContains(t, combined, "runtime-stream-secret")
+			require.NotContains(t, combined, "task-stream-secret")
+			require.NotContains(t, combined, "assertion-stream-secret")
+			require.Contains(t, combined, "[redacted]")
+		})
+	}
+}
+
+func TestAgentIdentityStreamingReadErrorsAreRedacted(t *testing.T) {
+	account := &Account{
+		ID: 28, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode": OpenAIAuthModeAgentIdentity, "agent_runtime_id": "runtime-read-secret",
+			"task_id": "task-read-secret",
+		},
+	}
+	readErr := errors.New("proxy read failed runtime-read-secret task-read-secret AgentAssertion assertion-read-secret")
+	tests := []struct {
+		name string
+		run  func(*OpenAIGatewayService, *http.Response, *gin.Context) error
+	}{
+		{name: "chat", run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) error {
+			_, err := svc.handleChatStreamingResponse(resp, c, account, "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now(), 0)
+			return err
+		}},
+		{name: "messages", run: func(svc *OpenAIGatewayService, resp *http.Response, c *gin.Context) error {
+			_, err := svc.handleAnthropicStreamingResponse(resp, c, account, "gpt-5.4", "gpt-5.4", "gpt-5.4", time.Now())
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/test", nil)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: errReadCloser{err: readErr}}
+			err := tt.run(&OpenAIGatewayService{cfg: &config.Config{}}, resp, c)
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "runtime-read-secret")
+			require.NotContains(t, err.Error(), "task-read-secret")
+			require.NotContains(t, err.Error(), "assertion-read-secret")
+			require.Contains(t, err.Error(), "[redacted]")
+		})
+	}
+}
+
 func TestOpenAIAuthenticationHeadersPreserveOAuthPATAndAPIKeyBearerModes(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	tests := []struct {
@@ -214,6 +338,16 @@ func TestOpenAIWSAgentIdentityRecoveryRequiresTaskInvalidBody(t *testing.T) {
 		StatusCode:   http.StatusUnauthorized,
 		ResponseBody: []byte(`{"error":{"code":"invalid_task_id"}}`),
 	}))
+	passthroughDialErr := normalizeOpenAIWSPassthroughDialError(
+		&openAIWSHandshakeError{
+			Body: []byte(`{"error":{"code":"invalid_task_id"}}`),
+			Err:  errors.New("handshake rejected"),
+		},
+		http.StatusUnauthorized,
+		http.Header{"X-Request-Id": []string{"req-invalid-task"}},
+	)
+	require.True(t, isAgentIdentityTaskInvalidWSDialError(passthroughDialErr))
+	require.Equal(t, "req-invalid-task", passthroughDialErr.ResponseHeaders.Get("X-Request-Id"))
 }
 
 func TestValidateOpenAIWSBearerTokenAllowsAgentIdentityWithoutStoredToken(t *testing.T) {
@@ -240,6 +374,273 @@ func TestValidateOpenAIWSBearerTokenAllowsAgentIdentityWithoutStoredToken(t *tes
 			require.EqualError(t, validateOpenAIWSBearerToken(account, ""), "token is empty")
 		}
 	})
+}
+
+func TestValidateOpenAIWSAccountTokenResolvesAgentIdentityShadow(t *testing.T) {
+	parentID := int64(81)
+	parent := Account{
+		ID:       parentID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode": OpenAIAuthModeAgentIdentity,
+		},
+	}
+	shadow := &Account{
+		ID:              82,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		ParentAccountID: &parentID,
+	}
+	svc := &OpenAIGatewayService{accountRepo: &snapshotUpdateAccountRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{parent}},
+	}}
+
+	require.NoError(t, svc.validateOpenAIWSAccountToken(context.Background(), shadow, ""))
+}
+
+func TestRecoverAgentIdentityTaskUsesShadowRequestTaskSnapshot(t *testing.T) {
+	key, privateKey := newTestAgentIdentityKey(t)
+	parentID := int64(831)
+	parent := &Account{
+		ID:       parentID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":         OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id":  key.runtimeID,
+			"agent_private_key": privateKey,
+			"task_id":           "task-shadow-old",
+		},
+	}
+	shadow := &Account{
+		ID:              832,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		ParentAccountID: &parentID,
+	}
+	repo := &countingAgentIdentityAccountRepo{account: parent}
+	registerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"task_id":"task-shadow-new"}`)
+	}))
+	defer registerServer.Close()
+	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
+	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
+
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	require.NoError(t, svc.recoverAgentIdentityTask(context.Background(), shadow, "task-shadow-old"))
+	require.Equal(t, "task-shadow-new", parent.GetCredential("task_id"))
+}
+
+func TestRecoverAgentIdentityTaskDoesNotReplaceConcurrentlyRefreshedShadowTask(t *testing.T) {
+	key, privateKey := newTestAgentIdentityKey(t)
+	parentID := int64(833)
+	parent := &Account{
+		ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode": OpenAIAuthModeAgentIdentity, "agent_runtime_id": key.runtimeID,
+			"agent_private_key": privateKey, "task_id": "task-old",
+		},
+	}
+	shadow := &Account{ID: 834, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+	repo := &countingAgentIdentityAccountRepo{account: parent}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	metadata, err := svc.agentIdentityRequestMetadata(context.Background(), shadow)
+	require.NoError(t, err)
+	require.Equal(t, "task-old", metadata.taskIDUsed)
+
+	parent.Credentials["task_id"] = "task-concurrently-refreshed"
+	require.NoError(t, svc.recoverAgentIdentityTask(context.Background(), shadow, metadata.taskIDUsed))
+	require.Equal(t, "task-concurrently-refreshed", parent.GetCredential("task_id"))
+}
+
+func TestAgentIdentityTaskIDFromAuthorization(t *testing.T) {
+	key, _ := newTestAgentIdentityKey(t)
+	key.taskID = "task-used-on-wire"
+	assertion, err := buildAgentAssertion(key, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, key.taskID, agentIdentityTaskIDFromAuthorization(assertion))
+	require.Empty(t, agentIdentityTaskIDFromAuthorization("Bearer token"))
+}
+
+func TestAgentIdentitySensitiveBodyRedactorResolvesShadowOncePerRequest(t *testing.T) {
+	parentID := int64(841)
+	parent := &Account{
+		ID:       parentID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":        OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id": "runtime-shadow-secret",
+			"task_id":          "task-shadow-secret",
+		},
+	}
+	shadow := &Account{ID: 842, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+	repo := &countingAgentIdentityAccountRepo{account: parent}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+
+	redact, err := svc.agentIdentitySensitiveBodyRedactor(context.Background(), shadow)
+	require.NoError(t, err)
+	for range 100 {
+		body := redact([]byte(`{"error":{"message":"runtime-shadow-secret task-shadow-secret"}}`))
+		require.NotContains(t, string(body), "runtime-shadow-secret")
+		require.NotContains(t, string(body), "task-shadow-secret")
+	}
+	require.Equal(t, 1, repo.getByIDCalls)
+}
+
+func TestAgentIdentitySensitiveBodyRedactorFailsClosedWhenShadowResolutionFails(t *testing.T) {
+	parentID := int64(851)
+	shadow := &Account{ID: 852, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+	repo := &countingAgentIdentityAccountRepo{getByIDErr: errors.New("repository unavailable")}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+
+	redact, err := svc.agentIdentitySensitiveBodyRedactor(context.Background(), shadow)
+	require.Error(t, err)
+	require.Nil(t, redact)
+	require.Equal(t, 1, repo.getByIDCalls)
+}
+
+func TestRedactAgentIdentitySensitiveBodyFailsClosedWhenShadowResolutionFails(t *testing.T) {
+	parentID := int64(861)
+	shadow := &Account{ID: 862, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+	repo := &countingAgentIdentityAccountRepo{getByIDErr: errors.New("repository unavailable")}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	body := []byte(`{"error":{"message":"runtime-secret task-secret AgentAssertion assertion-secret"}}`)
+
+	redacted := svc.redactAgentIdentitySensitiveBody(context.Background(), shadow, body)
+	require.JSONEq(t, `{"error":{"type":"upstream_error","message":"[redacted]"}}`, string(redacted))
+	require.NotContains(t, string(redacted), "runtime-secret")
+	require.NotContains(t, string(redacted), "task-secret")
+	require.NotContains(t, string(redacted), "assertion-secret")
+	require.Equal(t, 1, repo.getByIDCalls)
+}
+
+func TestRedactAgentIdentitySensitiveBodyPreservesTerminalEventTypeWhenFailingClosed(t *testing.T) {
+	parentID := int64(863)
+	shadow := &Account{ID: 864, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+	svc := &OpenAIGatewayService{accountRepo: &countingAgentIdentityAccountRepo{getByIDErr: errors.New("repository unavailable")}}
+
+	redacted := svc.redactAgentIdentitySensitiveBody(context.Background(), shadow, []byte(`{"type":"response.failed","response":{"error":{"message":"task-secret"}}}`))
+	require.Equal(t, "response.failed", gjson.GetBytes(redacted, "type").String())
+	require.Equal(t, "failed", gjson.GetBytes(redacted, "response.status").String())
+	require.NotContains(t, string(redacted), "task-secret")
+}
+
+func TestAgentIdentitySensitiveErrorRedactsWebSocketCloseReason(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":        OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id": "runtime-close-secret",
+			"task_id":          "task-close-secret",
+		},
+	}
+	svc := &OpenAIGatewayService{}
+	redact, err := svc.agentIdentitySensitiveBodyRedactor(context.Background(), account)
+	require.NoError(t, err)
+	rawErr := coderws.CloseError{
+		Code:   coderws.StatusPolicyViolation,
+		Reason: "runtime-close-secret task-close-secret AgentAssertion assertion-close-secret",
+	}
+
+	safeErr := redactAgentIdentitySensitiveError(redact, rawErr)
+	require.Equal(t, coderws.StatusPolicyViolation, coderws.CloseStatus(rawErr), "classification must use the original error")
+	require.NotContains(t, safeErr.Error(), "runtime-close-secret")
+	require.NotContains(t, safeErr.Error(), "task-close-secret")
+	require.NotContains(t, safeErr.Error(), "assertion-close-secret")
+	require.Contains(t, safeErr.Error(), "[redacted]")
+}
+
+func TestAgentIdentitySensitiveErrorDoesNotExposeRawCause(t *testing.T) {
+	redactor := func(body []byte) []byte { return bytes.ReplaceAll(body, []byte("task-secret"), []byte("[redacted]")) }
+	rawErr := &agentIdentitySecretTestError{secret: "task-secret", cause: context.DeadlineExceeded}
+	safeErr := redactAgentIdentitySensitiveError(redactor, rawErr)
+
+	require.ErrorIs(t, rawErr, context.DeadlineExceeded, "classification must happen before redaction")
+	require.NotErrorIs(t, safeErr, context.DeadlineExceeded)
+	require.Nil(t, errors.Unwrap(safeErr))
+	var recovered *agentIdentitySecretTestError
+	require.False(t, errors.As(safeErr, &recovered))
+	require.NotContains(t, safeErr.Error(), "task-secret")
+	require.Contains(t, safeErr.Error(), "[redacted]")
+}
+
+type agentIdentitySecretTestError struct {
+	secret string
+	cause  error
+}
+
+func (e *agentIdentitySecretTestError) Error() string { return e.secret + ": " + e.cause.Error() }
+func (e *agentIdentitySecretTestError) Unwrap() error { return e.cause }
+
+func TestAgentIdentityRequestRedactorTracksTaskIDUsedOnWire(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"auth_mode":        OpenAIAuthModeAgentIdentity,
+			"agent_runtime_id": "runtime-secret",
+			"task_id":          "task-snapshot",
+		},
+	}
+	svc := &OpenAIGatewayService{}
+	metadata, err := svc.agentIdentityRequestMetadata(context.Background(), account)
+	require.NoError(t, err)
+	metadata.bindTaskID("task-used-on-wire")
+
+	ctx := withAgentIdentityRequestRedactor(context.Background(), metadata.redactor)
+	redact, err := svc.agentIdentitySensitiveBodyRedactor(ctx, account)
+	require.NoError(t, err)
+	redacted := string(redact([]byte("task-snapshot task-used-on-wire runtime-secret")))
+	require.NotContains(t, redacted, "task-snapshot")
+	require.NotContains(t, redacted, "task-used-on-wire")
+	require.NotContains(t, redacted, "runtime-secret")
+}
+
+func TestAgentIdentityRequestRedactorBindsFullAndBareAssertion(t *testing.T) {
+	key, _ := newTestAgentIdentityKey(t)
+	assertion, err := buildAgentAssertion(key, time.Now())
+	require.NoError(t, err)
+	state := newAgentIdentityRedactionState(nil)
+	metadata := agentIdentityRequestMetadata{redactionState: state, redactor: state.redact}
+	metadata.bindAuthorization(assertion)
+
+	redacted := string(metadata.redactor([]byte(assertion + " " + strings.TrimPrefix(assertion, "AgentAssertion "))))
+	require.NotContains(t, redacted, strings.TrimPrefix(assertion, "AgentAssertion "))
+	require.NotContains(t, redacted, assertion)
+}
+
+func TestAgentIdentitySensitiveDialErrorDropsRawBodyAndCause(t *testing.T) {
+	redactor := agentIdentityBodyRedactor(func(body []byte) []byte {
+		return bytes.ReplaceAll(body, []byte("dial-secret"), []byte("[redacted]"))
+	})
+	raw := &openAIWSDialError{
+		StatusCode:   http.StatusUnauthorized,
+		ResponseBody: []byte(`{"error":{"message":"dial-secret"}}`),
+		Err:          errors.New("dial-secret"),
+	}
+	safe := redactAgentIdentitySensitiveDialError(redactor, raw)
+	var safeDial *openAIWSDialError
+	require.ErrorAs(t, safe, &safeDial)
+	require.NotContains(t, string(safeDial.ResponseBody), "dial-secret")
+	require.NotContains(t, safe.Error(), "dial-secret")
+	require.Nil(t, errors.Unwrap(safeDial.Err))
+}
+
+func TestOpenAIWSPassthroughDialErrorClassifiesRawErrorAndReturnsSafeCause(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	rawErr := fmt.Errorf("runtime-dial-secret: %w", context.DeadlineExceeded)
+	safeErr := errors.New("[redacted]: context deadline exceeded")
+
+	mapped := svc.mapOpenAIWSPassthroughDialErrorWithSafeCause(rawErr, safeErr, 0, nil)
+	var closeErr *OpenAIWSClientCloseError
+	require.ErrorAs(t, mapped, &closeErr)
+	require.Equal(t, coderws.StatusTryAgainLater, closeErr.statusCode)
+	require.NotContains(t, mapped.Error(), "runtime-dial-secret")
+	require.Contains(t, mapped.Error(), "[redacted]")
 }
 
 func TestOpenAIWSConnPoolHeadersFactoryRunsAtDialAndStalePrewarmIsDiscarded(t *testing.T) {
@@ -456,6 +857,26 @@ func decodeAgentAssertionTask(t *testing.T, header string) string {
 type agentIdentityForwardRepo struct {
 	AccountRepository
 	account *Account
+}
+
+type countingAgentIdentityAccountRepo struct {
+	AccountRepository
+	account      *Account
+	getByIDCalls int
+	getByIDErr   error
+}
+
+func (r *countingAgentIdentityAccountRepo) GetByID(_ context.Context, _ int64) (*Account, error) {
+	r.getByIDCalls++
+	if r.getByIDErr != nil {
+		return nil, r.getByIDErr
+	}
+	return r.account, nil
+}
+
+func (r *countingAgentIdentityAccountRepo) UpdateCredentials(_ context.Context, _ int64, credentials map[string]any) error {
+	r.account.Credentials = credentials
+	return nil
 }
 
 type agentIdentityWSInvalidationRecorder struct {

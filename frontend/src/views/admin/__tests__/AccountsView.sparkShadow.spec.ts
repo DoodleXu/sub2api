@@ -272,7 +272,7 @@ describe('admin AccountsView — 影子行 parent_* OR 兜底展示', () => {
     vi.unstubAllGlobals()
   })
 
-  it('影子行 email 单元格显示 parent_email，PlatformTypeBadge 接收 parent_plan_type/parent_privacy_mode', async () => {
+  it('影子行显示母账号身份信息，PlatformTypeBadge 接收 parent auth/plan/privacy', async () => {
     const shadowAccount = {
       id: 100,
       name: '影子账号',
@@ -280,6 +280,7 @@ describe('admin AccountsView — 影子行 parent_* OR 兜底展示', () => {
       type: 'oauth',
       parent_account_id: 1,
       parent_email: 'parent@example.com',
+      parent_auth_mode: 'agent_identity',
       parent_plan_type: 'plus',
       parent_privacy_mode: 'false',
       parent_subscription_expires_at: '2027-01-01T00:00:00Z',
@@ -297,6 +298,7 @@ describe('admin AccountsView — 影子行 parent_* OR 兜底展示', () => {
     // 2. PlatformTypeBadge 收到 parent_plan_type 和 parent_privacy_mode
     const badge = wrapper.findComponent(PlatformTypeBadge)
     expect(badge.exists()).toBe(true)
+    expect(badge.props('authMode')).toBe('agent_identity')
     expect(badge.props('planType')).toBe('plus')
     expect(badge.props('privacyMode')).toBe('false')
     expect(badge.props('subscriptionExpiresAt')).toBe('2027-01-01T00:00:00Z')

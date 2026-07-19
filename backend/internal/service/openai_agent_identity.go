@@ -48,12 +48,6 @@ type agentIdentityTaskRegistrationResponse struct {
 	EncryptedTaskIDCamel string `json:"encryptedTaskId"`
 }
 
-type agentIdentityTaskRecoveredError struct{}
-
-func (e *agentIdentityTaskRecoveredError) Error() string {
-	return "agent identity task recovered"
-}
-
 func (a *Account) IsOpenAIAgentIdentity() bool {
 	if a == nil || !a.IsOpenAIOAuth() {
 		return false
@@ -129,6 +123,25 @@ func buildAgentAssertion(key agentIdentityKey, now time.Time) (string, error) {
 		return "", errors.New("failed to serialize agent assertion")
 	}
 	return "AgentAssertion " + base64.RawURLEncoding.EncodeToString(encoded), nil
+}
+
+func agentIdentityTaskIDFromAuthorization(value string) string {
+	const prefix = "AgentAssertion "
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(strings.TrimPrefix(value, prefix)))
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(decoded, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.TaskID)
 }
 
 func signAgentTaskRegistration(key agentIdentityKey, timestamp time.Time) (string, string, error) {
@@ -236,7 +249,7 @@ func registerAgentIdentityTask(ctx context.Context, account *Account) (string, e
 }
 
 func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountRepository, wsInvalidator agentIdentityWSConnectionInvalidator, taskMu *sync.Mutex, account *Account, expectedTaskID string) error {
-	if account == nil || !account.IsOpenAIAgentIdentity() {
+	if account == nil {
 		return nil
 	}
 	credAccount := account
@@ -248,7 +261,7 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 		credAccount = resolved
 	}
 	if credAccount == nil || !credAccount.IsOpenAIAgentIdentity() {
-		return errors.New("agent identity credentials are unavailable")
+		return nil
 	}
 	currentTaskID := strings.TrimSpace(credAccount.GetCredential("task_id"))
 	if currentTaskID != "" && (expectedTaskID == "" || currentTaskID != expectedTaskID) {
@@ -274,18 +287,29 @@ func ensureAgentIdentityTaskForAccount(ctx context.Context, repo AccountReposito
 	// would allow sequential duplicate registrations after the first writer
 	// has already persisted a new task.
 	if repo != nil && credAccount.ID > 0 {
-		if refreshed, refreshErr := repo.GetByID(ctx, credAccount.ID); refreshErr == nil && refreshed != nil {
-			if refreshed.IsShadow() {
-				if resolved, resolveErr := resolveCredentialAccount(ctx, repo, refreshed); resolveErr == nil && resolved != nil {
-					refreshed = resolved
-				}
+		refreshed, refreshErr := repo.GetByID(ctx, credAccount.ID)
+		if refreshErr != nil {
+			return fmt.Errorf("refresh agent identity account %d: %w", credAccount.ID, refreshErr)
+		}
+		if refreshed == nil {
+			return fmt.Errorf("refresh agent identity account %d: account not found", credAccount.ID)
+		}
+		if refreshed.IsShadow() {
+			resolved, resolveErr := resolveCredentialAccount(ctx, repo, refreshed)
+			if resolveErr != nil {
+				return resolveErr
 			}
-			if refreshed.IsOpenAIAgentIdentity() {
-				credAccount = refreshed
-				if !account.IsShadow() {
-					account.Credentials = shallowCopyMap(credAccount.Credentials)
-				}
+			if resolved == nil {
+				return errors.New("agent identity credential account is unavailable")
 			}
+			refreshed = resolved
+		}
+		if !refreshed.IsOpenAIAgentIdentity() {
+			return errors.New("agent identity account authentication mode changed")
+		}
+		credAccount = refreshed
+		if !account.IsShadow() {
+			account.Credentials = shallowCopyMap(credAccount.Credentials)
 		}
 	}
 	currentTaskID = strings.TrimSpace(credAccount.GetCredential("task_id"))
@@ -440,27 +464,7 @@ func (s *OpenAIGatewayService) refreshOpenAIAgentIdentityHeaders(ctx context.Con
 }
 
 func (s *OpenAIGatewayService) recoverAgentIdentityTask(ctx context.Context, account *Account, expectedTaskID string) error {
-	if account != nil && account.IsShadow() {
-		if resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account); err == nil && resolved != nil && strings.TrimSpace(expectedTaskID) == "" {
-			expectedTaskID = strings.TrimSpace(resolved.GetCredential("task_id"))
-		}
-	}
 	return s.ensureAgentIdentityTask(ctx, account, expectedTaskID)
-}
-
-func (s *OpenAIGatewayService) isAgentIdentityAccount(ctx context.Context, account *Account) bool {
-	if account == nil {
-		return false
-	}
-	credAccount := account
-	if account.IsShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return false
-		}
-		credAccount = resolved
-	}
-	return credAccount != nil && credAccount.IsOpenAIAgentIdentity()
 }
 
 // redactAgentIdentitySensitiveBody removes credential values before an
@@ -480,7 +484,14 @@ func redactAgentIdentitySensitiveBodyForAccount(ctx context.Context, repo Accoun
 	if credAccount == nil || !credAccount.IsOpenAIAgentIdentity() {
 		return body
 	}
-	redacted := string(body)
+	return redactAgentIdentitySensitiveBodyWithValues(body, agentIdentitySensitiveValues(credAccount))
+}
+
+func agentIdentitySensitiveValues(account *Account) []string {
+	if account == nil || !account.IsOpenAIAgentIdentity() {
+		return nil
+	}
+	values := make([]string, 0, 12)
 	for _, key := range []string{
 		"agent_private_key",
 		"agent_runtime_id",
@@ -492,9 +503,17 @@ func redactAgentIdentitySensitiveBodyForAccount(ctx context.Context, repo Accoun
 		"session_key",
 		"cookie",
 	} {
-		if value := strings.TrimSpace(credAccount.GetCredential(key)); value != "" {
-			redacted = strings.ReplaceAll(redacted, value, "[redacted]")
+		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
+			values = append(values, value)
 		}
+	}
+	return values
+}
+
+func redactAgentIdentitySensitiveBodyWithValues(body []byte, values []string) []byte {
+	redacted := string(body)
+	for _, value := range values {
+		redacted = strings.ReplaceAll(redacted, value, "[redacted]")
 	}
 	const assertionPrefix = "AgentAssertion "
 	for offset := 0; offset < len(redacted); {
@@ -515,8 +534,249 @@ func redactAgentIdentitySensitiveBodyForAccount(ctx context.Context, repo Accoun
 }
 
 func (s *OpenAIGatewayService) redactAgentIdentitySensitiveBody(ctx context.Context, account *Account, body []byte) []byte {
-	if !s.isAgentIdentityAccount(ctx, account) {
+	redactor, err := s.agentIdentitySensitiveBodyRedactor(ctx, account)
+	if err != nil {
+		return agentIdentityFailClosedBody(body)
+	}
+	return redactor(body)
+}
+
+type agentIdentityBodyRedactor func([]byte) []byte
+
+type agentIdentityRedactionState struct {
+	mu          sync.RWMutex
+	base        agentIdentityBodyRedactor
+	extraValues map[string]struct{}
+}
+
+func newAgentIdentityRedactionState(base agentIdentityBodyRedactor) *agentIdentityRedactionState {
+	if base == nil {
+		base = func(body []byte) []byte { return body }
+	}
+	return &agentIdentityRedactionState{
+		base:        base,
+		extraValues: make(map[string]struct{}),
+	}
+}
+
+func (s *agentIdentityRedactionState) add(value string) {
+	if s == nil {
+		return
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	s.mu.Lock()
+	s.extraValues[value] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *agentIdentityRedactionState) redact(body []byte) []byte {
+	if s == nil {
 		return body
 	}
-	return redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, account, body)
+	redacted := s.base(body)
+	s.mu.RLock()
+	values := make([]string, 0, len(s.extraValues))
+	for value := range s.extraValues {
+		values = append(values, value)
+	}
+	s.mu.RUnlock()
+	for _, value := range values {
+		redacted = []byte(strings.ReplaceAll(string(redacted), value, "[redacted]"))
+	}
+	return redacted
+}
+
+type agentIdentityRequestMetadata struct {
+	credentialAccount *Account
+	isAgentIdentity   bool
+	taskIDUsed        string
+	redactor          agentIdentityBodyRedactor
+	redactionState    *agentIdentityRedactionState
+}
+
+func (m *agentIdentityRequestMetadata) bindTaskID(taskID string) {
+	if m == nil {
+		return
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+	m.taskIDUsed = taskID
+	m.redactionState.add(taskID)
+}
+
+func (m *agentIdentityRequestMetadata) bindAuthorization(value string) {
+	if m == nil {
+		return
+	}
+	value = strings.TrimSpace(value)
+	if value != "" {
+		// Bind the complete on-wire value and the bare assertion token. The
+		// latter protects against upstreams echoing the token without its scheme.
+		m.redactionState.add(value)
+		const prefix = "AgentAssertion "
+		if strings.HasPrefix(value, prefix) {
+			m.redactionState.add(strings.TrimSpace(strings.TrimPrefix(value, prefix)))
+		}
+	}
+	m.bindTaskID(agentIdentityTaskIDFromAuthorization(value))
+}
+
+func (s *OpenAIGatewayService) agentIdentityRequestMetadata(ctx context.Context, account *Account) (agentIdentityRequestMetadata, error) {
+	credentialAccount := account
+	if account != nil && account.IsShadow() {
+		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return agentIdentityRequestMetadata{}, err
+		}
+		if resolved == nil {
+			return agentIdentityRequestMetadata{}, errors.New("agent identity credential account is unavailable")
+		}
+		credentialAccount = resolved
+	}
+	metadata := agentIdentityRequestMetadata{
+		credentialAccount: credentialAccount,
+	}
+	metadata.redactionState = newAgentIdentityRedactionState(func(body []byte) []byte { return body })
+	metadata.redactor = metadata.redactionState.redact
+	if credentialAccount == nil || !credentialAccount.IsOpenAIAgentIdentity() {
+		return metadata, nil
+	}
+	metadata.isAgentIdentity = true
+	// Capture sensitive values once. Credential refresh replaces the account's
+	// map while a request may still be streaming; frame redaction must use an
+	// immutable request snapshot instead of reading that map on every frame.
+	sensitiveValues := agentIdentitySensitiveValues(credentialAccount)
+	metadata.redactionState = newAgentIdentityRedactionState(func(body []byte) []byte {
+		return redactAgentIdentitySensitiveBodyWithValues(body, sensitiveValues)
+	})
+	metadata.redactor = metadata.redactionState.redact
+	metadata.bindTaskID(credentialAccount.GetCredential("task_id"))
+	return metadata, nil
+}
+
+type agentIdentityRequestRedactorContextKey struct{}
+
+func withAgentIdentityRequestRedactor(ctx context.Context, redactor agentIdentityBodyRedactor) context.Context {
+	if ctx == nil || redactor == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, agentIdentityRequestRedactorContextKey{}, redactor)
+}
+
+func agentIdentityRequestRedactor(ctx context.Context) agentIdentityBodyRedactor {
+	if ctx == nil {
+		return nil
+	}
+	redactor, _ := ctx.Value(agentIdentityRequestRedactorContextKey{}).(agentIdentityBodyRedactor)
+	return redactor
+}
+
+func agentIdentityFailClosedBody(body []byte) []byte {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	eventType := strings.TrimSpace(envelope.Type)
+	if eventType == "" {
+		return []byte(`{"error":{"type":"upstream_error","message":"[redacted]"}}`)
+	}
+	safe := map[string]any{
+		"type": eventType,
+		"error": map[string]any{
+			"type":    "upstream_error",
+			"message": "[redacted]",
+		},
+	}
+	if eventType == "response.failed" || eventType == "response.incomplete" {
+		safe["response"] = map[string]any{
+			"status": strings.TrimPrefix(eventType, "response."),
+			"error": map[string]any{
+				"type":    "upstream_error",
+				"message": "[redacted]",
+			},
+		}
+	}
+	encoded, err := json.Marshal(safe)
+	if err != nil {
+		return []byte(`{"type":"error","error":{"type":"upstream_error","message":"[redacted]"}}`)
+	}
+	return encoded
+}
+
+// agentIdentitySensitiveBodyRedactor resolves a shadow's credential account
+// once per upstream request. Streaming paths must not resolve the parent for
+// every SSE/WS frame, which otherwise turns a long response into an unbounded
+// sequence of repository reads. Resolution errors are returned so callers can
+// fail closed instead of forwarding an error that may contain credentials.
+func (s *OpenAIGatewayService) agentIdentitySensitiveBodyRedactor(ctx context.Context, account *Account) (agentIdentityBodyRedactor, error) {
+	if redactor := agentIdentityRequestRedactor(ctx); redactor != nil {
+		return redactor, nil
+	}
+	metadata, err := s.agentIdentityRequestMetadata(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	return metadata.redactor, nil
+}
+
+func redactAgentIdentitySensitiveText(redactor agentIdentityBodyRedactor, value string) string {
+	if redactor == nil || value == "" {
+		return value
+	}
+	return string(redactor([]byte(value)))
+}
+
+func redactAgentIdentitySensitiveError(redactor agentIdentityBodyRedactor, err error) error {
+	if redactor == nil || err == nil {
+		return err
+	}
+	redacted := redactAgentIdentitySensitiveText(redactor, err.Error())
+	if redacted == err.Error() {
+		// No credential material was removed, so retaining the original type keeps
+		// ordinary context/scanner classification intact without exposing secrets.
+		return err
+	}
+	// Never preserve the raw cause: it may itself contain credentials. Callers
+	// must classify the original error before constructing this safe boundary.
+	return errors.New(redacted)
+}
+
+// redactAgentIdentitySensitiveErrorBoundary deliberately drops the unwrap
+// chain. Once an error crosses a log, hook, or protocol boundary, retaining a
+// raw cause can re-expose credentials through errors.As/Unwrap even when the
+// displayed message was redacted.
+func redactAgentIdentitySensitiveErrorBoundary(redactor agentIdentityBodyRedactor, err error) error {
+	if err == nil {
+		return nil
+	}
+	if redactor == nil {
+		return errors.New(err.Error())
+	}
+	return errors.New(redactAgentIdentitySensitiveText(redactor, err.Error()))
+}
+
+func redactAgentIdentitySensitiveDialError(redactor agentIdentityBodyRedactor, err error) error {
+	if err == nil {
+		return nil
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return redactAgentIdentitySensitiveErrorBoundary(redactor, err)
+	}
+	safeBody := append([]byte(nil), dialErr.ResponseBody...)
+	if redactor != nil {
+		safeBody = redactor(safeBody)
+	}
+	safe := &openAIWSDialError{
+		StatusCode:      dialErr.StatusCode,
+		ResponseHeaders: cloneHeader(dialErr.ResponseHeaders),
+		ResponseBody:    safeBody,
+		Err:             redactAgentIdentitySensitiveErrorBoundary(redactor, dialErr.Err),
+	}
+	return safe
 }

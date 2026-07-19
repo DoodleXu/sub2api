@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -242,15 +243,24 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	responsesBody = updatedBody
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
-		grokCacheIdentity = resolveGrokCacheIdentity(c, responsesBody, promptCacheKey, upstreamModel)
-		patchedBody, patchErr := patchGrokResponsesBody(responsesBody, upstreamModel)
+		grokIntentBody := responsesBody
+		grokCacheIdentity = resolveGrokCacheIdentity(c, grokIntentBody, promptCacheKey, upstreamModel)
+		patchedBody, patchErr := patchGrokResponsesBody(grokIntentBody, upstreamModel)
 		if patchErr != nil {
 			return nil, patchErr
 		}
-		responsesBody, patchErr = applyGrokResponsesCacheIdentity(patchedBody, responsesBody, grokCacheIdentity, account.IsGrokOAuth())
+		responsesBody, patchErr = applyGrokResponsesCacheIdentity(patchedBody, grokIntentBody, grokCacheIdentity, isKnownGrokFreeAccount(account))
 		if patchErr != nil {
 			return nil, fmt.Errorf("apply grok prompt cache identity: %w", patchErr)
 		}
+		responsesBody, patchErr = applyGrokFreeMessagesFunctionToolCacheRoute(responsesBody, grokIntentBody, account, grokCacheIdentity)
+		if patchErr != nil {
+			return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", patchErr)
+		}
+	}
+	identityMetadata, identityErr := s.agentIdentityRequestMetadata(ctx, account)
+	if identityErr != nil {
+		return nil, fmt.Errorf("resolve agent identity request metadata: %w", identityErr)
 	}
 
 	// 5. Get access token
@@ -277,6 +287,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
+	identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
+	c.Request = c.Request.WithContext(withAgentIdentityRequestRedactor(c.Request.Context(), identityMetadata.redactor))
 
 	// Override session_id with a deterministic UUID derived from the isolated
 	// session key, ensuring different API keys produce different upstream sessions.
@@ -324,10 +336,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
-		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
-		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			expectedTaskID := account.GetCredential("task_id")
-			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
+		respBody, upstreamMsg := s.readOpenAIUpstreamError(c.Request.Context(), account, resp)
+		if !agentIdentityTaskRecoveryWasTried(ctx) && identityMetadata.isAgentIdentity && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			if err := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); err != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
 			}
 			return s.ForwardAsAnthropic(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
@@ -451,8 +462,12 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	redactSensitiveBody, redactorErr := s.agentIdentitySensitiveBodyRedactor(c.Request.Context(), account)
+	if redactorErr != nil {
+		return nil, fmt.Errorf("resolve agent identity credentials for buffered messages redaction: %w", redactorErr)
+	}
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID, redactSensitiveBody)
 	if err != nil {
 		return nil, err
 	}
@@ -556,6 +571,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
+	redactSensitiveBody agentIdentityBodyRedactor,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
@@ -638,6 +654,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			if !ok {
 				if frame, ok := parser.Finish(); ok {
 					payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+					if eventType := strings.TrimSpace(gjson.Get(payload, "type").String()); isOpenAIErrorBearingEventType(eventType) {
+						payload = string(redactSensitiveBody([]byte(payload)))
+					}
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
 						acc.ProcessEvent(&event)
@@ -659,13 +678,14 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			}
 			resetTimeout()
 			if ev.err != nil {
+				safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, ev.err)
 				if !errors.Is(ev.err, context.Canceled) && !errors.Is(ev.err, context.DeadlineExceeded) {
 					logger.L().Warn(logPrefix+": read error",
-						zap.Error(ev.err),
+						zap.Error(safeErr),
 						zap.String("request_id", requestID),
 					)
 				}
-				return nil, usage, acc, ev.err
+				return nil, usage, acc, safeErr
 			}
 
 			if isOpenAICompatDoneSentinelLine(ev.line) {
@@ -676,6 +696,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				continue
 			}
 			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+			if eventType := strings.TrimSpace(gjson.Get(payload, "type").String()); isOpenAIErrorBearingEventType(eventType) {
+				payload = string(redactSensitiveBody([]byte(payload)))
+			}
 
 			var event apicompat.ResponsesStreamEvent
 			if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -727,6 +750,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	redactSensitiveBody, redactorErr := s.agentIdentitySensitiveBodyRedactor(c.Request.Context(), account)
+	if redactorErr != nil {
+		return nil, fmt.Errorf("resolve agent identity credentials for messages stream redaction: %w", redactorErr)
+	}
 
 	headersWritten := false
 	writeStreamHeaders := func() {
@@ -798,6 +825,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
+		}
+		if eventType := strings.TrimSpace(gjson.Get(payload, "type").String()); isOpenAIErrorBearingEventType(eventType) {
+			payload = string(redactSensitiveBody([]byte(payload)))
 		}
 
 		var event apicompat.ResponsesStreamEvent
@@ -942,7 +972,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	handleScanErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.L().Warn("openai messages stream: read error",
-				zap.Error(err),
+				zap.Error(redactAgentIdentitySensitiveError(redactSensitiveBody, err)),
 				zap.String("request_id", requestID),
 			)
 		}
@@ -987,8 +1017,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, err)
 			handleScanErr(err)
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
@@ -1060,8 +1091,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
+				safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, ev.err)
 				handleScanErr(ev.err)
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

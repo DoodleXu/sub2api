@@ -25,6 +25,14 @@ func validateOpenAIWSBearerToken(account *Account, token string) error {
 	return nil
 }
 
+func (s *OpenAIGatewayService) validateOpenAIWSAccountToken(ctx context.Context, account *Account, token string) error {
+	credentialAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+	if err != nil {
+		return err
+	}
+	return validateOpenAIWSBearerToken(credentialAccount, token)
+}
+
 func (s *OpenAIGatewayService) buildOpenAIResponsesWSURL(account *Account) (string, error) {
 	if account == nil {
 		return "", errors.New("account is nil")

@@ -27,6 +27,14 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	redactionCtx := ctx
+	if c != nil && c.Request != nil {
+		redactionCtx = c.Request.Context()
+	}
+	redactSensitiveBody, redactorErr := s.agentIdentitySensitiveBodyRedactor(redactionCtx, account)
+	if redactorErr != nil {
+		return nil, fmt.Errorf("resolve agent identity credentials for stream redaction: %w", redactorErr)
+	}
 	firstOutputTimeout := time.Duration(0)
 	if account != nil && account.Platform == PlatformOpenAI {
 		firstOutputTimeout = s.openAIFirstOutputTimeout(reasoningEffort)
@@ -325,8 +333,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if scanErr == nil {
 			return nil, nil, false
 		}
+		safeScanErr := redactAgentIdentitySensitiveError(redactSensitiveBody, scanErr)
 		if errors.Is(scanErr, errOpenAIFirstOutputScannerLimit) && firstTokenMs == nil {
-			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance, scanErr)
+			logger.LegacyPrintf("service.openai_gateway", "SSE token exceeded guarded first-output limit: account=%d limit=%d error=%v", account.ID, openAIFirstOutputStageMaxBytes+openAIFirstOutputScannerFramingAllowance, safeScanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
 				c, account, false, upstreamRequestID, nil,
 				"OpenAI SSE line exceeds guarded first-output limit",
@@ -335,7 +344,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			return resultWithUsage(), failoverErr, true
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) && guardFirstOutput && firstTokenMs == nil {
-			logger.LegacyPrintf("service.openai_gateway", "SSE line too long before first output: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
+			logger.LegacyPrintf("service.openai_gateway", "SSE line too long before first output: account=%d max_size=%d error=%v", account.ID, maxLineSize, safeScanErr)
 			failoverErr := s.newOpenAIStreamFailoverError(
 				c, account, false, upstreamRequestID, nil,
 				"OpenAI SSE line exceeds guarded first-output limit",
@@ -345,7 +354,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		if sawTerminalEvent {
 			if !sawFailedEvent {
-				logger.LegacyPrintf("service.openai_gateway", "Upstream scan ended after terminal event: %v", scanErr)
+				logger.LegacyPrintf("service.openai_gateway", "Upstream scan ended after terminal event: %v", safeScanErr)
 			}
 			result, err := finalizeStream()
 			return result, err, true
@@ -356,25 +365,25 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			if eventShouldFlush {
 				flushPending("Client disconnected during canceled stream flush, returning collected usage")
 			}
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", scanErr), true
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeScanErr), true
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) {
-			logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
-			return resultWithUsage(), scanErr, true
+			logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, safeScanErr)
+			return resultWithUsage(), safeScanErr, true
 		}
 		if !openAIStreamClientOutputStarted(c, clientOutputStarted) && !eventShouldFlush {
 			msg := "OpenAI stream disconnected before completion"
-			if errText := strings.TrimSpace(scanErr.Error()); errText != "" {
+			if errText := strings.TrimSpace(safeScanErr.Error()); errText != "" {
 				msg += ": " + errText
 			}
 			return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, msg), true
 		}
 		// 客户端已断开时，上游出错仅影响体验，不影响计费；返回已收集 usage
 		if clientDisconnected {
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", scanErr), true
+			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", safeScanErr), true
 		}
 		sendErrorEvent("stream_read_error")
-		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
+		return resultWithUsage(), fmt.Errorf("stream read error: %w", safeScanErr), true
 	}
 	processSSELine := func(line string, queueDrained bool) {
 		if streamEarlyErr != nil {
@@ -383,10 +392,17 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		// Extract data from SSE line (supports both "data: " and "data:" formats)
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
+			eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+			if isOpenAIErrorBearingEventType(eventType) {
+				if redacted := redactSensitiveBody(dataBytes); !bytes.Equal(redacted, dataBytes) {
+					dataBytes = redacted
+					data = string(redacted)
+					line = "data: " + data
+				}
+			}
 			if openAIStreamEventIsTerminal(data) {
 				sawTerminalEvent = true
 			}
-			eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
@@ -827,5 +843,12 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 	return updated, !bytes.Equal(updated, payload)
 }
 
-// extractOpenAISSEDataLine 低开销提取 SSE `data:` 行内容。
-// 兼容 `data: xxx` 与 `data:xxx` 两种格式。
+// isOpenAIErrorBearingEventType 标识可能携带上游错误明细、需先脱敏再记录或转发的事件。
+func isOpenAIErrorBearingEventType(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "error", "response.failed", "response.incomplete":
+		return true
+	default:
+		return false
+	}
+}

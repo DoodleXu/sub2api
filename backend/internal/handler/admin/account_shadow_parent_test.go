@@ -14,6 +14,7 @@ func TestEnrichShadowParentInfo(t *testing.T) {
 		ID: 100,
 		Credentials: map[string]any{
 			"email":                   "owner@example.com",
+			"auth_mode":               service.OpenAIAuthModeAgentIdentity,
 			"plan_type":               "pro",
 			"subscription_expires_at": "2026-12-31T00:00:00Z",
 			"chatgpt_account_id":      "acct_123",
@@ -30,6 +31,7 @@ func TestEnrichShadowParentInfo(t *testing.T) {
 	enrichShadowParentInfo(items, parents)
 
 	require.Equal(t, "owner@example.com", items[0].ParentEmail, "影子回填母账号邮箱")
+	require.Equal(t, service.OpenAIAuthModeAgentIdentity, items[0].ParentAuthMode)
 	require.Equal(t, "pro", items[0].ParentPlanType)
 	require.Equal(t, "training_off", items[0].ParentPrivacyMode)
 	require.Equal(t, "2026-12-31T00:00:00Z", items[0].ParentSubscriptionExpiresAt)

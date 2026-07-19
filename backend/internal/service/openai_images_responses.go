@@ -1694,12 +1694,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	)
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
+	identityMetadata, identityErr := s.agentIdentityRequestMetadata(upstreamCtx, account)
+	if identityErr != nil {
+		return nil, fmt.Errorf("resolve agent identity request metadata for images: %w", identityErr)
+	}
 
 	token, _, err := s.GetAccessToken(upstreamCtx, account)
 	if err != nil {
 		return nil, err
 	}
-
 	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, requestModel)
 	if err != nil {
 		return nil, err
@@ -1708,6 +1711,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err != nil {
 		return nil, err
 	}
+	identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "text/event-stream")
 
@@ -1735,10 +1739,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
-		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
-		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			expectedTaskID := account.GetCredential("task_id")
-			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
+		respBody = identityMetadata.redactor(respBody)
+		if !agentIdentityTaskRecoveryWasTried(ctx) && identityMetadata.isAgentIdentity && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			if err := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); err != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
 			}
 			return s.forwardOpenAIImagesOAuth(markAgentIdentityTaskRecoveryTried(ctx), c, account, parsed, channelMappedModel)

@@ -78,31 +78,62 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
 		return fmt.Errorf("get access token: %w", err)
 	}
-
-	upstreamReq, err := s.buildInputTokensUpstreamRequest(ctx, c, account, upstreamBody, token)
-	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
-		return fmt.Errorf("build input_tokens request: %w", err)
+	identityMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
+	if metadataErr != nil {
+		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to resolve account credentials")
+		return fmt.Errorf("resolve agent identity credentials for input_tokens redaction: %w", metadataErr)
 	}
+	redactSensitiveBody := identityMetadata.redactor
 
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return fmt.Errorf("openai input_tokens upstream request failed: %s", safeErr)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	agentIdentity := identityMetadata.isAgentIdentity
+	agentTaskRecoveryTried := false
+	var resp *http.Response
+	var respBody []byte
+	for {
+		upstreamReq, buildErr := s.buildInputTokensUpstreamRequest(ctx, c, account, upstreamBody, token)
+		if buildErr != nil {
+			writeAnthropicCountTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
+			return fmt.Errorf("build input_tokens request: %w", buildErr)
+		}
+		identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
-		return fmt.Errorf("read input_tokens response: %w", err)
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		if err != nil {
+			safeErr := sanitizeUpstreamErrorMessage(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
+			setOpsUpstreamError(c, 0, safeErr, "")
+			writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+			return fmt.Errorf("openai input_tokens upstream request failed: %s", safeErr)
+		}
+
+		respBody, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			safeErr := sanitizeUpstreamErrorMessage(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
+			writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
+			return fmt.Errorf("read input_tokens response: %s", safeErr)
+		}
+		if agentIdentity && !agentTaskRecoveryTried && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			agentTaskRecoveryTried = true
+			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); recoveryErr != nil {
+				writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream authentication failed")
+				return fmt.Errorf("recover input_tokens agent identity task: %w", recoveryErr)
+			}
+			refreshedMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
+			if metadataErr != nil {
+				writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to resolve account credentials")
+				return fmt.Errorf("refresh agent identity credentials for input_tokens redaction: %w", metadataErr)
+			}
+			redactSensitiveBody = refreshedMetadata.redactor
+			identityMetadata = refreshedMetadata
+			continue
+		}
+		break
 	}
+	respBody = redactSensitiveBody(respBody)
 
 	if resp.StatusCode >= 400 {
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))

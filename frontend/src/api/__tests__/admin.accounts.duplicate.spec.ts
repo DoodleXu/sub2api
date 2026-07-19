@@ -13,6 +13,8 @@ import { duplicate } from '@/api/admin/accounts'
 describe('admin account duplicate API', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    localStorage.clear()
+    localStorage.setItem('auth_user', JSON.stringify({ id: 7 }))
     post.mockReset()
     post.mockResolvedValue({ data: { id: 43, name: 'primary (Copy)' } })
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('11111111-1111-4111-8111-111111111111')
@@ -23,7 +25,7 @@ describe('admin account duplicate API', () => {
 
     expect(post).toHaveBeenCalledWith('/admin/accounts/42/duplicate', undefined, {
       headers: {
-        'Idempotency-Key': 'account-duplicate-42-11111111-1111-4111-8111-111111111111'
+        'Idempotency-Key': 'account-duplicate-7-42-11111111-1111-4111-8111-111111111111'
       }
     })
     expect(account).toEqual({ id: 43, name: 'primary (Copy)' })
@@ -55,5 +57,24 @@ describe('admin account duplicate API', () => {
     expect(post).toHaveBeenCalledTimes(2)
     expect(post.mock.calls[1][2].headers).toEqual(firstHeaders)
     expect(sessionStorage.length).toBe(0)
+  })
+
+  it('isolates pending operation keys between administrators', async () => {
+    post.mockRejectedValueOnce(new Error('admin A timeout'))
+    await expect(duplicate(42)).rejects.toThrow('admin A timeout')
+    const adminAKey = post.mock.calls[0][2].headers['Idempotency-Key']
+
+    localStorage.setItem('auth_user', JSON.stringify({ id: 8 }))
+    post.mockResolvedValueOnce({ data: { id: 44, name: 'admin B copy' } })
+    await duplicate(42)
+    const adminBKey = post.mock.calls[1][2].headers['Idempotency-Key']
+
+    expect(adminBKey).not.toBe(adminAKey)
+    expect(adminBKey).toContain('account-duplicate-8-42-')
+
+    localStorage.setItem('auth_user', JSON.stringify({ id: 7 }))
+    post.mockResolvedValueOnce({ data: { id: 43, name: 'admin A recovered copy' } })
+    await duplicate(42)
+    expect(post.mock.calls[2][2].headers['Idempotency-Key']).toBe(adminAKey)
   })
 })

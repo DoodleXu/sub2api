@@ -19,6 +19,7 @@ func enrichShadowParentInfo(items []AccountWithConcurrency, parents map[int64]*s
 			continue
 		}
 		a.ParentEmail = p.GetCredential("email")
+		a.ParentAuthMode = p.GetCredential("auth_mode")
 		a.ParentPlanType = p.GetCredential("plan_type")
 		a.ParentSubscriptionExpiresAt = p.GetCredential("subscription_expires_at")
 		a.ParentChatGPTAccountID = p.GetCredential("chatgpt_account_id")

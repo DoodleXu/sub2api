@@ -757,6 +757,7 @@ func TestForwardGrokResponsesStreamingDefaultsEmptyModelTo45AndSnapshots(t *test
 	c.Set("api_key", &APIKey{ID: 5201})
 
 	account := healthyGrokOAuthGatewayTestAccount(52, "access-token")
+	account.Credentials["subscription_tier"] = "free"
 	repo := &grokQuotaAccountRepo{
 		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
 			accountsByID: map[int64]*Account{52: account},
@@ -1078,6 +1079,7 @@ func TestForwardAsAnthropicForGrokUsesXAIResponses(t *testing.T) {
 	c.Request.Header.Set("originator", "opencode")
 
 	account := healthyGrokOAuthGatewayTestAccount(54, "access-token")
+	account.Credentials["subscription_tier"] = "free"
 	repo := &grokQuotaAccountRepo{
 		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
 			accountsByID: map[int64]*Account{54: account},
@@ -1117,6 +1119,46 @@ func TestForwardAsAnthropicForGrokUsesXAIResponses(t *testing.T) {
 	require.Equal(t, int64(3), gjson.Get(recorder.Body.String(), "usage.cache_read_input_tokens").Int())
 	require.Contains(t, recorder.Body.String(), "ok")
 	require.NotNil(t, repo.updates[54][grokQuotaSnapshotExtraKey])
+}
+
+func TestForwardAsAnthropicForGrokFreeFunctionToolsUsesCacheRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{
+		"model":"grok",
+		"max_tokens":32,
+		"stream":false,
+		"messages":[{"role":"user","content":"look up the weather"}],
+		"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],
+		"tool_choice":{"type":"auto"}
+	}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 5404})
+
+	account := healthyGrokOAuthGatewayTestAccount(59, "access-token")
+	account.Credentials["subscription_tier"] = "free"
+	repo := &grokQuotaAccountRepo{
+		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+			accountsByID: map[int64]*Account{59: account},
+		},
+	}
+	upstream := &httpUpstreamRecorder{resp: grokMessagesSSECompletedResponse("resp_grok_messages_function_cache", 0)}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	require.Equal(t, "get_weather", gjson.GetBytes(upstream.lastBody, `tools.#(type=="function").name`).String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="web_search")`).Exists())
+	require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="x_search")`).Exists())
+	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
 }
 
 func TestForwardAsAnthropicForGrok429UsesGrokRateLimitPolicy(t *testing.T) {

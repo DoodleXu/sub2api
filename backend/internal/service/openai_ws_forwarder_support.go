@@ -31,6 +31,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	stateStore OpenAIWSStateStore,
 	groupID int64,
 ) error {
+	redactSensitiveBody := agentIdentityRequestRedactor(ctx)
 	if s == nil {
 		return nil
 	}
@@ -84,9 +85,9 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",
 			account.ID,
 			connID,
-			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
+			truncateOpenAIWSLogValue(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()), openAIWSLogValueMaxLen),
 		)
-		return wrapOpenAIWSFallback("prewarm_write", err)
+		return wrapOpenAIWSFallback("prewarm_write", redactAgentIdentitySensitiveErrorBoundary(redactSensitiveBody, err))
 	}
 	logOpenAIWSModeInfo("prewarm_write_sent account_id=%d conn_id=%s payload_bytes=%d", account.ID, connID, len(prewarmPayloadJSON))
 
@@ -104,10 +105,10 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				connID,
 				closeStatus,
 				closeReason,
-				truncateOpenAIWSLogValue(readErr.Error(), openAIWSLogValueMaxLen),
+				truncateOpenAIWSLogValue(redactAgentIdentitySensitiveText(redactSensitiveBody, readErr.Error()), openAIWSLogValueMaxLen),
 				prewarmEventCount,
 			)
-			return wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), readErr)
+			return wrapOpenAIWSFallback("prewarm_"+classifyOpenAIWSReadFallbackReason(readErr), redactAgentIdentitySensitiveErrorBoundary(redactSensitiveBody, readErr))
 		}
 
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(message)

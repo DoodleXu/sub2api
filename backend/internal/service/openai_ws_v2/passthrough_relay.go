@@ -73,7 +73,7 @@ type RelayOptions struct {
 	OnResponseCreateAborted         func(sequence uint64)
 	OnUsageParseFailure             func(eventType string, usageRaw string)
 	OnTurnComplete                  func(turn RelayTurnResult)
-	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
+	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error)
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
 	Now                             func() time.Time
@@ -479,7 +479,7 @@ func runUpstreamToClient(
 	onUsageParseFailure func(eventType string, usageRaw string),
 	onTurnComplete func(turn RelayTurnResult),
 	onResponseCreateAborted func(sequence uint64),
-	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
+	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error),
 	afterWriteClient func(),
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
@@ -509,22 +509,24 @@ func runUpstreamToClient(
 		}
 		markActivity()
 		if beforeWriteClient != nil {
-			if err := beforeWriteClient(msgType, payload, wroteDownstream); err != nil {
+			updatedPayload, transformErr := beforeWriteClient(msgType, payload, wroteDownstream)
+			if transformErr != nil {
 				emitRelayTrace(onTrace, RelayTraceEvent{
 					Stage:           "upstream_message_rejected",
 					Direction:       "upstream_to_client",
 					MessageType:     relayMessageTypeString(msgType),
 					PayloadBytes:    len(payload),
 					WroteDownstream: wroteDownstream,
-					Error:           err.Error(),
+					Error:           transformErr.Error(),
 				})
 				exitCh <- relayExitSignal{
 					stage:           "upstream_message",
-					err:             err,
+					err:             transformErr,
 					wroteDownstream: wroteDownstream,
 				}
 				return
 			}
+			payload = updatedPayload
 		}
 		observedEvent := observedUpstreamEvent{}
 		switch msgType {
