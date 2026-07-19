@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	entsql "entgo.io/ent/dialect/sql"
@@ -1605,7 +1606,19 @@ func (h *AuthHandler) transitionPendingOAuthAccountToChoiceState(
 	return session, nil
 }
 
-func writeOAuthTokenPairResponse(c *gin.Context, tokenPair *service.TokenPair) {
+// setOAuthAuditActor 补齐公开 OAuth 路由缺失的认证上下文，确保成功注册、绑定和
+// 登录在审计中都能归属到实际用户，而不是被记录成匿名操作。
+func setOAuthAuditActor(c *gin.Context, user *service.User) {
+	if c == nil || user == nil {
+		return
+	}
+	middleware2.SetAuditActor(c, user.ID, user.Email)
+	c.Set(string(middleware2.ContextKeyUserRole), user.Role)
+	c.Set("auth_method", service.AuditAuthMethodOAuth)
+}
+
+func writeOAuthTokenPairResponse(c *gin.Context, user *service.User, tokenPair *service.TokenPair) {
+	setOAuthAuditActor(c, user)
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  tokenPair.AccessToken,
 		"refresh_token": tokenPair.RefreshToken,
@@ -1651,6 +1664,11 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 		return
 	}
 	if h.totpService != nil && h.settingSvc.IsTotpEnabled(c.Request.Context()) && user.TotpEnabled {
+		// 第一阶段已经用密码确认了本地账户。即使还需 TOTP，也要让本次
+		// bind-login challenge 审计归属到真实用户；最终兑换阶段会改记 oauth_totp。
+		middleware2.SetAuditActor(c, user.ID, user.Email)
+		c.Set(string(middleware2.ContextKeyUserRole), user.Role)
+		c.Set("auth_method", service.AuditAuthMethodPassword)
 		tempToken, err := h.totpService.CreatePendingOAuthBindLoginSession(
 			c.Request.Context(),
 			user.ID,
@@ -1689,7 +1707,7 @@ func (h *AuthHandler) bindPendingOAuthLogin(c *gin.Context, provider string) {
 	}
 
 	clearCookies()
-	writeOAuthTokenPairResponse(c, tokenPair)
+	writeOAuthTokenPairResponse(c, user, tokenPair)
 }
 
 func respondPendingOAuthBindingApplyError(c *gin.Context, err error) {
@@ -1879,7 +1897,7 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 	// createPendingOAuthAccount = 注册新账户，需要把钉钉昵称同步到 users.username 作为初始值
 	h.maybeSyncDingTalkAfterRegistration(c.Request.Context(), session, user.ID)
 	clearCookies()
-	writeOAuthTokenPairResponse(c, tokenPair)
+	writeOAuthTokenPairResponse(c, user, tokenPair)
 }
 
 // ExchangePendingOAuthCompletion redeems a pending OAuth browser session into a frontend-safe payload.
@@ -2033,6 +2051,7 @@ func (h *AuthHandler) ExchangePendingOAuthCompletion(c *gin.Context) {
 		payload["refresh_token"] = tokenPair.RefreshToken
 		payload["expires_in"] = tokenPair.ExpiresIn
 		payload["token_type"] = "Bearer"
+		setOAuthAuditActor(c, loginUser)
 	}
 
 	clearCookies()

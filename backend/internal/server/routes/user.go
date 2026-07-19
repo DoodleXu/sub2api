@@ -73,6 +73,8 @@ func RegisterUserRoutes(
 				totp.POST("/setup", h.Totp.InitiateSetup)
 				totp.POST("/enable", h.Totp.Enable)
 				totp.POST("/disable", h.Totp.Disable)
+				// 敏感操作二次验证：授予当前 JWT 会话一段时间的 step-up 权限。
+				totp.POST("/step-up", h.Totp.StepUp)
 			}
 		}
 

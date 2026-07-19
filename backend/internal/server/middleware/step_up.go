@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
-	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -23,12 +25,26 @@ type stepUpUserReader interface {
 }
 
 // StepUpSessionKey 计算 step-up 授权的会话键：
-// 优先绑定当前会话（refresh token family），无会话 ID 的旧 token 退化为用户级键。
-func StepUpSessionKey(c *gin.Context, userID int64) string {
+// 优先绑定 refresh token family；升级前签发、没有 sid 的 access token 则按 token
+// 指纹隔离，绝不退化为用户级共享授权。空串表示无法建立可靠的会话边界。
+func StepUpSessionKey(c *gin.Context, _ int64) string {
 	if sid := c.GetString(ContextKeySessionID); sid != "" {
-		return sid
+		return "sid:" + sid
 	}
-	return fmt.Sprintf("u%d", userID)
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	token := strings.TrimSpace(parts[1])
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "token:" + hex.EncodeToString(sum[:16])
 }
 
 // NewStepUpAuthMiddleware 创建敏感操作 step-up 2FA 门控中间件。
@@ -84,6 +100,10 @@ func enforceStepUp(c *gin.Context, grantChecker stepUpGrantChecker, userReader s
 	}
 
 	sessionKey := StepUpSessionKey(c, subject.UserID)
+	if sessionKey == "" {
+		AbortWithError(c, 401, "UNAUTHORIZED", "A bound JWT session is required")
+		return false
+	}
 	granted, err := grantChecker.HasStepUpGrant(c.Request.Context(), subject.UserID, sessionKey)
 	if err != nil {
 		// 安全门控故障时选择 fail-closed。

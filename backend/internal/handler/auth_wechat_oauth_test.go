@@ -981,6 +981,7 @@ func TestCompleteWeChatOAuthRegistrationBindsIdentityWithoutAdoptionFlags(t *tes
 	handler.CompleteWeChatOAuthRegistration(completeCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, service.AuditAuthMethodOAuth, completeCtx.GetString("auth_method"))
 	responseData := decodeJSONBody(t, recorder)
 	require.NotEmpty(t, responseData["access_token"])
 	require.NotEmpty(t, responseData["refresh_token"])
@@ -989,6 +990,8 @@ func TestCompleteWeChatOAuthRegistrationBindsIdentityWithoutAdoptionFlags(t *tes
 		Where(dbuser.EmailEQ(session.ResolvedEmail)).
 		Only(ctx)
 	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, completeCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, userEntity.Email, completeCtx.GetString("audit_actor_email"))
 	require.Equal(t, "wechat_user", userEntity.Username)
 
 	identity, err := client.AuthIdentity.Query().

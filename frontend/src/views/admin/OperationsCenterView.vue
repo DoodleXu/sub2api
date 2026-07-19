@@ -342,6 +342,7 @@
         </div>
       </section>
     </div>
+    <TotpStepUpDialog :controller="operationsExportStepUp" />
   </AppLayout>
 </template>
 
@@ -363,6 +364,8 @@ import operationsAPI, {
 } from '@/api/admin/operations'
 import OperationsOverviewTrendChart from './operations/OperationsOverviewTrendChart.vue'
 import DailyCheckinTrendChart from './operations/DailyCheckinTrendChart.vue'
+import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 type TabKey = 'overview' | 'checkin' | 'records' | 'rules'
 
@@ -388,6 +391,7 @@ interface CheckinRuleForm {
 }
 
 const { t } = useI18n()
+const operationsExportStepUp = useStepUp()
 const appStore = useAppStore()
 
 const activeTab = ref<TabKey>('overview')
@@ -656,10 +660,10 @@ async function applyRecordFilters() {
 async function exportDataset(dataset: OperationsExportDataset) {
   exporting.value = true
   try {
-    const blob = await operationsAPI.exportOperationsData({
+    const blob = await operationsExportStepUp.run(() => operationsAPI.exportOperationsData({
       dataset,
       ...(dataset === 'daily_checkin_records' ? dailyCheckinRecordQuery() : dateRangeQuery()),
-    })
+    }))
     const fileRange = exportFileDateRange(dataset)
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -671,8 +675,18 @@ async function exportDataset(dataset: OperationsExportDataset) {
     URL.revokeObjectURL(url)
     appStore.showSuccess(t('admin.operations.exportSuccess'))
   } catch (error) {
-    console.error('Failed to export operations data:', error)
-    appStore.showError(t('admin.operations.exportFailed'))
+    if (isStepUpCancelled(error)) {
+      // 用户取消二次验证时保持静默。
+    } else if (isStepUpBlocked(error)) {
+      appStore.showError(
+        stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+          ? t('stepUp.adminApiKeyForbidden')
+          : t('stepUp.notEnabled')
+      )
+    } else {
+      console.error('Failed to export operations data:', error)
+      appStore.showError(t('admin.operations.exportFailed'))
+    }
   } finally {
     exporting.value = false
   }

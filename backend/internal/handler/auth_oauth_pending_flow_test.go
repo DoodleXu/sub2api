@@ -237,6 +237,9 @@ func TestExchangePendingOAuthCompletionSkipsInvalidAvatarAdoptionWithoutBlocking
 	handler.ExchangePendingOAuthCompletion(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, userEntity.ID, ginCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, userEntity.Email, ginCtx.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodOAuth, ginCtx.GetString("auth_method"))
 
 	identity, err := client.AuthIdentity.Query().
 		Where(
@@ -1751,6 +1754,9 @@ func TestBindOIDCOAuthLoginBindsExistingUserAndConsumesSession(t *testing.T) {
 	handler.BindOIDCOAuthLogin(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, existingUser.ID, ginCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, existingUser.Email, ginCtx.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodOAuth, ginCtx.GetString("auth_method"))
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
@@ -2173,6 +2179,9 @@ func TestBindOIDCOAuthLoginReturns2FAChallengeWhenUserHasTotp(t *testing.T) {
 	handler.BindOIDCOAuthLogin(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, existingUser.ID, ginCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, existingUser.Email, ginCtx.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodPassword, ginCtx.GetString("auth_method"))
 	data := decodeJSONResponseData(t, recorder)
 	require.Equal(t, true, data["requires_2fa"])
 	require.Equal(t, "o***r@example.com", data["user_email_masked"])
@@ -2286,6 +2295,8 @@ func TestLogin2FACompletesPendingOAuthBindAndConsumesSession(t *testing.T) {
 	handler.Login2FA(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, existingUser.ID, ginCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, service.AuditAuthMethodOAuthTOTP, ginCtx.GetString("auth_method"))
 	payload := decodeJSONResponseData(t, recorder)
 	require.NotEmpty(t, payload["access_token"])
 	require.NotEmpty(t, payload["refresh_token"])
@@ -2321,6 +2332,53 @@ func TestLogin2FACompletesPendingOAuthBindAndConsumesSession(t *testing.T) {
 	require.Equal(t, 6, storedUser.Concurrency)
 	require.Equal(t, 1, countProviderGrantRecords(t, client, existingUser.ID, "oidc", "first_bind"))
 	require.Empty(t, defaultSubAssigner.calls)
+}
+
+func TestLogin2FAInvalidCodeKeepsAuditActor(t *testing.T) {
+	totpCache := &oauthPendingFlowTotpCacheStub{}
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		settingValues: map[string]string{service.SettingKeyTotpEnabled: "true"},
+		totpCache:     totpCache,
+		totpEncryptor: oauthPendingFlowTotpEncryptorStub{},
+	})
+	ctx := context.Background()
+	passwordHash, err := handler.authService.HashPassword("secret-123")
+	require.NoError(t, err)
+	secret := "JBSWY3DPEHPK3PXP"
+	userEntity, err := client.User.Create().
+		SetEmail("totp-owner@example.com").
+		SetUsername("totp-owner").
+		SetPasswordHash(passwordHash).
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		SetTotpEnabled(true).
+		SetTotpSecretEncrypted(secret).
+		Save(ctx)
+	require.NoError(t, err)
+
+	tempToken, err := handler.totpService.CreateLoginSession(ctx, userEntity.ID, userEntity.Email)
+	require.NoError(t, err)
+	validCode, err := totp.GenerateCode(secret, time.Now().UTC())
+	require.NoError(t, err)
+	replacement := byte('0')
+	if validCode[5] == replacement {
+		replacement = '1'
+	}
+	invalidCode := validCode[:5] + string(replacement)
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login/2fa", bytes.NewBufferString(
+		`{"temp_token":"`+tempToken+`","totp_code":"`+invalidCode+`"}`,
+	))
+	ginCtx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.Login2FA(ginCtx)
+
+	require.NotEqual(t, http.StatusOK, recorder.Code)
+	require.Equal(t, userEntity.ID, ginCtx.GetInt64("audit_actor_id"))
+	require.Equal(t, userEntity.Email, ginCtx.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodPasswordTOTP, ginCtx.GetString("auth_method"))
 }
 
 func newOAuthPendingFlowTestHandler(t *testing.T, invitationEnabled bool) (*AuthHandler, *dbent.Client) {

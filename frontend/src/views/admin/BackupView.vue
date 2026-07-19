@@ -356,18 +356,33 @@
         </div>
       </transition>
     </teleport>
+    <TotpStepUpDialog :controller="backupStepUp" />
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api'
+import { isAPIErrorStatus } from '@/api/client'
 import { useAppStore } from '@/stores'
 import type { BackupS3Config, BackupScheduleConfig, BackupRecord } from '@/api/admin/backup'
 import type { AdminDataImportResult } from '@/types'
+import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const backupStepUp = useStepUp()
+
+function reportStepUpBlocked(error: unknown): boolean {
+  if (!isStepUpBlocked(error)) return false
+  appStore.showError(
+    stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+      ? t('stepUp.adminApiKeyForbidden')
+      : t('stepUp.notEnabled')
+  )
+  return true
+}
 
 // Core data migration
 const coreDataFileInput = ref<HTMLInputElement | null>(null)
@@ -568,11 +583,13 @@ function downloadJSONFile(payload: unknown, fileName: string) {
 async function exportCoreData() {
   exportingCoreData.value = true
   try {
-    const payload = await adminAPI.accounts.exportData({ includeProxies: true, includeArchived: true })
+    const payload = await backupStepUp.run(() => adminAPI.accounts.exportData({ includeProxies: true, includeArchived: true }))
     downloadJSONFile(payload, `sub2api-core-data-${new Date().toISOString().slice(0, 10)}.json`)
     appStore.showSuccess(t('admin.backup.coreData.exportSuccess'))
   } catch (error) {
-    appStore.showError((error as { message?: string })?.message || t('admin.backup.coreData.exportFailed'))
+    if (!isStepUpCancelled(error) && !reportStepUpBlocked(error)) {
+      appStore.showError((error as { message?: string })?.message || t('admin.backup.coreData.exportFailed'))
+    }
   } finally {
     exportingCoreData.value = false
   }
@@ -640,11 +657,13 @@ async function loadS3Config() {
 async function saveS3Config() {
   savingS3.value = true
   try {
-    await adminAPI.backup.updateS3Config(s3Form.value)
+    await backupStepUp.run(() => adminAPI.backup.updateS3Config(s3Form.value))
     appStore.showSuccess(t('admin.backup.s3.saved'))
     await loadS3Config()
   } catch (error) {
-    appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+    if (!isStepUpCancelled(error) && !reportStepUpBlocked(error)) {
+      appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+    }
   } finally {
     savingS3.value = false
   }
@@ -707,12 +726,14 @@ async function loadBackups() {
 async function createBackup() {
   creatingBackup.value = true
   try {
-    const record = await adminAPI.backup.createBackup({ expire_days: manualExpireDays.value })
+    const record = await backupStepUp.run(() => adminAPI.backup.createBackup({ expire_days: manualExpireDays.value }))
     // 插入到列表顶部
     backups.value.unshift(record)
     startPolling(record.id)
   } catch (error: any) {
-    if (error?.response?.status === 409) {
+    if (isStepUpCancelled(error) || reportStepUpBlocked(error)) {
+      // 用户取消或当前身份无法执行 step-up。
+		} else if (isAPIErrorStatus(error, 409)) {
       appStore.showWarning(t('admin.backup.operations.alreadyInProgress'))
     } else {
       appStore.showError(error?.message || t('errors.networkError'))
@@ -723,10 +744,16 @@ async function createBackup() {
 
 async function downloadBackup(id: string) {
   try {
-    const result = await adminAPI.backup.getDownloadURL(id)
-    window.open(result.url, '_blank')
+    const result = await backupStepUp.run(() => adminAPI.backup.getDownloadURL(id))
+    const link = document.createElement('a')
+    link.href = result.url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.click()
   } catch (error) {
-    appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+    if (!isStepUpCancelled(error) && !reportStepUpBlocked(error)) {
+      appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
+    }
   }
 }
 
@@ -740,7 +767,7 @@ async function restoreBackup(id: string) {
     updateRecordInList(record)
     startRestorePolling(id)
   } catch (error: any) {
-    if (error?.response?.status === 409) {
+		if (isAPIErrorStatus(error, 409)) {
       appStore.showWarning(t('admin.backup.operations.restoreRunning'))
     } else {
       appStore.showError(error?.message || t('errors.networkError'))

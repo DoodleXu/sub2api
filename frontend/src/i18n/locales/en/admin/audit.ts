@@ -20,6 +20,11 @@ export default {
       startTime: 'Start Time',
       endTime: 'End Time'
     },
+    authMethods: {
+      password: 'Password',
+      passwordTotp: 'Password + TOTP',
+      oauthTotp: 'OAuth + TOTP'
+    },
     columns: {
       time: 'Time',
       actor: 'Actor',

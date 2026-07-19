@@ -52,6 +52,7 @@ func SkipAudit(c *gin.Context) {
 var auditSensitiveReads = map[string]string{
 	"GET /api/v1/admin/accounts/data":             "admin.accounts.export",
 	"GET /api/v1/admin/proxies/data":              "admin.proxies.export",
+	"GET /api/v1/admin/operations/export":         "admin.operations.export",
 	"GET /api/v1/admin/redeem-codes/export":       "admin.redeem_codes.export",
 	"GET /api/v1/admin/backups/:id/download-url":  "admin.backups.download",
 	"GET /api/v1/admin/settings/admin-api-key":    "admin.admin_api_key.read",
@@ -59,6 +60,23 @@ var auditSensitiveReads = map[string]string{
 	"GET /api/v1/admin/groups/:id/api-keys":       "admin.groups.api_keys.read",
 	"GET /api/v1/admin/backups/s3-config":         "admin.backups.s3_config.read",
 	"GET /api/v1/admin/data-management/s3/config": "admin.data_management.s3_config.read",
+	"GET /api/v1/auth/oauth/linuxdo/callback":     "auth.oauth.linuxdo.callback",
+	"GET /api/v1/auth/oauth/github/callback":      "auth.oauth.github.callback",
+	"GET /api/v1/auth/oauth/google/callback":      "auth.oauth.google.callback",
+	"GET /api/v1/auth/oauth/oidc/callback":        "auth.oauth.oidc.callback",
+	"GET /api/v1/auth/oauth/wechat/callback":      "auth.oauth.wechat.callback",
+	"GET /api/v1/auth/oauth/dingtalk/callback":    "auth.oauth.dingtalk.callback",
+}
+
+// OAuth callback 查询串含一次性 code/state。即便审计脱敏规则后续变化，
+// 这些路由也必须整体省略查询参数，避免认证材料落库。
+var auditQueryOmittedRoutes = map[string]struct{}{
+	"GET /api/v1/auth/oauth/linuxdo/callback":  {},
+	"GET /api/v1/auth/oauth/github/callback":   {},
+	"GET /api/v1/auth/oauth/google/callback":   {},
+	"GET /api/v1/auth/oauth/oidc/callback":     {},
+	"GET /api/v1/auth/oauth/wechat/callback":   {},
+	"GET /api/v1/auth/oauth/dingtalk/callback": {},
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。
@@ -135,7 +153,6 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 		if c.GetBool(auditCtxKeySkip) {
 			return
 		}
-
 		status := c.Writer.Status()
 		// token 刷新成功属于高频常规操作，只记录失败（潜在攻击信号）。
 		if routeKey == "POST /api/v1/auth/refresh" && status < 400 {
@@ -203,8 +220,10 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 			}
 			extra["params"] = params
 		}
-		if q := service.RedactAuditQuery(c.Request.URL.RawQuery); q != "" {
-			extra["query"] = q
+		if _, omit := auditQueryOmittedRoutes[routeKey]; !omit {
+			if q := service.RedactAuditQuery(c.Request.URL.RawQuery); q != "" {
+				extra["query"] = q
+			}
 		}
 		if len(extra) > 0 {
 			entry.Extra = extra

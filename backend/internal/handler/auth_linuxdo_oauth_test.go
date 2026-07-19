@@ -790,6 +790,9 @@ func TestLinuxDoOAuthCallbackDirectlyLogsInNewUserWhenEmailVerificationDisabled(
 		Where(dbuser.EmailEQ("linuxdo-direct-123@linuxdo-connect.invalid")).
 		Only(ctx)
 	require.NoError(t, err)
+	require.Equal(t, userEntity.ID, c.GetInt64("audit_actor_id"))
+	require.Equal(t, userEntity.Email, c.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodOAuth, c.GetString("auth_method"))
 	require.Equal(t, "linuxdo_direct", userEntity.Username)
 	require.Equal(t, "linuxdo", userEntity.SignupSource)
 

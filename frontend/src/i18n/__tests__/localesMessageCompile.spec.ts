@@ -38,4 +38,17 @@ describe('locale messages compile', () => {
     collectCompileErrors(messages, locale, errors)
     expect(errors).toEqual([])
   })
+
+  it('loads audit log auth method labels from the runtime locale bundles', () => {
+    expect(en.admin.audit.authMethods).toEqual({
+      password: 'Password',
+      passwordTotp: 'Password + TOTP',
+      oauthTotp: 'OAuth + TOTP'
+    })
+    expect(zh.admin.audit.authMethods).toEqual({
+      password: '密码',
+      passwordTotp: '密码 + TOTP',
+      oauthTotp: 'OAuth + TOTP'
+    })
+  })
 })

@@ -20,6 +20,11 @@ export default {
       startTime: '开始时间',
       endTime: '结束时间'
     },
+    authMethods: {
+      password: '密码',
+      passwordTotp: '密码 + TOTP',
+      oauthTotp: 'OAuth + TOTP'
+    },
     columns: {
       time: '时间',
       actor: '操作者',

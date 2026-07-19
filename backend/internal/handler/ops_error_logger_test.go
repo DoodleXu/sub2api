@@ -140,6 +140,8 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 }
 
 // setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
+//
+//nolint:unused // 仅供带 unit build tag 的跨文件 handler 测试复用。
 func setupOpsErrorLogTestQueue(t *testing.T, size int) {
 	t.Helper()
 	resetOpsErrorLoggerStateForTest(t)

@@ -67,6 +67,30 @@ describe('useStepUp.run', () => {
     expect(stepUp.visible.value).toBe(false)
   })
 
+  it('shares one prompt across concurrent protected actions', async () => {
+    const stepUp = useStepUp()
+    let firstCalls = 0
+    let secondCalls = 0
+    const first = stepUp.run(async () => {
+      firstCalls++
+      if (firstCalls === 1) throw { status: 403, code: 'STEP_UP_REQUIRED' }
+      return 'first'
+    })
+    const second = stepUp.run(async () => {
+      secondCalls++
+      if (secondCalls === 1) throw { status: 403, code: 'STEP_UP_REQUIRED' }
+      return 'second'
+    })
+
+    await vi.waitFor(() => expect(stepUp.visible.value).toBe(true))
+    stepUp.onVerified()
+
+    await expect(Promise.all([first, second])).resolves.toEqual(['first', 'second'])
+    expect(firstCalls).toBe(2)
+    expect(secondCalls).toBe(2)
+    expect(stepUp.visible.value).toBe(false)
+  })
+
   it('throws a cancellation sentinel (not the original error) if the user cancels the prompt', async () => {
     const stepUp = useStepUp()
     const err = { status: 403, code: 'STEP_UP_REQUIRED' }

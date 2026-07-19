@@ -97,11 +97,15 @@ func ensureLoginUserActive(user *service.User) error {
 
 // respondWithTokenPair 生成 Token 对并返回认证响应
 // 如果 Token 对生成失败，回退到只返回 Access Token（向后兼容）
-func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
+func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User, authMethod string) {
 	if err := ensureLoginUserActive(user); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
+	// auth 路由没有前置 JWT 中间件；身份确认后显式补齐审计 actor。
+	middleware2.SetAuditActor(c, user.ID, user.Email)
+	c.Set(string(middleware2.ContextKeyUserRole), user.Role)
+	c.Set("auth_method", authMethod)
 
 	tokenPair, err := h.authService.GenerateTokenPair(c.Request.Context(), user, "")
 	if err != nil {
@@ -185,7 +189,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	h.respondWithTokenPair(c, user)
+	h.respondWithTokenPair(c, user, service.AuditAuthMethodPassword)
 }
 
 // SendVerifyCode 发送邮箱验证码
@@ -241,6 +245,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	// 密码已验证成功；即使后续要求 TOTP，也要让第一阶段 auth.login 审计
+	// 带上真实 actor 与认证方式。
+	middleware2.SetAuditActor(c, user.ID, user.Email)
+	c.Set(string(middleware2.ContextKeyUserRole), user.Role)
+	c.Set("auth_method", service.AuditAuthMethodPassword)
 
 	// Check if TOTP 2FA is enabled for this user
 	if h.totpService != nil && h.settingSvc.IsTotpEnabled(c.Request.Context()) && user.TotpEnabled {
@@ -261,7 +270,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
-	h.respondWithTokenPair(c, user)
+	h.respondWithTokenPair(c, user, service.AuditAuthMethodPassword)
 }
 
 // TotpLoginResponse represents the response when 2FA is required
@@ -307,6 +316,15 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 	slog.Debug("login_2fa_session_found",
 		"user_id", session.UserID,
 		"email", session.Email)
+	// The temporary session already identifies the user. Set the audit actor
+	// before verification so failed TOTP attempts remain attributable without
+	// persisting the temporary token or code.
+	middleware2.SetAuditActor(c, session.UserID, session.Email)
+	method := service.AuditAuthMethodPasswordTOTP
+	if session.PendingOAuthBind != nil {
+		method = service.AuditAuthMethodOAuthTOTP
+	}
+	c.Set("auth_method", method)
 
 	// Verify the TOTP code
 	if err := h.totpService.VerifyCode(c.Request.Context(), session.UserID, req.TotpCode); err != nil {
@@ -397,7 +415,11 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 	}
 
-	h.respondWithTokenPair(c, user)
+	authMethod := service.AuditAuthMethodPasswordTOTP
+	if session.PendingOAuthBind != nil {
+		authMethod = service.AuditAuthMethodOAuthTOTP
+	}
+	h.respondWithTokenPair(c, user, authMethod)
 }
 
 // GetCurrentUser handles getting current authenticated user

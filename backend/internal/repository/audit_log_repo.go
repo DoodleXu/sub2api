@@ -18,6 +18,14 @@ type auditLogRepository struct {
 	db *sql.DB
 }
 
+// 所有审计批量写入与全量清空共用该事务级 advisory lock。配合清空留痕的
+// created_at 截止点，可阻止其他实例把清空前已排队的旧记录重新写回。
+const auditLogWriteAdvisoryLockKey int64 = 0x61756469746c6f67 // "auditlog"
+
+// auditLogClearWatermarkExtraKey 只由 ClearAll 在与 TRUNCATE 相同的事务内写入。
+// 普通中间件仍会记录失败的清空尝试，但它们没有该标志，不能推进异步写入的清空水位。
+const auditLogClearWatermarkExtraKey = "clear_watermark"
+
 // NewAuditLogRepository 创建审计日志仓储。
 func NewAuditLogRepository(db *sql.DB) service.AuditLogRepository {
 	return &auditLogRepository{db: db}
@@ -65,11 +73,56 @@ func (r *auditLogRepository) BatchInsert(ctx context.Context, logs []*service.Au
 	if len(logs) == 0 {
 		return 0, nil
 	}
+	now := time.Now().UTC()
+	for _, log := range logs {
+		if log != nil && log.CreatedAt.IsZero() {
+			log.CreatedAt = now
+		}
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", auditLogWriteAdvisoryLockKey); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("lock audit log writer: %w", err)
+	}
+
+	queryStartedAt := time.Now().UTC()
+	var databaseNow time.Time
+	var clearCutoff sql.NullTime
+	if err := tx.QueryRowContext(ctx,
+		"SELECT clock_timestamp(), MAX(created_at) FROM audit_logs WHERE action = $1 AND extra @> $2::jsonb",
+		service.AuditActionAuditLogClear,
+		`{"clear_watermark":true}`,
+	).Scan(&databaseNow, &clearCutoff); err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("read audit clear cutoff: %w", err)
+	}
+	queryFinishedAt := time.Now().UTC()
+	localMidpoint := queryStartedAt.Add(queryFinishedAt.Sub(queryStartedAt) / 2)
+	clockOffset := databaseNow.Sub(localMidpoint)
+	filtered := make([]*service.AuditLog, 0, len(logs))
+	for _, log := range logs {
+		if log == nil {
+			continue
+		}
+		// 各实例先把本机事件时间校准到数据库时钟，再与数据库生成的 clear
+		// 水位比较，避免节点时钟偏差让清空前记录回灌或误删清空后记录。
+		log.CreatedAt = log.CreatedAt.Add(clockOffset).UTC()
+		if clearCutoff.Valid && !log.CreatedAt.After(clearCutoff.Time) {
+			continue
+		}
+		filtered = append(filtered, log)
+	}
+	if len(filtered) == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+
 	stmt, err := tx.PrepareContext(ctx, pq.CopyIn(
 		"audit_logs",
 		"created_at", "actor_user_id", "actor_email", "actor_role", "auth_method",
@@ -82,10 +135,7 @@ func (r *auditLogRepository) BatchInsert(ctx context.Context, logs []*service.Au
 	}
 
 	var inserted int64
-	for _, log := range logs {
-		if log == nil {
-			continue
-		}
+	for _, log := range filtered {
 		if _, err := stmt.ExecContext(ctx, auditLogInsertValues(log)...); err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()
@@ -310,23 +360,46 @@ func (r *auditLogRepository) GetByID(ctx context.Context, id int64) (*service.Au
 	return item, nil
 }
 
-func (r *auditLogRepository) Count(ctx context.Context) (int64, error) {
+func (r *auditLogRepository) ClearAll(ctx context.Context, trace *service.AuditLog) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, fmt.Errorf("nil audit log repository")
 	}
+	if trace == nil {
+		return 0, fmt.Errorf("nil audit clear trace")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", auditLogWriteAdvisoryLockKey); err != nil {
+		return 0, fmt.Errorf("lock audit log clear: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT clock_timestamp()").Scan(&trace.CreatedAt); err != nil {
+		return 0, fmt.Errorf("read audit clear watermark: %w", err)
+	}
+	trace.CreatedAt = trace.CreatedAt.UTC()
 	var total int64
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_logs").Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_logs").Scan(&total); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "TRUNCATE TABLE audit_logs"); err != nil {
+		return 0, err
+	}
+	if trace.Extra == nil {
+		trace.Extra = map[string]any{}
+	}
+	trace.Extra["deleted_rows"] = total
+	trace.Extra[auditLogClearWatermarkExtraKey] = true
+	query := `INSERT INTO audit_logs (` + auditLogInsertColumns + `)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`
+	if _, err := tx.ExecContext(ctx, query, auditLogInsertValues(trace)...); err != nil {
+		return 0, fmt.Errorf("insert audit clear trace: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return total, nil
-}
-
-func (r *auditLogRepository) TruncateAll(ctx context.Context) error {
-	if r == nil || r.db == nil {
-		return fmt.Errorf("nil audit log repository")
-	}
-	_, err := r.db.ExecContext(ctx, "TRUNCATE TABLE audit_logs")
-	return err
 }
 
 func (r *auditLogRepository) DeleteBefore(ctx context.Context, cutoff time.Time, batchSize int) (int64, error) {

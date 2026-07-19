@@ -1025,6 +1025,9 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathIssuesTokenWithoutPendingSession(
 	require.NoError(t, err)
 	require.Equal(t, "oidc_fast_callback", user.Username)
 	require.Equal(t, "oidc", user.SignupSource)
+	require.Equal(t, user.ID, c.GetInt64("audit_actor_id"))
+	require.Equal(t, user.Email, c.GetString("audit_actor_email"))
+	require.Equal(t, service.AuditAuthMethodOAuth, c.GetString("auth_method"))
 
 	identity, err := client.AuthIdentity.Query().Where(
 		authidentity.ProviderTypeEQ("oidc"),

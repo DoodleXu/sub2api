@@ -16,9 +16,13 @@ var ErrAuditLogNotFound = infraerrors.NotFound("AUDIT_LOG_NOT_FOUND", "audit log
 
 // 审计日志相关常量。
 const (
-	// AuditAuthMethodJWT / AuditAuthMethodAdminAPIKey 与 auth 中间件写入的 auth_method 对齐。
-	AuditAuthMethodJWT         = "jwt"
-	AuditAuthMethodAdminAPIKey = "admin_api_key"
+	// 认证方式与认证/管理中间件写入的 auth_method 对齐。
+	AuditAuthMethodJWT          = "jwt"
+	AuditAuthMethodAdminAPIKey  = "admin_api_key"
+	AuditAuthMethodPassword     = "password"
+	AuditAuthMethodPasswordTOTP = "password_totp"
+	AuditAuthMethodOAuth        = "oauth"
+	AuditAuthMethodOAuthTOTP    = "oauth_totp"
 
 	// auditRequestBodyMaxBytes 请求体脱敏后入库的最大长度（字节），超出截断。
 	auditRequestBodyMaxBytes = 16 * 1024
@@ -94,9 +98,8 @@ type AuditLogRepository interface {
 	Insert(ctx context.Context, log *AuditLog) error
 	List(ctx context.Context, filter *AuditLogFilter) (*AuditLogList, error)
 	GetByID(ctx context.Context, id int64) (*AuditLog, error)
-	Count(ctx context.Context) (int64, error)
-	// TruncateAll 全量清空（TRUNCATE），返回前需调用方自行 Count 记录行数。
-	TruncateAll(ctx context.Context) error
+	// ClearAll 原子执行全量清空与清空留痕；仓储必须与异步批量写入使用同一写屏障。
+	ClearAll(ctx context.Context, trace *AuditLog) (int64, error)
 	// DeleteBefore 按保留期批量删除，返回本批删除行数（幂等，可多实例并发）。
 	DeleteBefore(ctx context.Context, cutoff time.Time, batchSize int) (int64, error)
 }

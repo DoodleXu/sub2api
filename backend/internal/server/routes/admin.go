@@ -76,7 +76,7 @@ func RegisterAdminRoutes(
 		registerOpsRoutes(admin, h)
 
 		// 运营中心
-		registerOperationsRoutes(admin, h)
+		registerOperationsRoutes(admin, h, stepUpAuth)
 
 		// 系统管理
 		registerSystemRoutes(admin, h)
@@ -268,11 +268,12 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerOperationsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerOperationsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	operations := admin.Group("/operations")
 	{
 		operations.GET("/overview", h.Admin.Setting.GetOperationsOverview)
-		operations.GET("/export", h.Admin.Setting.ExportOperationsData)
+		// 运营导出包含用户标识与消费/奖励数据，必须使用完成 TOTP step-up 的真人会话。
+		operations.GET("/export", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.ExportOperationsData)
 		checkin := operations.Group("/daily-checkin")
 		{
 			checkin.GET("/analytics", h.Admin.Setting.GetDailyCheckinAnalytics)

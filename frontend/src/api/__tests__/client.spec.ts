@@ -24,6 +24,13 @@ describe('API Client', () => {
     vi.unstubAllEnvs()
   })
 
+	 it('按拦截器统一的顶层 status 识别结构化 API 错误', async () => {
+		const { isAPIErrorStatus } = await import('@/api/client')
+		expect(isAPIErrorStatus({ status: 409 }, 409)).toBe(true)
+		expect(isAPIErrorStatus({ response: { status: 409 } }, 409)).toBe(false)
+		expect(isAPIErrorStatus(null, 409)).toBe(false)
+	 })
+
   // --- 请求拦截器 ---
 
   describe('请求拦截器', () => {
@@ -258,6 +265,30 @@ describe('API Client', () => {
         })
       )
     })
+
+    it('下载接口把 JSON 错误 Blob 还原为结构化 step-up 错误', async () => {
+      const adapter = vi.fn().mockRejectedValue({
+        response: {
+          status: 403,
+          data: new Blob([
+            JSON.stringify({ code: 'STEP_UP_REQUIRED', reason: 'STEP_UP_REQUIRED', message: 'verification required' })
+          ], { type: 'application/json' }),
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        },
+        config: { url: '/admin/operations/export', headers: {} },
+        code: 'ERR_BAD_REQUEST',
+        message: 'Request failed with status code 403',
+      })
+      apiClient.defaults.adapter = adapter
+
+	  await expect(apiClient.get('/admin/operations/export', { responseType: 'blob' })).rejects.toEqual(
+	    expect.objectContaining({
+	      status: 403,
+	      code: 'STEP_UP_REQUIRED',
+	      reason: 'STEP_UP_REQUIRED',
+	    })
+	  )
+	})
 
     it('部署与运营合规未确认时广播事件且保留登录态', async () => {
       localStorage.setItem('auth_token', 'admin-token')

@@ -15,6 +15,11 @@ import {
 import { getAPIBaseURL } from './url'
 export { buildApiUrl, buildGatewayUrl } from './url'
 
+export function isAPIErrorStatus(error: unknown, expectedStatus: number): boolean {
+	if (typeof error !== 'object' || error === null) return false
+	return (error as { status?: unknown }).status === expectedStatus
+}
+
 // ==================== Axios Instance Configuration ====================
 
 export const apiClient: AxiosInstance = axios.create({
@@ -28,6 +33,25 @@ export const apiClient: AxiosInstance = axios.create({
 
 export function isOpsMonitoringPath(pathname: string): boolean {
   return pathname === '/admin/ops' || pathname.startsWith('/admin/ops/')
+}
+
+async function decodeBlobAPIError(data: unknown, contentType: unknown): Promise<unknown> {
+  if (typeof Blob === 'undefined' || !(data instanceof Blob)) return data
+  const mime = `${data.type || ''};${String(contentType || '')}`.toLowerCase()
+  if (!mime.includes('json')) return data
+  try {
+    const text = typeof data.text === 'function'
+      ? await data.text()
+      : await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result || ''))
+          reader.onerror = () => reject(reader.error)
+          reader.readAsText(data)
+        })
+    return JSON.parse(text)
+  } catch {
+    return data
+  }
 }
 
 // ==================== Token Refresh State ====================
@@ -136,7 +160,9 @@ apiClient.interceptors.response.use(
 
     // Handle common errors
     if (error.response) {
-      const { status, data } = error.response
+      const { status } = error.response
+      const contentType = error.response.headers?.['content-type']
+      const data = await decodeBlobAPIError(error.response.data, contentType)
       const url = String(error.config?.url || '')
 
       // Validate `data` shape to avoid HTML error pages breaking our error handling.

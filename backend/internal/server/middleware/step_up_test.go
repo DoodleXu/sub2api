@@ -40,6 +40,31 @@ func newStepUpTestContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorde
 	return c, rec
 }
 
+func TestStepUpSessionKeyLegacyTokensAreIsolated(t *testing.T) {
+	newContext := func(token string) *gin.Context {
+		c, _ := newStepUpTestContext(t)
+		if token != "" {
+			c.Request.Header.Set("Authorization", "Bearer "+token)
+		}
+		return c
+	}
+
+	keyA := StepUpSessionKey(newContext("legacy-token-a"), 7)
+	keyAAgain := StepUpSessionKey(newContext("legacy-token-a"), 7)
+	keyB := StepUpSessionKey(newContext("legacy-token-b"), 7)
+	require.NotEmpty(t, keyA)
+	require.Equal(t, keyA, keyAAgain)
+	require.NotEqual(t, keyA, keyB)
+	require.Empty(t, StepUpSessionKey(newContext(""), 7))
+}
+
+func TestStepUpSessionKeyPrefersSessionID(t *testing.T) {
+	c, _ := newStepUpTestContext(t)
+	c.Set(ContextKeySessionID, "family-123")
+	c.Request.Header.Set("Authorization", "Bearer ignored-token")
+	require.Equal(t, "sid:family-123", StepUpSessionKey(c, 7))
+}
+
 func TestEnforceStepUpRejectsAdminAPIKey(t *testing.T) {
 	c, rec := newStepUpTestContext(t)
 	c.Set("auth_method", service.AuditAuthMethodAdminAPIKey)
@@ -75,6 +100,7 @@ func TestEnforceStepUpRequiresTotpEnabled(t *testing.T) {
 func TestEnforceStepUpFailsClosedOnGrantError(t *testing.T) {
 	c, rec := newStepUpTestContext(t)
 	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1})
+	c.Request.Header.Set("Authorization", "Bearer legacy-access-token")
 
 	ok := enforceStepUp(c, stubStepUpGrantChecker{err: errors.New("redis down")}, stubStepUpUserReader{user: &service.User{ID: 1, TotpEnabled: true}})
 
@@ -86,6 +112,7 @@ func TestEnforceStepUpFailsClosedOnGrantError(t *testing.T) {
 func TestEnforceStepUpRequiresGrant(t *testing.T) {
 	c, rec := newStepUpTestContext(t)
 	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1})
+	c.Request.Header.Set("Authorization", "Bearer legacy-access-token")
 
 	ok := enforceStepUp(c, stubStepUpGrantChecker{granted: false}, stubStepUpUserReader{user: &service.User{ID: 1, TotpEnabled: true}})
 
@@ -97,6 +124,7 @@ func TestEnforceStepUpRequiresGrant(t *testing.T) {
 func TestEnforceStepUpPassesWithGrant(t *testing.T) {
 	c, _ := newStepUpTestContext(t)
 	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1})
+	c.Request.Header.Set("Authorization", "Bearer legacy-access-token")
 
 	ok := enforceStepUp(c, stubStepUpGrantChecker{granted: true}, stubStepUpUserReader{user: &service.User{ID: 1, TotpEnabled: true}})
 

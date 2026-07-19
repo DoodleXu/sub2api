@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -103,6 +104,15 @@ const backendModeCacheTTL = 60 * time.Second
 const backendModeErrorTTL = 5 * time.Second
 const backendModeDBTimeout = 5 * time.Second
 
+type cachedSessionBinding struct {
+	value     bool
+	expiresAt int64
+}
+
+const sessionBindingCacheTTL = 60 * time.Second
+const sessionBindingErrorTTL = 5 * time.Second
+const sessionBindingDBTimeout = 5 * time.Second
+
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
 	fingerprintUnification           bool
@@ -127,11 +137,47 @@ const gatewayForwardingDBTimeout = 5 * time.Second
 // IsSessionBindingEnabled checks whether login sessions are bound to their
 // original IP and User-Agent. The secure default is enabled.
 func (s *SettingService) IsSessionBindingEnabled(ctx context.Context) bool {
-	value, err := s.settingRepo.GetValue(ctx, SettingKeySessionBindingEnabled)
-	if err != nil {
+	if s == nil {
 		return true
 	}
-	return value != "false"
+	if cached, ok := s.sessionBindingCache.Load().(*cachedSessionBinding); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.value
+	}
+	result, _, _ := s.sessionBindingSF.Do("session_binding", func() (any, error) {
+		if cached, ok := s.sessionBindingCache.Load().(*cachedSessionBinding); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			return cached.value, nil
+		}
+		if s == nil || s.settingRepo == nil {
+			return true, nil
+		}
+		generation := s.sessionBindingGeneration.Load()
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingDBTimeout)
+		defer cancel()
+		value, err := s.settingRepo.GetValue(dbCtx, SettingKeySessionBindingEnabled)
+		enabled := err != nil || value != "false"
+		ttl := sessionBindingCacheTTL
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			slog.Warn("failed to get session_binding_enabled setting", "error", err)
+			ttl = sessionBindingErrorTTL
+		}
+		s.sessionBindingPublicationMu.Lock()
+		defer s.sessionBindingPublicationMu.Unlock()
+		if generation == s.sessionBindingGeneration.Load() {
+			s.sessionBindingCache.Store(&cachedSessionBinding{
+				value:     enabled,
+				expiresAt: time.Now().Add(ttl).UnixNano(),
+			})
+		} else if cached, ok := s.sessionBindingCache.Load().(*cachedSessionBinding); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			// An admin refresh completed while the DB read was in flight. Return the
+			// refreshed value and never publish the stale snapshot.
+			return cached.value, nil
+		}
+		return enabled, nil
+	})
+	if enabled, ok := result.(bool); ok {
+		return enabled
+	}
+	return true
 }
 
 const defaultAuditLogRetentionDays = 180
@@ -260,6 +306,10 @@ type SettingService struct {
 
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
+	sessionBindingCache           atomic.Value // *cachedSessionBinding
+	sessionBindingSF              singleflight.Group
+	sessionBindingGeneration      atomic.Uint64
+	sessionBindingPublicationMu   sync.Mutex
 
 	// openAIQuotaAutoPauseSettingsCache holds the most recently observed quota auto-pause
 	// settings. GetOpenAIQuotaAutoPauseSettings reads this atomic.Value on the request hot
@@ -2695,6 +2745,14 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		value:     settings.BackendModeEnabled,
 		expiresAt: time.Now().Add(backendModeCacheTTL).UnixNano(),
 	})
+	s.sessionBindingPublicationMu.Lock()
+	s.sessionBindingGeneration.Add(1)
+	s.sessionBindingSF.Forget("session_binding")
+	s.sessionBindingCache.Store(&cachedSessionBinding{
+		value:     settings.SessionBindingEnabled,
+		expiresAt: time.Now().Add(sessionBindingCacheTTL).UnixNano(),
+	})
+	s.sessionBindingPublicationMu.Unlock()
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 		fingerprintUnification:           settings.EnableFingerprintUnification,
