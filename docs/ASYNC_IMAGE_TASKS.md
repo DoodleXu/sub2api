@@ -34,12 +34,13 @@ image_storage:
   force_path_style: false          # MinIO/path-style buckets set true
   public_base_url: ""              # set to return public_base_url/key直链; empty → presigned URL
   presign_expiry_hours: 24         # presigned link TTL when public_base_url is empty
+  lifecycle_expiration_days: 2     # minimum days for an enabled rule covering this prefix
   max_download_bytes: 33554432     # cap when re-hosting an upstream image URL (32MB)
 ```
 
 When a task completes, each generated image is uploaded to the bucket and the result is rewritten to a compact form: `data[].url` points at the stored object (a permanent `public_base_url/key` link, or a time-limited presigned URL) and `b64_json` is removed. Only this small JSON is stored in Redis. If an upload fails, the task is marked `failed` rather than persisting the raw base64.
 
-To support a different vendor beyond the S3-compatible client, implement the `service.ImageStorage` interface (`Save(ctx, key, contentType, data) (url, error)`) and provide it in place of the S3 implementation.
+To support a different vendor beyond the S3-compatible client, implement both `service.ImageStorage` and `service.ImageTaskStore`, including `ListPending(ctx, limit)`. The task service records pending object keys before upload and runs a bounded durable reconciliation worker; configure an enabled, unfiltered or prefix-only object-store lifecycle rule that covers every generated key as a final retention/cleanup backstop, especially when `public_base_url` is used. Tag, object-size, and compound `And` rules are not accepted because generated objects cannot be guaranteed to match them. Call `ImageTaskService.Close()` during application shutdown to stop the reconciliation worker.
 
 ## Submit a task
 

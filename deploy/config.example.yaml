@@ -1212,5 +1212,7 @@ image_storage:
   public_base_url: ""
   # public_base_url 为空时，presigned 链接的有效时长（小时）
   presign_expiry_hours: 24
+  # bucket 必须配置覆盖上述 prefix 的启用中生命周期规则；这里是允许的最短保留天数
+  lifecycle_expiration_days: 2
   # 当上游返回的是图片 url 时，下载该图片再转存的字节上限（默认 32MB）
   max_download_bytes: 33554432

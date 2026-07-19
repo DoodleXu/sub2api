@@ -472,6 +472,13 @@ func ProvideImageTaskService(store ImageTaskStore, storage ImageStorage, cfg *co
 		}
 		return NewImageTaskService(store)
 	}
+	if storage == nil {
+		logger.L().Error("image storage is unavailable; async image tasks are disabled")
+		return NewImageTaskService(store)
+	}
+	if cfg.ImageStorage.PublicBaseURL != "" {
+		logger.L().Warn("image_storage.public_base_url is configured; configure an object-store lifecycle rule to expire generated objects")
+	}
 	uploader := NewImageResultUploader(storage, cfg.ImageStorage.Prefix, cfg.ImageStorage.MaxDownloadByte, nil)
 	return NewImageTaskServiceWithUploader(store, uploader, defaultImageTaskTTL, defaultImageTaskExecutionTimeout)
 }

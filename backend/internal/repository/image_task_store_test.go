@@ -30,6 +30,18 @@ func TestImageTaskStoreRoundTripAndTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, task, got)
 	require.Equal(t, 24*time.Hour, mr.TTL(imageTaskKey(task.ID)))
+
+	completed := *task
+	completed.Status = service.ImageTaskStatusCompleted
+	transitioned, err := store.Transition(context.Background(), task.ID, service.ImageTaskStatusProcessing, &completed, time.Hour)
+	require.NoError(t, err)
+	require.True(t, transitioned)
+	transitioned, err = store.Transition(context.Background(), task.ID, service.ImageTaskStatusProcessing, task, time.Hour)
+	require.NoError(t, err)
+	require.False(t, transitioned, "terminal state must not be overwritten")
+	got, err = store.Get(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.Equal(t, service.ImageTaskStatusCompleted, got.Status)
 }
 
 func TestImageTaskStoreMissing(t *testing.T) {

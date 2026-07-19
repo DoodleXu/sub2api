@@ -12,10 +12,14 @@ import (
 )
 
 type imageTaskMemoryStore struct {
-	task    *ImageTaskRecord
-	ttl     time.Duration
-	saveErr error
-	getErr  error
+	task                     *ImageTaskRecord
+	ttl                      time.Duration
+	saveErr                  error
+	getErr                   error
+	forceTransitionMiss      bool
+	transitionErrNoCommit    error
+	transitionErrAfterCommit error
+	respectContext           bool
 }
 
 func (s *imageTaskMemoryStore) Save(_ context.Context, task *ImageTaskRecord, ttl time.Duration) error {
@@ -23,12 +27,16 @@ func (s *imageTaskMemoryStore) Save(_ context.Context, task *ImageTaskRecord, tt
 		return s.saveErr
 	}
 	copy := *task
+	copy.PendingObjectKeys = append([]string(nil), task.PendingObjectKeys...)
 	s.task = &copy
 	s.ttl = ttl
 	return nil
 }
 
-func (s *imageTaskMemoryStore) Get(_ context.Context, _ string) (*ImageTaskRecord, error) {
+func (s *imageTaskMemoryStore) Get(ctx context.Context, _ string) (*ImageTaskRecord, error) {
+	if s.respectContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -36,7 +44,49 @@ func (s *imageTaskMemoryStore) Get(_ context.Context, _ string) (*ImageTaskRecor
 		return nil, ErrImageTaskNotFound
 	}
 	copy := *s.task
+	copy.PendingObjectKeys = append([]string(nil), s.task.PendingObjectKeys...)
 	return &copy, nil
+}
+
+func (s *imageTaskMemoryStore) ListPending(context.Context, int) ([]*ImageTaskRecord, error) {
+	if s.task == nil || len(s.task.PendingObjectKeys) == 0 {
+		return nil, nil
+	}
+	copy := *s.task
+	copy.PendingObjectKeys = append([]string(nil), s.task.PendingObjectKeys...)
+	if copy.Status != ImageTaskStatusProcessing && copy.Status != ImageTaskStatusFailed {
+		return nil, nil
+	}
+	return []*ImageTaskRecord{&copy}, nil
+}
+
+func (s *imageTaskMemoryStore) Transition(ctx context.Context, _ string, expectedStatus string, task *ImageTaskRecord, ttl time.Duration) (bool, error) {
+	if s.respectContext && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if s.saveErr != nil {
+		return false, s.saveErr
+	}
+	if s.task == nil {
+		return false, ErrImageTaskNotFound
+	}
+	if s.forceTransitionMiss {
+		return false, nil
+	}
+	if task.Status == ImageTaskStatusCompleted && s.transitionErrNoCommit != nil {
+		return false, s.transitionErrNoCommit
+	}
+	if s.task.Status != expectedStatus {
+		return false, nil
+	}
+	copy := *task
+	copy.PendingObjectKeys = append([]string(nil), task.PendingObjectKeys...)
+	s.task = &copy
+	s.ttl = ttl
+	if task.Status == ImageTaskStatusCompleted && s.transitionErrAfterCommit != nil {
+		return false, s.transitionErrAfterCommit
+	}
+	return true, nil
 }
 
 func TestImageTaskServiceLifecycleAndOwnership(t *testing.T) {
@@ -80,6 +130,14 @@ func TestImageTaskServiceInvalidResultBecomesFailed(t *testing.T) {
 	require.Equal(t, ImageTaskStatusFailed, got.Status)
 	require.Equal(t, http.StatusBadGateway, got.HTTPStatus)
 	require.Contains(t, string(got.Error), "non-JSON")
+}
+
+func TestImageTaskServicePreservesExistingTerminalState(t *testing.T) {
+	store := &imageTaskMemoryStore{task: &ImageTaskRecord{ID: "imgtask_done", Status: ImageTaskStatusCompleted}}
+	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
+
+	require.NoError(t, svc.Fail(context.Background(), "imgtask_done", http.StatusBadGateway, json.RawMessage(`{"error":{"message":"late failure"}}`)))
+	require.Equal(t, ImageTaskStatusCompleted, store.task.Status)
 }
 
 func TestImageTaskServiceMapsStoreFailures(t *testing.T) {

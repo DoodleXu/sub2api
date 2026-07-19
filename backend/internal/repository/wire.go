@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -181,9 +183,11 @@ func ProvideImageStorage(cfg *config.Config) (service.ImageStorage, error) {
 	if !cfg.ImageStorage.Active() {
 		return nil, nil
 	}
-	store, err := NewS3ImageStorage(context.Background(), &cfg.ImageStorage)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store, err := NewS3ImageStorage(ctx, &cfg.ImageStorage)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize image storage bucket %q at %q: %w", cfg.ImageStorage.Bucket, cfg.ImageStorage.Endpoint, err)
 	}
 	return store, nil
 }

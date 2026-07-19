@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,10 +22,17 @@ import (
 )
 
 type AsyncImageHandler struct {
-	tasks   *service.ImageTaskService
-	openAI  *OpenAIGatewayHandler
-	execute func(platform string, c *gin.Context)
+	tasks             *service.ImageTaskService
+	openAI            *OpenAIGatewayHandler
+	execute           func(platform string, c *gin.Context)
+	completionTimeout time.Duration
+	failureTimeout    time.Duration
 }
+
+const (
+	defaultImageTaskCompletionTimeout = 2 * time.Minute
+	defaultImageTaskFailureTimeout    = 15 * time.Second
+)
 
 func NewAsyncImageHandler(tasks *service.ImageTaskService, openAI *OpenAIGatewayHandler) *AsyncImageHandler {
 	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
@@ -194,8 +202,12 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 			h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "upstream returned an invalid image response"))
 			return
 		}
-		if err := h.tasks.Complete(context.Background(), taskID, statusCode, json.RawMessage(body)); err != nil {
+		err := runBoundedImageTaskUpdate(h.effectiveCompletionTimeout(), func(ctx context.Context) error {
+			return h.tasks.Complete(ctx, taskID, statusCode, json.RawMessage(body))
+		})
+		if err != nil {
 			logger.L().Error("image_task.complete_store_failed", zap.String("task_id", taskID), zap.Error(err))
+			h.failTask(taskID, http.StatusBadGateway, imageTaskErrorPayload("api_error", "failed to finalize generated image"))
 		}
 		return
 	}
@@ -203,9 +215,48 @@ func (h *AsyncImageHandler) run(taskID, platform string, taskCtx *gin.Context, r
 }
 
 func (h *AsyncImageHandler) failTask(taskID string, statusCode int, taskErr json.RawMessage) {
-	if err := h.tasks.Fail(context.Background(), taskID, statusCode, taskErr); err != nil {
+	if err := runBoundedImageTaskUpdate(h.effectiveFailureTimeout(), func(ctx context.Context) error {
+		return h.tasks.Fail(ctx, taskID, statusCode, taskErr)
+	}); err != nil {
 		logger.L().Error("image_task.failure_store_failed", zap.String("task_id", taskID), zap.Error(err))
 	}
+}
+
+func runBoundedImageTaskUpdate(timeout time.Duration, update func(context.Context) error) error {
+	if timeout <= 0 {
+		timeout = defaultImageTaskFailureTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				result <- fmt.Errorf("image task update panicked: %v", recovered)
+			}
+		}()
+		result <- update(ctx)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *AsyncImageHandler) effectiveCompletionTimeout() time.Duration {
+	if h != nil && h.completionTimeout > 0 {
+		return h.completionTimeout
+	}
+	return defaultImageTaskCompletionTimeout
+}
+
+func (h *AsyncImageHandler) effectiveFailureTimeout() time.Duration {
+	if h != nil && h.failureTimeout > 0 {
+		return h.failureTimeout
+	}
+	return defaultImageTaskFailureTimeout
 }
 
 func newAsyncImageContext(c *gin.Context, body []byte, timeoutDuration time.Duration) (*gin.Context, *httptest.ResponseRecorder, context.CancelFunc) {
