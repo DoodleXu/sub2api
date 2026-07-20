@@ -872,7 +872,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if err := scanner.Err(); err != nil {
 			safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, err)
 			handleScanErr(err)
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
+			if clientDisconnected || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
+			}
+			return resultWithUsage(), newOpenAIUpstreamStreamReadError(safeErr)
 		}
 		if frame, ok := parser.Finish(); ok {
 			if strings.TrimSpace(frame.Data) == "[DONE]" {
@@ -945,7 +948,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if ev.err != nil {
 				safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, ev.err)
 				handleScanErr(ev.err)
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
+				if clientDisconnected || errors.Is(ev.err, context.Canceled) || errors.Is(ev.err, context.DeadlineExceeded) {
+					return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", safeErr)
+				}
+				return resultWithUsage(), newOpenAIUpstreamStreamReadError(safeErr)
 			}
 			lastDataAt = time.Now()
 			line := ev.line

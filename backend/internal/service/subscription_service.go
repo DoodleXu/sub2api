@@ -541,8 +541,27 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 		return nil, false, ErrGroupNotSubscriptionType
 	}
 
-	// 检查是否已存在订阅；若已存在，则按幂等成功返回现有订阅。
+	// 检查是否已存在订阅；有效订阅按幂等语义复用，过期订阅则原地续期。
 	if sub, getErr := s.getPreferredSubscriptionForGroup(ctx, input.UserID, input.GroupID); getErr == nil {
+		now := time.Now()
+		if sub.Status == SubscriptionStatusExpired ||
+			(sub.Status != SubscriptionStatusSuspended && !sub.ExpiresAt.After(now)) {
+			validityDays := normalizeAssignValidityDays(input.ValidityDays)
+			newExpiresAt := now.AddDate(0, 0, validityDays)
+			if newExpiresAt.After(MaxExpiresAt) {
+				newExpiresAt = MaxExpiresAt
+			}
+			renewalNotes := input.Notes
+			if strings.TrimSpace(sub.Notes) == strings.TrimSpace(input.Notes) {
+				renewalNotes = ""
+			}
+			if err := s.updateExistingSubscriptionTerm(ctx, sub, renewalNotes, now, newExpiresAt, true); err != nil {
+				return nil, false, err
+			}
+			s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)
+			renewed, getErr := s.userSubRepo.GetByID(ctx, sub.ID)
+			return renewed, true, getErr
+		}
 		if conflictReason, conflict := detectAssignSemanticConflict(sub, input); conflict {
 			return nil, false, ErrSubscriptionAssignConflict.WithMetadata(map[string]string{
 				"conflict_reason": conflictReason,

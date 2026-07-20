@@ -90,14 +90,16 @@ type OpenAIEndpointCapability string
 const openAILongContextBillingEnabledKey = "openai_long_context_billing_enabled"
 
 const (
-	OpenAIEndpointCapabilityChatCompletions OpenAIEndpointCapability = "chat_completions"
-	OpenAIEndpointCapabilityEmbeddings      OpenAIEndpointCapability = "embeddings"
-	OpenAIEndpointCapabilityResponsesNative OpenAIEndpointCapability = "responses_native"
-	OpenAIEndpointCapabilityAlphaSearch     OpenAIEndpointCapability = "alpha_search"
-	OpenAIEndpointCapabilityResponses       OpenAIEndpointCapability = "responses"
+	OpenAIEndpointCapabilityChatCompletions     OpenAIEndpointCapability = "chat_completions"
+	OpenAIEndpointCapabilityEmbeddings          OpenAIEndpointCapability = "embeddings"
+	OpenAIEndpointCapabilityResponsesNative     OpenAIEndpointCapability = "responses_native"
+	OpenAIEndpointCapabilityAlphaSearch         OpenAIEndpointCapability = "alpha_search"
+	OpenAIEndpointCapabilityResponses           OpenAIEndpointCapability = "responses"
+	OpenAIEndpointCapabilityGrokMediaGeneration OpenAIEndpointCapability = "grok_media_generation"
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+const GrokMediaEligibleExtraKey = "grok_media_eligible"
 
 const (
 	OpenAIAuthModePersonalAccessToken = "personalAccessToken"
@@ -1429,7 +1431,15 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return false
 	}
 	if a.IsGrok() {
-		return capability == OpenAIEndpointCapabilityChatCompletions
+		switch capability {
+		case OpenAIEndpointCapabilityChatCompletions:
+			return true
+		case OpenAIEndpointCapabilityGrokMediaGeneration:
+			eligible, reason := a.GrokMediaGenerationEligibility()
+			return eligible || reason == "billing_unobserved"
+		default:
+			return false
+		}
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
@@ -1439,7 +1449,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		}
 		capability = OpenAIEndpointCapabilityChatCompletions
 	case OpenAIEndpointCapabilityAlphaSearch:
-		if a.Type != AccountTypeOAuth {
+		if a.Type != AccountTypeOAuth && a.Type != AccountTypeAPIKey {
 			return false
 		}
 	case OpenAIEndpointCapabilityEmbeddings:
@@ -1459,6 +1469,50 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return true
 	}
 	return configured[string(capability)]
+}
+
+// GrokMediaGenerationEligibility reports whether a Grok account may receive
+// new image/video generation requests. OAuth media fails closed unless billing
+// observations provide positive paid-entitlement evidence.
+func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
+	if a == nil || !a.IsGrok() {
+		return false, "not_grok"
+	}
+	if override, ok := grokMediaEligibilityOverride(a.Extra); ok {
+		if override {
+			return true, "override_enabled"
+		}
+		return false, "override_disabled"
+	}
+	if a.Type != AccountTypeOAuth {
+		return true, "non_oauth"
+	}
+	billing, err := grokBillingSnapshotFromExtra(a.Extra)
+	if err != nil || billing == nil {
+		return false, "billing_unobserved"
+	}
+	if billing.StatusCode == 403 || billing.WeeklyStatusCode == 403 || billing.MonthlyStatusCode == 403 {
+		return false, "billing_forbidden"
+	}
+	if isKnownGrokFreeAccount(a) {
+		return false, "billing_free_tier"
+	}
+	if !grokBillingHasAuthoritativeQuota(billing) {
+		return false, "billing_inconclusive"
+	}
+	return true, "eligible"
+}
+
+func grokMediaEligibilityOverride(extra map[string]any) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	raw, exists := extra[GrokMediaEligibleExtraKey]
+	if !exists || raw == nil {
+		return false, false
+	}
+	value, ok := raw.(bool)
+	return value, ok
 }
 
 func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {

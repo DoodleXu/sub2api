@@ -135,10 +135,10 @@ const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
 
 // IsSessionBindingEnabled checks whether login sessions are bound to their
-// original IP and User-Agent. The secure default is enabled.
+// original IP and User-Agent. The release-compatible default is disabled.
 func (s *SettingService) IsSessionBindingEnabled(ctx context.Context) bool {
 	if s == nil {
-		return true
+		return false
 	}
 	if cached, ok := s.sessionBindingCache.Load().(*cachedSessionBinding); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
 		return cached.value
@@ -148,13 +148,13 @@ func (s *SettingService) IsSessionBindingEnabled(ctx context.Context) bool {
 			return cached.value, nil
 		}
 		if s == nil || s.settingRepo == nil {
-			return true, nil
+			return false, nil
 		}
 		generation := s.sessionBindingGeneration.Load()
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingDBTimeout)
 		defer cancel()
 		value, err := s.settingRepo.GetValue(dbCtx, SettingKeySessionBindingEnabled)
-		enabled := err != nil || value != "false"
+		enabled := err == nil && value == "true"
 		ttl := sessionBindingCacheTTL
 		if err != nil && !errors.Is(err, ErrSettingNotFound) {
 			slog.Warn("failed to get session_binding_enabled setting", "error", err)
@@ -178,6 +178,16 @@ func (s *SettingService) IsSessionBindingEnabled(ctx context.Context) bool {
 		return enabled
 	}
 	return true
+}
+
+// IsStepUpEnabled checks whether sensitive-operation step-up 2FA is enabled.
+// The secure rollout default is disabled to preserve existing sessions.
+func (s *SettingService) IsStepUpEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyStepUpEnabled)
+	return err == nil && value == "true"
 }
 
 const defaultAuditLogRetentionDays = 180
@@ -2571,6 +2581,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// 风控中心功能开关
 	updates[SettingKeyRiskControlEnabled] = strconv.FormatBool(settings.RiskControlEnabled)
 	updates[SettingKeySessionBindingEnabled] = strconv.FormatBool(settings.SessionBindingEnabled)
+	updates[SettingKeyStepUpEnabled] = strconv.FormatBool(settings.StepUpEnabled)
 	updates[SettingKeyAuditLogRetentionDays] = strconv.Itoa(settings.AuditLogRetentionDays)
 
 	// cyber 会话屏蔽开关 + TTL
@@ -3629,7 +3640,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// 风控中心功能（默认关闭，显式启用）
 		SettingKeyRiskControlEnabled:    "false",
-		SettingKeySessionBindingEnabled: "true",
+		SettingKeySessionBindingEnabled: "false",
+		SettingKeyStepUpEnabled:         "false",
 		SettingKeyAuditLogRetentionDays: strconv.Itoa(defaultAuditLogRetentionDays),
 
 		// cyber 会话屏蔽（默认关闭，TTL 默认 3600s）
@@ -4211,7 +4223,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// 风控中心功能（默认关闭，严格 true 才启用）
 	result.RiskControlEnabled = settings[SettingKeyRiskControlEnabled] == "true"
-	result.SessionBindingEnabled = settings[SettingKeySessionBindingEnabled] != "false"
+	result.SessionBindingEnabled = settings[SettingKeySessionBindingEnabled] == "true"
+	result.StepUpEnabled = settings[SettingKeyStepUpEnabled] == "true"
 	result.AuditLogRetentionDays = parseAuditLogRetentionDays(settings[SettingKeyAuditLogRetentionDays])
 
 	// cyber 会话屏蔽（默认关闭，TTL 默认 3600s）

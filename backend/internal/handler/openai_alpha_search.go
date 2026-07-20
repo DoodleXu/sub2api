@@ -80,8 +80,8 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
 	searchID := strings.TrimSpace(gjson.GetBytes(body, "id").String())
 
-	if decision := h.checkContentModeration(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIAlphaSearch, requestedModel, body); decision != nil && decision.Blocked {
-		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIAlphaSearch, requestedModel, body); decision != nil && !decision.AllowNextStage {
+		h.openAISecurityAuditError(c, decision)
 		return
 	}
 	if h.rejectIfCyberSessionBlockedWithFallback(c, apiKey, body, requestedModel, cyberBlockFormatResponses, searchID) {

@@ -1001,7 +1001,8 @@ func TestAPIContracts(t *testing.T) {
 					"available_channels_enabled": false,
 					"risk_control_enabled": false,
 					"audit_log_retention_days": 180,
-					"session_binding_enabled": true,
+					"session_binding_enabled": false,
+					"step_up_enabled": false,
 					"cyber_session_block_enabled": false,
 					"cyber_session_block_ttl_seconds": 3600,
 					"affiliate_enabled": false,
@@ -1072,7 +1073,8 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
-					"session_binding_enabled": true,
+					"session_binding_enabled": false,
+					"step_up_enabled": false,
 					"registration_enabled": true,
 					"email_verify_enabled": false,
 					"registration_email_suffix_whitelist": [],
@@ -2109,6 +2111,10 @@ func (s *stubAccountRepo) ListSchedulableByPlatforms(ctx context.Context, platfo
 
 func (s *stubAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
+	return []service.Account{}, nil
 }
 
 func (s *stubAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {

@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-18
+最后更新：2026-07-20
 
 ## 当前对比基线
 
@@ -10,24 +10,34 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `95591d977 chore: 准备发布 v0.1.223` | 已合并的 v0.1.158 同步前基线，fork 版本继续保留 `0.1.223` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.158` -> `26abd19a28` | v0.1.157/v0.1.158 已合入本 fork；后续 v0.1.159/v0.1.160 尚未纳入本次基线 |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.160` -> `8bfbc5ca99` | 2026-07-17 发布的官方最新非草稿 release；应作为下一次同步预检目标 |
-| 上游 main HEAD | `57914967cb` | 当前远端 main，包含 v0.1.160 及其后 main 变更 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次预检共 68 个冲突（50 个内容冲突、18 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游安全审计、账号复制、上游计费探测、Grok endpoint、Responses/WS 与图片 token 计费修复 |
+| Fork 同步前 HEAD | `4075866d0 chore: 准备发布 v0.1.224` | 本次合并 v0.1.161 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.161` -> `19149ca196` | v0.1.159-v0.1.161 已合入本 fork，fork 发布版本提升为 `0.1.225` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.161` -> `19149ca196` | 2026-07-18 发布的官方最新非草稿 release |
+| 上游 main HEAD | `30202f8266` | 本次同步时的远端 main，包含 v0.1.161 后续提交；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 53 个冲突路径（43 个内容冲突、10 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游入口安全、Prompt Audit、Grok media、Responses/WS 与订阅续期修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.157:refs/tags/upstream/v0.1.157 --force
-git fetch upstream refs/tags/v0.1.158:refs/tags/upstream/v0.1.158 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.158^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.158^{}..HEAD
+git fetch upstream refs/tags/v0.1.161:refs/tags/upstream/v0.1.161 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.161^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.158` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.161` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.159` + `v0.1.160` + `v0.1.161` 合并说明：
+
+- 安全面迁入 API Key 凭证长度限制、鉴权查询并发保护、负缓存失效 outbox、无效鉴权滥用限流和入口拒绝聚合；session binding 与敏感操作 step-up 按官方 v0.1.161 改为默认关闭，避免升级后隐式改变既有会话和管理流程。
+- 新增官方 Prompt Audit 后端协调器、迁移、管理 API、路由与前端工作台，并接入 Responses、Chat Completions、Messages、WebSocket、Alpha Search 和媒体提交入口；继续保留 fork 风控中心、内容审核与 cyber 会话屏蔽链路。
+- OpenAI Responses/WS 吸收流式 content part/full output、模型级临时冷却和完整生命周期控制；fork 每 turn 图片计费快照、首图耗时、图片计数、Agent Identity 请求级脱敏和 Responses Lite 行为继续保留。
+- Grok 合入受保护媒体访问、图片/视频 endpoint 规范化、媒体资格探测、Free 账号缓存判定与加密内容恢复；纯 function tools 不再隐式注入搜索工具，避免改变模型工具选择。
+- 管理订阅支持过期记录原地续期并重置周期用量；运营设置改为启动预热、请求热路径只读内存快照，管理更新立即刷新快照。
+- 前端运行时同时加载 fork 单体语言包与上游模块化语言包，模块化键覆盖旧键；补齐中英文键对称测试，修复账号上游声明倍率标题、未探测状态和 Prompt Audit 文案显示原始 key 的问题。
+- 部署吸收 BuildKit 原生架构构建、Go/pnpm 缓存和 Redis 持久化参数换行修复，同时保留 `ghcr.io/doodlexu/sub2api`、`UPDATE_REPOSITORY=DoodleXu/sub2api` 与 fork 镜像来源标签。
+- 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义，没有恢复已删除的 10 个拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理入口均保留。
 
 本次 `v0.1.157` + `v0.1.158` 合并说明：
 
@@ -446,7 +456,16 @@ git diff --name-status refs/tags/upstream/v0.1.158^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.158`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核 Agent Identity、Grok OAuth/media 路由、OpenAI 计费探测、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.161`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.159 + v0.1.160 + v0.1.161 合并验证
+
+- 冲突处理：共 53 个冲突路径，其中 43 个内容冲突、10 个 modify/delete；上游拆分文件行为继续移植到 fork 聚合模块，未恢复已删除的拆分文件。
+- 后端专项：API Key 入口保护、Prompt Audit 路由覆盖、Grok media、过期订阅续期、运营设置快照、Responses 流读取错误和 WS passthrough 生命周期用例通过。
+- 前端专项：运行时中英文键集合完全对称，截图涉及的 `admin.accounts.columns.upstreamBillingRate` 与 `admin.accounts.upstreamBilling.notProbed` 可正确翻译；账号主页安全链接、上游倍率提示/排序和 Prompt Audit 模块化语言包回归通过。
+- 部署与保留性：Docker 跨架构构建缓存和 Redis 持久化参数修复已合入；GHCR/更新仓库仍指向 fork；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理关键入口仍存在。
+- 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.225`。
+- 全量验证：后端 `TZ=UTC go test -tags=unit ./... -count=1` 全量通过；前端 Vitest 共 `192` 个测试文件、`1356` 项用例通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；Docker Compose 使用校验占位环境变量完成配置解析。当前环境未安装 `golangci-lint`，本次未执行该项。
 
 ## v0.1.157 + v0.1.158 合并验证
 

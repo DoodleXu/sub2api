@@ -58,6 +58,7 @@ type RelayTurnResult struct {
 type RelayExit struct {
 	Stage           string
 	Err             error
+	Graceful        bool
 	WroteDownstream bool
 }
 
@@ -74,6 +75,9 @@ type RelayOptions struct {
 	OnUsageParseFailure             func(eventType string, usageRaw string)
 	OnTurnComplete                  func(turn RelayTurnResult)
 	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error)
+	BeforeClientWrite               func(msgType coderws.MessageType, payload []byte)
+	AfterClientWrite                func(msgType coderws.MessageType, payload []byte, writeErr error)
+	BeforeRelayCancel               func(exit RelayExit)
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
 	Now                             func() time.Time
@@ -265,6 +269,8 @@ func Relay(
 		options.OnTurnComplete,
 		options.OnResponseCreateAborted,
 		options.BeforeWriteClient,
+		options.BeforeClientWrite,
+		options.AfterClientWrite,
 		func() {
 			if options.StartClientAfterFirstDownstream {
 				startClientReader()
@@ -280,6 +286,9 @@ func Relay(
 	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
 
 	firstExit := <-exitCh
+	if ctx.Err() != nil {
+		firstExit.graceful = false
+	}
 	emitRelayTrace(onTrace, RelayTraceEvent{
 		Stage:           "first_exit",
 		Direction:       relayDirectionFromStage(firstExit.stage),
@@ -287,6 +296,14 @@ func Relay(
 		WroteDownstream: firstExit.wroteDownstream,
 		Error:           relayErrorString(firstExit.err),
 	})
+	if options.BeforeRelayCancel != nil {
+		options.BeforeRelayCancel(RelayExit{
+			Stage:           firstExit.stage,
+			Err:             firstExit.err,
+			Graceful:        firstExit.graceful,
+			WroteDownstream: firstExit.wroteDownstream,
+		})
+	}
 	combinedWroteDownstream := firstExit.wroteDownstream
 	secondExit := relayExitSignal{graceful: true}
 	hasSecondExit := false
@@ -348,6 +365,7 @@ func Relay(
 		return result, &RelayExit{
 			Stage:           stage,
 			Err:             exitErr,
+			Graceful:        false,
 			WroteDownstream: combinedWroteDownstream,
 		}
 	}
@@ -371,6 +389,7 @@ func Relay(
 		return result, &RelayExit{
 			Stage:           firstExit.stage,
 			Err:             firstExit.err,
+			Graceful:        false,
 			WroteDownstream: combinedWroteDownstream,
 		}
 	}
@@ -385,6 +404,7 @@ func Relay(
 		return result, &RelayExit{
 			Stage:           secondExit.stage,
 			Err:             secondExit.err,
+			Graceful:        false,
 			WroteDownstream: combinedWroteDownstream,
 		}
 	}
@@ -480,6 +500,8 @@ func runUpstreamToClient(
 	onTurnComplete func(turn RelayTurnResult),
 	onResponseCreateAborted func(sequence uint64),
 	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error),
+	beforeClientWrite func(msgType coderws.MessageType, payload []byte),
+	afterClientWrite func(msgType coderws.MessageType, payload []byte, writeErr error),
 	afterWriteClient func(),
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
@@ -561,7 +583,13 @@ func runUpstreamToClient(
 			markActivity()
 			continue
 		}
+		if beforeClientWrite != nil {
+			beforeClientWrite(msgType, payload)
+		}
 		if err := writeClient(msgType, payload); err != nil {
+			if afterClientWrite != nil {
+				afterClientWrite(msgType, payload, err)
+			}
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "write_client_failed",
 				Direction:       "upstream_to_client",
@@ -572,6 +600,9 @@ func runUpstreamToClient(
 			})
 			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: wroteDownstream}
 			return
+		}
+		if afterClientWrite != nil {
+			afterClientWrite(msgType, payload, nil)
 		}
 		wroteDownstream = true
 		if afterWriteClient != nil {

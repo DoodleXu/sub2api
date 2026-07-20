@@ -12,7 +12,14 @@ import (
 	"go.uber.org/zap"
 )
 
-func (h *GatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
+func (h *GatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte) *service.ContentModerationDecision {
+	if h == nil || h.contentModerationService == nil {
+		return nil
+	}
+	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
+}
+
+func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte) *service.ContentModerationDecision {
 	if h == nil || h.contentModerationService == nil {
 		return nil
 	}
@@ -31,13 +38,6 @@ func contentModerationErrorCode(decision *service.ContentModerationDecision) str
 		return "content_policy_violation"
 	}
 	return strings.TrimSpace(decision.ErrorCode)
-}
-
-func (h *OpenAIGatewayHandler) checkContentModeration(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
-	if h == nil || h.contentModerationService == nil {
-		return nil
-	}
-	return runContentModeration(c, reqLog, h.contentModerationService, apiKey, subject, protocol, model, body)
 }
 
 func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {

@@ -1947,6 +1947,32 @@ func (r *accountRepository) ListSchedulableByGroupIDAndPlatforms(ctx context.Con
 	})
 }
 
+// ListModelAvailabilityCandidates returns accounts whose persistent settings
+// support model availability checks, ignoring transient runtime throttles.
+func (r *accountRepository) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]service.Account, error) {
+	if len(platforms) == 0 {
+		return []service.Account{}, nil
+	}
+	if groupID != nil {
+		return r.queryAccountsByGroup(ctx, *groupID, accountGroupQueryOptions{
+			status: service.StatusActive, schedulable: true, ignoreTransientState: true, platforms: platforms,
+		})
+	}
+	preds := []dbpredicate.Account{
+		dbaccount.StatusEQ(service.StatusActive),
+		dbaccount.SchedulableEQ(true),
+		dbaccount.PlatformIn(platforms...),
+	}
+	if !includeGrouped {
+		preds = append(preds, dbaccount.Not(dbaccount.HasAccountGroups()))
+	}
+	accounts, err := r.client.Account.Query().Where(preds...).Order(dbent.Asc(dbaccount.FieldPriority)).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.accountsToService(ctx, accounts)
+}
+
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	now := time.Now()
 	_, err := r.client.Account.Update().
@@ -2657,6 +2683,12 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Schedulable)
 		idx++
 	}
+	if updates.ProbeEnabled != nil {
+		if updates.Extra == nil {
+			updates.Extra = make(map[string]any)
+		}
+		updates.Extra[service.UpstreamBillingProbeEnabledExtraKey] = *updates.ProbeEnabled
+	}
 	// JSONB 需要合并而非覆盖，使用 raw SQL 保持旧行为。
 	if len(updates.Credentials) > 0 {
 		payload, err := json.Marshal(updates.Credentials)
@@ -2687,8 +2719,14 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
+	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
+	idx++
+	if updates.ProbeEnabled != nil {
+		whereClause += " AND platform = $" + itoa(idx) + " AND type = $" + itoa(idx+1)
+		args = append(args, service.PlatformOpenAI, service.AccountTypeAPIKey)
+	}
+	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -2716,6 +2754,20 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return 0, err
+	}
+	if updates.ProbeEnabled != nil {
+		expectedRows := int64(0)
+		seenIDs := make(map[int64]struct{}, len(ids))
+		for _, id := range ids {
+			if _, seen := seenIDs[id]; seen {
+				continue
+			}
+			seenIDs[id] = struct{}{}
+			expectedRows++
+		}
+		if rows != expectedRows {
+			return 0, service.ErrUpstreamBillingProbeAccountInvalid
+		}
 	}
 	if rows > 0 {
 		payload := map[string]any{"account_ids": ids}
@@ -2747,9 +2799,10 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 }
 
 type accountGroupQueryOptions struct {
-	status      string
-	schedulable bool
-	platforms   []string // 允许的多个平台，空切片表示不进行平台过滤
+	status               string
+	schedulable          bool
+	ignoreTransientState bool
+	platforms            []string // 允许的多个平台，空切片表示不进行平台过滤
 }
 
 func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID int64, opts accountGroupQueryOptions) ([]service.Account, error) {
@@ -2768,13 +2821,15 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 	}
 	if opts.schedulable {
 		now := time.Now()
-		preds = append(preds,
-			dbaccount.SchedulableEQ(true),
-			tempUnschedulablePredicate(),
-			notExpiredPredicate(now),
-			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
-		)
+		preds = append(preds, dbaccount.SchedulableEQ(true))
+		if !opts.ignoreTransientState {
+			preds = append(preds,
+				tempUnschedulablePredicate(),
+				notExpiredPredicate(now),
+				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
+				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			)
+		}
 	}
 
 	if len(preds) > 0 {

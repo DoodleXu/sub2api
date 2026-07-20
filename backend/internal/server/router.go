@@ -54,7 +54,8 @@ func SetupRouter(
 
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
-	r.Use(middleware2.SessionBindingContext())
+	middleware2.SetIngressRejectRecorder(opsService)
+	r.Use(middleware2.SessionBindingContext(cfg))
 	r.Use(middleware2.Logger())
 	r.Use(middleware2.CORS(cfg.CORS))
 	r.Use(middleware2.SecurityHeaders(cfg.Security.CSP, func() []string {

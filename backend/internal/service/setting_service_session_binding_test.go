@@ -51,15 +51,15 @@ func TestIsSessionBindingEnabledCachesResult(t *testing.T) {
 	require.Equal(t, 1, repo.calls)
 }
 
-func TestIsSessionBindingEnabledFailsSecurelyAndCachesErrorsBriefly(t *testing.T) {
+func TestIsSessionBindingEnabledUsesDisabledDefaultAndCachesErrorsBriefly(t *testing.T) {
 	resetSessionBindingTestCache(t)
 	repo := &bmRepoStub{getValueFn: func(_ context.Context, _ string) (string, error) {
 		return "", errors.New("database unavailable")
 	}}
 	svc := NewSettingService(repo, &config.Config{})
 
-	require.True(t, svc.IsSessionBindingEnabled(context.Background()))
-	require.True(t, svc.IsSessionBindingEnabled(context.Background()))
+	require.False(t, svc.IsSessionBindingEnabled(context.Background()))
+	require.False(t, svc.IsSessionBindingEnabled(context.Background()))
 	require.Equal(t, 1, repo.calls)
 	cached, ok := svc.sessionBindingCache.Load().(*cachedSessionBinding)
 	require.True(t, ok)

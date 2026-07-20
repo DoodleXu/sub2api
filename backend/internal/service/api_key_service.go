@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -31,6 +32,7 @@ var (
 	ErrAPIKeyTooShort                = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
 	ErrAPIKeyInvalidChars            = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
 	ErrAPIKeyRateLimited             = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyAuthOverloaded          = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
 	ErrInvalidIPPattern              = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
@@ -44,8 +46,11 @@ var (
 )
 
 const (
-	apiKeyMaxErrorsPerHour = 20
-	apiKeyLastUsedMinTouch = 30 * time.Second
+	MaxAPIKeyCredentialBytes     = 128
+	defaultAuthLookupConcurrency = 64
+	defaultNegativeAuthCacheSize = 16384
+	apiKeyMaxErrorsPerHour       = 20
+	apiKeyLastUsedMinTouch       = 30 * time.Second
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
 )
@@ -147,6 +152,20 @@ type APIKeyCache interface {
 	SubscribeAuthCacheInvalidation(ctx context.Context, handler func(cacheKey string)) error
 }
 
+type authCacheSubscriptionReadyKey struct{}
+
+func withAuthCacheSubscriptionReady(ctx context.Context, ready func()) context.Context {
+	return context.WithValue(ctx, authCacheSubscriptionReadyKey{}, ready)
+}
+
+// NotifyAuthCacheSubscriptionReady lets cache implementations report that the
+// server acknowledged the subscription without widening the public cache API.
+func NotifyAuthCacheSubscriptionReady(ctx context.Context) {
+	if ready, ok := ctx.Value(authCacheSubscriptionReadyKey{}).(func()); ok && ready != nil {
+		ready()
+	}
+}
+
 // APIKeyAuthCacheInvalidator 提供认证缓存失效能力
 type APIKeyAuthCacheInvalidator interface {
 	InvalidateAuthCacheByKey(ctx context.Context, key string)
@@ -202,20 +221,49 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
-	apiKeyRepo            APIKeyRepository
-	userRepo              UserRepository
-	groupRepo             GroupRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 APIKeyCache
-	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
-	concurrencyService    *ConcurrencyService
-	cfg                   *config.Config
-	authCacheL1           *ristretto.Cache
-	authCfg               apiKeyAuthCacheConfig
-	authGroup             singleflight.Group
-	lastUsedTouchL1       sync.Map // keyID -> nextAllowedAt(time.Time)
-	lastUsedTouchSF       singleflight.Group
+	apiKeyRepo                APIKeyRepository
+	userRepo                  UserRepository
+	groupRepo                 GroupRepository
+	userSubRepo               UserSubscriptionRepository
+	userGroupRateRepo         UserGroupRateRepository
+	cache                     APIKeyCache
+	rateLimitCacheInvalid     RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
+	concurrencyService        *ConcurrencyService
+	cfg                       *config.Config
+	authCacheL1               *ristretto.Cache
+	authNegativeCacheL1       *ristretto.Cache
+	authCfg                   apiKeyAuthCacheConfig
+	authGroup                 singleflight.Group
+	authLookupSlots           chan struct{}
+	authLookupTotal           atomic.Uint64
+	authLookupRejected        atomic.Uint64
+	authLookupInFlight        atomic.Int64
+	invalidAuthAbuse          *invalidAuthAbuseLimiter
+	authInvalidationStart     sync.Once
+	authInvalidationStop      sync.Once
+	authInvalidationCancel    context.CancelFunc
+	authInvalidationWG        sync.WaitGroup
+	authInvalidationConnected atomic.Bool
+	authInvalidationFailures  atomic.Uint64
+	lastUsedTouchL1           sync.Map // keyID -> nextAllowedAt(time.Time)
+	lastUsedTouchSF           singleflight.Group
+}
+
+type APIKeyAuthLookupMetrics struct {
+	Total    uint64 `json:"total"`
+	Rejected uint64 `json:"rejected"`
+	InFlight int64  `json:"in_flight"`
+	Capacity int    `json:"capacity"`
+}
+
+func (s *APIKeyService) AuthLookupMetrics() APIKeyAuthLookupMetrics {
+	if s == nil {
+		return APIKeyAuthLookupMetrics{}
+	}
+	return APIKeyAuthLookupMetrics{
+		Total: s.authLookupTotal.Load(), Rejected: s.authLookupRejected.Load(),
+		InFlight: s.authLookupInFlight.Load(), Capacity: cap(s.authLookupSlots),
+	}
 }
 
 // NewAPIKeyService 创建API Key服务实例
@@ -238,6 +286,12 @@ func NewAPIKeyService(
 		cfg:               cfg,
 	}
 	svc.initAuthCache(cfg)
+	lookupConcurrency := defaultAuthLookupConcurrency
+	if cfg != nil && cfg.APIKeyAuth.LookupConcurrency > 0 {
+		lookupConcurrency = cfg.APIKeyAuth.LookupConcurrency
+	}
+	svc.authLookupSlots = make(chan struct{}, lookupConcurrency)
+	svc.invalidAuthAbuse = newInvalidAuthAbuseLimiter(cfg)
 	return svc
 }
 
@@ -635,6 +689,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes {
+		return nil, ErrAPIKeyNotFound
+	}
 	cacheKey := s.authCacheKey(key)
 
 	if entry, ok := s.getAuthCacheEntry(ctx, cacheKey); ok {
