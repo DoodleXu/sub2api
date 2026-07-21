@@ -312,10 +312,6 @@ func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(
 	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), cacheKey, accountID, ttl)
 }
 
-func normalizeGrokMediaModelForEndpoint(endpoint GrokMediaEndpoint, model string, hasInputImage bool) string {
-	return NormalizeGrokMediaModelForEndpoint(endpoint, model, hasInputImage)
-}
-
 func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	ctx context.Context,
 	groupID *int64,

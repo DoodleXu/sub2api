@@ -38,6 +38,7 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 - 前端运行时同时加载 fork 单体语言包与上游模块化语言包，模块化键覆盖旧键；补齐中英文键对称测试，修复账号上游声明倍率标题、未探测状态和 Prompt Audit 文案显示原始 key 的问题。
 - 部署吸收 BuildKit 原生架构构建、Go/pnpm 缓存和 Redis 持久化参数换行修复，同时保留 `ghcr.io/doodlexu/sub2api`、`UPDATE_REPOSITORY=DoodleXu/sub2api` 与 fork 镜像来源标签。
 - 合并后审核修复 Prompt Audit Worker 长时间复用旧配置的问题：每次领取任务前重新读取活动配置，并在原子 claim 时记录实际执行版本；关闭审计、缩减 worker 或切换节点后不再继续用旧快照清空积压队列。异步图片任务恢复扫描覆盖尚未产生对象清单的 `processing` 记录，进程重启后会按执行超时转失败；提交入口增加单实例与单 API Key 有界准入，默认上限分别为 128 和 8，超限返回 429。
+- 发版门禁修复上游合并遗留的内容审核与 Grok media 未使用兼容 wrapper，并将 Axios 从 `1.16.0` 升级到 `1.18.1`，消除 `GHSA-gcfj-64vw-6mp9` 高危代理继承漏洞；不通过新增或延期安全例外绕过扫描。
 - 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义，没有恢复已删除的 10 个拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理入口均保留。
 
 本次 `v0.1.157` + `v0.1.158` 合并说明：
@@ -467,7 +468,7 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 - 前端专项：运行时中英文键集合完全对称，截图涉及的 `admin.accounts.columns.upstreamBillingRate` 与 `admin.accounts.upstreamBilling.notProbed` 可正确翻译；账号主页安全链接、上游倍率提示/排序和 Prompt Audit 模块化语言包回归通过。
 - 部署与保留性：Docker 跨架构构建缓存和 Redis 持久化参数修复已合入；GHCR/更新仓库仍指向 fork；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理关键入口仍存在。
 - 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.225`。
-- 全量验证：后端 `TZ=UTC go test -tags=unit ./... -count=1`、`TZ=UTC go vet -tags=unit ./...` 全量通过，并对 Prompt Audit 配置重载、异步图片恢复及有界准入执行定向 `-race`；前端 Vitest 共 `192` 个测试文件、`1356` 项用例通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；Docker Compose 使用校验占位环境变量完成配置解析。当前环境未安装 `golangci-lint`，本地未执行该项，交由分支 CI 发布门禁执行。
+- 全量验证：后端 `TZ=UTC go test -tags=unit ./... -count=1`、`TZ=UTC go vet -tags=unit ./...` 全量通过，并对 Prompt Audit 配置重载、异步图片恢复及有界准入执行定向 `-race`；`golangci-lint v2.9.0` 为 `0 issues`。前端使用 pnpm 9 frozen install 后，Vitest 共 `192` 个测试文件、`1356` 项用例通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；生产依赖审计例外校验通过。Docker Compose 使用校验占位环境变量完成配置解析。
 
 ## v0.1.157 + v0.1.158 合并验证
 
