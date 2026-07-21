@@ -93,24 +93,28 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 			return
 		case <-ticker.C:
 			r.runtime.heartbeatNS.Store(r.clock.Now().UnixNano())
-			cfg, ok := r.config.Active()
-			if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID >= cfg.WorkerCount {
-				continue
-			}
-			for {
-				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
-				if err != nil {
-					r.setLastError("claim_job_failed", err.Error())
-					break
-				}
-				if !claimed {
-					break
-				}
-				r.runtime.active.Add(1)
-				r.processSafely(ctx, workerID, cfg, job)
-				r.runtime.active.Add(-1)
-			}
+			r.drainAvailable(ctx, workerID)
 		}
+	}
+}
+
+func (r *Runner) drainAvailable(ctx context.Context, workerID int) {
+	for {
+		cfg, ok := r.config.Active()
+		if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID >= cfg.WorkerCount {
+			return
+		}
+		job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now(), cfg.ConfigVersion)
+		if err != nil {
+			r.setLastError("claim_job_failed", err.Error())
+			return
+		}
+		if !claimed {
+			return
+		}
+		r.runtime.active.Add(1)
+		r.processSafely(ctx, workerID, cfg, job)
+		r.runtime.active.Add(-1)
 	}
 }
 

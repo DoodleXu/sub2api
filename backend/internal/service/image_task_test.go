@@ -49,7 +49,8 @@ func (s *imageTaskMemoryStore) Get(ctx context.Context, _ string) (*ImageTaskRec
 }
 
 func (s *imageTaskMemoryStore) ListPending(context.Context, int) ([]*ImageTaskRecord, error) {
-	if s.task == nil || len(s.task.PendingObjectKeys) == 0 {
+	if s.task == nil || (s.task.Status != ImageTaskStatusProcessing &&
+		(s.task.Status != ImageTaskStatusFailed || len(s.task.PendingObjectKeys) == 0)) {
 		return nil, nil
 	}
 	copy := *s.task
@@ -58,6 +59,24 @@ func (s *imageTaskMemoryStore) ListPending(context.Context, int) ([]*ImageTaskRe
 		return nil, nil
 	}
 	return []*ImageTaskRecord{&copy}, nil
+}
+
+func TestImageTaskServiceReconcilesAbandonedProcessingWithoutObjects(t *testing.T) {
+	createdAt := time.Now().Add(-2 * time.Minute).Unix()
+	store := &imageTaskMemoryStore{task: &ImageTaskRecord{
+		ID: "imgtask_abandoned", Status: ImageTaskStatusProcessing,
+		CreatedAt: createdAt, ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}}
+	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
+	svc.uploader = &ImageResultUploader{}
+
+	svc.reconcilePendingObjects()
+
+	require.Equal(t, ImageTaskStatusFailed, store.task.Status)
+	require.Equal(t, http.StatusGatewayTimeout, store.task.HTTPStatus)
+	require.Contains(t, string(store.task.Error), "timed out")
+	require.NotNil(t, store.task.CompletedAt)
+	require.Empty(t, store.task.PendingObjectKeys)
 }
 
 func (s *imageTaskMemoryStore) Transition(ctx context.Context, _ string, expectedStatus string, task *ImageTaskRecord, ttl time.Duration) (bool, error) {

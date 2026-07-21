@@ -31,14 +31,21 @@ func (c *advancingClock) Now() time.Time {
 }
 
 type fakeConfigStore struct {
+	mu     sync.RWMutex
 	cfg    ActiveConfig
 	active bool
 }
 
 func (s *fakeConfigStore) Start(context.Context) error    { return nil }
 func (s *fakeConfigStore) Shutdown(context.Context) error { return nil }
-func (s *fakeConfigStore) Active() (ActiveConfig, bool)   { return cloneActiveConfig(s.cfg), s.active }
+func (s *fakeConfigStore) Active() (ActiveConfig, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneActiveConfig(s.cfg), s.active
+}
 func (s *fakeConfigStore) EffectiveMode() Mode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.BlockingActivationDegraded() {
 		return ModeBlocking
 	}
@@ -53,10 +60,18 @@ func (s *fakeConfigStore) Save(context.Context, UpdateConfigRequest, int64) (Pub
 	return PublicConfig{}, nil
 }
 func (s *fakeConfigStore) RuntimeState() (int64, int64, *time.Time, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.cfg.ConfigVersion, s.cfg.ConfigVersion, nil, ""
 }
 func (s *fakeConfigStore) Encrypt(value string) (string, error) { return value, nil }
 func (s *fakeConfigStore) Decrypt(value string) (string, error) { return value, nil }
+
+func (s *fakeConfigStore) set(cfg ActiveConfig, active bool) {
+	s.mu.Lock()
+	s.cfg, s.active = cloneActiveConfig(cfg), active
+	s.mu.Unlock()
+}
 
 type fakeJobRepository struct {
 	mu sync.Mutex
@@ -83,7 +98,8 @@ type fakeJobRepository struct {
 	failed          int
 	refreshes       int
 
-	claimQueue []*Job
+	claimQueue   []*Job
+	claimConfigs []int64
 
 	recordBlockingCalls    int
 	recordBlockingSnapshot PromptSnapshot
@@ -123,7 +139,7 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 	r.markedCode = code
 	return nil
 }
-func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time) (*Job, bool, error) {
+func (r *fakeJobRepository) ClaimNextJob(_ context.Context, _ time.Time, configVersion int64) (*Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.claimQueue) == 0 {
@@ -131,6 +147,8 @@ func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time) (*Job, bool
 	}
 	job := r.claimQueue[0]
 	r.claimQueue = r.claimQueue[1:]
+	job.ConfigVersion = configVersion
+	r.claimConfigs = append(r.claimConfigs, configVersion)
 	return job, true, nil
 }
 func (r *fakeJobRepository) RefreshLease(context.Context, int64, int64, time.Time) error {
@@ -384,6 +402,42 @@ func TestWorkerCompletesPassWithoutEventRefreshesEveryChunkAndDeletesPayload(t *
 	require.Equal(t, []int64{51}, payload.deleted)
 	require.Equal(t, int64(1), metrics.Snapshot().Total)
 	require.Equal(t, int64(1), metrics.Snapshot().Allowed)
+}
+
+func TestWorkerReloadsConfigBeforeEveryClaimAndStopsWhenDisabled(t *testing.T) {
+	cfgV7 := asyncConfig()
+	cfgV7.Endpoints[0].ID = "guard-v7"
+	cfgV7.Endpoints[0].InputLimit = 100
+	cfgV8 := cloneActiveConfig(cfgV7)
+	cfgV8.ConfigVersion = 8
+	cfgV8.Endpoints[0].ID = "guard-v8"
+	disabled := cloneActiveConfig(cfgV8)
+	disabled.Enabled = false
+	configStore := &fakeConfigStore{cfg: cfgV7, active: true}
+	repo := &fakeJobRepository{claimQueue: []*Job{
+		workerJob(1, 3), {ID: 52, ClaimVersion: 1, Attempts: 1, MaxAttempts: 3}, {ID: 53, ClaimVersion: 1, Attempts: 1, MaxAttempts: 3},
+	}}
+	payload := &fakePayloadStore{values: map[int64]string{51: "first", 52: "second", 53: "third"}}
+	var endpointIDs []string
+	scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+		endpointIDs = append(endpointIDs, endpoint.ID)
+		switch len(endpointIDs) {
+		case 1:
+			configStore.set(cfgV8, true)
+		case 2:
+			configStore.set(disabled, true)
+		}
+		return integrationResult(EventPass), nil
+	})
+	runner := NewRunner(configStore, repo, payload, scanner, NewAtomicMetrics())
+	runner.clock = fixedClock{now: time.Unix(100, 0).UTC()}
+
+	runner.drainAvailable(context.Background(), 0)
+
+	require.Equal(t, []string{"guard-v7", "guard-v8"}, endpointIDs)
+	require.Equal(t, []int64{7, 8}, repo.claimConfigs)
+	require.Len(t, repo.claimQueue, 1, "disabled config must stop claiming the backlog")
+	require.Equal(t, int64(53), repo.claimQueue[0].ID)
 }
 
 func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {

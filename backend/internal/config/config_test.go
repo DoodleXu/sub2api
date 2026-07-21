@@ -1599,6 +1599,24 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.image_concurrency.max_waiting_requests must be non-negative",
 		},
 		{
+			name:    "async image max inflight tasks",
+			mutate:  func(c *Config) { c.ImageStorage.MaxInflightTasks = 0 },
+			wantErr: "image_storage.max_inflight_tasks must be positive",
+		},
+		{
+			name:    "async image per key inflight tasks",
+			mutate:  func(c *Config) { c.ImageStorage.MaxInflightTasksPerAPIKey = 0 },
+			wantErr: "image_storage.max_inflight_tasks_per_api_key must be positive",
+		},
+		{
+			name: "async image per key exceeds global",
+			mutate: func(c *Config) {
+				c.ImageStorage.MaxInflightTasks = 4
+				c.ImageStorage.MaxInflightTasksPerAPIKey = 5
+			},
+			wantErr: "image_storage.max_inflight_tasks_per_api_key cannot exceed image_storage.max_inflight_tasks",
+		},
+		{
 			name:    "gateway max line size",
 			mutate:  func(c *Config) { c.Gateway.MaxLineSize = 1024 },
 			wantErr: "gateway.max_line_size must be at least",
@@ -2223,6 +2241,12 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.ImageConcurrency.MaxWaitingRequests != 100 {
 		t.Fatalf("image_concurrency.max_waiting_requests = %d, want 100", cfg.Gateway.ImageConcurrency.MaxWaitingRequests)
+	}
+	if cfg.ImageStorage.MaxInflightTasks != 128 {
+		t.Fatalf("image_storage.max_inflight_tasks = %d, want 128", cfg.ImageStorage.MaxInflightTasks)
+	}
+	if cfg.ImageStorage.MaxInflightTasksPerAPIKey != 8 {
+		t.Fatalf("image_storage.max_inflight_tasks_per_api_key = %d, want 8", cfg.ImageStorage.MaxInflightTasksPerAPIKey)
 	}
 	if cfg.Gateway.ImageStreamDataIntervalTimeout <= cfg.Gateway.StreamDataIntervalTimeout {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)

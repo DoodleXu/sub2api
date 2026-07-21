@@ -53,3 +53,28 @@ func TestImageTaskStoreMissing(t *testing.T) {
 	_, err := store.Get(context.Background(), "imgtask_missing")
 	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
 }
+
+func TestImageTaskStoreListsAbandonedProcessingWithoutObjectManifest(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb)
+	ctx := context.Background()
+	tasks := []*service.ImageTaskRecord{
+		{ID: "imgtask_processing", Status: service.ImageTaskStatusProcessing},
+		{ID: "imgtask_failed_pending", Status: service.ImageTaskStatusFailed, PendingObjectKeys: []string{"images/one.png"}},
+		{ID: "imgtask_failed_clean", Status: service.ImageTaskStatusFailed},
+		{ID: "imgtask_completed", Status: service.ImageTaskStatusCompleted, PendingObjectKeys: []string{"images/done.png"}},
+	}
+	for _, task := range tasks {
+		require.NoError(t, store.Save(ctx, task, time.Hour))
+	}
+
+	pending, err := store.ListPending(ctx, 10)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(pending))
+	for _, task := range pending {
+		ids = append(ids, task.ID)
+	}
+	require.ElementsMatch(t, []string{"imgtask_processing", "imgtask_failed_pending"}, ids)
+}

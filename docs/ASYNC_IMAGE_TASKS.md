@@ -25,6 +25,8 @@ Configure an S3-compatible object store (AWS S3, Cloudflare R2, Aliyun OSS, MinI
 ```yaml
 image_storage:
   enabled: true
+  max_inflight_tasks: 128             # process-local running/waiting task cap
+  max_inflight_tasks_per_api_key: 8   # per-key cap; excess submissions get HTTP 429
   endpoint: "https://<account_id>.r2.cloudflarestorage.com"  # AWS 官方可留空
   region: "auto"
   bucket: "my-images"
@@ -133,5 +135,7 @@ For URL responses, `image_url` mirrors the first `data[].url` for simple clients
 ```
 
 All submit and poll responses include `Cache-Control: no-store`, preventing a CDN from caching the `processing` state. Tasks and results expire 24 hours after their latest state update. A task executes for at most 30 minutes.
+
+The submission handler admits only a bounded number of detached tasks per process and per API key. This limit applies before a background goroutine and Redis task are created, so a fast submitter cannot build an unbounded in-process queue. After a restart, the reconciliation worker scans all `processing` records, including tasks that crashed before producing an object manifest, and marks them failed after the execution timeout.
 
 Task ownership is scoped to both user and API key. Unknown task IDs and IDs owned by another key both return `404`, avoiding task-existence disclosure. Polling remains available when the completed generation used the key's remaining balance; normal authentication, disabled-key, user, IP, and group checks still apply.

@@ -1196,6 +1196,10 @@ update:
 # service.ImageStorage 接口（Save(ctx, key, contentType, data) -> url）即可。
 image_storage:
   enabled: false
+  # 单实例允许同时处于执行/等待状态的异步图片任务总数，超限返回 429
+  max_inflight_tasks: 128
+  # 单个 API Key 允许的异步图片任务数，必须不大于全局上限
+  max_inflight_tasks_per_api_key: 8
   # S3 兼容端点。AWS 官方可留空；R2 形如 https://<account_id>.r2.cloudflarestorage.com
   endpoint: ""
   # 区域。Cloudflare R2 用 "auto"

@@ -64,7 +64,8 @@ func (s *timeoutAwareImageStore) Save(_ context.Context, task *service.ImageTask
 func (s *timeoutAwareImageStore) ListPending(_ context.Context, _ int) ([]*service.ImageTaskRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.task == nil || len(s.task.PendingObjectKeys) == 0 {
+	if s.task == nil || (s.task.Status != service.ImageTaskStatusProcessing &&
+		(s.task.Status != service.ImageTaskStatusFailed || len(s.task.PendingObjectKeys) == 0)) {
 		return nil, nil
 	}
 	copy := *s.task
@@ -144,7 +145,8 @@ func (s *asyncImageMemoryStore) ListPending(_ context.Context, _ int) ([]*servic
 	defer s.mu.RUnlock()
 	result := make([]*service.ImageTaskRecord, 0)
 	for _, task := range s.tasks {
-		if task == nil || len(task.PendingObjectKeys) == 0 {
+		if task == nil || (task.Status != service.ImageTaskStatusProcessing &&
+			(task.Status != service.ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0)) {
 			continue
 		}
 		copy := *task
@@ -159,7 +161,7 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	store := &asyncImageMemoryStore{tasks: make(map[string]*service.ImageTaskRecord)}
 	tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
 	release := make(chan struct{})
-	h := &AsyncImageHandler{tasks: tasks}
+	h := &AsyncImageHandler{tasks: tasks, admission: newAsyncImageAdmission(1, 1)}
 	h.execute = func(_ string, c *gin.Context) {
 		<-release
 		c.JSON(http.StatusOK, gin.H{"created": 123, "data": []gin.H{{"url": "https://example.test/image.png"}}})
@@ -198,6 +200,13 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	require.Equal(t, "/v1/images/tasks/"+accepted.TaskID, accepted.PollURL)
 	require.Equal(t, accepted.PollURL, w.Header().Get("Location"))
 
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/images/generations/async", strings.NewReader(`{"model":"gpt-image-1","prompt":"dog"}`))
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondWriter := httptest.NewRecorder()
+	router.ServeHTTP(secondWriter, secondReq)
+	require.Equal(t, http.StatusTooManyRequests, secondWriter.Code)
+	require.Contains(t, secondWriter.Body.String(), "rate_limit_error")
+
 	// The detached background request must survive completion of/cancellation
 	// from the short submission request.
 	cancelRequest()
@@ -206,6 +215,9 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 		got, err := tasks.Get(context.Background(), service.ImageTaskOwner{UserID: 7, APIKeyID: 9}, accepted.TaskID)
 		return err == nil && got.Status == service.ImageTaskStatusCompleted
 	}, time.Second, 10*time.Millisecond)
+	releaseAfterCompletion, admittedAfterCompletion := h.admission.acquire(9)
+	require.True(t, admittedAfterCompletion, "completed task must release its admission slot")
+	releaseAfterCompletion()
 
 	pollReq := httptest.NewRequest(http.MethodGet, accepted.PollURL, nil)
 	pollWriter := httptest.NewRecorder()
@@ -214,6 +226,26 @@ func TestAsyncImageHandlerSubmitAndPoll(t *testing.T) {
 	require.Equal(t, "no-store", pollWriter.Header().Get("Cache-Control"))
 	require.Empty(t, pollWriter.Header().Get("Retry-After"))
 	require.Contains(t, pollWriter.Body.String(), "https://example.test/image.png")
+}
+
+func TestAsyncImageAdmissionBoundsGlobalAndPerAPIKeyInflightTasks(t *testing.T) {
+	admission := newAsyncImageAdmission(2, 1)
+	releaseOne, ok := admission.acquire(101)
+	require.True(t, ok)
+	_, ok = admission.acquire(101)
+	require.False(t, ok, "one API key must not exceed its configured in-flight limit")
+
+	releaseTwo, ok := admission.acquire(202)
+	require.True(t, ok)
+	_, ok = admission.acquire(303)
+	require.False(t, ok, "global in-flight capacity must be bounded")
+
+	releaseOne()
+	releaseOne()
+	releaseThree, ok := admission.acquire(303)
+	require.True(t, ok, "released capacity must be reusable")
+	releaseTwo()
+	releaseThree()
 }
 
 // When object storage is not configured the feature is fully disabled: the

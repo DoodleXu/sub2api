@@ -187,7 +187,7 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 	}
 	now := time.Now().Unix()
 	for _, task := range tasks {
-		if task == nil || len(task.PendingObjectKeys) == 0 {
+		if task == nil {
 			continue
 		}
 		createdAt := time.Unix(task.CreatedAt, 0)
@@ -205,7 +205,7 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 			}
 			task = &failed
 		}
-		if task.Status == ImageTaskStatusFailed {
+		if task.Status == ImageTaskStatusFailed && len(task.PendingObjectKeys) > 0 {
 			if err := s.cleanupFailedPendingObjects(ctx, task); err != nil {
 				logger.L().Warn("image_task.pending_object_cleanup_failed", zap.String("task_id", task.ID), zap.Error(err))
 			}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -25,17 +26,74 @@ type AsyncImageHandler struct {
 	tasks             *service.ImageTaskService
 	openAI            *OpenAIGatewayHandler
 	execute           func(platform string, c *gin.Context)
+	admission         *asyncImageAdmission
 	completionTimeout time.Duration
 	failureTimeout    time.Duration
 }
 
 const (
-	defaultImageTaskCompletionTimeout = 2 * time.Minute
-	defaultImageTaskFailureTimeout    = 15 * time.Second
+	defaultImageTaskCompletionTimeout  = 2 * time.Minute
+	defaultImageTaskFailureTimeout     = 15 * time.Second
+	defaultAsyncImageMaxInflight       = 128
+	defaultAsyncImageMaxInflightPerKey = 8
 )
 
+type asyncImageAdmission struct {
+	mu          sync.Mutex
+	slots       chan struct{}
+	perKey      map[int64]int
+	perKeyLimit int
+}
+
+func newAsyncImageAdmission(globalLimit, perKeyLimit int) *asyncImageAdmission {
+	if globalLimit <= 0 {
+		globalLimit = defaultAsyncImageMaxInflight
+	}
+	if perKeyLimit <= 0 || perKeyLimit > globalLimit {
+		perKeyLimit = min(defaultAsyncImageMaxInflightPerKey, globalLimit)
+	}
+	return &asyncImageAdmission{
+		slots: make(chan struct{}, globalLimit), perKey: make(map[int64]int), perKeyLimit: perKeyLimit,
+	}
+}
+
+func (a *asyncImageAdmission) acquire(apiKeyID int64) (func(), bool) {
+	if a == nil {
+		return func() {}, true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.perKey[apiKeyID] >= a.perKeyLimit {
+		return nil, false
+	}
+	select {
+	case a.slots <- struct{}{}:
+		a.perKey[apiKeyID]++
+	default:
+		return nil, false
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			<-a.slots
+			if a.perKey[apiKeyID] <= 1 {
+				delete(a.perKey, apiKeyID)
+			} else {
+				a.perKey[apiKeyID]--
+			}
+		})
+	}, true
+}
+
 func NewAsyncImageHandler(tasks *service.ImageTaskService, openAI *OpenAIGatewayHandler) *AsyncImageHandler {
-	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
+	globalLimit, perKeyLimit := defaultAsyncImageMaxInflight, defaultAsyncImageMaxInflightPerKey
+	if openAI != nil && openAI.cfg != nil {
+		globalLimit = openAI.cfg.ImageStorage.MaxInflightTasks
+		perKeyLimit = openAI.cfg.ImageStorage.MaxInflightTasksPerAPIKey
+	}
+	h := &AsyncImageHandler{tasks: tasks, openAI: openAI, admission: newAsyncImageAdmission(globalLimit, perKeyLimit)}
 	h.execute = h.executeWithGateway
 	return h
 }
@@ -100,11 +158,17 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	if !h.checkSecurityAuditBeforeSubmit(c, apiKey, platform, body) {
 		return
 	}
+	releaseAdmission, admitted := h.admission.acquire(apiKey.ID)
+	if !admitted {
+		imageTaskJSONError(c, http.StatusTooManyRequests, "rate_limit_error", "too many asynchronous image tasks are already in progress")
+		return
+	}
 
 	taskCtx, recorder, cancel := newAsyncImageContext(c, body, h.tasks.ExecutionTimeout())
 	task, err := h.tasks.Create(c.Request.Context(), service.ImageTaskOwner{UserID: apiKey.UserID, APIKeyID: apiKey.ID})
 	if err != nil {
 		cancel()
+		releaseAdmission()
 		imageTaskError(c, err)
 		return
 	}
@@ -123,7 +187,10 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		"poll_url":   pollURL,
 	})
 
-	go h.run(task.ID, platform, taskCtx, recorder, cancel)
+	go h.run(task.ID, platform, taskCtx, recorder, func() {
+		cancel()
+		releaseAdmission()
+	})
 }
 
 func (h *AsyncImageHandler) checkSecurityAuditBeforeSubmit(c *gin.Context, apiKey *service.APIKey, platform string, body []byte) bool {

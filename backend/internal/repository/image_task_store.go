@@ -90,7 +90,8 @@ func (s *imageTaskStore) ListPending(ctx context.Context, limit int) ([]*service
 			// A malformed/legacy key must not starve valid cleanup records.
 			continue
 		}
-		if len(task.PendingObjectKeys) > 0 && (task.Status == service.ImageTaskStatusProcessing || task.Status == service.ImageTaskStatusFailed) {
+		if task.Status == service.ImageTaskStatusProcessing ||
+			(task.Status == service.ImageTaskStatusFailed && len(task.PendingObjectKeys) > 0) {
 			result = append(result, &task)
 			if len(result) >= limit {
 				return result, nil

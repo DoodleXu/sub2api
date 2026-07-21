@@ -247,7 +247,7 @@ func TestPromptAuditRepositoryAdmissionClaimFencingAndEventTransaction(t *testin
 		go func() {
 			defer wg.Done()
 			<-claimStart
-			job, claimed, claimErr := repo.ClaimNextJob(ctx, time.Now().Add(time.Second))
+			job, claimed, claimErr := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), 7)
 			require.NoError(t, claimErr)
 			if claimed {
 				claims <- job
@@ -264,14 +264,16 @@ func TestPromptAuditRepositoryAdmissionClaimFencingAndEventTransaction(t *testin
 	require.Len(t, claimedJobs, 1)
 	firstClaim := claimedJobs[0]
 	require.Equal(t, int64(1), firstClaim.ClaimVersion)
+	require.Equal(t, int64(7), firstClaim.ConfigVersion)
 
 	reclaimed, err := repo.ReclaimStale(ctx, time.Now().Add(time.Hour), time.Now().Add(time.Hour), 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), reclaimed)
-	secondClaim, claimed, err := repo.ClaimNextJob(ctx, time.Now().Add(time.Second))
+	secondClaim, claimed, err := repo.ClaimNextJob(ctx, time.Now().Add(time.Second), 8)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.Greater(t, secondClaim.ClaimVersion, firstClaim.ClaimVersion)
+	require.Equal(t, int64(8), secondClaim.ConfigVersion)
 	require.ErrorIs(t, repo.RefreshLease(ctx, firstClaim.ID, firstClaim.ClaimVersion, time.Now()), ErrLeaseLost)
 	_, err = repo.Complete(ctx, firstClaim, integrationResult(EventCritical), true)
 	require.ErrorIs(t, err, ErrLeaseLost)

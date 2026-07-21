@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-20
+最后更新：2026-07-21
 
 ## 当前对比基线
 
@@ -37,6 +37,7 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 - 管理订阅支持过期记录原地续期并重置周期用量；运营设置改为启动预热、请求热路径只读内存快照，管理更新立即刷新快照。
 - 前端运行时同时加载 fork 单体语言包与上游模块化语言包，模块化键覆盖旧键；补齐中英文键对称测试，修复账号上游声明倍率标题、未探测状态和 Prompt Audit 文案显示原始 key 的问题。
 - 部署吸收 BuildKit 原生架构构建、Go/pnpm 缓存和 Redis 持久化参数换行修复，同时保留 `ghcr.io/doodlexu/sub2api`、`UPDATE_REPOSITORY=DoodleXu/sub2api` 与 fork 镜像来源标签。
+- 合并后审核修复 Prompt Audit Worker 长时间复用旧配置的问题：每次领取任务前重新读取活动配置，并在原子 claim 时记录实际执行版本；关闭审计、缩减 worker 或切换节点后不再继续用旧快照清空积压队列。异步图片任务恢复扫描覆盖尚未产生对象清单的 `processing` 记录，进程重启后会按执行超时转失败；提交入口增加单实例与单 API Key 有界准入，默认上限分别为 128 和 8，超限返回 429。
 - 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义，没有恢复已删除的 10 个拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理入口均保留。
 
 本次 `v0.1.157` + `v0.1.158` 合并说明：
@@ -401,6 +402,7 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 - Codex models manifest 只从组内选择可解析出 backend access token 的 OpenAI OAuth/影子账号；纯 API Key 组返回合法空 manifest，让客户端保留随版本发布的内置模型 catalog，避免 `/v1/models?client_version=...` 持续返回 502/503，也避免不完整元数据覆盖 Codex 内置指令。
 - Chat Completions 与 Responses 恢复 `model_not_found` / 临时容量不足分类；compact 与 Responses 原生能力不足仍保留专用错误语义。
 - 图片归档把启用检查、记录创建、解码和存储统一纳入有界后台任务，并设置总超时；超时后使用独立 cleanup context 持久化失败终态，避免请求完成后无界保活 base64 数据或记录永久停在 pending/running。
+- 上游异步图片任务入口使用 `image_storage.max_inflight_tasks` 和 `image_storage.max_inflight_tasks_per_api_key` 做进程内有界准入；恢复扫描不能只依赖 `pending_object_keys`，必须同时覆盖上传前崩溃的 `processing` 任务。
 - 非流式响应体与 SSE 单行默认上限统一为 `128MB`，部署样例和中文文档使用同一口径，兼顾 4K base64 图片与内存保护。
 
 ### 通知、风控与内容审计增强
@@ -465,7 +467,7 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 - 前端专项：运行时中英文键集合完全对称，截图涉及的 `admin.accounts.columns.upstreamBillingRate` 与 `admin.accounts.upstreamBilling.notProbed` 可正确翻译；账号主页安全链接、上游倍率提示/排序和 Prompt Audit 模块化语言包回归通过。
 - 部署与保留性：Docker 跨架构构建缓存和 Redis 持久化参数修复已合入；GHCR/更新仓库仍指向 fork；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理关键入口仍存在。
 - 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.225`。
-- 全量验证：后端 `TZ=UTC go test -tags=unit ./... -count=1` 全量通过；前端 Vitest 共 `192` 个测试文件、`1356` 项用例通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；Docker Compose 使用校验占位环境变量完成配置解析。当前环境未安装 `golangci-lint`，本次未执行该项。
+- 全量验证：后端 `TZ=UTC go test -tags=unit ./... -count=1`、`TZ=UTC go vet -tags=unit ./...` 全量通过，并对 Prompt Audit 配置重载、异步图片恢复及有界准入执行定向 `-race`；前端 Vitest 共 `192` 个测试文件、`1356` 项用例通过，`vue-tsc --noEmit`、ESLint 与生产构建通过；Docker Compose 使用校验占位环境变量完成配置解析。当前环境未安装 `golangci-lint`，本地未执行该项，交由分支 CI 发布门禁执行。
 
 ## v0.1.157 + v0.1.158 合并验证
 
