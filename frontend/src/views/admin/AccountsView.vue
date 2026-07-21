@@ -38,22 +38,22 @@
                 </button>
                 <div
                   v-if="showAutoRefreshDropdown"
-                  class="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
+                  class="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
                 >
                   <div class="p-2">
                     <button
                       @click="setAutoRefreshEnabled(!autoRefreshEnabled)"
-                      class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
                     >
                       <span>{{ t('admin.accounts.enableAutoRefresh') }}</span>
                       <Icon v-if="autoRefreshEnabled" name="check" size="sm" class="text-primary-500" />
                     </button>
-                    <div class="my-1 border-t border-gray-100 dark:border-gray-700"></div>
+                    <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
                     <button
                       v-for="sec in autoRefreshIntervals"
                       :key="sec"
                       @click="setAutoRefreshInterval(sec)"
-                      class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                      class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
                     >
                       <span>{{ autoRefreshIntervalLabel(sec) }}</span>
                       <Icon v-if="autoRefreshIntervalSeconds === sec" name="check" size="sm" class="text-primary-500" />
@@ -78,7 +78,7 @@
                 </button>
                 <div
                   v-if="showAccountToolsDropdown"
-                  class="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800"
+                  class="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
                 >
                   <div class="max-h-[70vh] overflow-y-auto p-2">
                     <div class="px-2 py-2">
@@ -113,7 +113,7 @@
                       </span>
                     </button>
 
-                    <div class="my-2 border-t border-gray-100 dark:border-gray-700"></div>
+                    <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                     <div class="px-2 py-2">
                       <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
                         {{ t('admin.accounts.toolActions') }}
@@ -134,17 +134,18 @@
 
                     <div class="my-2 border-t border-gray-100 dark:border-gray-700"></div>
                     <div class="space-y-2 px-3 py-2">
-                      <div class="flex items-center justify-between gap-3">
-                        <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                      <div class="flex min-w-0 items-center justify-between gap-3">
+                        <span class="min-w-0 flex-1 break-words text-sm font-medium text-gray-700 dark:text-gray-200">
                           {{ t('admin.accounts.upstreamBilling.autoProbeSettings') }}
                         </span>
                         <Toggle
                           v-model="upstreamBillingProbeSettings.enabled"
+                          class="shrink-0"
                           :aria-label="t('admin.accounts.upstreamBilling.autoProbeSettings')"
                         />
                       </div>
-                      <div class="flex items-center gap-2">
-                        <label class="flex-1 text-xs text-gray-500 dark:text-gray-400" for="upstream-billing-probe-interval">
+                      <div class="flex min-w-0 items-center gap-2">
+                        <label class="min-w-0 flex-1 break-words text-xs text-gray-500 dark:text-gray-400" for="upstream-billing-probe-interval">
                           {{ t('admin.accounts.upstreamBilling.intervalMinutes') }}
                         </label>
                         <input
@@ -153,11 +154,11 @@
                           type="number"
                           min="5"
                           max="1440"
-                          class="input h-8 w-20 px-2 text-sm"
+                          class="input h-8 w-20 shrink-0 px-2 text-sm"
                         />
                         <button
                           type="button"
-                          class="btn btn-secondary h-8 px-2"
+                          class="btn btn-secondary h-8 shrink-0 px-2"
                           :disabled="upstreamBillingSettingsLoading || upstreamBillingSettingsSaving"
                           :title="t('common.save')"
                           @click="saveUpstreamBillingProbeSettings"
@@ -167,7 +168,7 @@
                       </div>
                     </div>
 
-                    <div class="my-2 border-t border-gray-100 dark:border-gray-700"></div>
+                    <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                     <div class="px-2 py-2">
                       <div class="flex items-center justify-between gap-3">
                         <span class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
@@ -181,7 +182,7 @@
                         v-for="col in toggleableColumns"
                         :key="col.key"
                         @click="toggleColumn(col.key)"
-                        class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                        class="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700"
                       >
                         <span class="truncate">{{ col.label }}</span>
                         <Icon v-if="isColumnVisible(col.key)" name="check" size="sm" class="text-primary-500" />
@@ -252,7 +253,7 @@
                     :href="accountHomepageUrl(row)"
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="border-b border-dotted border-gray-300 font-medium text-gray-900 dark:border-gray-600 dark:text-white"
+                    class="border-b border-dotted border-gray-300 font-medium text-gray-900 dark:border-dark-600 dark:text-white"
                   >
                     {{ value }}
                   </a>
@@ -354,7 +355,7 @@
                 <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" :title="t('admin.accounts.fallbackActiveTip', { origin: row.proxy_fallback_origin_name })">
                   {{ t('admin.accounts.fallbackActive') }}
                 </span>
-                <button class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700" @click="onRevertFallback(row)">{{ t('admin.accounts.revertProxy') }}</button>
+                <button class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-dark-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-dark-700" @click="onRevertFallback(row)">{{ t('admin.accounts.revertProxy') }}</button>
               </div>
             </div>
           </template>
@@ -1424,7 +1425,7 @@ function getOpenAICompactTitle(row: any): string {
 function getAntigravityTierClass(row: any): string {
   const tier = getAntigravityTierFromRow(row)
   switch (tier) {
-    case 'free-tier': return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+    case 'free-tier': return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
     case 'g1-pro-tier': return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
     case 'g1-ultra-tier': return 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300'
     default: return ''
@@ -2242,7 +2243,7 @@ onUnmounted(() => {
 
 <style scoped>
 .account-tools-menu-item {
-  @apply flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700;
+  @apply flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700;
 }
 
 .account-tools-menu-icon {

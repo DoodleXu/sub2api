@@ -58,6 +58,19 @@ const billingData = {
   observed_at: '2026-07-13T00:00:00Z'
 }
 
+const newAPIBillingData = {
+  object: 'newapi.observed_billing' as const,
+  schema_version: 1 as const,
+  billing_scope: 'token' as const,
+  source: 'newapi_usage_log' as const,
+  group: 'vip',
+  group_rate_multiplier: 0.06,
+  resolved_rate_multiplier: 0.06,
+  peak_rate_enabled: false,
+  effective_rate_multiplier: 0.06,
+  observed_at: '2026-07-13T00:20:00Z'
+}
+
 describe('UpstreamBillingRateCell', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -98,6 +111,62 @@ describe('UpstreamBillingRateCell', () => {
     expect(wrapper.get('[data-testid="upstream-billing-probe"]').attributes('aria-label')).toBe(
       'admin.accounts.upstreamBilling.manualProbe'
     )
+  })
+
+  it('labels New API usage-log rates as observed samples', async () => {
+    const wrapper = mount(UpstreamBillingRateCell, {
+      attachTo: document.body,
+      props: {
+        account: makeAccount({
+          extra: {
+            upstream_billing_probe: {
+              status: 'ok',
+              data: newAPIBillingData,
+              received_at: '2026-07-13T00:20:00Z',
+              fresh_until: '2026-07-13T01:20:00Z',
+              last_attempt_at: '2026-07-13T00:30:00Z',
+              next_probe_at: '2026-07-13T01:00:00Z'
+            }
+          }
+        }),
+        now: Date.now()
+      }
+    })
+
+    expect(wrapper.get('[data-testid="upstream-billing-rate"]').text()).toBe('0.06x')
+    await wrapper.get('[data-testid="upstream-billing-details"]').trigger('mouseenter')
+    await flushPromises()
+    const tooltips = document.body.querySelectorAll('[role="tooltip"]')
+    const tooltip = tooltips[tooltips.length - 1] as HTMLElement
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.newAPISource')
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.observedGroupRate:vip,0.06')
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.observedRate:0.06')
+    expect(tooltip.textContent).toContain('admin.accounts.upstreamBilling.sampleAt:')
+    expect(tooltip.textContent).not.toContain('admin.accounts.upstreamBilling.noPeakRate')
+    wrapper.unmount()
+  })
+
+  it('distinguishes New API accounts that do not have a billing sample yet', () => {
+    const wrapper = mount(UpstreamBillingRateCell, {
+      props: {
+        account: makeAccount({
+          extra: {
+            upstream_billing_probe: {
+              status: 'failed',
+              last_attempt_at: '2026-07-13T00:00:00Z',
+              next_probe_at: '2026-07-13T00:30:00Z',
+              last_error: 'newapi_billing_unobserved'
+            }
+          }
+        }),
+        now: Date.now()
+      }
+    })
+
+    expect(wrapper.get('[data-testid="upstream-billing-rate"]').text()).toBe(
+      'admin.accounts.upstreamBilling.noBillingSample'
+    )
+    expect(wrapper.get('[data-testid="upstream-billing-rate"]').classes()).toContain('text-amber-600')
   })
 
   it('uses retained failed data only while it is still fresh', async () => {

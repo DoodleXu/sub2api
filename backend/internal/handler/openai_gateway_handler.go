@@ -114,6 +114,13 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 	}
 }
 
+func openAIResponsesRequiredCapability(imageIntent bool, platform string) service.OpenAIEndpointCapability {
+	if imageIntent && platform == service.PlatformOpenAI {
+		return service.OpenAIEndpointCapabilityResponses
+	}
+	return service.OpenAIEndpointCapabilityChatCompletions
+}
+
 func allowOpenAICompatibleMessagesDispatch(apiKey *service.APIKey) bool {
 	if apiKey == nil || apiKey.Group == nil {
 		return true
@@ -342,6 +349,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	requireCompact := isOpenAIRemoteCompactPath(c)
 	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
+	if imageIntent && requestPlatform == service.PlatformOpenAI {
+		requiredCapability = service.OpenAIEndpointCapabilityResponses
+	}
 	requiresNativeResponses := service.RequiresNativeOpenAIResponses(forwardBody)
 	if requiresNativeResponses {
 		requiredCapability = service.OpenAIEndpointCapabilityResponsesNative

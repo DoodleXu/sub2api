@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ const (
 	upstreamBillingProbeCycleInterval          = time.Minute
 	upstreamBillingProbeRequestTimeout         = 10 * time.Second
 	upstreamBillingProbeMaxBodyBytes           = 64 * 1024
+	upstreamBillingProbeNewAPIMaxBodyBytes     = 1024 * 1024
+	upstreamBillingProbeClockSkewTolerance     = 5 * time.Minute
 	upstreamBillingProbeMaxPerCycle            = 20
 	upstreamBillingProbeConcurrency            = 4
 	upstreamBillingProbeMaxDelay               = 24 * time.Hour
@@ -63,6 +66,14 @@ const (
 	UpstreamBillingProbeStatusUnsupported = "unsupported"
 	UpstreamBillingProbeStatusFailed      = "failed"
 )
+
+const (
+	upstreamBillingProbeNewAPISource           = "newapi_usage_log"
+	upstreamBillingProbeNewAPIUnobservedReason = "newapi_billing_unobserved"
+	upstreamBillingProbeNewAPIConsumeLogType   = 2
+)
+
+var errUpstreamBillingProbeNewAPIUnobserved = errors.New(upstreamBillingProbeNewAPIUnobservedReason)
 
 // UpstreamBillingProbeSettings controls the periodic probe runner.
 type UpstreamBillingProbeSettings struct {
@@ -131,6 +142,18 @@ type upstreamBillingProbeResponse struct {
 	EffectiveRateMultiplier *float64 `json:"effective_rate_multiplier"`
 	Timezone                *string  `json:"timezone"`
 	ObservedAt              string   `json:"observed_at"`
+}
+
+type newAPIUpstreamBillingLogResponse struct {
+	Success bool                           `json:"success"`
+	Data    []newAPIUpstreamBillingLogItem `json:"data"`
+}
+
+type newAPIUpstreamBillingLogItem struct {
+	CreatedAt int64           `json:"created_at"`
+	Type      int             `json:"type"`
+	Group     string          `json:"group"`
+	Other     json.RawMessage `json:"other"`
 }
 
 // GetUpstreamBillingProbeSettings returns defaults when the setting is absent.
@@ -630,7 +653,8 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "response_too_large", retryAfter(resp.Header, now))
 	}
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "unsupported", retryAfter(resp.Header, now))
+		_ = resp.Body.Close()
+		return s.probeNewAPIUsageLog(ctx, account, normalizedBaseURL, apiKey, proxyURL, tlsProfile, intervalMinutes, now)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "http_error", retryAfter(resp.Header, now))
@@ -652,6 +676,98 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		return nil, err
 	}
 	return snapshot, nil
+}
+
+func (s *UpstreamBillingProbeService) probeNewAPIUsageLog(
+	ctx context.Context,
+	account *Account,
+	baseURL string,
+	apiKey string,
+	proxyURL string,
+	tlsProfile *tlsfingerprint.Profile,
+	intervalMinutes int,
+	now time.Time,
+) (*UpstreamBillingProbeSnapshot, error) {
+	probeURL := buildNewAPIUpstreamBillingLogURL(baseURL)
+	probeCtx, cancel := context.WithTimeout(ctx, upstreamBillingProbeRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, bytes.NewReader(nil))
+	if err != nil {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "request_build_failed", 0)
+	}
+	reqCtx := WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI)
+	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(reqCtx))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	account.ApplyHeaderOverrides(req.Header)
+
+	resp, err := s.accountTestService.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+	if err != nil {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "request_failed", 0)
+	}
+	if resp == nil || resp.Body == nil {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "empty_response", 0)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, upstreamBillingProbeNewAPIMaxBodyBytes+1))
+	if readErr != nil {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "response_read_failed", retryAfter(resp.Header, now))
+	}
+	if len(body) > upstreamBillingProbeNewAPIMaxBodyBytes {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "response_too_large", retryAfter(resp.Header, now))
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "unsupported", retryAfter(resp.Header, now))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "http_error", retryAfter(resp.Header, now))
+	}
+
+	data, observedAt, err := parseNewAPIUpstreamBillingLogResponse(body, now)
+	if err != nil {
+		reason := "invalid_response"
+		if errors.Is(err, errUpstreamBillingProbeNewAPIUnobserved) {
+			reason = upstreamBillingProbeNewAPIUnobservedReason
+		}
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, reason, retryAfter(resp.Header, now))
+	}
+	freshUntil := observedAt.Add(2 * time.Duration(intervalMinutes) * time.Minute)
+	snapshot := &UpstreamBillingProbeSnapshot{
+		Status:        UpstreamBillingProbeStatusOK,
+		Data:          data,
+		ReceivedAt:    probeTimePtr(observedAt),
+		FreshUntil:    probeTimePtr(freshUntil),
+		LastAttemptAt: now,
+		NextProbeAt:   now.Add(nextProbeDelay(intervalMinutes, 0)),
+		HTTPStatus:    resp.StatusCode,
+	}
+	if err := s.updateSnapshot(ctx, account, snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func buildNewAPIUpstreamBillingLogURL(base string) string {
+	normalized := strings.TrimSpace(base)
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return strings.TrimRight(normalized, "/") + "/api/log/token"
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if openAIBaseURLHasVersionSuffix(path) {
+		if slash := strings.LastIndex(path, "/"); slash >= 0 {
+			path = path[:slash]
+		} else {
+			path = ""
+		}
+	}
+	if !strings.HasSuffix(path, "/api/log/token") {
+		path += "/api/log/token"
+	}
+	parsed.Path = path
+	parsed.RawPath = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (s *UpstreamBillingProbeService) persistProbeFailure(
@@ -780,6 +896,75 @@ func parseUpstreamBillingProbeResponse(body []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("inconsistent effective billing multiplier")
 	}
 	return data, nil
+}
+
+func parseNewAPIUpstreamBillingLogResponse(body []byte, now time.Time) (map[string]any, time.Time, error) {
+	var response newAPIUpstreamBillingLogResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, time.Time{}, err
+	}
+	if !response.Success {
+		return nil, time.Time{}, fmt.Errorf("newapi log response was not successful")
+	}
+
+	var selected *newAPIUpstreamBillingLogItem
+	var selectedRate float64
+	var selectedAt time.Time
+	for i := range response.Data {
+		item := &response.Data[i]
+		if item.Type != upstreamBillingProbeNewAPIConsumeLogType || strings.TrimSpace(item.Group) == "" || item.CreatedAt <= 0 {
+			continue
+		}
+		observedAt := time.Unix(item.CreatedAt, 0).UTC()
+		if observedAt.After(now.Add(upstreamBillingProbeClockSkewTolerance)) {
+			continue
+		}
+		other, ok := parseNewAPIUpstreamBillingLogOther(item.Other)
+		if !ok {
+			continue
+		}
+		rate, ok := resolveAccountExtraNumber(other, "group_ratio")
+		if !ok || rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+			continue
+		}
+		if selected == nil || observedAt.After(selectedAt) {
+			selected = item
+			selectedRate = rate
+			selectedAt = observedAt
+		}
+	}
+	if selected == nil {
+		return nil, time.Time{}, errUpstreamBillingProbeNewAPIUnobserved
+	}
+
+	data := map[string]any{
+		"object":                    "newapi.observed_billing",
+		"schema_version":            1,
+		"billing_scope":             "token",
+		"source":                    upstreamBillingProbeNewAPISource,
+		"group":                     strings.TrimSpace(selected.Group),
+		"group_rate_multiplier":     selectedRate,
+		"resolved_rate_multiplier":  selectedRate,
+		"peak_rate_enabled":         false,
+		"effective_rate_multiplier": selectedRate,
+		"observed_at":               selectedAt.Format(time.RFC3339Nano),
+	}
+	return data, selectedAt, nil
+}
+
+func parseNewAPIUpstreamBillingLogOther(raw json.RawMessage) (map[string]any, bool) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, false
+	}
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err == nil {
+		raw = json.RawMessage(encoded)
+	}
+	var other map[string]any
+	if err := json.Unmarshal(raw, &other); err != nil || other == nil {
+		return nil, false
+	}
+	return other, true
 }
 
 func upstreamBillingRateAt(data map[string]any, now time.Time) (float64, bool) {

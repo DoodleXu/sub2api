@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -145,7 +143,7 @@ var ProviderSet = wire.NewSet(
 	NewS3BackupStoreFactory,
 
 	// Image storage (async image task result offload)
-	ProvideImageStorage,
+	ProvideImageStorageFactory,
 
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,
@@ -178,19 +176,14 @@ func ProvideEnt(cfg *config.Config) (*ent.Client, error) {
 	return client, err
 }
 
-// ProvideImageStorage 提供异步图片任务结果转存所用的对象存储实现。
-// 仅当开关打开且 S3 凭证齐全时返回具体实现，否则返回 nil（功能整体禁用）。
-func ProvideImageStorage(cfg *config.Config) (service.ImageStorage, error) {
-	if !cfg.ImageStorage.Active() {
-		return nil, nil
+// ProvideImageStorageFactory 提供按需构造对象存储客户端的工厂。
+//
+// 这里返回工厂而不是实例：异步生图的开关与凭证可以在后台随时改动，客户端必须能在
+// 设置保存后重建，而不是在启动时定死一份。
+func ProvideImageStorageFactory() service.ImageStorageFactory {
+	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		return NewS3ImageStorage(ctx, cfg)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	store, err := NewS3ImageStorage(ctx, &cfg.ImageStorage)
-	if err != nil {
-		return nil, fmt.Errorf("initialize image storage bucket %q at %q: %w", cfg.ImageStorage.Bucket, cfg.ImageStorage.Endpoint, err)
-	}
-	return store, nil
 }
 
 // ProvideSQLDB 从 Ent 客户端提取底层的 *sql.DB 连接。

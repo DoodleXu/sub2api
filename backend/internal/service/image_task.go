@@ -88,10 +88,17 @@ type ImageTaskStore interface {
 	ListPending(ctx context.Context, limit int) ([]*ImageTaskRecord, error)
 }
 
+// ImageStorageResolver reports the currently effective object-storage binding.
+// It exists so the async image feature can be switched on and off from the admin
+// UI without a restart: the wiring below is fixed at startup, but the answer to
+// "is object storage configured right now" is re-read (and cached) per call.
+type ImageStorageResolver func() (uploader *ImageResultUploader, enabled bool)
+
 type ImageTaskService struct {
 	store            ImageTaskStore
 	uploader         *ImageResultUploader
 	enabled          bool
+	resolve          ImageStorageResolver
 	ttl              time.Duration
 	executionTimeout time.Duration
 	cleanupMu        sync.Mutex
@@ -149,6 +156,33 @@ func NewImageTaskServiceWithUploader(store ImageTaskStore, uploader *ImageResult
 	return s
 }
 
+// NewImageTaskServiceWithResolver 构造一个由 resolver 决定启用状态的服务：
+// 开关与凭证来自后台设置，保存后立即生效，无需重启。
+func NewImageTaskServiceWithResolver(store ImageTaskStore, resolve ImageStorageResolver, ttl, executionTimeout time.Duration) *ImageTaskService {
+	s := NewImageTaskServiceWithOptions(store, ttl, executionTimeout)
+	s.resolve = resolve
+	if resolve != nil {
+		s.cleanupWG.Add(1)
+		go func() {
+			defer s.cleanupWG.Done()
+			s.pendingObjectCleanupWorker()
+		}()
+	}
+	return s
+}
+
+// current 返回当前生效的 uploader 与启用状态。
+// 注入了 resolver 时以 resolver 为准（后台设置可热切换），否则回落到构造时固定的值。
+func (s *ImageTaskService) current() (*ImageResultUploader, bool) {
+	if s == nil {
+		return nil, false
+	}
+	if s.resolve != nil {
+		return s.resolve()
+	}
+	return s.uploader, s.enabled
+}
+
 // Close stops background cleanup. It is safe to call more than once.
 func (s *ImageTaskService) Close() {
 	if s == nil {
@@ -175,7 +209,8 @@ func (s *ImageTaskService) pendingObjectCleanupWorker() {
 }
 
 func (s *ImageTaskService) reconcilePendingObjects() {
-	if s.store == nil || s.uploader == nil {
+	uploader, _ := s.current()
+	if s.store == nil || uploader == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), imageStorageCleanupTimeout+imageTaskReconcileTimeout)
@@ -206,7 +241,7 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 			task = &failed
 		}
 		if task.Status == ImageTaskStatusFailed && len(task.PendingObjectKeys) > 0 {
-			if err := s.cleanupFailedPendingObjects(ctx, task); err != nil {
+			if err := s.cleanupFailedPendingObjects(ctx, task, uploader); err != nil {
 				logger.L().Warn("image_task.pending_object_cleanup_failed", zap.String("task_id", task.ID), zap.Error(err))
 			}
 		}
@@ -216,7 +251,17 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 // Enabled 表示异步图片任务功能是否可用（总开关 + 凭证齐全）。
 // 关闭时 handler 直接返回 404，不创建任务、不写 Redis。
 func (s *ImageTaskService) Enabled() bool {
-	return s != nil && s.enabled && s.store != nil
+	if s == nil || s.store == nil {
+		return false
+	}
+	_, enabled := s.current()
+	return enabled
+}
+
+// Pollable 表示已创建的任务能否被查询。
+// 比 Enabled 弱：只要 store 可用即可，从而在功能被关掉后仍能取回进行中的任务结果。
+func (s *ImageTaskService) Pollable() bool {
+	return s != nil && s.store != nil
 }
 
 func (s *ImageTaskService) ExecutionTimeout() time.Duration {
@@ -268,9 +313,10 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if !json.Valid(result) {
 		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
+	uploader, _ := s.current()
 	var uploadedKeys []string
-	if s.uploader != nil {
-		rewritten, err := s.uploader.rewriteTracked(ctx, id, result, func(keys []string) (bool, error) {
+	if uploader != nil {
+		rewritten, err := uploader.rewriteTracked(ctx, id, result, func(keys []string) (bool, error) {
 			return s.trackPendingObjects(ctx, id, keys)
 		})
 		if err != nil {
@@ -305,7 +351,7 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 		cleanupUploaded = true
 	}
 	if cleanupUploaded && len(uploadedKeys) > 0 {
-		if cleanupErr := s.uploader.cleanup(uploadedKeys); cleanupErr != nil {
+		if cleanupErr := uploader.cleanup(uploadedKeys); cleanupErr != nil {
 			logger.L().Error("image_task.offload_cleanup_failed", zap.String("task_id", id), zap.Error(cleanupErr))
 		}
 	}
@@ -346,7 +392,8 @@ func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, 
 		taskErr = imageTaskErrorJSON("api_error", "image generation failed")
 	}
 	_, _, err := s.finish(ctx, id, ImageTaskStatusFailed, statusCode, nil, taskErr)
-	if err != nil || s.uploader == nil {
+	uploader, _ := s.current()
+	if err != nil || uploader == nil {
 		return err
 	}
 	task, getErr := s.store.Get(ctx, id)
@@ -356,14 +403,14 @@ func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, 
 	if task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
 		return nil
 	}
-	return errors.Join(err, s.cleanupFailedPendingObjects(ctx, task))
+	return errors.Join(err, s.cleanupFailedPendingObjects(ctx, task, uploader))
 }
 
-func (s *ImageTaskService) cleanupFailedPendingObjects(ctx context.Context, task *ImageTaskRecord) error {
-	if s == nil || s.store == nil || s.uploader == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
+func (s *ImageTaskService) cleanupFailedPendingObjects(ctx context.Context, task *ImageTaskRecord, uploader *ImageResultUploader) error {
+	if s == nil || s.store == nil || uploader == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
 		return nil
 	}
-	if cleanupErr := s.uploader.cleanup(task.PendingObjectKeys); cleanupErr != nil {
+	if cleanupErr := uploader.cleanup(task.PendingObjectKeys); cleanupErr != nil {
 		return cleanupErr
 	}
 	cleared := *task
@@ -379,7 +426,8 @@ func (s *ImageTaskService) cleanupFailedPendingObjects(ctx context.Context, task
 }
 
 func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRecord) {
-	if s == nil || s.store == nil || s.uploader == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
+	uploader, _ := s.current()
+	if s == nil || s.store == nil || uploader == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
 		return
 	}
 	taskCopy := *task
@@ -416,7 +464,7 @@ func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRec
 		}()
 		ctx, cancel := context.WithTimeout(s.cleanupCtx, imageStorageCleanupTimeout+imageTaskReconcileTimeout)
 		defer cancel()
-		if cleanupErr := s.cleanupFailedPendingObjects(ctx, &taskCopy); cleanupErr != nil {
+		if cleanupErr := s.cleanupFailedPendingObjects(ctx, &taskCopy, uploader); cleanupErr != nil {
 			// The durable manifest remains on the failed task, so a later poll can
 			// schedule another bounded attempt without delaying this GET.
 			logger.L().Warn("image_task.pending_object_cleanup_retry_failed", zap.String("task_id", taskCopy.ID), zap.Error(cleanupErr))

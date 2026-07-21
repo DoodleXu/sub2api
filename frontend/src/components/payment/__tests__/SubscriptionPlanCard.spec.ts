@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import type { SubscriptionPlan } from '@/types/payment'
 import SubscriptionPlanCard from '../SubscriptionPlanCard.vue'
 
 const i18n = createI18n({
@@ -35,7 +36,7 @@ const i18n = createI18n({
   },
 })
 
-const mountPlanCard = (overrides: Record<string, unknown> = {}) =>
+const mountPlanCard = (overrides: Partial<SubscriptionPlan> = {}) =>
   mount(SubscriptionPlanCard, {
     props: {
       plan: {
@@ -68,6 +69,7 @@ describe('SubscriptionPlanCard', () => {
   it('renders subscription price with ¥ while keeping quota limits in $', () => {
     const wrapper = mountPlanCard({
       name: '标准订阅',
+      currency: 'CNY',
       price: 128,
       original_price: 168,
       daily_limit_usd: 100,
@@ -121,5 +123,14 @@ describe('SubscriptionPlanCard', () => {
     expect(text).toContain('$20')
     expect(text).not.toContain('$100')
     expect(text).not.toContain('$300')
+  })
+
+  it('uses the configured currency symbol while preserving USD for legacy plans', () => {
+    const cnyPlan = mountPlanCard({ currency: 'CNY', original_price: 20 }).text()
+
+    expect(cnyPlan).toContain('¥10CNY')
+    expect(cnyPlan).toContain('¥20CNY')
+    expect(mountPlanCard({ currency: 'USD' }).text()).toContain('$10USD')
+    expect(mountPlanCard({ currency: '' }).text()).toContain('$10')
   })
 })

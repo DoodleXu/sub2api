@@ -311,10 +311,142 @@ func TestUpstreamBillingProbeSuccessPersistsSanitizedSnapshot(t *testing.T) {
 	require.Equal(t, http.MethodGet, upstream.lastReq.Method)
 	require.Equal(t, "Bearer sk-sensitive", upstream.lastReq.Header.Get("Authorization"))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
+	require.Len(t, upstream.requests, 1)
 
 	persisted := decodeUpstreamBillingProbeSnapshot(account.Extra)
 	require.NotNil(t, persisted)
 	require.Equal(t, snapshot.Status, persisted.Status)
+}
+
+func TestUpstreamBillingProbeFallsBackToNewAPIUsageLog(t *testing.T) {
+	fixedNow := time.Date(2026, time.July, 13, 2, 0, 0, 0, time.UTC)
+	observedAt := fixedNow.Add(-5 * time.Minute)
+	account := &Account{
+		ID:          48,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-newapi", "base_url": "https://newapi.example/v1"},
+		Extra:       map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Not Found"}}`)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
+				"success":true,
+				"data":[
+					{"created_at":%d,"type":5,"group":"ignored","other":"{\"group_ratio\":0.01}"},
+					{"created_at":%d,"type":2,"group":"vip","other":"{\"group_ratio\":0.06,\"model_ratio\":2,\"secret\":\"discard\"}"}
+				]
+			}`, observedAt.Add(time.Minute).Unix(), observedAt.Unix()))),
+		},
+	}}
+	svc := newUpstreamBillingProbeTestService(repo, upstream, &upstreamBillingProbeSettingRepo{})
+	svc.now = func() time.Time { return fixedNow }
+
+	snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
+	require.Equal(t, "newapi.observed_billing", snapshot.Data["object"])
+	require.Equal(t, upstreamBillingProbeNewAPISource, snapshot.Data["source"])
+	require.Equal(t, "vip", snapshot.Data["group"])
+	require.Equal(t, 0.06, snapshot.Data["group_rate_multiplier"])
+	require.Equal(t, 0.06, snapshot.Data["resolved_rate_multiplier"])
+	require.Equal(t, 0.06, snapshot.Data["effective_rate_multiplier"])
+	require.NotContains(t, snapshot.Data, "model_ratio")
+	require.NotContains(t, snapshot.Data, "secret")
+	require.Equal(t, observedAt, *snapshot.ReceivedAt)
+	require.Equal(t, observedAt.Add(time.Hour), *snapshot.FreshUntil)
+	require.Equal(t, fixedNow, snapshot.LastAttemptAt)
+	require.Len(t, upstream.requests, 2)
+	require.Equal(t, "https://newapi.example/v1/sub2api/billing", upstream.requests[0].URL.String())
+	require.Equal(t, "https://newapi.example/api/log/token", upstream.requests[1].URL.String())
+	require.Equal(t, "Bearer sk-newapi", upstream.requests[1].Header.Get("Authorization"))
+	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.requests[1].Context()))
+
+	rate, ok := upstreamBillingRateAt(snapshot.Data, fixedNow)
+	require.True(t, ok)
+	require.Equal(t, 0.06, rate)
+}
+
+func TestUpstreamBillingProbeReportsNewAPIWithoutBillingSamples(t *testing.T) {
+	account := &Account{
+		ID:          49,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-newapi", "base_url": "https://newapi.example"},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("not found"))},
+		{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"success":true,"data":[]}`))},
+	}}
+	svc := newUpstreamBillingProbeTestService(repo, upstream, &upstreamBillingProbeSettingRepo{})
+
+	snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, UpstreamBillingProbeStatusFailed, snapshot.Status)
+	require.Equal(t, upstreamBillingProbeNewAPIUnobservedReason, snapshot.LastError)
+	require.Empty(t, snapshot.Data)
+	require.Len(t, upstream.requests, 2)
+}
+
+func TestParseNewAPIUpstreamBillingLogResponseSelectsNewestValidConsumption(t *testing.T) {
+	now := time.Date(2026, time.July, 13, 2, 0, 0, 0, time.UTC)
+	body := fmt.Sprintf(`{
+		"success":true,
+		"data":[
+			{"created_at":%d,"type":2,"group":"future","other":{"group_ratio":0.01}},
+			{"created_at":%d,"type":2,"group":"older","other":{"group_ratio":0.5}},
+			{"created_at":%d,"type":2,"group":"newer","other":"{\"group_ratio\":0.25}"}
+		]
+	}`, now.Add(10*time.Minute).Unix(), now.Add(-10*time.Minute).Unix(), now.Add(-time.Minute).Unix())
+
+	data, observedAt, err := parseNewAPIUpstreamBillingLogResponse([]byte(body), now)
+
+	require.NoError(t, err)
+	require.Equal(t, "newer", data["group"])
+	require.Equal(t, 0.25, data["resolved_rate_multiplier"])
+	require.Equal(t, now.Add(-time.Minute), observedAt)
+}
+
+func TestParseNewAPIUpstreamBillingLogResponseRejectsInvalidOrMissingSamples(t *testing.T) {
+	now := time.Date(2026, time.July, 13, 2, 0, 0, 0, time.UTC)
+	for _, body := range []string{
+		`{"success":false,"data":[]}`,
+		`{"success":true,"data":[{"created_at":1,"type":2,"group":"vip","other":"not-json"}]}`,
+		`{"success":true,"data":[{"created_at":1,"type":2,"group":"vip","other":"{\"group_ratio\":-1}"}]}`,
+	} {
+		_, _, err := parseNewAPIUpstreamBillingLogResponse([]byte(body), now)
+		require.Error(t, err)
+	}
+}
+
+func TestBuildNewAPIUpstreamBillingLogURL(t *testing.T) {
+	tests := []struct {
+		base string
+		want string
+	}{
+		{base: "https://newapi.example", want: "https://newapi.example/api/log/token"},
+		{base: "https://newapi.example/v1", want: "https://newapi.example/api/log/token"},
+		{base: "https://newapi.example/prefix/v1?tenant=a#stale", want: "https://newapi.example/prefix/api/log/token?tenant=a"},
+		{base: "https://newapi.example/api/log/token", want: "https://newapi.example/api/log/token"},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.want, buildNewAPIUpstreamBillingLogURL(tt.base))
+	}
 }
 
 func TestUpstreamBillingProbeRejectsMissingRequiredMultiplier(t *testing.T) {

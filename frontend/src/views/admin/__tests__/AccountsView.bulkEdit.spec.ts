@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, shallowMount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
 
@@ -9,6 +9,8 @@ const {
   getBatchTodayStats,
   getAllProxies,
   getAllGroups,
+  getUpstreamBillingProbeSettings,
+  updateUpstreamBillingProbeSettings,
   setArchived,
   bulkUpdate
 } = vi.hoisted(() => ({
@@ -17,6 +19,8 @@ const {
   getBatchTodayStats: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn(),
+  getUpstreamBillingProbeSettings: vi.fn(),
+  updateUpstreamBillingProbeSettings: vi.fn(),
   setArchived: vi.fn(),
   bulkUpdate: vi.fn()
 }))
@@ -27,6 +31,8 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
+      getUpstreamBillingProbeSettings,
+      updateUpstreamBillingProbeSettings,
       setArchived,
       bulkUpdate,
       delete: vi.fn(),
@@ -118,6 +124,8 @@ describe('admin AccountsView bulk edit scope', () => {
     getBatchTodayStats.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
+    getUpstreamBillingProbeSettings.mockReset()
+    updateUpstreamBillingProbeSettings.mockReset()
     setArchived.mockReset()
     bulkUpdate.mockReset()
 
@@ -136,6 +144,8 @@ describe('admin AccountsView bulk edit scope', () => {
     getBatchTodayStats.mockResolvedValue({ stats: {} })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
+    getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: false, interval_minutes: 60 })
+    updateUpstreamBillingProbeSettings.mockResolvedValue({ enabled: false, interval_minutes: 60 })
     setArchived.mockImplementation(async (_id: number, archived: boolean) => ({
       id: _id,
       name: `account-${_id}`,
@@ -159,6 +169,38 @@ describe('admin AccountsView bulk edit scope', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('keeps upstream billing probe controls inside the tools menu', async () => {
+    const wrapper = shallowMount(AccountsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: {
+            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
+          },
+          AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
+          Toggle: { template: '<button v-bind="$attrs" />' }
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('button[title="admin.accounts.moreActions"]').trigger('click')
+
+    const title = wrapper.get('[aria-label="admin.accounts.upstreamBilling.autoProbeSettings"]')
+    const titleLabel = title.element.previousElementSibling as HTMLElement
+    const intervalLabel = wrapper.get('label[for="upstream-billing-probe-interval"]')
+    const intervalInput = wrapper.get('#upstream-billing-probe-interval')
+    const saveButton = wrapper.get('button[title="common.save"]')
+
+    expect(titleLabel.classList).toContain('min-w-0')
+    expect(titleLabel.classList).toContain('break-words')
+    expect(title.classes()).toContain('shrink-0')
+    expect(intervalLabel.classes()).toContain('min-w-0')
+    expect(intervalLabel.classes()).toContain('break-words')
+    expect(intervalInput.classes()).toContain('shrink-0')
+    expect(saveButton.classes()).toContain('shrink-0')
   })
 
   it('opens bulk edit in filtered-results mode from the bulk actions dropdown', async () => {

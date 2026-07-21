@@ -1,11 +1,12 @@
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { flushPromises, mount } from '@vue/test-utils'
 
 import AdminPaymentPlansView from '../AdminPaymentPlansView.vue'
 
-const { getPlans, getAllGroups, showError } = vi.hoisted(() => ({
+const { getPlans, getConfig, getAllGroups, showError } = vi.hoisted(() => ({
   getPlans: vi.fn(),
+  getConfig: vi.fn(),
   getAllGroups: vi.fn(),
   showError: vi.fn(),
 }))
@@ -13,6 +14,7 @@ const { getPlans, getAllGroups, showError } = vi.hoisted(() => ({
 vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: {
     getPlans,
+    getConfig,
     updatePlan: vi.fn(),
     deletePlan: vi.fn(),
   },
@@ -59,11 +61,28 @@ const DataTableStub = defineComponent({
   `,
 })
 
+function mountView() {
+  return mount(AdminPaymentPlansView, {
+    global: {
+      stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+        DataTable: DataTableStub,
+        ConfirmDialog: true,
+        GroupBadge: true,
+        Icon: true,
+        PlanEditDialog: true,
+      },
+    },
+  })
+}
+
 describe('AdminPaymentPlansView', () => {
   beforeEach(() => {
     getPlans.mockReset()
+    getConfig.mockReset()
     getAllGroups.mockReset()
     showError.mockReset()
+    getConfig.mockResolvedValue({ data: {} })
     getAllGroups.mockResolvedValue([
       {
         id: 3,
@@ -93,22 +112,50 @@ describe('AdminPaymentPlansView', () => {
       ],
     })
 
-    const wrapper = mount(AdminPaymentPlansView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          DataTable: DataTableStub,
-          ConfirmDialog: true,
-          GroupBadge: true,
-          Icon: true,
-          PlanEditDialog: true,
-        },
-      },
-    })
-
+    const wrapper = mountView()
     await flushPromises()
 
     expect(wrapper.text()).toContain('1 payment.admin.week')
     expect(wrapper.text()).not.toContain('1 payment.admin.weeks')
+  })
+
+  it('uses the configured currency symbol and keeps legacy prices in USD', async () => {
+    getPlans.mockResolvedValue({
+      data: [
+        {
+          id: 1,
+          name: 'CNY plan',
+          group_id: 3,
+          price: 499,
+          original_price: 599,
+          currency: 'CNY',
+          validity_days: 30,
+          validity_unit: 'day',
+          sort_order: 0,
+          for_sale: true,
+          features: [],
+        },
+        {
+          id: 2,
+          name: 'Legacy plan',
+          group_id: 3,
+          price: 10,
+          original_price: 0,
+          currency: '',
+          validity_days: 30,
+          validity_unit: 'day',
+          sort_order: 0,
+          for_sale: true,
+          features: [],
+        },
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('¥499.00CNY')
+    expect(wrapper.text()).toContain('¥599.00')
+    expect(wrapper.text()).toContain('$10.00')
   })
 })

@@ -10,23 +10,33 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `4075866d0 chore: 准备发布 v0.1.224` | 本次合并 v0.1.161 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.161` -> `19149ca196` | v0.1.159-v0.1.161 已合入本 fork，fork 发布版本提升为 `0.1.225` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.161` -> `19149ca196` | 2026-07-18 发布的官方最新非草稿 release |
-| 上游 main HEAD | `30202f8266` | 本次同步时的远端 main，包含 v0.1.161 后续提交；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 53 个冲突路径（43 个内容冲突、10 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游入口安全、Prompt Audit、Grok media、Responses/WS 与订阅续期修复 |
+| Fork 同步前 HEAD | `6171eccb2 fix: 修复发版安全与静态检查` | 本次合并 v0.1.162 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | v0.1.162 已合入本 fork，fork 发布版本提升为 `0.1.226` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | 2026-07-20 发布的官方最新非草稿 release |
+| 上游 main HEAD | `5a8d6c4e41` | 本次同步时的远端 main，包含 v0.1.162 后续提交；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 31 个冲突路径（含 4 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游入口 IP 安全、图片存储热配置、Grok 工具缓存、OpenAI/Codex 与订阅展示修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.161:refs/tags/upstream/v0.1.161 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.161^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
+git fetch upstream refs/tags/v0.1.162:refs/tags/upstream/v0.1.162 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.162^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.161` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.162` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.162` 合并说明：
+
+- 入口安全吸收可信代理、转发客户端 IP 自定义 header、API Key IP 列表局部更新、请求头读取超时与大小限制；fork 继续保持 `trusted_proxies: []` 和“不默认信任转发 IP”的安全默认值，不执行上游把历史 false 自动翻为 true 的兼容迁移。
+- 管理端图片存储支持运行时读取和更新 S3 配置；动态 uploader 已接入 fork 异步图片任务的原子终态、待确认对象清单、失败补偿、周期清理和重启恢复，单次任务始终使用同一 uploader 快照，避免热切换时跨存储清理。
+- OpenAI/Codex 吸收 Responses 生图能力筛选、模型发现、首轮 failover、缓存计费与 SSE 热路径优化；Grok 吸收客户端工具缓存、免费额度配置、视频代理与配额刷新，并继续保留 fork Responses Lite、Agent Identity 脱敏、首图 TTFT 和每轮图片计费快照。
+- 运营邮件报告补齐结构化摘要变量和中英文模板；订阅剩余天数、有效期复数、计划币种及管理员计划列表展示已更新，同时保留 fork 按订阅类型显示日/周/月额度的规则。
+- 更新检查支持 GitHub Token，在线更新/回滚请求超时与服务端限制对齐；S3 secret 继续拒绝进入备份导出，pnpm 11 的 `form-data@<4.0.6` 安全覆盖已迁到实际生效的 workspace 配置。
+- 账号工具菜单补齐自动倍率探测的中英文标题、间隔、成功和失败文案；标签容器允许收缩换行，开关、输入框和保存按钮固定不收缩，修复原始 i18n key 撑宽菜单并把控件挤出可视区域的问题。
+- 4 个上游拆分文件的增量已移植回 fork 聚合模块，没有恢复已删除的拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理入口均保留。
 
 本次 `v0.1.159` + `v0.1.160` + `v0.1.161` 合并说明：
 
@@ -459,7 +469,15 @@ git diff --name-status refs/tags/upstream/v0.1.161^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.161`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.162`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.162 合并验证
+
+- 冲突处理：共 31 个冲突路径，含 4 个 modify/delete；设置 handler/service 与 OpenAI response handling 等上游拆分语义已移植到 fork 聚合模块，未恢复已删除文件。
+- 后端：重新生成 Wire 依赖注入代码；`go test ./...` 全量通过，重点覆盖入口 IP 设置、动态图片存储、异步任务、OpenAI/Codex/Grok、运营报告和订阅剩余天数。
+- 前端：Vitest 全量 `194` 个测试文件、`1369` 项用例通过；`vue-tsc --noEmit`、ESLint 和生产构建通过。账号工具菜单新增自动倍率探测翻译覆盖，长标签布局保持控件可见。
+- 安装与发布：pnpm 11 frozen install 通过，安全 overrides 与 lockfile 对齐；`backend/cmd/server/VERSION` 更新为 `0.1.226`，部署和在线更新仓库继续指向 fork。
+- 保留性：签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Ops 动态直方图和生图 TTFT 入口均保留；转发 IP 信任继续默认关闭。
 
 ## v0.1.159 + v0.1.160 + v0.1.161 合并验证
 

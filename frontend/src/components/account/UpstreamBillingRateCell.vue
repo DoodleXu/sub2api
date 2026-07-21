@@ -3,7 +3,7 @@
     <HelpTooltip class="-ml-1" width-class="w-max max-w-[calc(100vw-2rem)]" data-testid="upstream-billing-details">
       <template #trigger>
         <span
-          class="cursor-help border-b border-dotted border-gray-300 text-sm font-medium dark:border-gray-600"
+          class="cursor-help border-b border-dotted border-gray-300 text-sm font-medium dark:border-dark-600"
           :class="hasEffectiveRate ? 'font-mono text-gray-800 dark:text-gray-200' : statusClass || 'text-gray-400 dark:text-gray-500'"
           data-testid="upstream-billing-rate"
         >
@@ -11,12 +11,24 @@
         </span>
       </template>
       <div class="space-y-1">
+        <p v-if="isNewAPI" data-testid="upstream-billing-source">
+          {{ t('admin.accounts.upstreamBilling.newAPISource') }}
+        </p>
         <template v-if="hasEffectiveRate && data">
-          <p>{{ t('admin.accounts.upstreamBilling.groupRate', { value: data.group_rate_multiplier }) }}</p>
-          <p v-if="data.user_rate_multiplier != null">
+          <p>
+            {{
+              isNewAPI
+                ? t('admin.accounts.upstreamBilling.observedGroupRate', {
+                    group: data.group || '-',
+                    value: data.group_rate_multiplier
+                  })
+                : t('admin.accounts.upstreamBilling.groupRate', { value: data.group_rate_multiplier })
+            }}
+          </p>
+          <p v-if="!isNewAPI && data.user_rate_multiplier != null">
             {{ t('admin.accounts.upstreamBilling.userRate', { value: data.user_rate_multiplier }) }}
           </p>
-          <p>
+          <p v-if="!isNewAPI">
             {{
               data.peak_rate_enabled
                 ? t('admin.accounts.upstreamBilling.peakRate', {
@@ -28,8 +40,26 @@
                 : t('admin.accounts.upstreamBilling.noPeakRate')
             }}
           </p>
-          <p>{{ t('admin.accounts.upstreamBilling.effectiveRate', { value: currentEffectiveRate ?? '-' }) }}</p>
-          <p>{{ t('admin.accounts.upstreamBilling.updatedAt', { value: formatDate(snapshot?.received_at) }) }}</p>
+          <p>
+            {{
+              t(
+                isNewAPI
+                  ? 'admin.accounts.upstreamBilling.observedRate'
+                  : 'admin.accounts.upstreamBilling.effectiveRate',
+                { value: currentEffectiveRate ?? '-' }
+              )
+            }}
+          </p>
+          <p>
+            {{
+              t(
+                isNewAPI
+                  ? 'admin.accounts.upstreamBilling.sampleAt'
+                  : 'admin.accounts.upstreamBilling.updatedAt',
+                { value: formatDate(snapshot?.received_at) }
+              )
+            }}
+          </p>
         </template>
         <template v-else-if="stale && lastDetectedRate != null">
           <p data-testid="upstream-billing-last-rate">
@@ -108,6 +138,7 @@ const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000
 const eligible = computed(() => props.account.platform === 'openai' && props.account.type === 'apikey')
 const snapshot = computed<UpstreamBillingProbeSnapshot | undefined>(() => props.account.extra?.upstream_billing_probe)
 const data = computed(() => snapshot.value?.data)
+const isNewAPI = computed(() => data.value?.source === 'newapi_usage_log')
 const probeEnabled = computed(() => props.account.extra?.upstream_billing_probe_enabled === true)
 const nextProbeAt = computed(() => {
   const value = snapshot.value?.next_probe_at
@@ -196,6 +227,7 @@ const statusLabel = computed(() => {
   if (!snapshot.value) return t('admin.accounts.upstreamBilling.notProbed')
   if (snapshot.value.status === 'unsupported') return t('admin.accounts.upstreamBilling.unsupported')
   if (stale.value) return t('admin.accounts.upstreamBilling.stale')
+  if (snapshot.value.last_error === 'newapi_billing_unobserved') return t('admin.accounts.upstreamBilling.noBillingSample')
   if (snapshot.value.status === 'failed') return t('admin.accounts.upstreamBilling.failed')
   return ''
 })
@@ -203,6 +235,7 @@ const statusClass = computed(() => {
   if (!snapshot.value) return 'text-gray-400 dark:text-gray-500'
   if (snapshot.value.status === 'unsupported') return 'text-gray-500 dark:text-gray-400'
   if (stale.value) return 'text-amber-600 dark:text-amber-400'
+  if (snapshot.value.last_error === 'newapi_billing_unobserved') return 'text-amber-600 dark:text-amber-400'
   if (snapshot.value.status === 'failed') return 'text-red-600 dark:text-red-400'
   return ''
 })
