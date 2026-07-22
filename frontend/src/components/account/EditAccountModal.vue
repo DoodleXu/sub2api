@@ -2779,9 +2779,9 @@ const headerOverrideCapable = computed(
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
 const grokOAuthCustomBaseUrlEnabled = ref(false)
 const grokOAuthBaseUrl = ref('')
-// Grok Free OAuth accounts use client-tool prompt caching by default. Keep an
-// explicit false in the account extra as the opt-out signal.
-const grokClientToolCacheEnabled = ref(true)
+// Native search tools can change automatic tool selection, so the fork keeps
+// client-tool prompt caching explicitly opt-in.
+const grokClientToolCacheEnabled = ref(false)
 
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(false)
@@ -3447,7 +3447,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   grokClientToolCacheEnabled.value =
     newAccount.platform === 'grok' &&
     newAccount.type === 'oauth' &&
-    (grokClientToolCacheSetting === undefined || grokClientToolCacheSetting === true)
+    grokClientToolCacheSetting === true
   if (newAccount.platform === 'grok' && newAccount.type === 'oauth' && newAccount.credentials) {
     const grokCreds = newAccount.credentials as Record<string, unknown>
     if (isCustomGrokBaseUrl(grokCreds.base_url)) {
@@ -4344,8 +4344,7 @@ const handleSubmit = async () => {
       const newExtra: Record<string, unknown> = {
         ...((props.account.extra as Record<string, unknown>) || {})
       }
-      // Persist both states so a disabled account remains opted out when the
-      // backend applies the default-enabled policy to missing values.
+      // Persist both states so account behavior remains explicit and stable.
       newExtra[GROK_CLIENT_TOOL_CACHE_EXTRA_KEY] = grokClientToolCacheEnabled.value
       updatePayload.extra = newExtra
     }

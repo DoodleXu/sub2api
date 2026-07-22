@@ -249,3 +249,14 @@ func TestMigration173AllowsCyberBlockedUsageRequestType(t *testing.T) {
 	require.Contains(t, sql, "ADD CONSTRAINT usage_logs_request_type_check")
 	require.Contains(t, sql, "CHECK (request_type IN (0, 1, 2, 3, 4)) NOT VALID")
 }
+
+func TestMigration185BackfillsLegacySubscriptionPlanCurrencyToCNY(t *testing.T) {
+	content, err := FS.ReadFile("185_backfill_subscription_plan_currency_cny.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "UPDATE subscription_plans")
+	require.Contains(t, sql, "SET currency = 'CNY'")
+	require.Contains(t, sql, "WHERE TRIM(currency) = ''")
+	require.Contains(t, sql, "ALTER COLUMN currency SET DEFAULT 'CNY'")
+}

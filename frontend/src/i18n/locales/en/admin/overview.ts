@@ -113,6 +113,7 @@ export default {
         publicBaseUrl: 'Public base URL',
         publicBaseUrlPlaceholder: 'Leave empty to return presigned links',
         presignExpiryHours: 'Presigned link TTL (hours)',
+        lifecycleExpirationDays: 'Minimum lifecycle retention (days)',
         saved: 'Async image object storage saved'
       },
       schedule: {

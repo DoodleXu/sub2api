@@ -125,12 +125,12 @@ describe('SubscriptionPlanCard', () => {
     expect(text).not.toContain('$300')
   })
 
-  it('uses the configured currency symbol while preserving USD for legacy plans', () => {
+  it('uses the configured currency symbol while preserving CNY for legacy plans', () => {
     const cnyPlan = mountPlanCard({ currency: 'CNY', original_price: 20 }).text()
 
     expect(cnyPlan).toContain('¥10CNY')
     expect(cnyPlan).toContain('¥20CNY')
     expect(mountPlanCard({ currency: 'USD' }).text()).toContain('$10USD')
-    expect(mountPlanCard({ currency: '' }).text()).toContain('$10')
+    expect(mountPlanCard({ currency: '' }).text()).toContain('¥10')
   })
 })

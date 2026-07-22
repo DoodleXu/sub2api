@@ -135,6 +135,10 @@ type BackupService struct {
 	storeMu sync.Mutex // 保护 store/s3Cfg 缓存
 	store   BackupObjectStore
 	s3Cfg   *BackupS3Config
+	// onS3ConfigUpdate is invoked after a persisted S3 config update so
+	// dependent services (for example image storage reusing backup S3) can
+	// invalidate their own runtime clients without creating a package cycle.
+	onS3ConfigUpdate func()
 
 	recordsMu sync.Mutex // 保护 records 的 load/save 操作
 
@@ -262,6 +266,19 @@ func (s *BackupService) EncryptionKeyConfigured() bool {
 	return s != nil && s.encryptionKeyConfigured
 }
 
+// SetS3ConfigUpdateCallback registers an optional local-process notification
+// for services that reuse the backup S3 credentials. The callback is invoked
+// only after the new value is durably saved and the backup client cache is
+// cleared.
+func (s *BackupService) SetS3ConfigUpdateCallback(callback func()) {
+	if s == nil {
+		return
+	}
+	s.storeMu.Lock()
+	s.onS3ConfigUpdate = callback
+	s.storeMu.Unlock()
+}
+
 func (s *BackupService) GetS3Config(ctx context.Context) (*BackupS3Config, error) {
 	cfg, err := s.loadS3Config(ctx)
 	if err != nil {
@@ -278,7 +295,10 @@ func (s *BackupService) GetS3Config(ctx context.Context) (*BackupS3Config, error
 func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) (*BackupS3Config, error) {
 	// 如果没提供 secret，保留原有值
 	if cfg.SecretAccessKey == "" {
-		old, _ := s.loadS3Config(ctx)
+		old, err := s.loadS3Config(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load existing s3 config: %w", err)
+		}
 		if old != nil {
 			cfg.SecretAccessKey = old.SecretAccessKey
 		}
@@ -308,7 +328,11 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 	s.storeMu.Lock()
 	s.store = nil
 	s.s3Cfg = nil
+	onUpdate := s.onS3ConfigUpdate
 	s.storeMu.Unlock()
+	if onUpdate != nil {
+		onUpdate()
+	}
 
 	cfg.SecretAccessKey = ""
 	return &cfg, nil
@@ -317,7 +341,10 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 func (s *BackupService) TestS3Connection(ctx context.Context, cfg BackupS3Config) error {
 	// 如果没提供 secret，用已保存的
 	if cfg.SecretAccessKey == "" {
-		old, _ := s.loadS3Config(ctx)
+		old, err := s.loadS3Config(ctx)
+		if err != nil {
+			return fmt.Errorf("load existing s3 config: %w", err)
+		}
 		if old != nil {
 			cfg.SecretAccessKey = old.SecretAccessKey
 		}
@@ -338,12 +365,18 @@ func (s *BackupService) TestS3Connection(ctx context.Context, cfg BackupS3Config
 
 func (s *BackupService) GetSchedule(ctx context.Context) (*BackupScheduleConfig, error) {
 	raw, err := s.settingRepo.GetValue(ctx, settingKeyBackupSchedule)
-	if err != nil || raw == "" {
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return &BackupScheduleConfig{}, nil
+		}
+		return nil, fmt.Errorf("load backup schedule: %w", err)
+	}
+	if strings.TrimSpace(raw) == "" {
 		return &BackupScheduleConfig{}, nil
 	}
 	var cfg BackupScheduleConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return &BackupScheduleConfig{}, nil
+		return nil, fmt.Errorf("parse backup schedule: %w", err)
 	}
 	return &cfg, nil
 }
@@ -423,7 +456,11 @@ func (s *BackupService) runScheduledBackup() {
 	defer cancel()
 
 	// 读取定时备份配置中的过期天数
-	schedule, _ := s.GetSchedule(ctx)
+	schedule, err := s.GetSchedule(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.backup", "[Backup] 读取定时备份配置失败，跳过本次任务: %v", err)
+		return
+	}
 	expireDays := 14 // 默认14天过期
 	if schedule != nil && schedule.RetainDays > 0 {
 		expireDays = schedule.RetainDays
@@ -991,7 +1028,13 @@ func (s *BackupService) GetBackupDownloadURL(ctx context.Context, backupID strin
 
 func (s *BackupService) loadS3Config(ctx context.Context) (*BackupS3Config, error) {
 	raw, err := s.settingRepo.GetValue(ctx, settingKeyBackupS3Config)
-	if err != nil || raw == "" {
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return nil, nil //nolint:nilnil // no config is a valid state
+		}
+		return nil, fmt.Errorf("load backup s3 config: %w", err)
+	}
+	if strings.TrimSpace(raw) == "" {
 		return nil, nil //nolint:nilnil // no config is a valid state
 	}
 	var cfg BackupS3Config
@@ -1050,7 +1093,13 @@ func (s *BackupService) loadRecords(ctx context.Context) ([]BackupRecord, error)
 // loadRecordsLocked 在已持有 recordsMu 锁的情况下加载记录
 func (s *BackupService) loadRecordsLocked(ctx context.Context) ([]BackupRecord, error) {
 	raw, err := s.settingRepo.GetValue(ctx, settingKeyBackupRecords)
-	if err != nil || raw == "" {
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return nil, nil //nolint:nilnil // no records is a valid state
+		}
+		return nil, fmt.Errorf("load backup records: %w", err)
+	}
+	if strings.TrimSpace(raw) == "" {
 		return nil, nil //nolint:nilnil // no records is a valid state
 	}
 	var records []BackupRecord
@@ -1074,7 +1123,10 @@ func (s *BackupService) saveRecord(ctx context.Context, record *BackupRecord) er
 	s.recordsMu.Lock()
 	defer s.recordsMu.Unlock()
 
-	records, _ := s.loadRecordsLocked(ctx)
+	records, err := s.loadRecordsLocked(ctx)
+	if err != nil {
+		return err
+	}
 
 	// 更新已有记录或追加
 	found := false

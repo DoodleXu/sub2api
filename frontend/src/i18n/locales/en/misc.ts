@@ -547,7 +547,7 @@ export default {
       price: 'Price',
       currency: 'Currency Label',
       currencyPlaceholder: 'e.g. USD / NZD / CNY',
-      currencyHint: 'Display-only 3-letter ISO currency code shown next to the price; leave empty to hide, does not affect billing',
+      currencyHint: 'Display-only 3-letter ISO currency code shown next to the price; defaults to CNY and does not affect billing',
       subscriptionCnyPayPreview: 'CNY channel charge preview: {amount}',
       subscriptionCnyPayPreviewWithFee: '({feeRate}% fee included: {total})',
       validity: 'Validity',

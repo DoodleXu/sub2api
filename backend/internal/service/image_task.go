@@ -102,6 +102,7 @@ type ImageTaskService struct {
 	ttl              time.Duration
 	executionTimeout time.Duration
 	cleanupMu        sync.Mutex
+	cleanupClosed    bool
 	cleanupRunning   map[string]struct{}
 	cleanupSlots     chan struct{}
 	cleanupStop      chan struct{}
@@ -109,6 +110,7 @@ type ImageTaskService struct {
 	cleanupCancel    context.CancelFunc
 	cleanupCtx       context.Context
 	cleanupWG        sync.WaitGroup
+	taskUploaders    sync.Map // task ID -> uploader snapshot captured at admission
 }
 
 func NewImageTaskService(store ImageTaskStore) *ImageTaskService {
@@ -183,12 +185,34 @@ func (s *ImageTaskService) current() (*ImageResultUploader, bool) {
 	return s.uploader, s.enabled
 }
 
+func (s *ImageTaskService) uploaderForTask(id string) *ImageResultUploader {
+	if s == nil {
+		return nil
+	}
+	if uploader, ok := s.taskUploaders.Load(id); ok {
+		if typed, valid := uploader.(*ImageResultUploader); valid {
+			return typed
+		}
+	}
+	uploader, _ := s.current()
+	return uploader
+}
+
+func (s *ImageTaskService) forgetTaskUploader(id string) {
+	if s != nil {
+		s.taskUploaders.Delete(id)
+	}
+}
+
 // Close stops background cleanup. It is safe to call more than once.
 func (s *ImageTaskService) Close() {
 	if s == nil {
 		return
 	}
 	s.cleanupStopOnce.Do(func() { close(s.cleanupStop) })
+	s.cleanupMu.Lock()
+	s.cleanupClosed = true
+	s.cleanupMu.Unlock()
 	if s.cleanupCancel != nil {
 		s.cleanupCancel()
 	}
@@ -209,11 +233,14 @@ func (s *ImageTaskService) pendingObjectCleanupWorker() {
 }
 
 func (s *ImageTaskService) reconcilePendingObjects() {
-	uploader, _ := s.current()
-	if s.store == nil || uploader == nil {
+	if s.store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), imageStorageCleanupTimeout+imageTaskReconcileTimeout)
+	parent := s.cleanupCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, imageStorageCleanupTimeout+imageTaskReconcileTimeout)
 	defer cancel()
 	tasks, err := s.store.ListPending(ctx, imageTaskCleanupBatchSize)
 	if err != nil {
@@ -241,9 +268,19 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 			task = &failed
 		}
 		if task.Status == ImageTaskStatusFailed && len(task.PendingObjectKeys) > 0 {
+			uploader := s.uploaderForTask(task.ID)
+			if uploader == nil {
+				continue
+			}
 			if err := s.cleanupFailedPendingObjects(ctx, task, uploader); err != nil {
 				logger.L().Warn("image_task.pending_object_cleanup_failed", zap.String("task_id", task.ID), zap.Error(err))
+			} else {
+				s.forgetTaskUploader(task.ID)
 			}
+		} else if task.Status == ImageTaskStatusFailed {
+			// A task that timed out before uploading anything has no compensation
+			// work left. Release its admission-time uploader snapshot immediately.
+			s.forgetTaskUploader(task.ID)
 		}
 	}
 }
@@ -275,6 +312,10 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 	if s == nil || s.store == nil {
 		return nil, ErrImageTaskUnavailable
 	}
+	uploader, enabled := s.current()
+	if s.resolve != nil && (!enabled || uploader == nil) {
+		return nil, ErrImageTaskUnavailable
+	}
 	now := time.Now().UTC()
 	task := &ImageTaskRecord{
 		ID:        "imgtask_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
@@ -286,6 +327,9 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 	}
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {
 		return nil, ErrImageTaskUnavailable.WithCause(err)
+	}
+	if uploader != nil {
+		s.taskUploaders.Store(task.ID, uploader)
 	}
 	return imageTaskToPublic(task), nil
 }
@@ -313,7 +357,11 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if !json.Valid(result) {
 		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
-	uploader, _ := s.current()
+	uploader := s.uploaderForTask(id)
+	if s.resolve != nil && uploader == nil {
+		logger.L().Error("image_task.uploader_snapshot_unavailable", zap.String("task_id", id))
+		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "image object storage is unavailable"))
+	}
 	var uploadedKeys []string
 	if uploader != nil {
 		rewritten, err := uploader.rewriteTracked(ctx, id, result, func(keys []string) (bool, error) {
@@ -325,6 +373,7 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 			return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "failed to store generated image to object storage"))
 		}
 		if !rewritten.active {
+			s.forgetTaskUploader(id)
 			return nil
 		}
 		result = rewritten.payload
@@ -335,6 +384,7 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if err != nil && transitionAttempted {
 		switch s.reconcileCompletionAfterTransitionError(id, result) {
 		case imageTaskCompletionCommitted:
+			s.forgetTaskUploader(id)
 			return nil
 		case imageTaskCompletionNotCommitted:
 			cleanupUploaded = true
@@ -353,7 +403,11 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if cleanupUploaded && len(uploadedKeys) > 0 {
 		if cleanupErr := uploader.cleanup(uploadedKeys); cleanupErr != nil {
 			logger.L().Error("image_task.offload_cleanup_failed", zap.String("task_id", id), zap.Error(cleanupErr))
+		} else {
+			s.forgetTaskUploader(id)
 		}
+	} else if err == nil && transitioned {
+		s.forgetTaskUploader(id)
 	}
 	return err
 }
@@ -392,18 +446,27 @@ func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, 
 		taskErr = imageTaskErrorJSON("api_error", "image generation failed")
 	}
 	_, _, err := s.finish(ctx, id, ImageTaskStatusFailed, statusCode, nil, taskErr)
-	uploader, _ := s.current()
-	if err != nil || uploader == nil {
+	uploader := s.uploaderForTask(id)
+	if err != nil {
 		return err
+	}
+	if uploader == nil {
+		s.forgetTaskUploader(id)
+		return nil
 	}
 	task, getErr := s.store.Get(ctx, id)
 	if getErr != nil {
 		return errors.Join(err, ErrImageTaskUnavailable.WithCause(getErr))
 	}
 	if task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
+		s.forgetTaskUploader(id)
 		return nil
 	}
-	return errors.Join(err, s.cleanupFailedPendingObjects(ctx, task, uploader))
+	cleanupErr := s.cleanupFailedPendingObjects(ctx, task, uploader)
+	if cleanupErr == nil {
+		s.forgetTaskUploader(id)
+	}
+	return errors.Join(err, cleanupErr)
 }
 
 func (s *ImageTaskService) cleanupFailedPendingObjects(ctx context.Context, task *ImageTaskRecord, uploader *ImageResultUploader) error {
@@ -426,8 +489,11 @@ func (s *ImageTaskService) cleanupFailedPendingObjects(ctx context.Context, task
 }
 
 func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRecord) {
-	uploader, _ := s.current()
-	if s == nil || s.store == nil || uploader == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
+	if s == nil || s.store == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
+		return
+	}
+	uploader := s.uploaderForTask(task.ID)
+	if uploader == nil {
 		return
 	}
 	taskCopy := *task
@@ -453,7 +519,18 @@ func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRec
 		return
 	}
 
+	// Register the goroutine while holding cleanupMu. Close marks the service
+	// closed under the same lock before waiting, so WaitGroup.Add can never
+	// race with a zero-counter Wait after shutdown has begun.
+	s.cleanupMu.Lock()
+	if s.cleanupClosed {
+		delete(s.cleanupRunning, taskCopy.ID)
+		s.cleanupMu.Unlock()
+		<-s.cleanupSlots
+		return
+	}
 	s.cleanupWG.Add(1)
+	s.cleanupMu.Unlock()
 	go func() {
 		defer s.cleanupWG.Done()
 		defer func() { <-s.cleanupSlots }()
@@ -468,6 +545,8 @@ func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRec
 			// The durable manifest remains on the failed task, so a later poll can
 			// schedule another bounded attempt without delaying this GET.
 			logger.L().Warn("image_task.pending_object_cleanup_retry_failed", zap.String("task_id", taskCopy.ID), zap.Error(cleanupErr))
+		} else {
+			s.forgetTaskUploader(taskCopy.ID)
 		}
 	}()
 }

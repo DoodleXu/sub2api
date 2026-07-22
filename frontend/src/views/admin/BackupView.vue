@@ -197,6 +197,10 @@
             <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.imageStorage.presignExpiryHours') }}</label>
             <input v-model.number="imageStorageForm.presign_expiry_hours" type="number" min="1" class="input w-full" />
           </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.imageStorage.lifecycleExpirationDays') }}</label>
+            <input v-model.number="imageStorageForm.lifecycle_expiration_days" type="number" min="1" class="input w-full" />
+          </div>
         </div>
 
         <div class="mt-4 flex flex-wrap gap-2">
@@ -492,6 +496,7 @@ const imageStorageForm = ref<ImageStorageConfig>({
   prefix: 'images/',
   public_base_url: '',
   presign_expiry_hours: 24,
+  lifecycle_expiration_days: 2,
   max_download_bytes: 33554432,
   endpoint: '',
   region: 'auto',

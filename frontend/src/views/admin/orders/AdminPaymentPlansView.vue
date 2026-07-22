@@ -99,7 +99,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 function planCurrencySymbol(currency?: string): string {
-  return currencySymbol(currency || 'USD')
+  return currencySymbol(currency)
 }
 
 // ==================== Groups ====================

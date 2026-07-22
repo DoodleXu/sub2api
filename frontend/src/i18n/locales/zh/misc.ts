@@ -571,7 +571,7 @@ export default {
       price: '价格',
       currency: '币种标注',
       currencyPlaceholder: '如 USD / NZD / CNY',
-      currencyHint: '仅用于价格展示的 ISO 三字母币种码，留空不展示，不影响实际扣款',
+      currencyHint: '仅用于价格展示的 ISO 三字母币种码，默认 CNY，不影响实际扣款',
       subscriptionCnyPayPreview: 'CNY 通道实扣预览：{amount}',
       subscriptionCnyPayPreviewWithFee: '（含 {feeRate}% 手续费：{total}）',
       validity: '有效期',

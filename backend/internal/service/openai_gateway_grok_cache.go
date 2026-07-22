@@ -200,13 +200,13 @@ func hasGrokResponsesToolIntent(body []byte) bool {
 }
 
 // applyGrokFreeMessagesFunctionToolCacheRoute enables xAI's cache-capable
-// mixed-tools route only for known Free accounts. Pure client tools default to
-// the cache-capable route so an intermediate sub2api does not need to preserve
-// client-specific opt-in headers. Operators can explicitly disable this per
-// account when native search tools would change the desired behavior (#4486).
+// mixed-tools route only for known Free accounts. Pure client tools require an
+// explicit account opt-in because adding native search tools can change model
+// tool selection (#4486).
 func applyGrokFreeMessagesFunctionToolCacheRoute(body, intentSourceBody []byte, account *Account, cacheIdentity string) ([]byte, error) {
-	allowPureClientTools, _ := grokClientToolCacheAccountPolicy(account)
-	return applyGrokFreeToolCacheRoute(body, intentSourceBody, account, cacheIdentity, allowPureClientTools, true)
+	allowPureClientTools, accountPolicyExplicit := grokClientToolCacheAccountPolicy(account)
+	allowFunctionSearch := allowPureClientTools || !accountPolicyExplicit
+	return applyGrokFreeToolCacheRoute(body, intentSourceBody, account, cacheIdentity, allowPureClientTools, allowFunctionSearch)
 }
 
 // applyGrokFreeRequestToolCacheRoute also accepts a request-scoped opt-in. The
@@ -228,27 +228,27 @@ func applyGrokFreeRequestToolCacheRoute(c *gin.Context, body, intentSourceBody [
 		allowPureClientTools = true
 	}
 	// A function merely named web_search/x_search is still a client function.
-	// Known Free OAuth accounts use the cache route by default; a request-scoped
-	// opt-in may override an account opt-out, while an explicit request opt-out
-	// always wins. The legacy Claude fingerprint remains only as a compatibility
-	// fallback when no account policy has been recorded (#4486).
-	return applyGrokFreeToolCacheRoute(body, intentSourceBody, account, cacheIdentity, allowPureClientTools, allowPureClientTools)
+	// Pure tools remain unchanged unless an explicit opt-in or the strict Claude
+	// Desktop fingerprint is present. A missing policy may still normalize an
+	// explicitly requested search function into xAI's native search tool form.
+	allowFunctionSearch := allowPureClientTools || (!accountPolicyExplicit && !requestOptOut)
+	return applyGrokFreeToolCacheRoute(body, intentSourceBody, account, cacheIdentity, allowPureClientTools, allowFunctionSearch)
 }
 
 // grokClientToolCacheAccountPolicy is intentionally strict for configured
-// values: only a JSON boolean is accepted. A missing key defaults on solely for
-// accounts positively identified as Grok Free OAuth; paid, API-key, and unknown
-// accounts remain fail-closed.
+// values: only a JSON boolean is accepted. A missing key remains disabled so
+// upgrades never change automatic tool selection; paid, API-key, and unknown
+// accounts also remain fail-closed.
 func grokClientToolCacheAccountPolicy(account *Account) (enabled, explicit bool) {
 	if !isKnownGrokFreeAccount(account) {
 		return false, false
 	}
 	if account.Extra == nil {
-		return true, false
+		return false, false
 	}
 	value, exists := account.Extra[grokClientToolCacheOptInExtraKey]
 	if !exists {
-		return true, false
+		return false, false
 	}
 	enabled, valid := value.(bool)
 	if !valid {

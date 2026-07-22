@@ -9,14 +9,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
 type stubSettingRepo struct {
-	mu     sync.Mutex
-	values map[string]string
+	mu          sync.Mutex
+	values      map[string]string
+	getValueErr error
 }
 
 func newStubSettingRepo() *stubSettingRepo {
@@ -27,6 +29,9 @@ func (r *stubSettingRepo) Get(context.Context, string) (*Setting, error) { retur
 func (r *stubSettingRepo) GetValue(_ context.Context, key string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.getValueErr != nil {
+		return "", r.getValueErr
+	}
 	return r.values[key], nil
 }
 
@@ -67,6 +72,8 @@ func (s *recordingStorage) Save(_ context.Context, key, _ string, _ []byte) (str
 	s.saved = append(s.saved, key)
 	return "https://cdn.example.com/" + key, nil
 }
+
+func (s *recordingStorage) Delete(context.Context, string) error { return nil }
 
 func newImageStorageFixture(t *testing.T, fallback config.ImageStorageConfig) (*ImageStorageSettingService, *stubSettingRepo, *[]config.ImageStorageConfig) {
 	return newImageStorageFixtureWithKey(t, fallback, true)
@@ -126,6 +133,28 @@ func TestImageStorageSettingsToggleTakesEffectWithoutRestart(t *testing.T) {
 	require.Len(t, *built, 1, "the S3 client is built only when the feature is on")
 }
 
+func TestImageStorageSettingsInvalidatesWhenBackupS3Changes(t *testing.T) {
+	svc, repo, _ := newImageStorageFixture(t, config.ImageStorageConfig{})
+	seedBackupS3(t, repo, BackupS3Config{
+		Endpoint: "https://old.example.test", Region: "auto", Bucket: "old-bucket",
+		AccessKeyID: "old-ak", SecretAccessKey: "old-sk", Prefix: "backups/",
+	})
+	svc.backup.SetS3ConfigUpdateCallback(svc.Invalidate)
+
+	_, err := svc.Update(context.Background(), ImageStorageSettings{Enabled: true, ReuseBackupS3: true})
+	require.NoError(t, err)
+	_, enabled := svc.resolve()
+	require.True(t, enabled)
+	require.True(t, svc.resolved)
+
+	_, err = svc.backup.UpdateS3Config(context.Background(), BackupS3Config{
+		Endpoint: "https://new.example.test", Region: "auto", Bucket: "new-bucket",
+		AccessKeyID: "new-ak", SecretAccessKey: "new-sk", Prefix: "backups/",
+	})
+	require.NoError(t, err)
+	require.False(t, svc.resolved, "backup S3 updates must invalidate reused image storage")
+}
+
 func TestImageStorageSettingsReuseBackupCredentials(t *testing.T) {
 	svc, repo, built := newImageStorageFixture(t, config.ImageStorageConfig{})
 	ctx := context.Background()
@@ -135,7 +164,9 @@ func TestImageStorageSettingsReuseBackupCredentials(t *testing.T) {
 		Prefix: "backups/", ForcePathStyle: true,
 	})
 
-	_, err := svc.Update(ctx, ImageStorageSettings{Enabled: true, ReuseBackupS3: true, Prefix: "images"})
+	_, err := svc.Update(ctx, ImageStorageSettings{
+		Enabled: true, ReuseBackupS3: true, Prefix: "images", LifecycleDays: 7,
+	})
 	require.NoError(t, err)
 	_, enabled := svc.resolve()
 	require.True(t, enabled)
@@ -149,6 +180,7 @@ func TestImageStorageSettingsReuseBackupCredentials(t *testing.T) {
 	require.True(t, got.ForcePathStyle)
 	require.Equal(t, "backup-bucket", got.Bucket, "an empty bucket falls back to the backup bucket")
 	require.Equal(t, "images/", got.Prefix, "images stay under their own prefix so they never collide with backups/")
+	require.Equal(t, 7, got.LifecycleExpirationDays)
 
 	// Reusing must not duplicate the secret into a second row.
 	raw, err := repo.GetValue(ctx, settingKeyImageStorageConfig)
@@ -191,6 +223,39 @@ func TestImageStorageSettingsOwnCredentialsAreEncryptedAndMasked(t *testing.T) {
 	require.NoError(t, err)
 	svc.resolve()
 	require.Equal(t, "super-secret", (*built)[1].SecretAccessKey)
+}
+
+func TestImageStorageSettingsReadFailureDoesNotOverwriteStoredSecret(t *testing.T) {
+	svc, repo, _ := newImageStorageFixture(t, config.ImageStorageConfig{Enabled: true})
+	repo.values[settingKeyImageStorageConfig] = `{"enabled":true,"secret_access_key":"enc:preserve-me"}`
+	repo.getValueErr = errors.New("database unavailable")
+
+	_, err := svc.Update(context.Background(), ImageStorageSettings{
+		Enabled: true, Bucket: "my-images", Endpoint: "https://s3.example.test", AccessKeyID: "ak",
+	})
+
+	require.ErrorContains(t, err, "database unavailable")
+	require.Contains(t, repo.values[settingKeyImageStorageConfig], "enc:preserve-me")
+	_, err = svc.effectiveConfig(context.Background())
+	require.ErrorContains(t, err, "database unavailable", "read failures must not activate the YAML fallback")
+}
+
+func TestImageStorageSettingsResolverRetriesAfterTransientReadFailure(t *testing.T) {
+	svc, repo, _ := newImageStorageFixture(t, config.ImageStorageConfig{
+		Enabled: true, Endpoint: "https://s3.example.test", Bucket: "images",
+		AccessKeyID: "ak", SecretAccessKey: "sk",
+	})
+	repo.getValueErr = errors.New("database unavailable")
+
+	_, enabled := svc.resolve()
+	require.False(t, enabled)
+	require.False(t, svc.resolved, "transient read failures must not be cached permanently")
+	require.True(t, svc.retryAt.After(time.Now()), "retry delay must start when the failure is observed")
+
+	repo.getValueErr = nil
+	svc.retryAt = time.Time{} // simulate the bounded retry interval elapsing
+	_, enabled = svc.resolve()
+	require.True(t, enabled)
 }
 
 // Persisting the service's own S3 secret must be refused when the encryption key
@@ -251,4 +316,19 @@ func TestImageStorageSettingsFallBackToConfigFile(t *testing.T) {
 	require.True(t, fetched.Enabled)
 	require.Equal(t, "yaml-bucket", fetched.Bucket)
 	require.Empty(t, fetched.SecretAccessKey)
+}
+
+func TestImageStorageSettingsLegacyStoredConfigGetsSafeDefaults(t *testing.T) {
+	svc, repo, _ := newImageStorageFixture(t, config.ImageStorageConfig{})
+	repo.values[settingKeyImageStorageConfig] = `{"enabled":true,"bucket":"images","endpoint":"https://s3.example.test","access_key_id":"ak","secret_access_key":"enc:sk"}`
+
+	fetched, err := svc.Get(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, fetched.LifecycleDays)
+	require.Equal(t, "images/", fetched.Prefix)
+
+	got, err := svc.effectiveConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, got.LifecycleExpirationDays)
+	require.Equal(t, "images/", got.Prefix)
 }

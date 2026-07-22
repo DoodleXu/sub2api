@@ -45,7 +45,7 @@ func (SubscriptionPlan) Fields() []ent.Field {
 			Nillable(),
 		field.String("currency").
 			MaxLen(3).
-			Default(""),
+			Default("CNY"),
 		field.Int("validity_days").
 			Default(30),
 		field.String("validity_unit").

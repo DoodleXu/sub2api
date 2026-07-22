@@ -220,7 +220,7 @@ func TestApplyGrokCacheIdentityWritesResponsesBodyAndHeader(t *testing.T) {
 	require.False(t, gjson.GetBytes(unscopedBody, "tool_choice").Exists())
 }
 
-func TestGrokFreeMessagesClientToolCacheDefaultsOnForKnownFree(t *testing.T) {
+func TestGrokFreeMessagesClientToolCacheDoesNotImplicitlyAddSearch(t *testing.T) {
 	account := healthyGrokOAuthGatewayTestAccount(901, "access-token")
 	account.Credentials["subscription_tier"] = " FREE "
 	tests := []struct {
@@ -242,19 +242,17 @@ func TestGrokFreeMessagesClientToolCacheDefaultsOnForKnownFree(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "isolated-id", gjson.GetBytes(body, "prompt_cache_key").String())
 			tools := gjson.GetBytes(body, "tools").Array()
-			require.Len(t, tools, 4)
+			require.Len(t, tools, 2)
 			require.Equal(t, "function", tools[0].Get("type").String())
 			require.Equal(t, "lookup", tools[0].Get("name").String())
 			require.Equal(t, "function", tools[1].Get("type").String())
 			require.Equal(t, "save", tools[1].Get("name").String())
-			require.Equal(t, "web_search", tools[2].Get("type").String())
-			require.Equal(t, "x_search", tools[3].Get("type").String())
 			require.Equal(t, tt.wantChoice, gjson.GetBytes(body, "tool_choice").Exists())
 		})
 	}
 }
 
-func TestGrokFreeMessagesClientToolCacheDefaultsWithMissingAccountSetting(t *testing.T) {
+func TestGrokFreeMessagesClientToolCacheStaysDisabledWithMissingAccountSetting(t *testing.T) {
 	body := []byte(`{"model":"grok","tools":[{"type":"function","name":"view_image","parameters":{"type":"object"}}],"tool_choice":"auto"}`)
 	tests := []struct {
 		name  string
@@ -274,10 +272,7 @@ func TestGrokFreeMessagesClientToolCacheDefaultsWithMissingAccountSetting(t *tes
 			patched, err := applyGrokFreeMessagesFunctionToolCacheRoute(body, body, account, "isolated-id")
 
 			require.NoError(t, err)
-			tools := gjson.GetBytes(patched, "tools").Array()
-			require.Len(t, tools, 3)
-			require.Equal(t, "web_search", tools[1].Get("type").String())
-			require.Equal(t, "x_search", tools[2].Get("type").String())
+			require.JSONEq(t, string(body), string(patched))
 		})
 	}
 }
@@ -346,6 +341,17 @@ func TestGrokFreeMessagesClientToolCacheAccountOptOut(t *testing.T) {
 	}
 }
 
+func TestGrokFreeMessagesClientToolCacheExplicitOptOutPreservesSearchFunction(t *testing.T) {
+	account := healthyGrokOAuthGatewayTestAccount(90112, "access-token")
+	account.Credentials["subscription_tier"] = "free"
+	account.Extra = map[string]any{grokClientToolCacheOptInExtraKey: false}
+	body := []byte(`{"model":"grok","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}},{"type":"function","name":"web_search","parameters":{"type":"object"}}],"tool_choice":"auto"}`)
+
+	patched, err := applyGrokFreeMessagesFunctionToolCacheRoute(body, body, account, "isolated-id")
+	require.NoError(t, err)
+	require.JSONEq(t, string(body), string(patched))
+}
+
 func TestGrokFreeClientToolCacheRequestOptInOverridesAccountOptOut(t *testing.T) {
 	account := healthyGrokOAuthGatewayTestAccount(9014, "access-token")
 	account.Credentials["subscription_tier"] = "free"
@@ -366,7 +372,7 @@ func TestGrokFreeClientToolCacheRequestOptInOverridesAccountOptOut(t *testing.T)
 	require.Equal(t, "x_search", tools[2].Get("type").String())
 }
 
-func TestGrokFreeChatRequestClientToolCacheDefaultsOnWithoutClientFingerprint(t *testing.T) {
+func TestGrokFreeChatRequestClientToolCacheRequiresExplicitOptIn(t *testing.T) {
 	account := healthyGrokOAuthGatewayTestAccount(90140, "access-token")
 	account.Credentials["subscription_tier"] = "free"
 	c := newGrokCacheTestContext(90140)
@@ -376,11 +382,7 @@ func TestGrokFreeChatRequestClientToolCacheDefaultsOnWithoutClientFingerprint(t 
 	patched, err := applyGrokFreeRequestToolCacheRoute(c, body, body, account, "isolated-id")
 
 	require.NoError(t, err)
-	tools := gjson.GetBytes(patched, "tools").Array()
-	require.Len(t, tools, 3)
-	require.Equal(t, "view_image", tools[0].Get("name").String())
-	require.Equal(t, "web_search", tools[1].Get("type").String())
-	require.Equal(t, "x_search", tools[2].Get("type").String())
+	require.JSONEq(t, string(body), string(patched))
 }
 
 func TestGrokFreeClientToolCacheClaudeDesktopResponsesAutoOptIn(t *testing.T) {

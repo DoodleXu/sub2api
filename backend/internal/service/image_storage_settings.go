@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -14,6 +15,11 @@ import (
 )
 
 const settingKeyImageStorageConfig = "image_storage_config"
+
+const (
+	imageStorageResolveTimeout       = 15 * time.Second
+	imageStorageResolveRetryInterval = 5 * time.Second
+)
 
 // ErrImageStorageIncomplete 表示开关已打开但凭证不全，无法启用异步生图。
 var ErrImageStorageIncomplete = errors.New("image storage is enabled but bucket/access_key_id/secret_access_key are incomplete")
@@ -34,6 +40,7 @@ type ImageStorageSettings struct {
 	Prefix           string `json:"prefix"`
 	PublicBaseURL    string `json:"public_base_url"`
 	PresignExpiry    int    `json:"presign_expiry_hours"`
+	LifecycleDays    int    `json:"lifecycle_expiration_days"`
 	MaxDownloadBytes int64  `json:"max_download_bytes"`
 
 	// 以下仅在 ReuseBackupS3 为假时使用
@@ -62,6 +69,7 @@ type ImageStorageSettingService struct {
 	resolved bool
 	uploader *ImageResultUploader
 	enabled  bool
+	retryAt  time.Time
 }
 
 func NewImageStorageSettingService(
@@ -96,16 +104,23 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 	if s.resolved {
 		return s.uploader, s.enabled
 	}
+	now := time.Now()
+	if !s.retryAt.IsZero() && now.Before(s.retryAt) {
+		return nil, false
+	}
 
-	ctx := context.Background()
-	s.resolved = true
+	ctx, cancel := context.WithTimeout(context.Background(), imageStorageResolveTimeout)
+	defer cancel()
 	s.uploader, s.enabled = nil, false
 
 	cfg, err := s.effectiveConfig(ctx)
 	if err != nil {
+		s.retryAt = time.Now().Add(imageStorageResolveRetryInterval)
 		logger.L().Warn("image_storage.settings_load_failed; async image tasks stay disabled", zap.Error(err))
 		return nil, false
 	}
+	s.retryAt = time.Time{}
+	s.resolved = true
 	if !cfg.Enabled {
 		return nil, false
 	}
@@ -117,6 +132,8 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 
 	storage, err := s.factory(ctx, cfg)
 	if err != nil {
+		s.resolved = false
+		s.retryAt = time.Now().Add(imageStorageResolveRetryInterval)
 		logger.L().Error("image_storage.client_build_failed; async image tasks stay disabled", zap.Error(err))
 		return nil, false
 	}
@@ -134,6 +151,7 @@ func (s *ImageStorageSettingService) Invalidate() {
 	s.resolved = false
 	s.uploader = nil
 	s.enabled = false
+	s.retryAt = time.Time{}
 	s.mu.Unlock()
 }
 
@@ -146,6 +164,10 @@ func (s *ImageStorageSettingService) Get(ctx context.Context) (*ImageStorageSett
 	if settings == nil {
 		settings = settingsFromConfig(s.fallback)
 	}
+	// Stored settings may predate newly added fields such as lifecycle days.
+	// Apply the same safe defaults used on writes so the admin form never shows
+	// an invalid zero value for a valid legacy configuration.
+	normalizeImageStorageSettings(settings)
 	settings.SecretAccessKey = ""
 	return settings, nil
 }
@@ -153,7 +175,10 @@ func (s *ImageStorageSettingService) Get(ctx context.Context) (*ImageStorageSett
 // SecretConfigured 供前端展示"已配置"占位符。
 func (s *ImageStorageSettingService) SecretConfigured(ctx context.Context) bool {
 	settings, err := s.load(ctx)
-	if err != nil || settings == nil {
+	if err != nil {
+		return false
+	}
+	if settings == nil {
 		return s.fallback.SecretAccessKey != ""
 	}
 	if settings.ReuseBackupS3 {
@@ -172,7 +197,11 @@ func (s *ImageStorageSettingService) Update(ctx context.Context, in ImageStorage
 		in.Endpoint, in.Region, in.AccessKeyID, in.SecretAccessKey = "", "", "", ""
 		in.ForcePathStyle = false
 	} else if in.SecretAccessKey == "" {
-		if old, err := s.load(ctx); err == nil && old != nil {
+		old, err := s.load(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load existing image storage settings: %w", err)
+		}
+		if old != nil {
 			in.SecretAccessKey = old.SecretAccessKey
 		}
 	} else {
@@ -207,7 +236,10 @@ func (s *ImageStorageSettingService) TestConnection(ctx context.Context, in Imag
 	normalizeImageStorageSettings(&in)
 	if !in.ReuseBackupS3 && in.SecretAccessKey == "" {
 		old, err := s.load(ctx)
-		if err == nil && old != nil {
+		if err != nil {
+			return fmt.Errorf("load existing image storage settings: %w", err)
+		}
+		if old != nil {
 			in.SecretAccessKey = old.SecretAccessKey
 		}
 	}
@@ -234,22 +266,24 @@ func (s *ImageStorageSettingService) effectiveConfig(ctx context.Context) (*conf
 		fallback := s.fallback
 		return &fallback, nil
 	}
+	normalizeImageStorageSettings(settings)
 	return s.toImageStorageConfig(ctx, settings)
 }
 
 func (s *ImageStorageSettingService) toImageStorageConfig(ctx context.Context, in *ImageStorageSettings) (*config.ImageStorageConfig, error) {
 	cfg := &config.ImageStorageConfig{
-		Enabled:         in.Enabled,
-		Bucket:          in.Bucket,
-		Prefix:          in.Prefix,
-		PublicBaseURL:   in.PublicBaseURL,
-		PresignExpiry:   in.PresignExpiry,
-		MaxDownloadByte: in.MaxDownloadBytes,
-		Endpoint:        in.Endpoint,
-		Region:          in.Region,
-		AccessKeyID:     in.AccessKeyID,
-		SecretAccessKey: in.SecretAccessKey,
-		ForcePathStyle:  in.ForcePathStyle,
+		Enabled:                 in.Enabled,
+		Bucket:                  in.Bucket,
+		Prefix:                  in.Prefix,
+		PublicBaseURL:           in.PublicBaseURL,
+		PresignExpiry:           in.PresignExpiry,
+		LifecycleExpirationDays: in.LifecycleDays,
+		MaxDownloadByte:         in.MaxDownloadBytes,
+		Endpoint:                in.Endpoint,
+		Region:                  in.Region,
+		AccessKeyID:             in.AccessKeyID,
+		SecretAccessKey:         in.SecretAccessKey,
+		ForcePathStyle:          in.ForcePathStyle,
 	}
 
 	if in.ReuseBackupS3 {
@@ -294,7 +328,13 @@ func (s *ImageStorageSettingService) load(ctx context.Context) (*ImageStorageSet
 		return nil, nil //nolint:nilnil // no repository means no stored settings
 	}
 	raw, err := s.settingRepo.GetValue(ctx, settingKeyImageStorageConfig)
-	if err != nil || strings.TrimSpace(raw) == "" {
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return nil, nil //nolint:nilnil // never configured is a valid state
+		}
+		return nil, fmt.Errorf("load image storage settings: %w", err)
+	}
+	if strings.TrimSpace(raw) == "" {
 		return nil, nil //nolint:nilnil // never configured is a valid state
 	}
 	var settings ImageStorageSettings
@@ -311,6 +351,7 @@ func settingsFromConfig(cfg config.ImageStorageConfig) *ImageStorageSettings {
 		Prefix:           cfg.Prefix,
 		PublicBaseURL:    cfg.PublicBaseURL,
 		PresignExpiry:    cfg.PresignExpiry,
+		LifecycleDays:    cfg.LifecycleExpirationDays,
 		MaxDownloadBytes: cfg.MaxDownloadByte,
 		Endpoint:         cfg.Endpoint,
 		Region:           cfg.Region,
@@ -340,6 +381,9 @@ func normalizeImageStorageSettings(in *ImageStorageSettings) {
 	}
 	if in.PresignExpiry <= 0 {
 		in.PresignExpiry = 24
+	}
+	if in.LifecycleDays <= 0 {
+		in.LifecycleDays = 2
 	}
 	if in.MaxDownloadBytes <= 0 {
 		in.MaxDownloadBytes = defaultImageMaxDownloadBytes

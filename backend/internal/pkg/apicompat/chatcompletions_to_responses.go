@@ -22,7 +22,9 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 
 	format := chatResponseFormatToResponsesTextFormat(req.ResponseFormat)
-	if responsesTextFormatIsJSONObject(format) && !responsesInputContainsJSONKeyword(input) {
+	if responsesTextFormatIsJSONObject(format) &&
+		!strings.Contains(strings.ToLower(req.Instructions), "json") &&
+		!responsesInputContainsJSONKeyword(input) {
 		input = append([]ResponsesInputItem{{
 			Role:    "developer",
 			Content: rawJSONString("Respond with a valid JSON object."),

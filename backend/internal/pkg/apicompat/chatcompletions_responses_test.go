@@ -304,6 +304,22 @@ func TestChatCompletionsToResponses_ResponseFormatJsonObject(t *testing.T) {
 	assert.JSONEq(t, `{"type":"json_object"}`, string(serialized.Text.Format))
 }
 
+func TestChatCompletionsToResponses_ResponseFormatJsonObjectRespectsInstructions(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model:          "grok",
+		Instructions:   "Return concise JSON",
+		Messages:       []ChatMessage{{Role: "user", Content: rawJSONString("hello")}},
+		ResponseFormat: json.RawMessage(`{"type":"json_object"}`),
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1, "existing JSON instructions must avoid an extra developer message")
+	require.Equal(t, "user", items[0].Role)
+}
+
 func TestChatCompletionsToResponses_ResponseFormatJsonObjectInjectsJSONInstruction(t *testing.T) {
 	req := &ChatCompletionsRequest{
 		Model:          "gpt-4o",

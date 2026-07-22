@@ -1378,7 +1378,7 @@ function handleToolbarRefresh() {
             </div>
             <div class="flex items-baseline gap-1 whitespace-nowrap">
               <span class="text-gray-500">{{ t('admin.ops.imageGenerationAvg') }}:</span>
-              <span class="font-bold" :class="getThresholdColorClass(getTTFTThresholdLevel(imageGenerationTTFTAvgMs))">{{ imageGenerationTTFTAvgMs ?? '-' }}</span>
+              <span class="font-bold text-green-600 dark:text-green-400">{{ imageGenerationTTFTAvgMs ?? '-' }}</span>
               <span class="text-gray-400">ms</span>
             </div>
           </div>

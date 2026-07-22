@@ -119,7 +119,7 @@ describe('AdminPaymentPlansView', () => {
     expect(wrapper.text()).not.toContain('1 payment.admin.weeks')
   })
 
-  it('uses the configured currency symbol and keeps legacy prices in USD', async () => {
+  it('uses the configured currency symbol and keeps legacy prices in CNY', async () => {
     getPlans.mockResolvedValue({
       data: [
         {
@@ -156,6 +156,6 @@ describe('AdminPaymentPlansView', () => {
 
     expect(wrapper.text()).toContain('¥499.00CNY')
     expect(wrapper.text()).toContain('¥599.00')
-    expect(wrapper.text()).toContain('$10.00')
+    expect(wrapper.text()).toContain('¥10.00')
   })
 })

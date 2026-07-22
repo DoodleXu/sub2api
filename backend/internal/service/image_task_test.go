@@ -69,6 +69,7 @@ func TestImageTaskServiceReconcilesAbandonedProcessingWithoutObjects(t *testing.
 	}}
 	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)
 	svc.uploader = &ImageResultUploader{}
+	svc.taskUploaders.Store(store.task.ID, svc.uploader)
 
 	svc.reconcilePendingObjects()
 
@@ -77,6 +78,8 @@ func TestImageTaskServiceReconcilesAbandonedProcessingWithoutObjects(t *testing.
 	require.Contains(t, string(store.task.Error), "timed out")
 	require.NotNil(t, store.task.CompletedAt)
 	require.Empty(t, store.task.PendingObjectKeys)
+	_, snapshotExists := svc.taskUploaders.Load(store.task.ID)
+	require.False(t, snapshotExists)
 }
 
 func (s *imageTaskMemoryStore) Transition(ctx context.Context, _ string, expectedStatus string, task *ImageTaskRecord, ttl time.Duration) (bool, error) {

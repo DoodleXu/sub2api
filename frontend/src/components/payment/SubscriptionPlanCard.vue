@@ -156,7 +156,7 @@ const showWeeklyLimit = computed(() => allowsWeeklyLimit(groupSubscriptionType.v
 const showMonthlyLimit = computed(() => allowsMonthlyLimit(groupSubscriptionType.value) && props.plan.monthly_limit_usd != null)
 const hasVisibleLimit = computed(() => showDailyLimit.value || showWeeklyLimit.value || showMonthlyLimit.value)
 const appStore = useAppStore()
-const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency || 'USD'))
+const planCurrencySymbol = computed(() => currencySymbol(props.plan.currency))
 
 const hasPeakRate = computed(() => groupHasPeakRate(props.plan))
 

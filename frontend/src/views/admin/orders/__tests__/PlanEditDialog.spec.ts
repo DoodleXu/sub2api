@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import PlanEditDialog from '../PlanEditDialog.vue'
+import type { SubscriptionPlan } from '@/types/payment'
+
+const paymentMocks = vi.hoisted(() => ({
+  createPlan: vi.fn(),
+  updatePlan: vi.fn(),
+}))
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -21,16 +27,16 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/api/admin/payment', () => ({
   adminPaymentAPI: {
-    createPlan: vi.fn(),
-    updatePlan: vi.fn(),
+    createPlan: paymentMocks.createPlan,
+    updatePlan: paymentMocks.updatePlan,
   },
 }))
 
-function mountDialog(paymentConfig: Record<string, unknown> | null) {
+function mountDialog(paymentConfig: Record<string, unknown> | null, plan: SubscriptionPlan | null = null, show = true) {
   return mount(PlanEditDialog, {
     props: {
-      show: true,
-      plan: null,
+      show,
+      plan,
       groups: [],
       paymentConfig,
     },
@@ -49,6 +55,10 @@ function mountDialog(paymentConfig: Record<string, unknown> | null) {
 }
 
 describe('PlanEditDialog subscription CNY payment preview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('shows CNY channel charge using the configured subscription rate and fee', async () => {
     const wrapper = mountDialog({
       subscription_usd_to_cny_rate: 7.15,
@@ -73,5 +83,36 @@ describe('PlanEditDialog subscription CNY payment preview', () => {
 
     expect(wrapper.text()).not.toContain('preview')
     expect(wrapper.text()).not.toContain('¥71.43')
+  })
+
+  it('backfills an empty legacy currency and submits an uppercase currency', async () => {
+    const plan = {
+      id: 7,
+      name: 'Legacy plan',
+      description: 'Legacy plan',
+      group_id: 1,
+      price: 9.99,
+      original_price: 0,
+      currency: '',
+      validity_days: 30,
+      validity_unit: 'days',
+      sort_order: 0,
+      for_sale: true,
+      features: [],
+    } as SubscriptionPlan
+    const wrapper = mountDialog(null, plan, false)
+
+    await wrapper.setProps({ show: true })
+    const currencyInput = wrapper.find('input[maxlength="3"]')
+    expect((currencyInput.element as HTMLInputElement).value).toBe('CNY')
+
+    await currencyInput.setValue('usd')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(paymentMocks.updatePlan).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ currency: 'USD' }),
+    )
   })
 })

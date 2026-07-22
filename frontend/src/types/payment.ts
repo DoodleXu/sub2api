@@ -143,7 +143,7 @@ export interface SubscriptionPlan {
   description: string
   price: number
   original_price?: number
-  /** Display-only ISO 4217 currency label (e.g. "NZD"); empty means no label */
+  /** Display-only ISO 4217 currency label (e.g. "NZD"); legacy empty values render as CNY */
   currency?: string
   validity_days: number
   validity_unit: string

@@ -267,20 +267,20 @@ describe('EditAccountModal Grok OAuth upstream config', () => {
     expect(payload?.extra?.grok_client_tool_cache_enabled).toBe(false)
   })
 
-  it('defaults client-tool caching on when the setting is missing and persists explicit true', async () => {
+  it('defaults client-tool caching off when the setting is missing and persists explicit false', async () => {
     const account = buildGrokOAuthAccount({}, { custom_setting: 'keep-me' })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
     const toggle = wrapper.get('[data-testid="grok-client-tool-cache-toggle"]')
-    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(toggle.attributes('aria-checked')).toBe('false')
 
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalledTimes(1))
 
     const payload = updateAccountMock.mock.calls[0]?.[1]
     expect(payload?.extra).toMatchObject({
-      grok_client_tool_cache_enabled: true,
+      grok_client_tool_cache_enabled: false,
       custom_setting: 'keep-me'
     })
   })

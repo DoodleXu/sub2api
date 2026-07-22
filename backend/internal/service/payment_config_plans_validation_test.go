@@ -217,19 +217,18 @@ func TestValidatePlanPatch_AllNil(t *testing.T) {
 }
 
 // --- normalizePlanCurrency tests ---
-// Empty must stay empty (not coerced to the default payment currency),
-// so existing plans keep rendering without any currency label.
+// Empty keeps the fork's historical CNY subscription pricing semantics.
 
-func TestNormalizePlanCurrency_EmptyKeepsEmpty(t *testing.T) {
+func TestNormalizePlanCurrency_EmptyDefaultsToCNY(t *testing.T) {
 	currency, err := normalizePlanCurrency("")
 	require.NoError(t, err)
-	require.Equal(t, "", currency)
+	require.Equal(t, "CNY", currency)
 }
 
-func TestNormalizePlanCurrency_WhitespaceKeepsEmpty(t *testing.T) {
+func TestNormalizePlanCurrency_WhitespaceDefaultsToCNY(t *testing.T) {
 	currency, err := normalizePlanCurrency("   ")
 	require.NoError(t, err)
-	require.Equal(t, "", currency)
+	require.Equal(t, "CNY", currency)
 }
 
 func TestNormalizePlanCurrency_LowercaseNormalized(t *testing.T) {

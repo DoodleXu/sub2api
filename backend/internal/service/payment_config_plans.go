@@ -13,10 +13,10 @@ import (
 )
 
 // normalizePlanCurrency validates and normalizes the display-only currency label.
-// Empty means "no label" and is kept as-is so existing plans stay unchanged.
+// This fork displays subscription plans in CNY unless an explicit currency is set.
 func normalizePlanCurrency(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
-		return "", nil
+		return payment.DefaultPaymentCurrency, nil
 	}
 	currency, err := payment.NormalizePaymentCurrency(raw)
 	if err != nil {

@@ -250,6 +250,49 @@ func TestImageTaskServiceCompleteOffloadsToStorage(t *testing.T) {
 	require.Len(t, storage.saved, 1)
 }
 
+func TestImageTaskServicePinsUploaderForAcceptedTask(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	firstStorage := &fakeImageStorage{}
+	secondStorage := &fakeImageStorage{}
+	firstUploader := NewImageResultUploader(firstStorage, "first/", 0, nil)
+	secondUploader := NewImageResultUploader(secondStorage, "second/", 0, nil)
+	currentUploader := firstUploader
+	enabled := true
+	svc := NewImageTaskServiceWithResolver(store, func() (*ImageResultUploader, bool) {
+		return currentUploader, enabled
+	}, time.Hour, time.Minute)
+	defer svc.Close()
+
+	owner := ImageTaskOwner{UserID: 1, APIKeyID: 2}
+	created, err := svc.Create(context.Background(), owner)
+	require.NoError(t, err)
+
+	// A hot configuration change after admission must not redirect this task's
+	// result or compensation work to a different object store.
+	currentUploader = secondUploader
+	enabled = false
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	require.NoError(t, svc.Complete(context.Background(), created.ID, http.StatusOK,
+		json.RawMessage(`{"data":[{"b64_json":"`+b64+`"}]}`)))
+
+	require.Len(t, firstStorage.saved, 1)
+	require.Empty(t, secondStorage.saved)
+	require.NotContains(t, string(store.task.Result), "b64_json")
+	require.Contains(t, string(store.task.Result), "https://cdn.test/first/")
+}
+
+func TestImageTaskServiceDynamicModeNeverPersistsRawResultWithoutUploader(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	svc := NewImageTaskServiceWithResolver(store, func() (*ImageResultUploader, bool) {
+		return nil, false
+	}, time.Hour, time.Minute)
+	defer svc.Close()
+
+	_, err := svc.Create(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2})
+	require.ErrorIs(t, err, ErrImageTaskUnavailable)
+	require.Nil(t, store.task)
+}
+
 func TestImageTaskServicePersistsObjectManifestBeforeUpload(t *testing.T) {
 	store := &imageTaskMemoryStore{}
 	storage := &fakeImageStorage{}
@@ -393,4 +436,23 @@ func TestImageTaskServicePollRetriesFailedPendingObjectCleanup(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.Empty(t, store.task.PendingObjectKeys)
 	require.Len(t, storage.deleted, 2)
+}
+
+func TestImageTaskServiceClosePreventsPollCleanupRegistration(t *testing.T) {
+	owner := ImageTaskOwner{UserID: 1, APIKeyID: 2}
+	store := &imageTaskMemoryStore{task: &ImageTaskRecord{
+		ID: "imgtask_closed", UserID: owner.UserID, APIKeyID: owner.APIKeyID,
+		Status: ImageTaskStatusFailed, PendingObjectKeys: []string{"images/pending.png"},
+	}}
+	storage := &fakeImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	svc := NewImageTaskServiceWithUploader(store, uploader, time.Hour, time.Minute)
+	svc.Close()
+
+	_, err := svc.Get(context.Background(), owner, store.task.ID)
+	require.NoError(t, err)
+	require.Empty(t, storage.deleted, "polling after shutdown must not register new cleanup work")
+	svc.cleanupMu.Lock()
+	defer svc.cleanupMu.Unlock()
+	require.Empty(t, svc.cleanupRunning)
 }

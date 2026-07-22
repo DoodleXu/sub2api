@@ -487,7 +487,11 @@ func ProvideImageStorageSettingService(
 		logger.L().Warn("image_storage.enabled is true in config but object storage is not fully configured; configure it in the admin UI or complete the config file",
 			zap.Strings("missing_keys", cfg.ImageStorage.MissingCredentialKeys()))
 	}
-	return NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+	svc := NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+	if backup != nil {
+		backup.SetS3ConfigUpdateCallback(svc.Invalidate)
+	}
+	return svc
 }
 
 // ProvideImageTaskService 构造异步图片任务服务。

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,8 +22,9 @@ import (
 // ─── Mocks ───
 
 type mockSettingRepo struct {
-	mu   sync.Mutex
-	data map[string]string
+	mu          sync.Mutex
+	data        map[string]string
+	getValueErr error
 }
 
 func newMockSettingRepo() *mockSettingRepo {
@@ -42,6 +44,9 @@ func (m *mockSettingRepo) Get(_ context.Context, key string) (*Setting, error) {
 func (m *mockSettingRepo) GetValue(_ context.Context, key string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.getValueErr != nil {
+		return "", m.getValueErr
+	}
 	v, ok := m.data[key]
 	if !ok {
 		return "", nil
@@ -302,6 +307,66 @@ func TestBackupService_S3ConfigKeepExistingSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "original-secret", internal.SecretAccessKey)
 	require.Equal(t, "AKID-NEW", internal.AccessKeyID)
+}
+
+func TestBackupService_S3ConfigReadFailureDoesNotOverwriteSecret(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+	seedS3Config(t, repo)
+	repo.getValueErr = errors.New("database unavailable")
+
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{Bucket: "new-bucket", AccessKeyID: "new-ak"})
+	require.ErrorContains(t, err, "database unavailable")
+	repo.getValueErr = nil
+	raw, readErr := repo.GetValue(context.Background(), settingKeyBackupS3Config)
+	require.NoError(t, readErr)
+	require.Contains(t, raw, "ENC:secret123")
+}
+
+func TestBackupService_S3ConfigUpdateNotifiesDependents(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+	called := 0
+	svc.SetS3ConfigUpdateCallback(func() { called++ })
+
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket: "my-bucket", AccessKeyID: "AKID", SecretAccessKey: "secret",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, called)
+}
+
+func TestBackupService_RecordsReadFailureDoesNotOverwriteHistory(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+	original := `[{"id":"original","status":"completed"}]`
+	require.NoError(t, repo.Set(context.Background(), settingKeyBackupRecords, original))
+	repo.getValueErr = errors.New("database unavailable")
+
+	err := svc.saveRecord(context.Background(), &BackupRecord{ID: "new", Status: "completed"})
+	require.ErrorContains(t, err, "database unavailable")
+	repo.getValueErr = nil
+	raw, readErr := repo.GetValue(context.Background(), settingKeyBackupRecords)
+	require.NoError(t, readErr)
+	require.JSONEq(t, original, raw)
+}
+
+func TestBackupService_GetSchedulePropagatesReadFailure(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+	repo.getValueErr = errors.New("database unavailable")
+
+	_, err := svc.GetSchedule(context.Background())
+	require.ErrorContains(t, err, "database unavailable")
+}
+
+func TestBackupService_TestS3ConnectionPropagatesReadFailure(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupService(repo, &mockDumper{}, newMockObjectStore())
+	repo.getValueErr = errors.New("database unavailable")
+
+	err := svc.TestS3Connection(context.Background(), BackupS3Config{Bucket: "bucket", AccessKeyID: "ak"})
+	require.ErrorContains(t, err, "database unavailable")
 }
 
 func TestBackupService_UpdateS3Config_RejectsEphemeralKey(t *testing.T) {
