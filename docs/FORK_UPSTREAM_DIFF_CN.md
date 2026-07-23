@@ -10,23 +10,32 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `6171eccb2 fix: 修复发版安全与静态检查` | 本次合并 v0.1.162 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | v0.1.162 已合入本 fork，fork 发布版本提升为 `0.1.227` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | 2026-07-20 发布的官方最新非草稿 release |
-| 上游 main HEAD | `5a8d6c4e41` | 本次同步时的远端 main，包含 v0.1.162 后续提交；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 31 个冲突路径（含 4 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游入口 IP 安全、图片存储热配置、Grok 工具缓存、OpenAI/Codex 与订阅展示修复 |
+| Fork 同步前 HEAD | `40ac7871f chore: 准备发布 v0.1.227` | 本次合并 v0.1.163 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | v0.1.163 已合入本 fork；fork 版本继续保持 `0.1.227`，由后续独立发版流程决定是否提升 |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | 2026-07-22 发布的官方最新非草稿 release |
+| 上游 main HEAD | `fa2da0409` | 本次同步时的远端 main，包含 v0.1.163 后续版本同步和赞助者更新；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 5 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游分组推理策略、Grok compact/工具协议、调度诊断、缓存计费、Redis ACL 与移动端适配 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.162:refs/tags/upstream/v0.1.162 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.162^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
+git fetch upstream refs/tags/v0.1.163:refs/tags/upstream/v0.1.163 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.163^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.163^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.162` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.163` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.163` 合并说明：
+
+- 分组新增 OpenAI 推理强度上限和精确映射，字段、Ent schema、迁移、管理 API、复制分组、API Key 鉴权快照、HTTP 与 WebSocket 请求改写及前端编辑器均已接入；fork 原 v16 快照已包含订阅、峰值、视频和网页搜索计费字段，因此合并后统一提升为 v17，避免两个独立 v16 schema 被误判兼容。
+- Grok 吸收 `/responses/compact` 调度与转换、Codex 客户端工具往返、OAuth 模型同步和模型级策略 403 隔离；OpenCode、CodeBuddy 与 Grok 原生会话 header 纳入稳定粘性路由，同时继续保留 fork 对 Responses Lite 工具载体、生图桥接、Agent Identity 请求级脱敏和显式缓存工具语义的约束。
+- OpenAI/Codex 的 hosted `image_generation` 工具图片 token 合并进 Responses 计费；Anthropic 强制缓存计费的非流式响应会同步把 input token 归类为 cache read。调度器保留配额元数据、隔离 `LastUsedAt` 缓存写、输出无可用账号排除原因；渠道监控解密失败后停止继续调度。
+- 优雅关停即使超过等待预算也会执行 Cleanup，避免缓冲用量和计费记录丢失；Redis 支持 ACL username，代理探测支持双栈回退，SSE 紧凑格式、call_id 长度限制、系统日志清理错误提示和倍率有效小数展示已同步。
+- 管理端账号工具菜单、分组表单、Ops 面板及全站移动端布局吸收上游窄屏修复；账号工具菜单仍保留 fork 自动倍率探测设置，分组表单仍保留日/周/月订阅类型，支付页继续保持人民币默认、升级抵扣和多费率手续费行为。部署镜像继续使用 `ghcr.io/doodlexu/sub2api`，前端 Axios 保持 fork 已审计的 `1.18.1`。
+- 5 个上游拆分文件的增量已移植回 fork 聚合模块，没有恢复已删除的拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和 Ops 生图 Avg 关键入口继续保留。
 
 本次 `v0.1.162` 合并说明：
 
@@ -475,7 +484,7 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.162`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.163`。上游 `main` 在该 release 后的版本同步与赞助者更新尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
 ## v0.1.227 发布验证
 
@@ -485,6 +494,13 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 - 后端门禁：`TZ=UTC go test -tags=unit ./... -count=1`、`TZ=UTC go vet -tags=unit ./...`、integration 测试、`golangci-lint v2.9.0` 均通过；`govulncheck` 在实际调用路径中发现 `0` 个漏洞。
 - 前端门禁：Vitest 全量 `196` 个测试文件、`1360` 项用例通过；`vue-tsc --noEmit`、ESLint、frozen install、生产依赖审计例外校验和生产构建通过。
 - 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.227`；GitHub Release 与 GHCR 继续只发布 `linux/amd64`。
+
+## v0.1.163 合并验证
+
+- 冲突处理：共 20 个冲突路径，含 5 个 modify/delete；分组管理、Anthropic passthrough、OpenAI 转发/调度/错误处理等拆分文件语义已移植到 fork 聚合模块，未恢复已删除文件。
+- 后端：`TZ=UTC go test -tags=unit ./... -count=1` 全量通过；`TZ=UTC go vet -tags=unit ./...` 通过。重点覆盖分组推理策略、API Key 快照 v17、Grok compact/工具协议与策略 403、hosted image token、强制缓存计费、调度器元数据及 Redis ACL。
+- 前端：Vitest 全量 `201` 个测试文件、`1386` 项用例通过；`vue-tsc --noEmit`、ESLint、pnpm frozen install 和生产构建通过。构建仅保留既有动态/静态混合导入和大 chunk 提示。
+- 保留性：账号工具菜单继续显示自动倍率探测设置，日/周/月订阅类型、人民币支付与升级抵扣保持可用；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和 Ops 生图 Avg 关键入口均保留。部署镜像仍指向 fork，`VERSION` 保持 `0.1.227`。
 
 ## v0.1.162 合并验证
 

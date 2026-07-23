@@ -107,6 +107,7 @@ import type { UserSubscription } from '@/types'
 import { allowsDailyLimit, allowsMonthlyLimit, allowsWeeklyLimit, SUBSCRIPTION_MONTHLY_TYPE } from '@/utils/subscriptionType'
 import { useAppStore } from '@/stores/app'
 import { hasPeakRate as groupHasPeakRate, formatPeakRateWindow, serverTimezoneLabel } from '@/utils/peak-rate'
+import { planValiditySuffix } from './validity'
 import { currencySymbol } from '@/components/payment/currency'
 import {
   platformAccentBarClass,
@@ -118,7 +119,6 @@ import {
   platformDiscountClass,
   platformLabel,
 } from '@/utils/platformColors'
-import { formatValidityPeriod } from '@/utils/validityUnit'
 
 const props = defineProps<{ plan: SubscriptionPlan; activeSubscriptions?: UserSubscription[] }>()
 const emit = defineEmits<{ select: [plan: SubscriptionPlan] }>()
@@ -178,6 +178,6 @@ const modelScopeLabels = computed(() => {
 })
 
 const validitySuffix = computed(() => {
-  return formatValidityPeriod(props.plan.validity_days, props.plan.validity_unit, t)
+  return planValiditySuffix(props.plan, t)
 })
 </script>

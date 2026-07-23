@@ -180,6 +180,7 @@ describe('admin AccountsView bulk edit scope', () => {
             template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
           },
           AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
+          Teleport: { template: '<div><slot /></div>' },
           Toggle: { template: '<button v-bind="$attrs" />' }
         }
       }
