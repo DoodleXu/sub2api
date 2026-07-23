@@ -281,7 +281,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	streamImageOutputs := make([]json.RawMessage, 0, 1)
 	streamSeenImages := make(map[string]struct{})
-	streamArchiveInputs := make([]ArchivedImageInput, 0, 1)
 	resultWithUsage := func() *openaiStreamingResult {
 		return &openaiStreamingResult{
 			usage:              usage,
@@ -290,7 +289,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			responseID:         responseID,
 			imageCount:         imageCounter.Count(),
 			imageOutputSizes:   imageCounter.Sizes(),
-			archiveInputs:      dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
 		}
 	}
 	flushPending := func(disconnectMessage string) {
@@ -461,7 +459,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				ms := int(time.Since(startTime).Milliseconds())
 				imageFirstOutputMs = &ms
 			}
-			streamArchiveInputs = append(streamArchiveInputs, collectOpenAIArchiveImages(dataBytes)...)
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {

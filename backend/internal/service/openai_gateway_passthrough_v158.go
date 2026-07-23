@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -58,9 +57,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	var firstTokenMs *int
 	var imageFirstOutputMs *int
 	responseID := ""
-	streamImageOutputs := make([]json.RawMessage, 0, 1)
-	streamSeenImages := make(map[string]struct{})
-	streamArchiveInputs := make([]ArchivedImageInput, 0, 1)
 	clientDisconnected := false
 	sawDone := false
 	sawTerminalEvent := false
@@ -111,7 +107,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			responseID:         responseID,
 			imageCount:         imageCounter.Count(),
 			imageOutputSizes:   imageCounter.Sizes(),
-			archiveInputs:      dedupeOpenAIArchiveInputs(append(streamArchiveInputs, collectOpenAIArchiveImagesFromRawMessages(streamImageOutputs)...)),
 		}
 	}
 
@@ -208,10 +203,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(dataBytes) {
 				ms := int(time.Since(startTime).Milliseconds())
 				imageFirstOutputMs = &ms
-			}
-			streamArchiveInputs = append(streamArchiveInputs, collectOpenAIArchiveImages(dataBytes)...)
-			if imageOutput, ok := extractImageGenerationOutputFromSSEData(dataBytes, streamSeenImages); ok {
-				streamImageOutputs = append(streamImageOutputs, imageOutput)
 			}
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,

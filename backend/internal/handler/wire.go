@@ -121,14 +121,13 @@ func ProvideOpenAIGatewayHandler(
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
 	contentModerationService *service.ContentModerationService,
-	imageArchiveService *service.ImageGenerationArchiveService,
 	opsService *service.OpsService,
 	grokQuotaService *service.GrokQuotaService,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
-		usageRecordWorkerPool, errorPassthroughService, contentModerationService, imageArchiveService, opsService, cfg)
+		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
 	return h
@@ -180,33 +179,31 @@ func ProvideHandlers(
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
-	webConsoleImageTaskHandler *WebConsoleImageTaskHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:                authHandler,
-		User:                userHandler,
-		APIKey:              apiKeyHandler,
-		Usage:               usageHandler,
-		Redeem:              redeemHandler,
-		Subscription:        subscriptionHandler,
-		Announcement:        announcementHandler,
-		DailyCheckin:        dailyCheckinHandler,
-		ChannelMonitor:      channelMonitorUserHandler,
-		Admin:               adminHandlers,
-		Gateway:             gatewayHandler,
-		OpenAIGateway:       openaiGatewayHandler,
-		Setting:             settingHandler,
-		Totp:                totpHandler,
-		Payment:             paymentHandler,
-		PaymentWebhook:      paymentWebhookHandler,
-		AvailableChannel:    availableChannelHandler,
-		WebConsoleImageTask: webConsoleImageTaskHandler,
-		AsyncImage:          asyncImageHandler,
-		BatchImage:          batchImageHandler,
+		Auth:             authHandler,
+		User:             userHandler,
+		APIKey:           apiKeyHandler,
+		Usage:            usageHandler,
+		Redeem:           redeemHandler,
+		Subscription:     subscriptionHandler,
+		Announcement:     announcementHandler,
+		DailyCheckin:     dailyCheckinHandler,
+		ChannelMonitor:   channelMonitorUserHandler,
+		Admin:            adminHandlers,
+		Gateway:          gatewayHandler,
+		OpenAIGateway:    openaiGatewayHandler,
+		Setting:          settingHandler,
+		Totp:             totpHandler,
+		Payment:          paymentHandler,
+		PaymentWebhook:   paymentWebhookHandler,
+		AvailableChannel: availableChannelHandler,
+		AsyncImage:       asyncImageHandler,
+		BatchImage:       batchImageHandler,
 	}
 }
 
@@ -229,7 +226,6 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
-	NewWebConsoleImageTaskHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
 

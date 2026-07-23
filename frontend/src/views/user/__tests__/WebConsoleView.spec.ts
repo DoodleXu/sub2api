@@ -9,7 +9,7 @@ const fetchPublicSettingsMock = vi.hoisted(() => vi.fn())
 const sendWebConsoleChatMock = vi.hoisted(() => vi.fn())
 const createImageTaskMock = vi.hoisted(() => vi.fn())
 const getImageTaskMock = vi.hoisted(() => vi.fn())
-const deleteImageTaskSessionMock = vi.hoisted(() => vi.fn())
+const taskAssetsMock = vi.hoisted(() => vi.fn((task: { assets?: unknown[] }) => task.assets || []))
 const appStore = vi.hoisted(() => ({
   cachedPublicSettings: {
     api_base_url: 'https://api.example.com',
@@ -32,10 +32,10 @@ vi.mock('@/api', () => ({
   keysAPI: {
     list: keysListMock,
   },
-  webConsoleImageTasksAPI: {
+  asyncImageTasksAPI: {
     create: createImageTaskMock,
     get: getImageTaskMock,
-    deleteSession: deleteImageTaskSessionMock,
+    taskAssets: taskAssetsMock,
   },
 }))
 
@@ -137,8 +137,7 @@ describe('WebConsoleView', () => {
     sendWebConsoleChatMock.mockReset()
     createImageTaskMock.mockReset()
     getImageTaskMock.mockReset()
-    deleteImageTaskSessionMock.mockReset()
-    deleteImageTaskSessionMock.mockResolvedValue({ deleted: 0 })
+    taskAssetsMock.mockClear()
     keysListMock.mockResolvedValue({
       items: [{
         id: 1,
@@ -199,8 +198,6 @@ describe('WebConsoleView', () => {
     await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).not.toContain('旧消息')
-    expect(deleteImageTaskSessionMock).toHaveBeenCalledTimes(1)
-    expect(deleteImageTaskSessionMock).toHaveBeenCalledWith(expect.stringMatching(/^session-/))
 
     await openSelect(wrapper, '切换会话')
     const remainingSessions = selectOptionTexts().join('\n')
@@ -209,7 +206,7 @@ describe('WebConsoleView', () => {
     await wrapper.get('button[aria-label="切换会话"]').trigger('click')
   })
 
-  it('删除生图会话时一并删除后端恢复态并移除本地 session', async () => {
+  it('删除生图会话时仅移除本地 session，不调用已删除的归档任务接口', async () => {
     saveWebConsoleSessions([
       session({
         id: 'session-image',
@@ -246,7 +243,6 @@ describe('WebConsoleView', () => {
     await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
     await flushPromises()
 
-    expect(deleteImageTaskSessionMock).toHaveBeenCalledWith('session-image')
     const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
     expect(stored.some((item) => item.id === 'session-image')).toBe(false)
     expect(stored.some((item) => item.id === 'session-chat')).toBe(true)
@@ -264,7 +260,6 @@ describe('WebConsoleView', () => {
     await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
     await flushPromises()
 
-    expect(deleteImageTaskSessionMock).not.toHaveBeenCalled()
     const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
     expect(stored.some((item) => item.id === 'session-chat')).toBe(false)
     expect(stored.some((item) => item.id === 'session-image')).toBe(true)
@@ -404,13 +399,15 @@ describe('WebConsoleView', () => {
   it('生图模式通过任务接口提交图片生成请求', async () => {
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 101,
+        id: 'imgtask_101',
+        task_id: 'imgtask_101',
         status: 'completed',
         assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 101,
+      id: 'imgtask_101',
+      task_id: 'imgtask_101',
       status: 'completed',
       assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
     })
@@ -431,9 +428,9 @@ describe('WebConsoleView', () => {
 
     expect(createImageTaskMock).toHaveBeenCalledTimes(1)
     expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
-      api_key_id: 1,
+      api_key: 'sk-test',
       endpoint: 'https://api.example.com',
-      model: 'gpt-5.5',
+      model: 'gpt-image-2',
       prompt: '画一只猫',
     }))
     expect(wrapper.find('a[title="打开图片"]').exists()).toBe(false)
@@ -461,13 +458,15 @@ describe('WebConsoleView', () => {
     localStorage.setItem('auth_token', 'user-token')
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 104,
-        status: 'pending',
+        id: 'imgtask_104',
+        task_id: 'imgtask_104',
+        status: 'processing',
         assets: [],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 104,
+      id: 'imgtask_104',
+      task_id: 'imgtask_104',
       status: 'completed',
       assets: [{
         id: 7,
@@ -477,7 +476,7 @@ describe('WebConsoleView', () => {
         extension: '.png',
         bytes: 3,
         sha256: 'hash',
-        url: '/api/v1/web-console/image-tasks/assets/7',
+        url: 'https://bucket.example/images/imgtask_104-0.png?signature=test',
       }],
     })
 
@@ -490,10 +489,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(fetch).toHaveBeenCalledWith('/api/v1/web-console/image-tasks/assets/7', {
-      credentials: 'include',
-      headers: { Authorization: 'Bearer user-token' },
-    })
+    expect(fetch).toHaveBeenCalledWith('https://bucket.example/images/imgtask_104-0.png?signature=test')
     expect(cachePut).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/7?v=hash', expect.any(Response))
     expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-image-1')
     const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
@@ -503,12 +499,61 @@ describe('WebConsoleView', () => {
       cacheKey: '/__sub2api_web_console_image_cache__/7?v=hash',
       assetId: 7,
     }))
-    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('/api/v1/web-console/image-tasks/assets/7')
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('signature=test')
 
     wrapper.unmount()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:web-console-image-1')
     Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectURL, configurable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
+  })
+
+  it('对象存储未配置 CORS 时降级为预签名直链展示且不持久化签名', async () => {
+    const signedURL = 'https://bucket.example/images/imgtask_107-0.png?signature=test'
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({
+        match: vi.fn().mockResolvedValue(null),
+        put: vi.fn(),
+      }),
+    })
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    localStorage.setItem('auth_token', 'user-token')
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 'imgtask_107',
+        task_id: 'imgtask_107',
+        status: 'processing',
+        assets: [],
+      },
+    })
+    getImageTaskMock.mockResolvedValue({
+      id: 'imgtask_107',
+      task_id: 'imgtask_107',
+      status: 'completed',
+      assets: [{
+        id: 9,
+        record_id: 44,
+        asset_index: 0,
+        mime_type: 'image/png',
+        extension: '.png',
+        bytes: 3,
+        sha256: 'hash-cors',
+        url: signedURL,
+      }],
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
+    await wrapper.get('textarea').setValue('画一张跨域海报')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith(signedURL)
+    expect(wrapper.find('img').attributes('src')).toBe(signedURL)
+    expect(wrapper.text()).toContain('已生成 1 张图片。')
+    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('signature=test')
   })
 
   it('重新进入创作台时从浏览器图片缓存恢复本地图片', async () => {
@@ -713,13 +758,15 @@ describe('WebConsoleView', () => {
     localStorage.setItem('auth_token', 'user-token')
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 106,
-        status: 'pending',
+        id: 'imgtask_106',
+        task_id: 'imgtask_106',
+        status: 'processing',
         assets: [],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 106,
+      id: 'imgtask_106',
+      task_id: 'imgtask_106',
       status: 'completed',
       assets: [{
         id: 8,
@@ -729,7 +776,7 @@ describe('WebConsoleView', () => {
         extension: '.png',
         bytes: 3,
         sha256: 'hash-2',
-        url: '/api/v1/web-console/image-tasks/assets/8',
+        url: 'https://bucket.example/images/imgtask_106-0.png?signature=test',
       }],
     })
 
@@ -768,13 +815,15 @@ describe('WebConsoleView', () => {
     })
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 101,
+        id: 'imgtask_101',
+        task_id: 'imgtask_101',
         status: 'completed',
         assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 101,
+      id: 'imgtask_101',
+      task_id: 'imgtask_101',
       status: 'completed',
       assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
     })
@@ -900,13 +949,15 @@ describe('WebConsoleView', () => {
     ])
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 109,
+        id: 'imgtask_109',
+        task_id: 'imgtask_109',
         status: 'completed',
         assets: [{ url: 'data:image/png;base64,ZmFrZS0z', asset_index: 0 }],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 109,
+      id: 'imgtask_109',
+      task_id: 'imgtask_109',
       status: 'completed',
       assets: [{ url: 'data:image/png;base64,ZmFrZS0z', asset_index: 0 }],
     })
@@ -1007,16 +1058,18 @@ describe('WebConsoleView', () => {
   it('生图任务失败时展示上游失败提示', async () => {
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 103,
-        status: 'pending',
+        id: 'imgtask_103',
+        task_id: 'imgtask_103',
+        status: 'processing',
         assets: [],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 103,
+      id: 'imgtask_103',
+      task_id: 'imgtask_103',
       status: 'failed',
       assets: [],
-      error_message: '上游生图服务暂时不可用：upstream_error: policy rejected',
+      error: { message: '上游生图服务暂时不可用：upstream_error: policy rejected' },
     })
 
     const wrapper = mount(WebConsoleView)
@@ -1030,7 +1083,7 @@ describe('WebConsoleView', () => {
     expect(wrapper.text()).toContain('生图失败：上游生图服务暂时不可用：upstream_error: policy rejected')
   })
 
-  it('本地失败但后端已归档完成时会恢复图片结果', async () => {
+  it('本地轮询失败但上游任务已完成时会恢复图片结果', async () => {
     saveWebConsoleSessions([
       session({
         id: 'session-image',
@@ -1041,7 +1094,7 @@ describe('WebConsoleView', () => {
           role: 'assistant',
           content: '生图失败：临时拉取失败',
           images: [],
-          imageTaskId: 105,
+          imageTaskId: 'imgtask_105',
           imageRequest: {
             prompt: '画一张海报',
             model: 'gpt-5.5',
@@ -1059,7 +1112,8 @@ describe('WebConsoleView', () => {
       }),
     ])
     getImageTaskMock.mockResolvedValue({
-      id: 105,
+      id: 'imgtask_105',
+      task_id: 'imgtask_105',
       status: 'completed',
       assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
     })
@@ -1068,12 +1122,12 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith(105)
+    expect(getImageTaskMock).toHaveBeenCalledWith('https://api.example.com', 'sk-test', 'imgtask_105')
     expect(wrapper.text()).toContain('已生成 1 张图片。')
     expect(wrapper.find('img').attributes('src')).toBe('data:image/png;base64,ZmFrZQ==')
   })
 
-  it('浏览器图片缓存丢失时会通过后端任务重新拉取归档资产', async () => {
+  it('浏览器图片缓存丢失时会通过上游任务重新获取桶内结果', async () => {
     const cachePut = vi.fn()
     vi.stubGlobal('caches', {
       open: vi.fn().mockResolvedValue({
@@ -1108,7 +1162,7 @@ describe('WebConsoleView', () => {
             extension: '.png',
             unavailable: false,
           }],
-          imageTaskId: 107,
+          imageTaskId: 'imgtask_107',
           imageRequest: {
             prompt: '画一张海报',
             model: 'gpt-5.5',
@@ -1126,7 +1180,8 @@ describe('WebConsoleView', () => {
       }),
     ])
     getImageTaskMock.mockResolvedValue({
-      id: 107,
+      id: 'imgtask_107',
+      task_id: 'imgtask_107',
       status: 'completed',
       assets: [{
         id: 9,
@@ -1136,7 +1191,7 @@ describe('WebConsoleView', () => {
         extension: '.png',
         bytes: 3,
         sha256: 'new-hash',
-        url: '/api/v1/web-console/image-tasks/assets/9',
+        url: 'https://bucket.example/images/imgtask_107-0.png?signature=new',
       }],
     })
 
@@ -1144,11 +1199,8 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith(107)
-    expect(fetch).toHaveBeenCalledWith('/api/v1/web-console/image-tasks/assets/9', {
-      credentials: 'include',
-      headers: { Authorization: 'Bearer user-token' },
-    })
+    expect(getImageTaskMock).toHaveBeenCalledWith('https://api.example.com', 'sk-test', 'imgtask_107')
+    expect(fetch).toHaveBeenCalledWith('https://bucket.example/images/imgtask_107-0.png?signature=new')
     expect(cachePut).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/9?v=new-hash', expect.any(Response))
     expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-image-restored')
     expect(wrapper.text()).not.toContain('本地图片缓存不可用')
@@ -1158,23 +1210,13 @@ describe('WebConsoleView', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
   })
 
-  it('旧版签名图片 URL 失效后会通过后端任务恢复归档资产', async () => {
-    const cachePut = vi.fn()
+  it('旧版数字任务不会再请求已移除的 fork 任务接口', async () => {
     vi.stubGlobal('caches', {
       open: vi.fn().mockResolvedValue({
         match: vi.fn().mockResolvedValue(null),
-        put: cachePut,
+        put: vi.fn(),
       }),
     })
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['png'], { type: 'image/png' }), {
-      status: 200,
-      headers: { 'Content-Type': 'image/png' },
-    })))
-    const originalCreateObjectURL = URL.createObjectURL
-    const originalRevokeObjectURL = URL.revokeObjectURL
-    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:web-console-image-legacy-restored'), configurable: true })
-    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
-    localStorage.setItem('auth_token', 'user-token')
     saveWebConsoleSessions([
       session({
         id: 'session-image',
@@ -1184,10 +1226,7 @@ describe('WebConsoleView', () => {
           id: 'message-image',
           role: 'assistant',
           content: '已生成 1 张图片。',
-          images: [{
-            url: '/api/v1/image-assets/9?v=old-hash&expires=1800000000&scope=web-console-image-task&sig=old',
-            alt: '画一张海报',
-          }],
+          images: [],
           imageTaskId: 108,
           imageRequest: {
             prompt: '画一张海报',
@@ -1205,37 +1244,14 @@ describe('WebConsoleView', () => {
         }],
       }),
     ])
-    getImageTaskMock.mockResolvedValue({
-      id: 108,
-      status: 'completed',
-      assets: [{
-        id: 9,
-        record_id: 44,
-        asset_index: 0,
-        mime_type: 'image/png',
-        extension: '.png',
-        bytes: 3,
-        sha256: 'new-hash',
-        url: '/api/v1/web-console/image-tasks/assets/9',
-      }],
-    })
-
     const wrapper = mount(WebConsoleView)
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith(108)
-    expect(fetch).toHaveBeenCalledWith('/api/v1/web-console/image-tasks/assets/9', {
-      credentials: 'include',
-      headers: { Authorization: 'Bearer user-token' },
-    })
-    expect(cachePut).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/9?v=new-hash', expect.any(Response))
-    expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-image-legacy-restored')
-    expect(localStorage.getItem('sub2api-web-console-sessions-v1')).not.toContain('/api/v1/image-assets/9')
+    expect(getImageTaskMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('已生成 1 张图片。')
 
     wrapper.unmount()
-    Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectURL, configurable: true })
-    Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
   })
 
   it('生成结果可以作为下一次编辑的参考图', async () => {
@@ -1267,13 +1283,15 @@ describe('WebConsoleView', () => {
     ])
     createImageTaskMock.mockResolvedValue({
       task: {
-        id: 102,
+        id: 'imgtask_102',
+        task_id: 'imgtask_102',
         status: 'completed',
         assets: [{ url: 'data:image/png;base64,ZmFrZS0y', asset_index: 0 }],
       },
     })
     getImageTaskMock.mockResolvedValue({
-      id: 102,
+      id: 'imgtask_102',
+      task_id: 'imgtask_102',
       status: 'completed',
       assets: [{ url: 'data:image/png;base64,ZmFrZS0y', asset_index: 0 }],
     })

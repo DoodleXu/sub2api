@@ -296,7 +296,6 @@ func TestOpenAIGatewayHandlerAlphaSearch_PoolModeRetriesSameAccount(t *testing.T
 		nil,
 		nil,
 		nil,
-		nil,
 		cfg,
 	)
 	h.maxAccountSwitches = 1
@@ -375,7 +374,6 @@ func TestOpenAIGatewayHandlerAlphaSearch_CyberHitBlocksSameSearchID(t *testing.T
 		service.NewConcurrencyService(nil),
 		billingCacheSvc,
 		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg),
-		nil,
 		nil,
 		nil,
 		nil,

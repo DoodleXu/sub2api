@@ -345,8 +345,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
-import { keysAPI, webConsoleImageTasksAPI } from '@/api'
-import type { WebConsoleImageTaskAsset } from '@/api/webConsoleImageTasks'
+import { asyncImageTasksAPI, keysAPI } from '@/api'
+import type { AsyncImageTaskAsset } from '@/api/asyncImageTasks'
 import { useAppStore } from '@/stores/app'
 import { isSubscriptionType } from '@/utils/subscriptionType'
 import type { ApiKey } from '@/types'
@@ -386,7 +386,7 @@ const apiKeys = ref<ApiKey[]>([])
 const selectedKeyId = ref(0)
 const selectedEndpoint = ref('')
 const chatModel = ref('gpt-5.5')
-const imageModelValue = ref('gpt-5.5')
+const imageModelValue = ref('gpt-image-2')
 const activeMode = ref<WebConsoleMode>('chat')
 const imageTaskMode = ref<WebConsoleImageTaskMode>('generate')
 const imageSize = ref('')
@@ -406,7 +406,7 @@ const messagePanel = ref<HTMLElement | null>(null)
 const referenceFileInput = ref<HTMLInputElement | null>(null)
 const maskFileInput = ref<HTMLInputElement | null>(null)
 const deletingSessionIds = new Set<string>()
-const pollingImageTaskIds = new Set<number>()
+const pollingImageTaskIds = new Set<string>()
 const restoringImageSessionIds = new Set<string>()
 const pendingImageEditPayloads = new Map<string, {
   referenceImages: WebConsoleImageReference[]
@@ -509,10 +509,15 @@ const canSubmit = computed(() => {
   if (activeMode.value === 'image' && imageTaskMode.value === 'edit' && referenceImages.value.length === 0) return false
   return true
 })
-const modelOptions: SelectOption[] = [
-  { value: 'gpt-5.5', label: 'gpt-5.5' },
-  { value: 'gpt-5.4', label: 'gpt-5.4' },
-]
+const modelOptions = computed<SelectOption[]>(() => activeMode.value === 'image'
+  ? [
+      { value: 'gpt-image-2', label: 'gpt-image-2' },
+      { value: 'gpt-image-1', label: 'gpt-image-1' },
+    ]
+  : [
+      { value: 'gpt-5.5', label: 'gpt-5.5' },
+      { value: 'gpt-5.4', label: 'gpt-5.4' },
+    ])
 const imageSizeOptions: SelectOption[] = [
   { value: '', label: '默认' },
   { value: '1024x1024', label: '1024 x 1024' },
@@ -613,17 +618,7 @@ async function deleteCurrentSession(): Promise<void> {
   deletingSession.value = true
   errorMessage.value = ''
   deletingSessionIds.add(session.id)
-  try {
-    if (session.mode === 'image') {
-      await webConsoleImageTasksAPI.deleteSession(session.id)
-    }
-  } catch (error) {
-    deletingSessionIds.delete(session.id)
-    errorMessage.value = webConsoleErrorMessage(error)
-    return
-  } finally {
-    deletingSession.value = false
-  }
+  deletingSession.value = false
   const deletedMode = session.mode
   for (const message of session.messages) {
     pendingImageEditPayloads.delete(message.id)
@@ -829,14 +824,9 @@ function validateImageReferenceSize(byteSize: number): boolean {
   return true
 }
 
-function imageAssetCacheKey(asset: WebConsoleImageTaskAsset): string {
+function imageAssetCacheKey(asset: AsyncImageTaskAsset): string {
   const version = asset.sha256 || `${asset.bytes || 0}-${asset.extension || asset.mime_type || 'image'}`
   return `${IMAGE_CACHE_KEY_PREFIX}/${asset.id}?v=${encodeURIComponent(version)}`
-}
-
-function imageFetchHeaders(): Record<string, string> {
-  const token = localStorage.getItem('auth_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function trackImageObjectURL(url: string): string {
@@ -907,7 +897,7 @@ function imageFromBlob(blob: Blob, image: Omit<WebConsoleImage, 'url'>): WebCons
   }
 }
 
-async function materializeImageAsset(asset: WebConsoleImageTaskAsset, alt?: string): Promise<WebConsoleImage> {
+async function materializeImageAsset(asset: AsyncImageTaskAsset, alt?: string): Promise<WebConsoleImage> {
   if (asset.url?.startsWith('data:image/')) {
     return {
       url: asset.url,
@@ -934,7 +924,14 @@ async function materializeImageAsset(asset: WebConsoleImageTaskAsset, alt?: stri
   if (!asset.url) {
     return { ...baseImage, url: '', unavailable: true }
   }
-  const response = await fetch(asset.url, { credentials: 'include', headers: imageFetchHeaders() })
+  let response: Response
+  try {
+    response = await fetch(asset.url)
+  } catch {
+    // A cross-origin object URL can still be rendered by <img> even when bucket CORS
+    // prevents JavaScript from reading its bytes for Cache Storage.
+    return { ...baseImage, url: asset.url, unavailable: false }
+  }
   if (!response.ok) throw new Error(`图片读取失败：HTTP ${response.status}`)
   const blob = await response.blob()
   await writeCachedImage(cacheKey, blob, asset.mime_type || blob.type)
@@ -946,6 +943,9 @@ async function restoreCachedImage(image: WebConsoleImage): Promise<WebConsoleIma
   if (isTrackedRuntimeImageObjectURL(image.url) && !image.unavailable) return image
   const cached = await readCachedImage(image.cacheKey)
   if (!cached) {
+    if (/^https?:\/\//i.test(image.url)) {
+      return { ...image, unavailable: false }
+    }
     return { ...image, url: '', unavailable: true }
   }
   return imageFromBlob(cached, {
@@ -958,7 +958,7 @@ async function restoreCachedImage(image: WebConsoleImage): Promise<WebConsoleIma
   })
 }
 
-async function materializeTaskImages(assets: WebConsoleImageTaskAsset[], alt?: string): Promise<WebConsoleImage[]> {
+async function materializeTaskImages(assets: AsyncImageTaskAsset[], alt?: string): Promise<WebConsoleImage[]> {
   const images: WebConsoleImage[] = []
   for (const asset of assets) {
     try {
@@ -1104,7 +1104,7 @@ function failedImageContent(message?: string): string {
 }
 
 function isImageGenerationInProgress(message: WebConsoleMessage): boolean {
-  return Boolean(message.imageRequest && (message.status === 'pending' || message.status === 'running'))
+  return Boolean(message.imageRequest && (message.status === 'pending' || message.status === 'running' || message.status === 'processing'))
 }
 
 async function createImageTaskForMessage(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
@@ -1115,19 +1115,19 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
   if (message.imageRequest.mode === 'edit' && referenceImagePayload.length === 0) {
     throw new Error('该编辑请求的参考图缓存已失效，请重新添加参考图后再编辑。')
   }
-  const { task } = await webConsoleImageTasksAPI.create({
-    api_key_id: selectedKey.value.id,
+  const { task } = await asyncImageTasksAPI.create({
     endpoint: selectedEndpoint.value,
+    api_key: selectedKey.value.key,
     mode: message.imageRequest.mode || 'generate',
     model: message.imageRequest.model,
     prompt: message.imageRequest.prompt,
     options: message.imageRequest.options,
     reference_images: referenceImagePayload,
     mask_image: maskImagePayload,
-    session_id: session.id,
-    message_id: message.id,
   })
-  message.imageTaskId = task.id
+  message.imageTaskId = task.task_id || task.id
+  message.imageTaskApiKeyId = selectedKey.value.id
+  message.imageTaskEndpoint = selectedEndpoint.value
   message.status = task.status
   touchSession(session)
   void pollImageTask(session, message)
@@ -1135,7 +1135,7 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
 
 async function pollImageTask(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!message.imageTaskId) return
-  const taskID = message.imageTaskId
+  const taskID = String(message.imageTaskId)
   if (pollingImageTaskIds.has(taskID)) return
   pollingImageTaskIds.add(taskID)
   try {
@@ -1143,7 +1143,9 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
       if (deletingSessionIds.has(session.id)) return
       let task
       try {
-        task = await webConsoleImageTasksAPI.get(taskID)
+        const taskKey = compatibleApiKeys.value.find((key) => key.id === message.imageTaskApiKeyId) || selectedKey.value
+        if (!taskKey) return
+        task = await asyncImageTasksAPI.get(message.imageTaskEndpoint || selectedEndpoint.value, taskKey.key, taskID)
       } catch {
         await new Promise((resolve) => window.setTimeout(resolve, 2000))
         continue
@@ -1152,7 +1154,7 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
       if (!task) return
       message.status = task.status
       if (task.status === 'completed') {
-        const images = await materializeTaskImages(task.assets, message.imageRequest?.prompt)
+        const images = await materializeTaskImages(asyncImageTasksAPI.taskAssets(task), message.imageRequest?.prompt)
         replaceMessageImages(message, images)
         message.content = assistantImageContent({ images })
         touchSession(session)
@@ -1160,7 +1162,7 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
         return
       }
       if (task.status === 'failed') {
-        message.content = failedImageContent(task.error_message)
+        message.content = failedImageContent(task.error?.message)
         touchSession(session)
         await scrollToBottom()
         return
@@ -1175,27 +1177,13 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
 
 function shouldResumeImageTask(message: WebConsoleMessage): boolean {
   if (!message.imageTaskId || !message.imageRequest) return false
-  if (message.status === 'pending' || message.status === 'running') return true
-  return !message.images?.length || hasMissingCachedImage(message) || hasLegacySignedImageAssetURL(message)
+  if (!String(message.imageTaskId).startsWith('imgtask_')) return false
+  if (message.status === 'pending' || message.status === 'running' || message.status === 'processing') return true
+  return !message.images?.length || hasMissingCachedImage(message)
 }
 
 function hasMissingCachedImage(message: WebConsoleMessage): boolean {
   return Boolean(message.images?.some((image) => image.cacheKey && (!image.url || image.unavailable)))
-}
-
-function hasLegacySignedImageAssetURL(message: WebConsoleMessage): boolean {
-  return Boolean(message.images?.some((image) => isLegacySignedImageAssetURL(image.url)))
-}
-
-function isLegacySignedImageAssetURL(rawURL?: string): boolean {
-  const value = rawURL?.trim()
-  if (!value) return false
-  try {
-    const parsed = new URL(value, window.location.origin)
-    return parsed.pathname.includes('/api/v1/image-assets/') || parsed.searchParams.get('scope') === 'web-console-image-task'
-  } catch {
-    return value.includes('/api/v1/image-assets/') || value.includes('scope=web-console-image-task')
-  }
 }
 
 function resumeImageTasksForSession(session: WebConsoleSession): void {

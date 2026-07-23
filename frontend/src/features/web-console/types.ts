@@ -26,7 +26,7 @@ export interface WebConsoleImageOptions {
 export interface WebConsoleImage {
   url: string
   alt?: string
-  assetId?: number
+  assetId?: string | number
   cacheKey?: string
   sha256?: string
   mimeType?: string
@@ -40,8 +40,10 @@ export interface WebConsoleMessage {
   content: string
   images?: WebConsoleImage[]
   imageRequest?: WebConsoleImageRequest
-  imageTaskId?: number
-  status?: 'pending' | 'running' | 'completed' | 'failed'
+  imageTaskId?: string | number
+  imageTaskApiKeyId?: number
+  imageTaskEndpoint?: string
+  status?: 'pending' | 'running' | 'processing' | 'completed' | 'failed'
   created_at: string
 }
 
@@ -60,7 +62,6 @@ export interface WebConsoleRequestContext {
   model: string
   prompt: string
   history: WebConsoleMessage[]
-  imageOptions?: WebConsoleImageOptions
   tools?: unknown[]
   toolChoice?: unknown
 }
@@ -69,12 +70,6 @@ export interface WebConsoleTextResult {
   text: string
   usedMode: WebConsoleResponseMode
   images?: WebConsoleImage[]
-}
-
-export interface WebConsoleImageResult {
-  images: WebConsoleImage[]
-  text?: string
-  usedMode: WebConsoleResponseMode
 }
 
 export interface WebConsoleImageRequest {

@@ -36,7 +36,6 @@ type OpenAIGatewayHandler struct {
 	contentModerationService   *service.ContentModerationService
 	securityAuditCoordinator   *securityaudit.Coordinator
 	grokMediaEligibilityProber grokMediaEligibilityProber
-	imageArchiveService        *service.ImageGenerationArchiveService
 	opsService                 *service.OpsService
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
@@ -140,7 +139,6 @@ func NewOpenAIGatewayHandler(
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
 	contentModerationService *service.ContentModerationService,
-	imageArchiveService *service.ImageGenerationArchiveService,
 	opsService *service.OpsService,
 	cfg *config.Config,
 ) *OpenAIGatewayHandler {
@@ -159,7 +157,6 @@ func NewOpenAIGatewayHandler(
 		usageRecordWorkerPool:    usageRecordWorkerPool,
 		errorPassthroughService:  errorPassthroughService,
 		contentModerationService: contentModerationService,
-		imageArchiveService:      imageArchiveService,
 		opsService:               opsService,
 		concurrencyHelper:        NewConcurrencyHelper(concurrencyService, SSEPingFormatComment, pingInterval),
 		imageLimiter:             &imageConcurrencyLimiter{},
@@ -655,107 +652,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				).Error("openai.record_usage_failed", zap.Error(err))
 			}
 		})
-		h.submitImageArchiveTask(
-			subject.UserID,
-			apiKey.ID,
-			apiKey.GroupID,
-			account.ID,
-			result,
-			inboundEndpoint,
-			reqModel,
-			extractOpenAIResponsesPromptExcerpt(body),
-		)
 		reqLog.Debug("openai.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
 		)
 		return
 	}
-}
-
-func extractOpenAIResponsesPromptExcerpt(body []byte) string {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return ""
-	}
-	var userParts []string
-	collectOpenAIResponsesUserTextParts(gjson.GetBytes(body, "input"), &userParts)
-	if len(userParts) > 0 {
-		return trimOpenAIResponsesPromptExcerpt(strings.Join(userParts, "\n"), 500)
-	}
-	var parts []string
-	collectOpenAIResponsesTextParts(gjson.GetBytes(body, "input"), &parts)
-	if len(parts) == 0 {
-		collectOpenAIResponsesTextParts(gjson.GetBytes(body, "prompt"), &parts)
-	}
-	return trimOpenAIResponsesPromptExcerpt(strings.Join(parts, "\n"), 500)
-}
-
-func collectOpenAIResponsesUserTextParts(value gjson.Result, out *[]string) {
-	if !value.Exists() {
-		return
-	}
-	switch {
-	case value.Type == gjson.String:
-		if text := strings.TrimSpace(value.String()); text != "" {
-			*out = append(*out, text)
-		}
-	case value.IsArray():
-		for _, item := range value.Array() {
-			collectOpenAIResponsesUserTextParts(item, out)
-		}
-	case value.IsObject():
-		role := strings.TrimSpace(value.Get("role").String())
-		if role != "" && role != "user" {
-			return
-		}
-		if role == "user" {
-			collectOpenAIResponsesTextParts(value.Get("content"), out)
-			return
-		}
-		itemType := strings.TrimSpace(value.Get("type").String())
-		if itemType == "input_text" || itemType == "text" {
-			collectOpenAIResponsesTextParts(value, out)
-			return
-		}
-		collectOpenAIResponsesUserTextParts(value.Get("content"), out)
-	}
-}
-
-func collectOpenAIResponsesTextParts(value gjson.Result, out *[]string) {
-	if !value.Exists() {
-		return
-	}
-	switch {
-	case value.Type == gjson.String:
-		if text := strings.TrimSpace(value.String()); text != "" {
-			*out = append(*out, text)
-		}
-	case value.IsArray():
-		for _, item := range value.Array() {
-			collectOpenAIResponsesTextParts(item, out)
-		}
-	case value.IsObject():
-		itemType := strings.TrimSpace(value.Get("type").String())
-		if itemType == "input_text" || itemType == "text" {
-			if text := strings.TrimSpace(value.Get("text").String()); text != "" {
-				*out = append(*out, text)
-			}
-			return
-		}
-		collectOpenAIResponsesTextParts(value.Get("content"), out)
-	}
-}
-
-func trimOpenAIResponsesPromptExcerpt(text string, maxRunes int) string {
-	text = strings.TrimSpace(text)
-	if text == "" || maxRunes <= 0 {
-		return text
-	}
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	return string(runes[:maxRunes])
 }
 
 func isOpenAIRemoteCompactPath(c *gin.Context) bool {

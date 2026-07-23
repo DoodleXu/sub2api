@@ -964,6 +964,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_user_agent":           "",
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
+					"openai_scheduling_usd_to_cny_rate": 7.2,
 					"openai_fast_policy_settings": {
 						"rules": []
 					},
@@ -1074,6 +1075,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
+					"openai_scheduling_usd_to_cny_rate": 7.2,
 					"session_binding_enabled": false,
 					"step_up_enabled": false,
 					"registration_enabled": true,

@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-22
+最后更新：2026-07-23
 
 ## 当前对比基线
 
@@ -11,7 +11,7 @@
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
 | Fork 同步前 HEAD | `6171eccb2 fix: 修复发版安全与静态检查` | 本次合并 v0.1.162 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | v0.1.162 已合入本 fork，fork 发布版本提升为 `0.1.226` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | v0.1.162 已合入本 fork，fork 发布版本提升为 `0.1.227` |
 | 上游最新 release 基线 | `refs/tags/upstream/v0.1.162` -> `27f094e096` | 2026-07-20 发布的官方最新非草稿 release |
 | 上游 main HEAD | `5a8d6c4e41` | 本次同步时的远端 main，包含 v0.1.162 后续提交；未越过 release 标签合并 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 31 个冲突路径（含 4 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游入口 IP 安全、图片存储热配置、Grok 工具缓存、OpenAI/Codex 与订阅展示修复 |
@@ -37,6 +37,7 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 - 更新检查支持 GitHub Token，在线更新/回滚请求超时与服务端限制对齐；S3 secret 继续拒绝进入备份导出，pnpm 11 的 `form-data@<4.0.6` 安全覆盖已迁到实际生效的 workspace 配置。
 - 账号工具菜单补齐自动倍率探测的中英文标题、间隔、成功和失败文案；标签容器允许收缩换行，开关、输入框和保存按钮固定不收缩，修复原始 i18n key 撑宽菜单并把控件挤出可视区域的问题。
 - 上游 API Key 计费倍率探测新增 New API 兼容回退：原生 `/v1/sub2api/billing` 返回 404/405 时，以同一 API Key 只读查询 `/api/log/token`，从最新有效消费日志提取实际 `group_ratio`；样本时间决定新鲜度，旧日志不会因轮询续期，无日志明确显示“暂无计费样本”，前端将该值标记为消费日志观测值而非上游实时声明。
+- OpenAI 自动低倍率调度对明确不支持倍率探测的 API Key 账号，改用账号“每刀成本”（累计人民币成本 / 账号口径累计美元消耗）参与排序和高级成本权重计算，并按可热更新的“调度美元兑人民币基准汇率”（默认 `7.2`）换算为与上游倍率一致的无量纲成本；汇率变化会触发调度快照重建。未探测、过期或无有效成本样本的账号仍保持未知，不改变既有兜底顺序。仅在成本策略生效时为调度快照批量加载成本统计，策略热切换会异步请求快照重建；统计失败时复用缓存中的美元消耗分母并结合账号最新人民币成本重新计算，继续调度且不发布错误零值，避免请求热路径扫描用量日志或因统计查询异常阻断账号选择。
 - 合并后全面审核补强动态图片存储与订阅币种兼容：后台生命周期天数可由环境变量和管理端完整读写；图片与备份 S3 设置读取异常不再回落并覆盖已存密钥，备份 S3/记录/定时配置读取失败不再被吞没或覆盖历史数据，备份 S3 更新会通知复用它的图片 uploader 失效，瞬时读取或建连失败按有界间隔自动重试；任务创建时固定 uploader，热关闭或切换存储后仍在原存储完成上传与补偿，关闭期间的清理登记受控且超时任务会释放 uploader 快照。历史空币种统一迁移为 `CNY` 并同步数据库默认值，管理端恢复币种编辑并默认人民币；同时将 `golang.org/x/text` 升级至 `v0.39.0`，消除 `GO-2026-5970` 非法输入死循环风险；部署文档同步保持“不默认信任转发 IP”的 fork 安全口径。
 - Grok 保留 fork 的显式工具语义：Free OAuth 的纯客户端函数工具缓存默认关闭，只有账号开关、请求头或严格 Claude Desktop 指纹才允许加入缓存路由工具；API Key 原生 Chat Completions 不再携带 OAuth CLI 身份头，Chat→Responses 在 `instructions` 已声明 JSON 时不重复插入 developer 消息。
 - Ops Monitoring 的“生图 Avg”固定使用绿色展示，不复用普通 TTFT 红黄阈值；生图本身是长耗时任务，该数值继续用于观察真实首图平均等待时间，不作为常规首 Token 延迟告警状态。
@@ -270,17 +271,16 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 主要差异：
 
 - 新增 Web Console 开关和默认端点设置：`web_console_enabled`、`web_console_default_endpoint`。
-- 用户侧前端 `/console` 支持 OpenAI-compatible `/v1` 对话、Responses 工具调用、生图模式、本地会话存储；后端异步任务 API 使用 `/web-console/image-tasks`。
-- 生图任务改为后端异步任务接口，支持任务轮询、资产恢复、删除会话时同步清理后端恢复态。
-- 图片引用、蒙版和生成结果通过浏览器 Cache Storage 和后端归档互相恢复，降低刷新后丢图概率。
+- 用户侧前端 `/console` 支持 OpenAI-compatible `/v1` 对话、Responses 工具调用、生图模式和本地会话存储。
+- 生图模式只使用上游异步 Images 契约：浏览器以用户选中的 API Key 请求 `/v1/images/generations/async` 或 `/v1/images/edits/async`，再用同一 Key 轮询 `/v1/images/tasks/{task_id}`。
+- 图片引用、蒙版和生成结果写入浏览器 Cache Storage；对象存储 CORS 阻止读取图片字节时，生成结果降级为预签名直链展示，但缓存、下载和复用为编辑参考图仍需桶允许前端来源的 `GET`/`HEAD`；删除会话只清理本地会话，不再创建或删除 fork 自建后端任务/归档记录。
 
 关键代码：
 
 - `frontend/src/views/user/WebConsoleView.vue`
 - `frontend/src/features/web-console/openaiClient.ts`
 - `frontend/src/features/web-console/storage.ts`
-- `frontend/src/api/webConsoleImageTasks.ts`
-- `backend/internal/handler/web_console_image_task_handler.go`
+- `frontend/src/api/asyncImageTasks.ts`
 - `backend/internal/server/routes/user.go`
 - `frontend/src/router/index.ts`
 - `frontend/src/utils/featureFlags.ts`
@@ -302,36 +302,38 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 
 同步上游注意：
 
-- 上游若更新 OpenAI Responses、tool call、images 或网关错误格式，要同步检查 `openaiClient.ts` 与 `web_console_image_task_handler.go` 的请求/响应兼容。
+- 上游若更新 OpenAI Responses、tool call、异步 Images 路由或任务结果格式，要同步检查 `openaiClient.ts`、`asyncImageTasks.ts` 与创作台轮询逻辑的请求/响应兼容。
 - 上游若调整公共设置加载或路由守卫，要确认 Web Console 开关仍在刷新后生效。
 
 ### 6. 生图管理
 
-定位：admin 侧集中查看和清理 Web 创作台生图归档资产。
+定位：admin 侧只读浏览上游异步生图任务已经写入对象存储的结果。
 
 主要差异：
 
-- 新增生图归档服务和 repository，记录请求、输出资产、状态、存储统计。
-- 管理后台 `/admin/image-generations` 支持状态筛选、分页加载、资产预览、启用/关闭归档、清空终态归档。
-- 清空终态归档会保留等待中或归档中的记录；对象存储清理失败时保留记录，便于重试。
-- 对资产访问做鉴权和安全返回，修复 CSP、签名 URL 失效、本地缓存丢失后的恢复路径。
+- 2026-07-22 起统一采用上游 `/v1/images/generations/async`、`/v1/images/edits/async` 与 `/v1/images/tasks/{task_id}`：Web 创作台直接使用用户选中的同一 API Key 提交和轮询，不再维护 fork 自建的 `web_console_image_tasks` 执行器。
+- 移除本地/S3 双轨归档运行时、同步生图旁路归档、独立归档设置、归档清空与签名资产代理；历史 `image_generation_records`、`image_generation_assets`、`web_console_image_tasks` 表和迁移暂时保留为遗留数据，不再读写，也不在升级时自动删除历史文件。
+- 管理后台 `/admin/image-generations` 直接按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载；接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
+- 管理页除异步上传/删除/生命周期读取权限外，还要求对象存储凭证具有 `ListBucket`/`ListObjectsV2` 权限；页面本身只读，对象保留与删除继续由异步任务补偿和桶生命周期规则负责。
+- 创作台把提交时的 API Key ID、端点和 `imgtask_*` 保存到本地会话，用原 Key 恢复轮询；结果 URL 会写入浏览器 Cache Storage，避免预签名 URL 到期影响已打开会话；若桶 CORS 拒绝脚本读取，则保留当前预签名直链用于 `<img>` 展示且不把签名持久化到本地会话。
 
 关键代码：
 
-- `backend/internal/service/image_generation_archive.go`
-- `backend/internal/repository/image_generation_archive_repo.go`
+- `backend/internal/service/image_storage_browser.go`
+- `backend/internal/repository/image_storage_s3.go`
 - `backend/internal/handler/admin/image_generation_handler.go`
-- `backend/internal/handler/web_console_image_task_handler.go`
 - `backend/internal/server/routes/admin.go`
 - `frontend/src/views/admin/ImageGenerationsView.vue`
 - `frontend/src/api/admin/imageGenerations.ts`
+- `frontend/src/api/asyncImageTasks.ts`
+- `frontend/src/views/user/WebConsoleView.vue`
 
 关键迁移：
 
 - `backend/migrations/159_image_generation_archive.sql`
 - `backend/migrations/160_web_console_image_task_user_delete.sql`
 
-相关提交线索：
+历史归档实现提交线索（仅用于识别遗留表和旧数据，不应恢复为运行时双轨）：
 
 - `702056526 feat: 增加生图归档与异步任务`
 - `2fb77e392 fix: 补齐生图归档禁用开关`
@@ -344,8 +346,8 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 
 同步上游注意：
 
-- 上游若引入自己的图片任务、对象存储、文件代理或 CSP 处理，要检查是否和 fork 的归档表、资产签名、清理策略重复。
-- 生图管理和 Web 创作台共享归档链路；debug 时不要只查前端缓存，也要查 `web_console_image_tasks` 和归档资产记录。
+- 上游异步图片任务、对象存储结果格式或路由变化时，Web 创作台和生图管理必须同步跟随同一契约，禁止重新引入第二套任务表、执行器或本地归档。
+- 排障优先查 `image_task:*` Redis 任务、异步图片桶对象和 `image_task.offload_*` 日志；历史 `web_console_image_tasks` 与归档资产记录不再代表当前运行状态。
 
 ## 其他 fork 差异
 
@@ -475,6 +477,15 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 
 当前 fork 已包含官方 release `v0.1.162`。上游 `main` 在该 release 后的提交尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
+## v0.1.227 发布验证
+
+- 生图链路收口：Web 创作台统一使用上游异步 Images API，不再维护 fork 自建任务执行器和双轨归档运行时；管理端改为只读浏览异步图片前缀中的对象，保留前缀隔离、分页、预览和下载能力。
+- Web Console 可靠性：生成结果写入浏览器 Cache Storage；对象存储未配置 CORS 时降级为预签名直链展示，且不把签名持久化到本地会话。部署文档补充桶 `GET`/`HEAD` CORS 要求。
+- 调度成本口径：明确不支持上游倍率探测的 API Key 账号继续使用每美元人民币成本，但先按可热更新的美元兑人民币基准汇率换算为与上游倍率一致的无量纲值；默认汇率为 `7.2`，修改后触发调度快照重建。
+- 后端门禁：`TZ=UTC go test -tags=unit ./... -count=1`、`TZ=UTC go vet -tags=unit ./...`、integration 测试、`golangci-lint v2.9.0` 均通过；`govulncheck` 在实际调用路径中发现 `0` 个漏洞。
+- 前端门禁：Vitest 全量 `196` 个测试文件、`1360` 项用例通过；`vue-tsc --noEmit`、ESLint、frozen install、生产依赖审计例外校验和生产构建通过。
+- 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.227`；GitHub Release 与 GHCR 继续只发布 `linux/amd64`。
+
 ## v0.1.162 合并验证
 
 - 冲突处理：共 31 个冲突路径，含 4 个 modify/delete；设置 handler/service 与 OpenAI response handling 等上游拆分语义已移植到 fork 聚合模块，未恢复已删除文件。
@@ -503,7 +514,7 @@ git diff --name-status refs/tags/upstream/v0.1.162^{}..HEAD
 - OpenAI/WS 审核修复：Agent Identity 及其 Spark 影子账号的 ctx-pool、WS v2 direct、WS v2 passthrough 均支持空 bearer、逐次握手 assertion 刷新和 invalid-task 单次自愈，shadow 恢复先解析母账号再更新 task；Responses Lite WS 恢复工具载体规范化，Grok 图片意图恢复平台感知；HTTP bridge 与 WS 直连统一对 dial/error/failed/incomplete 终态执行瞬时冷却并把真实终态写入 usage 结果。Agent Identity Responses、Chat、Messages、`count_tokens`、HTTP passthrough、SSE 和 WS v2 错误在解析、Ops 记录及下游转发前完成凭证脱敏；shadow 母账号解析失败时 fail-closed，旧非流式 helper 也只返回通用安全错误体。流式 shadow 每请求只解析一次母账号，task 恢复后刷新请求级凭证快照；WS close/read/relay 错误和 `count_tokens` transport/read 错误均先按原始错误分类，再使用安全副本写日志、Ops、hooks 和下游响应。发布 lint 复核还按 v0.1.158 原位恢复了 Messages 路径遗漏的 Grok Free function-tool cache route，并删除已由 v158 拆分文件接管的旧 passthrough/streaming dead code。
 - 异步图片与运行时审核修复：上游图片 URL 仅允许 HTTPS，下载前和每次重定向校验公网地址，默认 transport 在建连前固定已校验 IP 以阻断 DNS rebinding；允许通用二进制 MIME，但最终必须通过真实图片魔数校验。任务完成和失败写回使用独立有界 context 与 watchdog，Redis 以原子 `processing -> completed|failed` CAS 保证终态不可逆；每次完成尝试使用唯一对象 key，并记录已上传 key。多图部分失败、CAS 前置失败和明确 CAS 落败会补偿删除；Transition 返回错误属于提交结果未知，使用独立 5 秒预算重读终态：同一 candidate 已完成则保留并视为成功，其他终态才清理，仍为 processing 或无法确认时保留对象交由生命周期清扫，避免把已提交完成任务引用的对象误删。内容审核 worker 改复用运行时快照，session binding 设置增加 singleflight + TTL 缓存并在设置更新时立即刷新，避免每个 JWT 请求和每个 worker 空轮询都访问数据库。
 - 全面审核修复后验证：后端全量 `TZ=UTC go test -tags=unit ./... -count=1` 通过，`golangci-lint v2.9.0` 为 `0 issues`；前端 Vitest `183` 个测试文件、`1304` 项用例全量通过，ESLint、`vue-tsc` 与生产构建通过；三组子代理复核及主代理交叉审查提出的管理面、OpenAI 网关、异步图片和前端/fork 保留性问题均已逐项修复并补回归覆盖。
-- 再次深审修复：Agent Identity 请求统一绑定母账号、实际发送的 task ID 与请求级 redactor，shadow 并发恢复只对失败 assertion 的 task 做 CAS，流式 terminal envelope 及 scanner/read 错误均先脱敏；Grok 原生 cache 工具注入从“所有 OAuth”收紧为已确认 Free 账号，付费、未知和 API Key 请求只写 cache identity。异步生图任务在 Redis 私有记录中持久化待确认对象 key，失败终态 CAS 获胜后删除并清空清单，`PutObject` 结果不明确和部分多图失败也补偿删除唯一尝试 key；session binding 缓存以 generation 阻止 inflight 旧查询覆盖管理员新设置。备份页按统一顶层 `status` 识别 409，台账同步更正 Web Console 前端 `/console` 与后端 `/web-console/image-tasks` 的路由边界。
+- 再次深审修复：Agent Identity 请求统一绑定母账号、实际发送的 task ID 与请求级 redactor，shadow 并发恢复只对失败 assertion 的 task 做 CAS，流式 terminal envelope 及 scanner/read 错误均先脱敏；Grok 原生 cache 工具注入从“所有 OAuth”收紧为已确认 Free 账号，付费、未知和 API Key 请求只写 cache identity。异步生图任务在 Redis 私有记录中持久化待确认对象 key，失败终态 CAS 获胜后删除并清空清单，`PutObject` 结果不明确和部分多图失败也补偿删除唯一尝试 key；session binding 缓存以 generation 阻止 inflight 旧查询覆盖管理员新设置。备份页按统一顶层 `status` 识别 409。当时曾明确 Web Console 前端 `/console` 与 fork 后端 `/web-console/image-tasks` 的路由边界；该 fork 路由现已删除并改用上游异步 Images API。
 - 深审补强修复：Agent Identity 的安全错误副本不再保留可 `Unwrap`/`errors.As` 取回的原始敏感 cause，scanner/WS 等路径先使用原始错误完成分类，再仅向日志、hooks 与下游传播脱敏文本；请求级 redactor 会动态绑定实际 Authorization 中发送的 task ID，并通过同一请求上下文复用于 HTTP/SSE 全生命周期。异步生图会先下载并生成完整唯一 key 清单、先以 Redis CAS 持久化待清理对象清单、再执行首个 S3 `PutObject`；不明确的 Put 延迟重复删除，失败任务轮询改为按 task 去重的后台有界清理，S3 故障不再把 GET 阻塞至 15 秒。session binding 的 generation 检查、读取方 cache store 与管理员刷新发布使用同一互斥锁，封闭 generation 增长与新值写入之间被旧查询抢占的窗口。
 - 深审补强验证：敏感 error 的 `Unwrap`/`errors.As` 隔离、on-wire task ID 脱敏、图片上传前清单持久化、轮询后台清理和 session binding 并发测试通过，并对新增并发用例执行 `-race`；最终态后端全量 `TZ=UTC go test -tags=unit ./... -count=1` 通过，`golangci-lint v2.9.0` 为 `0 issues`。前端 Vitest `183` 个测试文件、`1305` 项用例、ESLint、`vue-tsc --noEmit` 和生产构建继续通过，仅保留既有构建提示。
 - 再次深审修复：Agent Identity 锁内重读以数据库最新认证模式为准，重读失败或认证模式已变化时禁止旧凭据快照回写；OpenAI `http_bridge` 对 `invalid_task_id` 在输出客户端错误前执行一次 task 恢复、刷新 assertion 并重试。异步图片存储的启动生命周期探针限制为 15 秒，且仅接受真正覆盖生成 key 的无过滤或前缀规则，Tag/Size/And 规则不再被误判为全量覆盖。

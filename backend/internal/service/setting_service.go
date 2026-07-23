@@ -233,6 +233,21 @@ func parseOpenAIOAuthSchedulingRateMultiplier(raw string) float64 {
 	return value
 }
 
+func parseOpenAISchedulingUSDToCNYRate(raw string) float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		value = 0
+	}
+	return normalizeOpenAISchedulingUSDToCNYRate(value)
+}
+
+func normalizeOpenAISchedulingUSDToCNYRate(value float64) float64 {
+	if value <= 0 || value > 100 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return defaultOpenAISchedulingUSDToCNYRate
+	}
+	return value
+}
+
 // cachedAntigravityUserAgentVersion 缓存 Antigravity UA 版本号（进程内缓存，60s TTL）
 type cachedAntigravityUserAgentVersion struct {
 	version   string
@@ -300,19 +315,20 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo                 SettingRepository
-	defaultSubGroupReader       DefaultSubscriptionGroupReader
-	proxyRepo                   ProxyRepository // for resolving websearch provider proxy URLs
-	cfg                         *config.Config
-	onUpdate                    func() // Callback when settings are updated (for cache invalidation)
-	version                     string // Application version
-	webSearchManagerBuilder     WebSearchManagerBuilder
-	antigravityUAVersionCache   atomic.Value // *cachedAntigravityUserAgentVersion
-	antigravityUAVersionSF      singleflight.Group
-	openAICodexUACache          atomic.Value // *cachedOpenAICodexUserAgent
-	openAICodexUASF             singleflight.Group
-	codexRestrictionPolicyCache atomic.Value // *cachedCodexRestrictionPolicy
-	codexRestrictionPolicySF    singleflight.Group
+	settingRepo                   SettingRepository
+	defaultSubGroupReader         DefaultSubscriptionGroupReader
+	proxyRepo                     ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                           *config.Config
+	onUpdate                      func() // Callback when settings are updated (for cache invalidation)
+	onOpenAISchedulerPolicyUpdate func()
+	version                       string // Application version
+	webSearchManagerBuilder       WebSearchManagerBuilder
+	antigravityUAVersionCache     atomic.Value // *cachedAntigravityUserAgentVersion
+	antigravityUAVersionSF        singleflight.Group
+	openAICodexUACache            atomic.Value // *cachedOpenAICodexUserAgent
+	openAICodexUASF               singleflight.Group
+	codexRestrictionPolicyCache   atomic.Value // *cachedCodexRestrictionPolicy
+	codexRestrictionPolicySF      singleflight.Group
 
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
@@ -1788,6 +1804,14 @@ func (s *SettingService) SetOnUpdateCallback(callback func()) {
 	s.onUpdate = callback
 }
 
+// SetOpenAISchedulerPolicyUpdateCallback registers a callback independent from
+// the frontend/settings cache callback configured by the HTTP router.
+func (s *SettingService) SetOpenAISchedulerPolicyUpdateCallback(callback func()) {
+	if s != nil {
+		s.onOpenAISchedulerPolicyUpdate = callback
+	}
+}
+
 // SetVersion sets the application version for injection into public settings
 func (s *SettingService) SetVersion(version string) {
 	s.version = version
@@ -2677,6 +2701,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingPaymentVisibleMethodWxpayEnabled] = strconv.FormatBool(settings.PaymentVisibleMethodWxpayEnabled)
 	updates[SettingKeyOpenAILowUpstreamRatePriorityEnabled] = strconv.FormatBool(settings.OpenAILowUpstreamRatePriorityEnabled)
 	updates[SettingKeyOpenAIOAuthSchedulingRateMultiplier] = strconv.FormatFloat(settings.OpenAIOAuthSchedulingRateMultiplier, 'f', -1, 64)
+	updates[SettingKeyOpenAISchedulingUSDToCNYRate] = strconv.FormatFloat(settings.OpenAISchedulingUSDToCNYRate, 'f', -1, 64)
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
@@ -2792,6 +2817,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
 	}
+	previousOpenAISchedulerSettings, _ := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting)
 
 	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
 	versionBoundsSF.Forget("version_bounds")
@@ -2848,6 +2874,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
 		oauthSchedulingRateMultiplier:  settings.OpenAIOAuthSchedulingRateMultiplier,
+		schedulingUSDToCNYRate:         normalizeOpenAISchedulingUSDToCNYRate(settings.OpenAISchedulingUSDToCNYRate),
 		enabled:                        settings.OpenAIAdvancedSchedulerEnabled,
 		stickyWeightedEnabled:          settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		subscriptionPriorityEnabled:    settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
@@ -2866,6 +2893,9 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		}),
 		expiresAt: time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
 	})
+	if openAICostSchedulerPolicyChanged(previousOpenAISchedulerSettings, settings) && s.onOpenAISchedulerPolicyUpdate != nil {
+		s.onOpenAISchedulerPolicyUpdate()
+	}
 	// Invalidate the quota auto-pause cache and let the next read trigger a fresh load.
 	// We can't know from here whether ops_advanced_settings was also touched, so be
 	// defensive: store an expired entry — GetOpenAIQuotaAutoPauseSettings will serve
@@ -2886,6 +2916,24 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if s.onUpdate != nil {
 		s.onUpdate() // Invalidate cache after settings update
 	}
+}
+
+func openAICostSchedulerPolicyChanged(previous *cachedOpenAIAdvancedSchedulerSetting, current *SystemSettings) bool {
+	if current == nil {
+		return false
+	}
+	if previous == nil ||
+		previous.lowUpstreamRatePriorityEnabled != current.OpenAILowUpstreamRatePriorityEnabled ||
+		previous.schedulingUSDToCNYRate != normalizeOpenAISchedulingUSDToCNYRate(current.OpenAISchedulingUSDToCNYRate) ||
+		previous.enabled != current.OpenAIAdvancedSchedulerEnabled {
+		return true
+	}
+	currentOverrides := parseOpenAIAdvancedSchedulerWeightOverrides(map[string]string{
+		SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost: current.OpenAIAdvancedSchedulerWeightUpstreamCost,
+	})
+	previousCost, previousHasCost := previous.weightOverrides["upstream_cost"]
+	currentCost, currentHasCost := currentOverrides["upstream_cost"]
+	return previousHasCost != currentHasCost || previousCost != currentCost
 }
 
 func (s *SettingService) defaultRewriteMessageCacheControl() bool {
@@ -3723,6 +3771,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAllowUngroupedKeyScheduling:                        "false",
 		SettingKeyOpenAILowUpstreamRatePriorityEnabled:               "false",
 		SettingKeyOpenAIOAuthSchedulingRateMultiplier:                "1",
+		SettingKeyOpenAISchedulingUSDToCNYRate:                       "7.2",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:                 "false",
 		SettingKeyRewriteMessageCacheControl:                         strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
 		SettingKeyEnableClientDatelineNormalization:                  "true",
@@ -4385,6 +4434,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.PaymentVisibleMethodWxpayEnabled = settings[SettingPaymentVisibleMethodWxpayEnabled] == "true"
 	result.OpenAILowUpstreamRatePriorityEnabled = settings[SettingKeyOpenAILowUpstreamRatePriorityEnabled] == "true"
 	result.OpenAIOAuthSchedulingRateMultiplier = parseOpenAIOAuthSchedulingRateMultiplier(settings[SettingKeyOpenAIOAuthSchedulingRateMultiplier])
+	result.OpenAISchedulingUSDToCNYRate = parseOpenAISchedulingUSDToCNYRate(settings[SettingKeyOpenAISchedulingUSDToCNYRate])
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"
@@ -4522,6 +4572,10 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 	if rate := settings.OpenAIOAuthSchedulingRateMultiplier; rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
 		return infraerrors.BadRequest("INVALID_OPENAI_OAUTH_SCHEDULING_RATE_MULTIPLIER", "OpenAI OAuth scheduling rate multiplier must be a finite non-negative number")
 	}
+	if rate := settings.OpenAISchedulingUSDToCNYRate; rate < 0 || rate > 100 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return infraerrors.BadRequest("INVALID_OPENAI_SCHEDULING_USD_TO_CNY_RATE", "OpenAI scheduling USD to CNY rate must be 0 for the default or a finite number greater than 0 and no greater than 100")
+	}
+	settings.OpenAISchedulingUSDToCNYRate = normalizeOpenAISchedulingUSDToCNYRate(settings.OpenAISchedulingUSDToCNYRate)
 	lbTopK, err := normalizeOptionalPositiveIntString(settings.OpenAIAdvancedSchedulerLBTopK)
 	if err != nil {
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_LB_TOP_K", "openai advanced scheduler TopK must be a positive integer or empty")

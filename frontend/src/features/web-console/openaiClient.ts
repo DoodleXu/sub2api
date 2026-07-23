@@ -1,7 +1,5 @@
 import type {
-  WebConsoleImageOptions,
   WebConsoleImage,
-  WebConsoleImageResult,
   WebConsoleMessage,
   WebConsoleRequestContext,
   WebConsoleTextResult,
@@ -17,8 +15,6 @@ class WebConsoleRequestError extends Error {
     this.name = 'WebConsoleRequestError'
   }
 }
-
-const defaultImageGenerationToolModel = 'gpt-image-2'
 
 function endpointPath(base: string): string {
   const value = base.trim()
@@ -155,17 +151,6 @@ function imageFromValue(value: string, alt: string): WebConsoleImage {
   return { url: `data:image/png;base64,${value}`, alt }
 }
 
-function normalizedImageOptions(options?: WebConsoleImageOptions): WebConsoleImageOptions {
-  const background = options?.background?.trim() || ''
-  return {
-    size: options?.size?.trim() || '',
-    quality: options?.quality?.trim() || '',
-    background: background === 'transparent' ? '' : background,
-    outputFormat: options?.outputFormat?.trim() || 'png',
-    count: Math.min(Math.max(Math.trunc(Number(options?.count) || 1), 1), 4),
-  }
-}
-
 function collectImages(value: unknown, alt: string, out: WebConsoleImage[]): void {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
@@ -180,42 +165,6 @@ function collectImages(value: unknown, alt: string, out: WebConsoleImage[]): voi
   for (const child of Object.values(record)) {
     if (child && typeof child === 'object') collectImages(child, alt, out)
   }
-}
-
-async function generateImagesWithResponses(ctx: WebConsoleRequestContext): Promise<WebConsoleImageResult> {
-  const options = normalizedImageOptions(ctx.imageOptions)
-  const requestBody = responsesPayload(ctx, ctx.prompt)
-  requestBody.tools = [
-    {
-      type: 'image_generation',
-      model: defaultImageGenerationToolModel,
-      ...(options.size ? { size: options.size } : {}),
-      ...(options.quality ? { quality: options.quality } : {}),
-      ...(options.background ? { background: options.background } : {}),
-      ...(options.outputFormat && options.outputFormat !== 'png' ? { output_format: options.outputFormat } : {}),
-    },
-  ]
-  requestBody.tool_choice = { type: 'image_generation' }
-  const images: WebConsoleImage[] = []
-  const texts: string[] = []
-
-  for (let index = 0; index < options.count; index++) {
-    const body = await postJSON<any>(ctx.endpoint, ctx.apiKey, '/responses', requestBody)
-    collectImages(body, ctx.prompt, images)
-    const text = extractResponseText(body)
-    if (text) texts.push(text)
-  }
-
-  if (images.length === 0) throw new WebConsoleRequestError('Responses 未返回图片。', 502)
-  return {
-    images,
-    text: texts.join('\n\n'),
-    usedMode: 'responses',
-  }
-}
-
-export async function generateWebConsoleImage(ctx: WebConsoleRequestContext): Promise<WebConsoleImageResult> {
-  return generateImagesWithResponses(ctx)
 }
 
 export function webConsoleErrorMessage(error: unknown): string {

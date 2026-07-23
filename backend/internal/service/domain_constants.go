@@ -480,6 +480,7 @@ const (
 	SettingKeyAllowUngroupedKeyScheduling          = "allow_ungrouped_key_scheduling"
 	SettingKeyOpenAILowUpstreamRatePriorityEnabled = "openai_low_upstream_rate_priority_enabled"
 	SettingKeyOpenAIOAuthSchedulingRateMultiplier  = "openai_oauth_scheduling_rate_multiplier"
+	SettingKeyOpenAISchedulingUSDToCNYRate         = "openai_scheduling_usd_to_cny_rate"
 	// SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled OpenAI 高级调度下是否启用粘性加权。
 	SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled = "openai_advanced_scheduler_sticky_weighted_enabled"
 	// SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled OpenAI 高级调度下是否优先使用订阅账号池。

@@ -283,8 +283,15 @@ func ProvideSchedulerSnapshotService(
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	cfg *config.Config,
+	settingService *SettingService,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc.SetSettingService(settingService)
+	if settingService != nil {
+		settingService.SetOpenAISchedulerPolicyUpdateCallback(func() {
+			svc.RequestFullRebuild("openai_scheduler_policy_change")
+		})
+	}
 	svc.Start()
 	return svc
 }
@@ -736,7 +743,6 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelMonitorRunner,
 	NewChannelMonitorRequestTemplateService,
 	ProvideUserPlatformQuotaUsageFlusher,
-	NewImageGenerationArchiveService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
 	NewBatchImageService,

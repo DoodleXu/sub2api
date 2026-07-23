@@ -56,6 +56,24 @@ image_storage:
 
 When a task completes, each generated image is uploaded to the bucket and the result is rewritten to a compact form: `data[].url` points at the stored object (a permanent `public_base_url/key` link, or a time-limited presigned URL) and `b64_json` is removed. Only this small JSON is stored in Redis. If an upload fails, the task is marked `failed` rather than persisting the raw base64.
 
+### Browser CORS for Web Console
+
+The Web Console renders a returned object URL directly when browser CORS prevents JavaScript from reading it, so a missing CORS rule does not by itself hide a successfully generated image. However, Cache Storage persistence, downloads, and reusing the result as an edit reference all need browser-readable response bytes. Configure the bucket to allow `GET` and `HEAD` from every frontend origin that serves Web Console, for example:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://sub2api.example.com"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "Content-Length"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Replace the example origin with the exact scheme and host used by the frontend. Keep bucket access private if desired: CORS only controls which browser origins may read an already-authorized public or presigned response; it does not grant object-store permission by itself.
+
 To support a different vendor beyond the S3-compatible client, implement both `service.ImageStorage` and `service.ImageTaskStore`, including `ListPending(ctx, limit)`. The task service records pending object keys before upload and runs a bounded durable reconciliation worker; configure an enabled, unfiltered or prefix-only object-store lifecycle rule that covers every generated key as a final retention/cleanup backstop, especially when `public_base_url` is used. Tag, object-size, and compound `And` rules are not accepted because generated objects cannot be guaranteed to match them. Call `ImageTaskService.Close()` during application shutdown to stop the reconciliation worker.
 
 ### Troubleshooting: the endpoints return 404 after enabling

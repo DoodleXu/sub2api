@@ -1540,7 +1540,7 @@ export default {
   // Admin
   admin: {
     imageGenerations: {
-      description: 'View site-wide image generation archives, daily stats, and storage settings.'
+      description: 'Browse existing results in the upstream asynchronous image object store.'
     },
     // Dashboard
     dashboard: {

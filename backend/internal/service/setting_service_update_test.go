@@ -454,6 +454,7 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 		PaymentVisibleMethodWxpayEnabled:                   false,
 		OpenAILowUpstreamRatePriorityEnabled:               true,
 		OpenAIOAuthSchedulingRateMultiplier:                0.05,
+		OpenAISchedulingUSDToCNYRate:                       7.15,
 		OpenAIAdvancedSchedulerEnabled:                     true,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:       true,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled: true,
@@ -476,6 +477,7 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "false", repo.updates[SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAILowUpstreamRatePriorityEnabled])
 	require.Equal(t, "0.05", repo.updates[SettingKeyOpenAIOAuthSchedulingRateMultiplier])
+	require.Equal(t, "7.15", repo.updates[SettingKeyOpenAISchedulingUSDToCNYRate])
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
@@ -498,6 +500,16 @@ func TestSettingService_UpdateSettingsRejectsInvalidOpenAIOAuthSchedulingRateMul
 
 	for _, rate := range []float64{-0.01, math.NaN(), math.Inf(1)} {
 		err := svc.UpdateSettings(context.Background(), &SystemSettings{OpenAIOAuthSchedulingRateMultiplier: rate})
+		require.Error(t, err)
+	}
+}
+
+func TestSettingService_UpdateSettingsRejectsInvalidOpenAISchedulingUSDToCNYRate(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	for _, rate := range []float64{-0.01, 100.01, math.NaN(), math.Inf(1)} {
+		err := svc.UpdateSettings(context.Background(), &SystemSettings{OpenAISchedulingUSDToCNYRate: rate})
 		require.Error(t, err)
 	}
 }
@@ -560,6 +572,8 @@ func TestSettingService_ParseSettingsDefaultsOpenAIOAuthSchedulingRateMultiplier
 
 	require.Equal(t, 1.0, svc.parseSettings(map[string]string{}).OpenAIOAuthSchedulingRateMultiplier)
 	require.Equal(t, 0.05, svc.parseSettings(map[string]string{SettingKeyOpenAIOAuthSchedulingRateMultiplier: "0.05"}).OpenAIOAuthSchedulingRateMultiplier)
+	require.Equal(t, 7.2, svc.parseSettings(map[string]string{}).OpenAISchedulingUSDToCNYRate)
+	require.Equal(t, 7.15, svc.parseSettings(map[string]string{SettingKeyOpenAISchedulingUSDToCNYRate: "7.15"}).OpenAISchedulingUSDToCNYRate)
 }
 
 func TestSettingService_GetAllSettings_OpenAIAdvancedSchedulerEffectiveValuesUseConfig(t *testing.T) {

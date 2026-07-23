@@ -25,6 +25,7 @@ type S3ImageStorage struct {
 }
 
 var _ service.ImageStorage = (*S3ImageStorage)(nil)
+var _ service.ImageStorageBrowser = (*S3ImageStorage)(nil)
 
 // NewS3ImageStorage 依据配置构造 S3 图片存储（调用方应先确认 cfg.Active()）。
 func NewS3ImageStorage(ctx context.Context, cfg *config.ImageStorageConfig) (*S3ImageStorage, error) {
@@ -169,4 +170,63 @@ func (s *S3ImageStorage) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("S3 DeleteObject: %w", err)
 	}
 	return nil
+}
+
+// List exposes objects already written by upstream async image tasks. It is
+// intentionally read-only; lifecycle rules remain the owner of retention.
+func (s *S3ImageStorage) List(ctx context.Context, prefix, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	maxKeys := int32(limit)
+	input := &s3.ListObjectsV2Input{
+		Bucket:  &s.bucket,
+		Prefix:  &prefix,
+		MaxKeys: &maxKeys,
+	}
+	if strings.TrimSpace(cursor) != "" {
+		input.ContinuationToken = &cursor
+	}
+	result, err := s.client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("S3 ListObjectsV2: %w", err)
+	}
+	page := &service.ImageStorageObjectPage{
+		Items:   make([]service.ImageStorageObject, 0, len(result.Contents)),
+		HasMore: result.IsTruncated != nil && *result.IsTruncated,
+	}
+	if result.NextContinuationToken != nil {
+		page.NextCursor = *result.NextContinuationToken
+	}
+	presignClient := s3.NewPresignClient(s.client)
+	for _, object := range result.Contents {
+		if object.Key == nil || strings.HasSuffix(*object.Key, "/") {
+			continue
+		}
+		objectURL := ""
+		if s.publicBaseURL != "" {
+			objectURL = s.publicBaseURL + "/" + strings.TrimLeft(*object.Key, "/")
+		} else {
+			presigned, presignErr := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+				Bucket: &s.bucket,
+				Key:    object.Key,
+			}, s3.WithPresignExpires(s.presignExpiry))
+			if presignErr != nil {
+				return nil, fmt.Errorf("presign image object %q: %w", *object.Key, presignErr)
+			}
+			objectURL = presigned.URL
+		}
+		item := service.ImageStorageObject{Key: *object.Key, URL: objectURL}
+		if object.Size != nil {
+			item.Size = *object.Size
+		}
+		if object.ETag != nil {
+			item.ETag = strings.Trim(*object.ETag, "\"")
+		}
+		if object.LastModified != nil {
+			item.LastModified = *object.LastModified
+		}
+		page.Items = append(page.Items, item)
+	}
+	return page, nil
 }

@@ -192,14 +192,7 @@ func registerImageGenerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 	images := admin.Group("/image-generations")
 	{
 		images.GET("", h.Admin.ImageGeneration.List)
-		images.DELETE("", h.Admin.ImageGeneration.ClearAll)
-		images.GET("/stats/daily", h.Admin.ImageGeneration.DailyStats)
-		images.GET("/stats/storage", h.Admin.ImageGeneration.StorageStats)
-		images.GET("/assets/:asset_id", h.Admin.ImageGeneration.GetAsset)
-		images.GET("/:id", h.Admin.ImageGeneration.Get)
 	}
-	admin.GET("/settings/image-archive-storage", h.Admin.ImageGeneration.GetStorageConfig)
-	admin.PUT("/settings/image-archive-storage", h.Admin.ImageGeneration.UpdateStorageConfig)
 }
 
 func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

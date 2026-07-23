@@ -97,7 +97,6 @@ var ProviderSet = wire.NewSet(
 	NewChannelMonitorRepository,
 	NewChannelMonitorRequestTemplateRepository,
 	NewContentModerationRepository,
-	NewImageGenerationArchiveRepository,
 	NewAffiliateRepository,
 	NewUserPlatformQuotaRepository,     // T14: user × platform quota
 	NewUserPlatformQuotaServiceAdapter, // T14: adapter → service.UserPlatformQuotaRepository
@@ -144,6 +143,7 @@ var ProviderSet = wire.NewSet(
 
 	// Image storage (async image task result offload)
 	ProvideImageStorageFactory,
+	ProvideImageStorageBrowserFactory,
 
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,
@@ -182,6 +182,12 @@ func ProvideEnt(cfg *config.Config) (*ent.Client, error) {
 // 设置保存后重建，而不是在启动时定死一份。
 func ProvideImageStorageFactory() service.ImageStorageFactory {
 	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		return NewS3ImageStorage(ctx, cfg)
+	}
+}
+
+func ProvideImageStorageBrowserFactory() service.ImageStorageBrowserFactory {
+	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorageBrowser, error) {
 		return NewS3ImageStorage(ctx, cfg)
 	}
 }

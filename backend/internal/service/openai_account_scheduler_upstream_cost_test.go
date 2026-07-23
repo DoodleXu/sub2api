@@ -20,6 +20,30 @@ type upstreamCostTrackingConcurrencyCache struct {
 	rejectAcquire bool
 }
 
+type schedulerCostStatsRepo struct {
+	schedulerTestOpenAIAccountRepo
+	attachCalls int
+	attachErr   error
+}
+
+func (r *schedulerCostStatsRepo) ListAllWithFilters(context.Context, string, string, string, string, int64, string) ([]Account, error) {
+	return append([]Account(nil), r.accounts...), nil
+}
+
+func (r *schedulerCostStatsRepo) AttachOpenAISchedulingCostStats(_ context.Context, accounts []Account) error {
+	r.attachCalls++
+	if r.attachErr != nil {
+		return r.attachErr
+	}
+	for i := range accounts {
+		if accounts[i].CostCNYPerUSD == 0 {
+			accounts[i].TotalAccountCost = 100
+			accounts[i].CostCNYPerUSD = 0.06
+		}
+	}
+	return nil
+}
+
 func (c *upstreamCostTrackingConcurrencyCache) AcquireAccountSlot(_ context.Context, accountID int64, maxConcurrency int, _ string) (bool, error) {
 	if c.acquireLimits == nil {
 		c.acquireLimits = make(map[int64][]int)
@@ -430,7 +454,7 @@ func TestOpenAIUpstreamCostFactorsSparseProbeIsNeutral(t *testing.T) {
 		})
 	}
 
-	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	for id := int64(1); id <= 10; id++ {
 		require.Equal(t, openAIUpstreamCostNeutralFactor, factors[id])
 	}
@@ -446,7 +470,7 @@ func TestOpenAIUpstreamCostFactorsCoverageShrinksSparseSignal(t *testing.T) {
 		accounts = append(accounts, &Account{ID: id, Platform: PlatformOpenAI, Type: AccountTypeAPIKey})
 	}
 
-	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	center := math.Sqrt(0.03 * 0.8)
 	require.InDelta(t, 0.5+0.2*(1/(1+0.03/center)-0.5), factors[1], 1e-12)
 	require.InDelta(t, 0.5+0.2*(1/(1+0.8/center)-0.5), factors[2], 1e-12)
@@ -461,7 +485,7 @@ func TestOpenAIUpstreamCostFactorsUseMedianAgainstOutlier(t *testing.T) {
 		upstreamCostTestAccount(3, UpstreamBillingProbeStatusOK, 100, now.Add(-time.Minute), 30*time.Minute),
 	}
 
-	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	factors := openAIUpstreamCostFactors(accounts, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	require.InDelta(t, 2.0/3.0, factors[1], 1e-12)
 	require.InDelta(t, 0.5, factors[2], 1e-12)
 	require.InDelta(t, 1/(1+100/0.2), factors[3], 1e-12)
@@ -472,23 +496,375 @@ func TestOpenAILegacyUpstreamRateOrderRequiresComparableRates(t *testing.T) {
 	oneKnown := newOpenAILegacyUpstreamRateOrder([]*Account{
 		upstreamCostTestAccount(1, UpstreamBillingProbeStatusOK, 0.03, now.Add(-time.Minute), 30*time.Minute),
 		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
-	}, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	}, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	require.False(t, oneKnown.enabled)
 
 	allEqual := newOpenAILegacyUpstreamRateOrder([]*Account{
 		upstreamCostTestAccount(1, UpstreamBillingProbeStatusOK, 0.3, now.Add(-time.Minute), 30*time.Minute),
 		upstreamCostTestAccount(2, UpstreamBillingProbeStatusOK, 0.3, now.Add(-time.Minute), 30*time.Minute),
-	}, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	}, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	require.False(t, allEqual.enabled)
 
 	distinct := newOpenAILegacyUpstreamRateOrder([]*Account{
 		upstreamCostTestAccount(1, UpstreamBillingProbeStatusOK, 0.03, now.Add(-time.Minute), 30*time.Minute),
 		upstreamCostTestAccount(2, UpstreamBillingProbeStatusOK, 0.8, now.Add(-time.Minute), 30*time.Minute),
 		{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
-	}, now, defaultOpenAIOAuthSchedulingRateMultiplier)
+	}, now, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	require.True(t, distinct.enabled)
 	require.Negative(t, distinct.compare(&Account{ID: 1}, &Account{ID: 2}))
 	require.Negative(t, distinct.compare(&Account{ID: 2}, &Account{ID: 3}))
+}
+
+func TestOpenAILegacyUpstreamRateOrderUsesCostForUnsupportedProbe(t *testing.T) {
+	now := time.Now()
+	known := upstreamCostTestAccount(1, UpstreamBillingProbeStatusOK, 0.08, now.Add(-time.Minute), 30*time.Minute)
+	unsupportedCheap := upstreamCostTestAccount(2, UpstreamBillingProbeStatusUnsupported, 0, now.Add(-time.Minute), 30*time.Minute)
+	unsupportedCheap.CostCNYPerUSD = 0.36
+	unsupportedExpensive := upstreamCostTestAccount(3, UpstreamBillingProbeStatusUnsupported, 0, now.Add(-time.Minute), 30*time.Minute)
+	unsupportedExpensive.CostCNYPerUSD = 0.72
+
+	order := newOpenAILegacyUpstreamRateOrder(
+		[]*Account{known, unsupportedCheap, unsupportedExpensive},
+		now,
+		defaultOpenAIOAuthSchedulingRateMultiplier,
+		defaultOpenAISchedulingUSDToCNYRate,
+	)
+
+	require.True(t, order.enabled)
+	require.Negative(t, order.compare(unsupportedCheap, known))
+	require.Negative(t, order.compare(known, unsupportedExpensive))
+
+	factors := openAIUpstreamCostFactors(
+		[]*Account{known, unsupportedCheap, unsupportedExpensive},
+		now,
+		defaultOpenAIOAuthSchedulingRateMultiplier,
+		defaultOpenAISchedulingUSDToCNYRate,
+	)
+	require.Greater(t, factors[unsupportedCheap.ID], factors[known.ID])
+	require.Greater(t, factors[known.ID], factors[unsupportedExpensive.ID])
+}
+
+func TestOpenAIUnsupportedBillingCostRateRequiresValidCostAndUnsupportedStatus(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name    string
+		account *Account
+		want    float64
+		wantOK  bool
+	}{
+		{
+			name: "unsupported with cost",
+			account: func() *Account {
+				account := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute)
+				account.CostCNYPerUSD = 0.0695
+				return account
+			}(),
+			want:   0.0695 / defaultOpenAISchedulingUSDToCNYRate,
+			wantOK: true,
+		},
+		{
+			name: "successful probe does not use cost",
+			account: func() *Account {
+				account := upstreamCostTestAccount(2, UpstreamBillingProbeStatusOK, 0.05, now, time.Minute)
+				account.CostCNYPerUSD = 0.01
+				return account
+			}(),
+		},
+		{
+			name:    "unsupported without cost",
+			account: upstreamCostTestAccount(3, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute),
+		},
+		{
+			name: "unsupported with nan cost",
+			account: func() *Account {
+				account := upstreamCostTestAccount(4, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute)
+				account.CostCNYPerUSD = math.NaN()
+				return account
+			}(),
+		},
+		{
+			name: "unsupported with infinite cost",
+			account: func() *Account {
+				account := upstreamCostTestAccount(5, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute)
+				account.CostCNYPerUSD = math.Inf(1)
+				return account
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := openAIUnsupportedBillingCostRate(tt.account, defaultOpenAISchedulingUSDToCNYRate)
+			require.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				require.InDelta(t, tt.want, got, 1e-12)
+			}
+		})
+	}
+
+	account := upstreamCostTestAccount(6, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute)
+	account.CostCNYPerUSD = 0.36
+	for _, invalidRate := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		_, ok := openAIUnsupportedBillingCostRate(account, invalidRate)
+		require.False(t, ok)
+	}
+}
+
+func TestOpenAISchedulingCostStatsAreGatedAndFailOpen(t *testing.T) {
+	account := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+
+	t.Run("disabled does not load usage cost", func(t *testing.T) {
+		resetOpenAIAdvancedSchedulerSettingCacheForTest()
+		defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+		repo := &schedulerCostStatsRepo{schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{*account}}}
+		settings := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+			openAIAdvancedSchedulerSettingKey:              "false",
+			SettingKeyOpenAILowUpstreamRatePriorityEnabled: "false",
+		}}
+		cfg := &config.Config{}
+		svc := &OpenAIGatewayService{
+			accountRepo:      repo,
+			cfg:              cfg,
+			rateLimitService: &RateLimitService{settingService: NewSettingService(settings, cfg)},
+		}
+
+		accounts, err := svc.listSchedulableAccounts(context.Background(), nil)
+		require.NoError(t, err)
+		require.Len(t, accounts, 1)
+		require.Zero(t, repo.attachCalls)
+	})
+
+	t.Run("enabled load failure keeps accounts schedulable", func(t *testing.T) {
+		resetOpenAIAdvancedSchedulerSettingCacheForTest()
+		defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+		repo := &schedulerCostStatsRepo{
+			schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{*account}},
+			attachErr:                      errors.New("usage log unavailable"),
+		}
+		settings := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+			openAIAdvancedSchedulerSettingKey:              "false",
+			SettingKeyOpenAILowUpstreamRatePriorityEnabled: "true",
+		}}
+		cfg := &config.Config{}
+		svc := &OpenAIGatewayService{
+			accountRepo:      repo,
+			cfg:              cfg,
+			rateLimitService: &RateLimitService{settingService: NewSettingService(settings, cfg)},
+		}
+
+		accounts, err := svc.listSchedulableAccounts(context.Background(), nil)
+		require.NoError(t, err)
+		require.Len(t, accounts, 1)
+		require.Equal(t, 1, repo.attachCalls)
+	})
+}
+
+func TestSchedulerSnapshotCostStatsLoadFailureIsFailOpen(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	account := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.TotalCostCNY = 12
+	cached := *account
+	cached.TotalAccountCost = 100
+	cached.CostCNYPerUSD = 0.06
+	repo := &schedulerCostStatsRepo{
+		schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{*account}},
+		attachErr:                      errors.New("usage log unavailable"),
+	}
+	settings := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+		openAIAdvancedSchedulerSettingKey:              "false",
+		SettingKeyOpenAILowUpstreamRatePriorityEnabled: "true",
+	}}
+	cfg := &config.Config{}
+	snapshot := NewSchedulerSnapshotService(&openAISnapshotCacheStub{accountsByID: map[int64]*Account{cached.ID: &cached}}, nil, repo, nil, cfg)
+	snapshot.SetSettingService(NewSettingService(settings, cfg))
+
+	accounts, err := snapshot.loadAccountsFromDB(context.Background(), SchedulerBucket{Platform: PlatformOpenAI}, false)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	require.Equal(t, 1, repo.attachCalls)
+	require.Equal(t, 100.0, accounts[0].TotalAccountCost)
+	require.Equal(t, 0.12, accounts[0].CostCNYPerUSD)
+}
+
+func TestOpenAICostSchedulerPolicyChangeRequestsSnapshotRebuild(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	settings := NewSettingService(&openAIAdvancedSchedulerSettingRepoStub{}, &config.Config{})
+	settings.refreshCachedSettings(&SystemSettings{})
+	snapshot := NewSchedulerSnapshotService(&openAISnapshotCacheStub{}, nil, nil, nil, &config.Config{})
+	settings.SetOpenAISchedulerPolicyUpdateCallback(func() {
+		snapshot.RequestFullRebuild("openai_scheduler_policy_change")
+	})
+
+	settings.refreshCachedSettings(&SystemSettings{OpenAILowUpstreamRatePriorityEnabled: true})
+
+	select {
+	case reason := <-snapshot.fullRebuildRequestCh:
+		require.Equal(t, "openai_scheduler_policy_change", reason)
+	default:
+		t.Fatal("expected scheduler snapshot rebuild request")
+	}
+}
+
+func TestOpenAICostSchedulerPolicyChanged(t *testing.T) {
+	previous := &cachedOpenAIAdvancedSchedulerSetting{
+		lowUpstreamRatePriorityEnabled: true,
+		schedulingUSDToCNYRate:         defaultOpenAISchedulingUSDToCNYRate,
+		enabled:                        true,
+		weightOverrides:                map[string]float64{"upstream_cost": 0},
+	}
+
+	tests := []struct {
+		name    string
+		current *SystemSettings
+		want    bool
+	}{
+		{
+			name: "unchanged explicit zero",
+			current: &SystemSettings{
+				OpenAILowUpstreamRatePriorityEnabled:      true,
+				OpenAISchedulingUSDToCNYRate:              defaultOpenAISchedulingUSDToCNYRate,
+				OpenAIAdvancedSchedulerEnabled:            true,
+				OpenAIAdvancedSchedulerWeightUpstreamCost: "0",
+			},
+		},
+		{
+			name: "explicit zero removed",
+			current: &SystemSettings{
+				OpenAILowUpstreamRatePriorityEnabled: true,
+				OpenAISchedulingUSDToCNYRate:         defaultOpenAISchedulingUSDToCNYRate,
+				OpenAIAdvancedSchedulerEnabled:       true,
+			},
+			want: true,
+		},
+		{
+			name: "cost weight changed",
+			current: &SystemSettings{
+				OpenAILowUpstreamRatePriorityEnabled:      true,
+				OpenAISchedulingUSDToCNYRate:              defaultOpenAISchedulingUSDToCNYRate,
+				OpenAIAdvancedSchedulerEnabled:            true,
+				OpenAIAdvancedSchedulerWeightUpstreamCost: "0.25",
+			},
+			want: true,
+		},
+		{
+			name: "legacy strategy changed",
+			current: &SystemSettings{
+				OpenAISchedulingUSDToCNYRate:              defaultOpenAISchedulingUSDToCNYRate,
+				OpenAIAdvancedSchedulerEnabled:            true,
+				OpenAIAdvancedSchedulerWeightUpstreamCost: "0",
+			},
+			want: true,
+		},
+		{
+			name: "currency rate changed",
+			current: &SystemSettings{
+				OpenAILowUpstreamRatePriorityEnabled:      true,
+				OpenAISchedulingUSDToCNYRate:              7.15,
+				OpenAIAdvancedSchedulerEnabled:            true,
+				OpenAIAdvancedSchedulerWeightUpstreamCost: "0",
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, openAICostSchedulerPolicyChanged(previous, tt.current))
+		})
+	}
+}
+
+func TestAdminSchedulerScoreFilterLoadsCostStats(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	account := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	repo := &schedulerCostStatsRepo{schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{*account}}}
+	cfg := &config.Config{}
+	settings := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+		SettingKeyOpenAILowUpstreamRatePriorityEnabled: "true",
+	}}
+	admin := &adminServiceImpl{
+		accountRepo:    repo,
+		settingService: NewSettingService(settings, cfg),
+	}
+
+	accounts, err := admin.ListAccountsForSchedulerScoreFilter(context.Background(), PlatformOpenAI, "", "", "", 0, "")
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	require.Equal(t, 1, repo.attachCalls)
+	require.Equal(t, 0.06, accounts[0].CostCNYPerUSD)
+}
+
+func TestPreserveOpenAISchedulingCostStatsRecomputesWithLatestCNYCost(t *testing.T) {
+	source := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	source.TotalCostCNY = 6
+	source.TotalAccountCost = 100
+	source.CostCNYPerUSD = 0.06
+	target := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	target.TotalCostCNY = 12
+
+	preserveOpenAISchedulingCostStats(target, source)
+
+	require.Equal(t, 100.0, target.TotalAccountCost)
+	require.Equal(t, 0.12, target.CostCNYPerUSD)
+}
+
+func TestLegacyLowRateSnapshotRecheckPreservesUnsupportedCost(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	now := time.Now()
+	unsupportedCheap := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, now, time.Minute)
+	unsupportedCheap.CostCNYPerUSD = 0.06
+	unsupportedCheap.TotalAccountCost = 100
+	unsupportedCheap.TotalCostCNY = 6
+	knownExpensive := upstreamCostTestAccount(2, UpstreamBillingProbeStatusOK, 0.08, now, time.Minute)
+	for _, account := range []*Account{unsupportedCheap, knownExpensive} {
+		account.Status = StatusActive
+		account.Schedulable = true
+		account.Concurrency = 1
+	}
+	unsupportedCheap.Priority = 10
+	knownExpensive.Priority = 0
+
+	latestUnsupported := *unsupportedCheap
+	latestUnsupported.TotalAccountCost = 0
+	latestUnsupported.CostCNYPerUSD = 0
+	latest := []Account{latestUnsupported, *knownExpensive}
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{unsupportedCheap, knownExpensive},
+		accountsByID: map[int64]*Account{
+			unsupportedCheap.ID: unsupportedCheap,
+			knownExpensive.ID:   knownExpensive,
+		},
+	}
+	settings := &openAIAdvancedSchedulerSettingRepoStub{values: map[string]string{
+		openAIAdvancedSchedulerSettingKey:              "false",
+		SettingKeyOpenAILowUpstreamRatePriorityEnabled: "true",
+	}}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:       schedulerTestOpenAIAccountRepo{accounts: latest},
+		schedulerSnapshot: &SchedulerSnapshotService{cache: snapshotCache, cfg: cfg},
+		cfg:               cfg,
+		rateLimitService:  &RateLimitService{settingService: NewSettingService(settings, cfg)},
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), nil, "", "gpt-test", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, unsupportedCheap.ID, selection.Account.ID)
 }
 
 func TestOpenAISchedulingRatePlacesOAuthAtConfiguredReference(t *testing.T) {
@@ -497,12 +873,12 @@ func TestOpenAISchedulingRatePlacesOAuthAtConfiguredReference(t *testing.T) {
 	oauth := upstreamCostTestOAuthAccount(2)
 	expensive := upstreamCostTestAccount(3, UpstreamBillingProbeStatusOK, 0.12, now.Add(-time.Minute), 30*time.Minute)
 
-	order := newOpenAILegacyUpstreamRateOrder([]*Account{cheap, oauth, expensive}, now, 0.05)
+	order := newOpenAILegacyUpstreamRateOrder([]*Account{cheap, oauth, expensive}, now, 0.05, defaultOpenAISchedulingUSDToCNYRate)
 	require.True(t, order.enabled)
 	require.Negative(t, order.compare(cheap, oauth))
 	require.Negative(t, order.compare(oauth, expensive))
 
-	factors := openAIUpstreamCostFactors([]*Account{cheap, oauth, expensive}, now, 0.05)
+	factors := openAIUpstreamCostFactors([]*Account{cheap, oauth, expensive}, now, 0.05, defaultOpenAISchedulingUSDToCNYRate)
 	require.Greater(t, factors[cheap.ID], factors[oauth.ID])
 	require.Greater(t, factors[oauth.ID], factors[expensive.ID])
 }
@@ -794,9 +1170,9 @@ func TestBuildOpenAIAccountSchedulerScoreSnapshotUpstreamCostIsExactNoOpWithoutS
 		2: {AccountID: 2, LoadRate: 80},
 	}
 	weights := GatewayOpenAIWSSchedulerScoreWeightsView{Priority: 1, Load: 1, Queue: 0.7, ErrorRate: 0.8, TTFT: 0.5}
-	baseline := buildOpenAIAccountSchedulerScoreSnapshot(accounts, loadMap, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier)
+	baseline := buildOpenAIAccountSchedulerScoreSnapshot(accounts, loadMap, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 	weights.UpstreamCost = 1.5
-	withCost := buildOpenAIAccountSchedulerScoreSnapshot(accounts, loadMap, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier)
+	withCost := buildOpenAIAccountSchedulerScoreSnapshot(accounts, loadMap, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 
 	require.Equal(t, baseline, withCost)
 }
@@ -808,7 +1184,7 @@ func TestBuildOpenAIAccountSchedulerScoreSnapshotUsesUpstreamCostSignal(t *testi
 		upstreamCostTestAccount(2, UpstreamBillingProbeStatusOK, 0.8, now.Add(-time.Minute), 30*time.Minute),
 	}
 	weights := GatewayOpenAIWSSchedulerScoreWeightsView{UpstreamCost: 1.5}
-	scores := buildOpenAIAccountSchedulerScoreSnapshot(accounts, nil, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier)
+	scores := buildOpenAIAccountSchedulerScoreSnapshot(accounts, nil, weights, false, defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
 
 	require.Greater(t, scores[1].BaseScore, scores[2].BaseScore)
 }

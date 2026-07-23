@@ -1808,7 +1808,6 @@ func TestOpenAIResponses_APIKeyPassthroughPool5xxRetriesThenExhaustsMaxSwitches(
 		nil,
 		nil,
 		nil,
-		nil,
 		cfg,
 	)
 
@@ -2470,14 +2469,4 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 
 		require.False(t, openAIForwardErrorAlreadyCommunicated(c, c.Writer.Size(), errors.New("openai cyber_policy: blocked")))
 	})
-}
-
-func TestExtractOpenAIResponsesPromptExcerpt(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_text","text":"world"}]},{"type":"message","role":"developer","content":"keep"}],"tools":[{"type":"function","name":"shell"}]}`)
-
-	excerpt := extractOpenAIResponsesPromptExcerpt(body)
-
-	require.Equal(t, "hello\nworld", excerpt)
-
-	require.Equal(t, "draw a cat", extractOpenAIResponsesPromptExcerpt([]byte(`{"prompt":"draw a cat"}`)))
 }

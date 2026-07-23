@@ -124,6 +124,7 @@ type SchedulerSnapshotService struct {
 	accountRepo                  AccountRepository
 	groupRepo                    GroupRepository
 	cfg                          *config.Config
+	settingService               *SettingService
 	stopCh                       chan struct{}
 	stopOnce                     sync.Once
 	wg                           sync.WaitGroup
@@ -143,6 +144,14 @@ type SchedulerSnapshotService struct {
 	fullRebuildRequested uint64
 	fullRebuildCompleted uint64
 	fullRebuildLastErr   error
+	fullRebuildRequestCh chan string
+}
+
+// SetSettingService configures the runtime policy source before Start.
+func (s *SchedulerSnapshotService) SetSettingService(settingService *SettingService) {
+	if s != nil {
+		s.settingService = settingService
+	}
 }
 
 func NewSchedulerSnapshotService(
@@ -157,13 +166,14 @@ func NewSchedulerSnapshotService(
 		maxQPS = cfg.Gateway.Scheduling.DbFallbackMaxQPS
 	}
 	return &SchedulerSnapshotService{
-		cache:         cache,
-		outboxRepo:    outboxRepo,
-		accountRepo:   accountRepo,
-		groupRepo:     groupRepo,
-		cfg:           cfg,
-		stopCh:        make(chan struct{}),
-		fallbackLimit: newFallbackLimiter(maxQPS),
+		cache:                cache,
+		outboxRepo:           outboxRepo,
+		accountRepo:          accountRepo,
+		groupRepo:            groupRepo,
+		cfg:                  cfg,
+		stopCh:               make(chan struct{}),
+		fullRebuildRequestCh: make(chan string, 1),
+		fallbackLimit:        newFallbackLimiter(maxQPS),
 	}
 }
 
@@ -176,6 +186,12 @@ func (s *SchedulerSnapshotService) Start() {
 	go func() {
 		defer s.wg.Done()
 		s.runInitialRebuild()
+	}()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runRequestedFullRebuildWorker()
 	}()
 
 	interval := s.outboxPollInterval()
@@ -194,6 +210,30 @@ func (s *SchedulerSnapshotService) Start() {
 			defer s.wg.Done()
 			s.runFullRebuildWorker(fullInterval)
 		}()
+	}
+}
+
+// RequestFullRebuild queues a coalesced asynchronous snapshot rebuild.
+func (s *SchedulerSnapshotService) RequestFullRebuild(reason string) {
+	if s == nil || s.cache == nil || s.fullRebuildRequestCh == nil {
+		return
+	}
+	select {
+	case s.fullRebuildRequestCh <- reason:
+	default:
+	}
+}
+
+func (s *SchedulerSnapshotService) runRequestedFullRebuildWorker() {
+	for {
+		select {
+		case reason := <-s.fullRebuildRequestCh:
+			if err := s.triggerFullRebuild(reason); err != nil {
+				logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] requested full rebuild failed: reason=%s err=%v", reason, err)
+			}
+		case <-s.stopCh:
+			return
+		}
 	}
 }
 
@@ -529,6 +569,7 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		found[account.ID] = struct{}{}
 		if s.cache != nil {
+			s.preserveCachedOpenAISchedulingCostStats(ctx, account)
 			if err := s.cache.SetAccount(ctx, account); err != nil {
 				return err
 			}
@@ -646,6 +687,7 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 		return err
 	}
 	if s.cache != nil {
+		s.preserveCachedOpenAISchedulingCostStats(ctx, account)
 		if err := s.cache.SetAccount(ctx, account); err != nil {
 			return err
 		}
@@ -1458,13 +1500,41 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		return filtered, nil
 	}
 
+	var (
+		accounts []Account
+		err      error
+	)
 	if groupID > 0 {
-		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, groupID, bucket.Platform)
+	} else if s.isRunModeSimple() {
+		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
 	}
-	if s.isRunModeSimple() {
-		return s.accountRepo.ListSchedulableByPlatform(ctx, bucket.Platform)
+	if err != nil {
+		return nil, err
 	}
-	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, bucket.Platform)
+	if bucket.Platform == PlatformOpenAI && openAIAccountCostSchedulingEnabled(ctx, s.cfg, s.settingService) {
+		if err := attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts); err != nil {
+			for i := range accounts {
+				s.preserveCachedOpenAISchedulingCostStats(ctx, &accounts[i])
+			}
+		}
+	}
+	return accounts, nil
+}
+
+func (s *SchedulerSnapshotService) preserveCachedOpenAISchedulingCostStats(ctx context.Context, account *Account) {
+	if s == nil || s.cache == nil || account == nil || account.ID <= 0 ||
+		!isOpenAIUnsupportedBillingProbeAccount(account) ||
+		!openAIAccountCostSchedulingEnabled(ctx, s.cfg, s.settingService) {
+		return
+	}
+	cached, err := s.cache.GetAccount(ctx, account.ID)
+	if err != nil || cached == nil {
+		return
+	}
+	preserveOpenAISchedulingCostStats(account, cached)
 }
 
 func (s *SchedulerSnapshotService) loadAccountsForRebuild(

@@ -1509,6 +1509,7 @@ func (r *accountRepository) syncSchedulerAccountSnapshot(ctx context.Context, ac
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot read failed: id=%d err=%v", accountID, err)
 		return
 	}
+	r.preserveCachedAccountCostStats(ctx, account)
 	if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] sync account snapshot write failed: id=%d err=%v", accountID, err)
 	}
@@ -1558,6 +1559,9 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 	if err != nil {
 		logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot read failed: count=%d err=%v", len(uniqueIDs), err)
 		return
+	}
+	for _, account := range accounts {
+		r.preserveCachedAccountCostStats(ctx, account)
 	}
 
 	for _, account := range accounts {
@@ -3005,18 +3009,37 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 }
 
 func (r *accountRepository) attachAccountCostStats(ctx context.Context, accounts []service.Account) error {
+	return r.attachMatchingAccountCostStats(ctx, accounts, nil)
+}
+
+// AttachOpenAISchedulingCostStats fills the derived cost-per-USD signal used by
+// OpenAI cost-aware schedulers. Callers decide when the signal is enabled so
+// ordinary schedulable-account queries never scan usage history.
+func (r *accountRepository) AttachOpenAISchedulingCostStats(ctx context.Context, accounts []service.Account) error {
+	return r.attachMatchingAccountCostStats(ctx, accounts, accountUsesCostPerUSDForScheduling)
+}
+
+func (r *accountRepository) attachMatchingAccountCostStats(ctx context.Context, accounts []service.Account, include func(*service.Account) bool) error {
 	if len(accounts) == 0 {
 		return nil
 	}
 	accountIDs := make([]int64, 0, len(accounts))
 	for i := range accounts {
-		accountIDs = append(accountIDs, accounts[i].ID)
+		if include == nil || include(&accounts[i]) {
+			accountIDs = append(accountIDs, accounts[i].ID)
+		}
+	}
+	if len(accountIDs) == 0 {
+		return nil
 	}
 	costs, err := r.loadTotalAccountCosts(ctx, accountIDs)
 	if err != nil {
 		return err
 	}
 	for i := range accounts {
+		if include != nil && !include(&accounts[i]) {
+			continue
+		}
 		totalAccountCost := costs[accounts[i].ID]
 		accounts[i].TotalAccountCost = totalAccountCost
 		if accounts[i].TotalCostCNY <= 0 {
@@ -3027,6 +3050,33 @@ func (r *accountRepository) attachAccountCostStats(ctx context.Context, accounts
 		}
 	}
 	return nil
+}
+
+func accountUsesCostPerUSDForScheduling(account *service.Account) bool {
+	if account == nil || account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeAPIKey || account.TotalCostCNY <= 0 {
+		return false
+	}
+	probe, ok := account.Extra[service.UpstreamBillingProbeExtraKey].(map[string]any)
+	if !ok {
+		return false
+	}
+	status, _ := probe["status"].(string)
+	return status == service.UpstreamBillingProbeStatusUnsupported
+}
+
+func (r *accountRepository) preserveCachedAccountCostStats(ctx context.Context, account *service.Account) {
+	if r == nil || r.schedulerCache == nil || account == nil || account.ID <= 0 {
+		return
+	}
+	if !accountUsesCostPerUSDForScheduling(account) {
+		return
+	}
+	cached, err := r.schedulerCache.GetAccount(ctx, account.ID)
+	if err != nil || cached == nil || cached.TotalAccountCost <= 0 {
+		return
+	}
+	account.TotalAccountCost = cached.TotalAccountCost
+	account.CostCNYPerUSD = account.TotalCostCNY / cached.TotalAccountCost
 }
 
 func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []int64) (map[int64][]*service.Group, map[int64][]int64, map[int64][]service.AccountGroup, error) {

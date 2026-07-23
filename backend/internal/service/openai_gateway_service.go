@@ -265,7 +265,6 @@ type OpenAIForwardResult struct {
 	ImageOutputSizes      []string
 	ImageSizeSource       string
 	ImageSizeBreakdown    map[string]int
-	ImageArchiveInputs    []ArchivedImageInput
 	VideoCount            int
 	VideoResolution       string
 	// VideoDurationSeconds is the requested generated video duration normalized to 1-15 seconds.
@@ -2003,7 +2002,12 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	}
 	rateOrder := openAILegacyUpstreamRateOrder{}
 	if preferLowUpstreamRate {
-		rateOrder = newOpenAILegacyUpstreamRateOrder(eligible, time.Now(), s.openAIOAuthSchedulingRateMultiplier(ctx))
+		rateOrder = newOpenAILegacyUpstreamRateOrder(
+			eligible,
+			time.Now(),
+			s.openAIOAuthSchedulingRateMultiplier(ctx),
+			s.openAISchedulingUSDToCNYRate(ctx),
+		)
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		a, b := eligible[i], eligible[j]
@@ -2212,7 +2216,12 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 	rateOrder := openAILegacyUpstreamRateOrder{}
 	if preferLowUpstreamRate {
-		rateOrder = newOpenAILegacyUpstreamRateOrder(candidates, time.Now(), s.openAIOAuthSchedulingRateMultiplier(ctx))
+		rateOrder = newOpenAILegacyUpstreamRateOrder(
+			candidates,
+			time.Now(),
+			s.openAIOAuthSchedulingRateMultiplier(ctx),
+			s.openAISchedulingUSDToCNYRate(ctx),
+		)
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
@@ -2417,6 +2426,9 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	if err != nil {
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
+	if platform == PlatformOpenAI && s.shouldLoadOpenAISchedulingCostStats(ctx) {
+		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
+	}
 	return accounts, nil
 }
 
@@ -2549,6 +2561,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
+	preserveOpenAISchedulingCostStats(latest, account)
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
 		return nil
 	}
@@ -3681,7 +3694,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		responseID := ""
 		imageCount := 0
 		var imageOutputSizes []string
-		var imageArchiveInputs []ArchivedImageInput
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil {
@@ -3693,7 +3705,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseID = strings.TrimSpace(streamResult.responseID)
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
-			imageArchiveInputs = streamResult.archiveInputs
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
@@ -3703,7 +3714,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseID = strings.TrimSpace(nonStreamResult.responseID)
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
-			imageArchiveInputs = nonStreamResult.archiveInputs
 			if imageCount > 0 {
 				ms := int(time.Since(startTime).Milliseconds())
 				imageFirstOutputMs = &ms
@@ -3744,9 +3754,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			forwardResult.ImageInputSize = imageInputSize
 			forwardResult.ImageOutputSizes = imageOutputSizes
 			forwardResult.BillingModel = imageBillingModel
-		}
-		if len(imageArchiveInputs) > 0 {
-			forwardResult.ImageArchiveInputs = imageArchiveInputs
 		}
 		return forwardResult, nil
 	}
@@ -3975,7 +3982,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	responseID := ""
 	imageCount := 0
 	var imageOutputSizes []string
-	var imageArchiveInputs []ArchivedImageInput
 	if reqStream {
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 		if err != nil {
@@ -3987,7 +3993,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		responseID = strings.TrimSpace(result.responseID)
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
-		imageArchiveInputs = result.archiveInputs
 	} else {
 		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel)
 		if err != nil {
@@ -3997,7 +4002,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		responseID = strings.TrimSpace(result.responseID)
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
-		imageArchiveInputs = result.archiveInputs
 		if imageCount > 0 {
 			ms := int(time.Since(startTime).Milliseconds())
 			imageFirstOutputMs = &ms
@@ -4036,9 +4040,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageInputSize = imageInputSize
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
-	}
-	if len(imageArchiveInputs) > 0 {
-		forwardResult.ImageArchiveInputs = imageArchiveInputs
 	}
 	return forwardResult, nil
 }
@@ -4351,7 +4352,6 @@ type openaiStreamingResultPassthrough struct {
 	responseID         string
 	imageCount         int
 	imageOutputSizes   []string
-	archiveInputs      []ArchivedImageInput
 }
 
 type openaiNonStreamingResultPassthrough struct {
@@ -4360,7 +4360,6 @@ type openaiNonStreamingResultPassthrough struct {
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
-	archiveInputs    []ArchivedImageInput
 }
 
 func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
@@ -4602,7 +4601,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
-		archiveInputs:    collectOpenAIArchiveImages(body),
 	}, nil
 }
 
@@ -4655,11 +4653,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 		body = []byte(bodyText)
 	}
-	archiveInputs := collectOpenAIArchiveImages(body)
-	if len(archiveInputs) == 0 {
-		archiveInputs = collectOpenAIArchiveImagesFromSSEBody(bodyText)
-	}
-
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
 	contentType := "application/json; charset=utf-8"
@@ -4679,7 +4672,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
-		archiveInputs:    archiveInputs,
 	}, nil
 }
 
@@ -5216,7 +5208,6 @@ type openaiStreamingResult struct {
 	responseID         string
 	imageCount         int
 	imageOutputSizes   []string
-	archiveInputs      []ArchivedImageInput
 }
 
 type openaiNonStreamingResult struct {
@@ -5225,7 +5216,6 @@ type openaiNonStreamingResult struct {
 	responseID       string
 	imageCount       int
 	imageOutputSizes []string
-	archiveInputs    []ArchivedImageInput
 }
 
 func extractOpenAISSEDataLine(line string) (string, bool) {
@@ -5510,7 +5500,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
-		archiveInputs:    collectOpenAIArchiveImages(body),
 	}, nil
 }
 
@@ -5565,11 +5554,6 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 		body = []byte(bodyText)
 	}
-	archiveInputs := collectOpenAIArchiveImages(body)
-	if len(archiveInputs) == 0 {
-		archiveInputs = collectOpenAIArchiveImagesFromSSEBody(bodyText)
-	}
-
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
 	contentType := "application/json; charset=utf-8"
@@ -5589,7 +5573,6 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
-		archiveInputs:    archiveInputs,
 	}, nil
 }
 
@@ -5760,57 +5743,6 @@ func buildResponsesOutputJSON(acc *apicompat.BufferedResponseAccumulator, imageO
 		return nil, false
 	}
 	return outputJSON, true
-}
-
-func collectOpenAIArchiveImagesFromRawMessages(items []json.RawMessage) []ArchivedImageInput {
-	if len(items) == 0 {
-		return nil
-	}
-	body, err := json.Marshal(items)
-	if err != nil {
-		return nil
-	}
-	return collectOpenAIArchiveImages(body)
-}
-
-func dedupeOpenAIArchiveInputs(inputs []ArchivedImageInput) []ArchivedImageInput {
-	if len(inputs) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(inputs))
-	out := make([]ArchivedImageInput, 0, len(inputs))
-	for _, input := range inputs {
-		key := strings.TrimSpace(input.B64JSON)
-		if key == "" {
-			key = strings.TrimSpace(input.DownloadURL)
-		}
-		if key == "" {
-			continue
-		}
-		sum := sha256.Sum256([]byte(key))
-		dedupeKey := string(sum[:])
-		if _, exists := seen[dedupeKey]; exists {
-			continue
-		}
-		seen[dedupeKey] = struct{}{}
-		input.Index = len(out)
-		out = append(out, input)
-	}
-	return out
-}
-
-func collectOpenAIArchiveImagesFromSSEBody(bodyText string) []ArchivedImageInput {
-	if strings.TrimSpace(bodyText) == "" {
-		return nil
-	}
-	imageOutputs := make([]json.RawMessage, 0, 1)
-	seenImages := make(map[string]struct{})
-	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
-		if imageOutput, ok := extractImageGenerationOutputFromSSEData(data, seenImages); ok {
-			imageOutputs = append(imageOutputs, imageOutput)
-		}
-	})
-	return collectOpenAIArchiveImagesFromRawMessages(imageOutputs)
 }
 
 func extractImageGenerationOutputFromSSEData(data []byte, seen map[string]struct{}) (json.RawMessage, bool) {

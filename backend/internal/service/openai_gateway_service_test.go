@@ -2968,7 +2968,7 @@ func TestHandleNonStreamingResponse_APIKeyFallsBackToSSEBodyWhenContentTypeIsWro
 	require.Equal(t, "hello", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
 }
 
-func TestHandleNonStreamingResponse_ArchivesResponsesImageOutput(t *testing.T) {
+func TestHandleNonStreamingResponse_PreservesResponsesImageOutputUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -2986,9 +2986,6 @@ func TestHandleNonStreamingResponse_ArchivesResponsesImageOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 4, result.ImageOutputTokens)
-	require.Len(t, result.archiveInputs, 1)
-	require.Equal(t, "aW1hZ2UtMQ==", result.archiveInputs[0].B64JSON)
-	require.Equal(t, 0, result.archiveInputs[0].Index)
 }
 
 func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T) {
@@ -3017,9 +3014,6 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 	require.Equal(t, "completed", gjson.Get(rec.Body.String(), "output.0.status").String())
 	require.Equal(t, "aGVsbG8=", gjson.Get(rec.Body.String(), "output.0.result").String())
 	require.Equal(t, "draw a cat", gjson.Get(rec.Body.String(), "output.0.revised_prompt").String())
-	require.Len(t, usage.archiveInputs, 1)
-	require.Equal(t, "aGVsbG8=", usage.archiveInputs[0].B64JSON)
-	require.Equal(t, 0, usage.archiveInputs[0].Index)
 }
 
 func TestHandleSSEToJSON_NoFinalResponseKeepsSSEBody(t *testing.T) {

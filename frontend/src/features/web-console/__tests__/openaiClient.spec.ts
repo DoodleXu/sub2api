@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateWebConsoleImage, sendWebConsoleChat, webConsoleErrorMessage } from '../openaiClient'
+import { sendWebConsoleChat, webConsoleErrorMessage } from '../openaiClient'
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -125,57 +125,6 @@ describe('web console openai client', () => {
       url: 'data:image/png;base64,ZmFrZS1pbWFnZQ==',
       alt: '画一只猫',
     }])
-  })
-
-  it('生图模式强制走 Responses image_generation tool 并按张数合并展示结果', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({
-        output: [{ type: 'image_generation_call', result: 'ZmFrZS0x' }],
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        output: [{ type: 'image_generation_call', result: 'ZmFrZS0y' }],
-      }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const result = await generateWebConsoleImage({
-      endpoint: 'https://api.example.com',
-      apiKey: 'sk-test',
-      model: 'gpt-5.4',
-      prompt: '画两张海报',
-      history: [],
-      imageOptions: {
-        size: '1024x1024',
-        quality: 'high',
-        background: 'transparent',
-        outputFormat: 'webp',
-        count: 2,
-      },
-    })
-
-    expect(result.usedMode).toBe('responses')
-    expect(result.images).toHaveLength(2)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      'https://api.example.com/v1/responses',
-      'https://api.example.com/v1/responses',
-    ])
-
-    const [, firstResponsesInit] = fetchMock.mock.calls[0] as [string, RequestInit]
-    const [, secondResponsesInit] = fetchMock.mock.calls[1] as [string, RequestInit]
-    const expectedResponsesBody = {
-      model: 'gpt-5.4',
-      input: '画两张海报',
-      tools: [{
-        type: 'image_generation',
-        model: 'gpt-image-2',
-        size: '1024x1024',
-        quality: 'high',
-        output_format: 'webp',
-      }],
-      tool_choice: { type: 'image_generation' },
-    }
-    expect(JSON.parse(String(firstResponsesInit.body))).toEqual(expectedResponsesBody)
-    expect(JSON.parse(String(secondResponsesInit.body))).toEqual(expectedResponsesBody)
   })
 
   it('将额度耗尽错误转成中文提示', () => {

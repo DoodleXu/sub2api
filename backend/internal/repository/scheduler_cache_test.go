@@ -37,6 +37,23 @@ func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 	require.Empty(t, metadata.GetCredential("access_token"))
 }
 
+func TestSchedulerMetadataAccountKeepsCostPerUSD(t *testing.T) {
+	account := service.Account{
+		ID:               25,
+		Platform:         service.PlatformOpenAI,
+		Type:             service.AccountTypeAPIKey,
+		TotalCostCNY:     6.95,
+		TotalAccountCost: 100,
+		CostCNYPerUSD:    0.0695,
+	}
+
+	metadata := buildSchedulerMetadataAccount(account)
+
+	require.Equal(t, account.TotalCostCNY, metadata.TotalCostCNY)
+	require.Equal(t, account.TotalAccountCost, metadata.TotalAccountCost)
+	require.Equal(t, account.CostCNYPerUSD, metadata.CostCNYPerUSD)
+}
+
 func TestSchedulerMetadataAccountProjectsUpstreamBillingProbe(t *testing.T) {
 	lastError := strings.Repeat("upstream diagnostic ", 512)
 	probe := map[string]any{

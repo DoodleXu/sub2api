@@ -1544,7 +1544,7 @@ export default {
   // Admin
   admin: {
     imageGenerations: {
-      description: '查看全站生图归档、每日统计和存储配置。'
+      description: '查看上游异步生图对象存储中的已有结果。'
     },
     // Dashboard
     dashboard: {

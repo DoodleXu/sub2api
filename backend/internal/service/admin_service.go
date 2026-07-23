@@ -2912,17 +2912,36 @@ func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Conte
 	if s == nil || s.accountRepo == nil {
 		return nil, nil
 	}
-	return s.accountRepo.ListAllWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
+	accounts, err := s.accountRepo.ListAllWithFilters(ctx, platform, accountType, status, search, groupID, privacyMode)
+	if err != nil {
+		return nil, err
+	}
+	if s.settingService != nil && openAIAccountCostSchedulingEnabled(ctx, s.settingService.cfg, s.settingService) {
+		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
+	}
+	return accounts, nil
 }
 
 func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScore(ctx context.Context, groupID *int64) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, nil
 	}
+	var (
+		accounts []Account
+		err      error
+	)
 	if groupID != nil {
-		return s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, PlatformOpenAI)
+		accounts, err = s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, *groupID, PlatformOpenAI)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, PlatformOpenAI)
 	}
-	return s.accountRepo.ListSchedulableUngroupedByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return nil, err
+	}
+	if s.settingService != nil && openAIAccountCostSchedulingEnabled(ctx, s.settingService.cfg, s.settingService) {
+		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
+	}
+	return accounts, nil
 }
 
 func (s *adminServiceImpl) GetAccount(ctx context.Context, id int64) (*Account, error) {
