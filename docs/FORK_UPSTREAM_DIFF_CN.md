@@ -11,7 +11,7 @@
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
 | Fork 同步前 HEAD | `40ac7871f chore: 准备发布 v0.1.227` | 本次合并 v0.1.163 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | v0.1.163 已合入本 fork；fork 版本继续保持 `0.1.227`，由后续独立发版流程决定是否提升 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | v0.1.163 已合入本 fork；完成合并审核修复后发布为 `v0.1.228` |
 | 上游最新 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | 2026-07-22 发布的官方最新非草稿 release |
 | 上游 main HEAD | `fa2da0409` | 本次同步时的远端 main，包含 v0.1.163 后续版本同步和赞助者更新；未越过 release 标签合并 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 5 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游分组推理策略、Grok compact/工具协议、调度诊断、缓存计费、Redis ACL 与移动端适配 |
@@ -485,6 +485,14 @@ git diff --name-status refs/tags/upstream/v0.1.163^{}..HEAD
 ## 待关注上游 main 变更
 
 当前 fork 已包含官方 release `v0.1.163`。上游 `main` 在该 release 后的版本同步与赞助者更新尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.228 发布验证
+
+- 上游同步：完整合入官方 release `v0.1.163`，保留 fork 聚合模块结构及签到、运营中心、成本核算、账号归档、Web 创作台和生图管理等定制行为。
+- 审核修复：默认 `deploy/docker-compose.yml` 补齐 `REDIS_USERNAME` 环境变量透传，与 `.env.example`、dev/local/standalone Compose 模板及后端 Redis ACL 配置保持一致；使用非空 ACL 用户名渲染 Compose 后确认变量进入应用容器。
+- 后端门禁：`TZ=UTC go test -tags=unit ./...`、`TZ=UTC go test -tags=integration ./...`、`TZ=UTC go vet -tags=unit ./...` 和生产构建通过；`golangci-lint v2.9.0` 为 `0 issues`，`govulncheck` 在实际调用路径中发现 `0` 个漏洞。
+- 前端门禁：Vitest 全量 `201` 个测试文件、`1386` 项用例通过；`vue-tsc --noEmit`、ESLint、pnpm frozen install、生产依赖审计例外校验和生产构建通过。构建仅保留既有动态/静态混合导入和大 chunk 提示。
+- 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.228`；GitHub Release 与 GHCR 继续只发布 `linux/amd64`。
 
 ## v0.1.227 发布验证
 
