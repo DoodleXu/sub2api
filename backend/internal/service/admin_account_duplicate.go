@@ -144,6 +144,9 @@ func cloneAccountValuePointer[T any](value *T) *T {
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
+	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
+	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
 	account := &Account{
 		Name: input.Name, Notes: normalizeAccountNotes(input.Notes), Platform: input.Platform, Type: input.Type,
 		Credentials: input.Credentials, Extra: accountExtra, ProxyID: input.ProxyID,

@@ -10,23 +10,32 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `40ac7871f chore: 准备发布 v0.1.227` | 本次合并 v0.1.163 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | v0.1.163 已合入本 fork；完成合并审核修复后发布为 `v0.1.228` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.163` -> `d0bdd7e771` | 2026-07-22 发布的官方最新非草稿 release |
-| 上游 main HEAD | `fa2da0409` | 本次同步时的远端 main，包含 v0.1.163 后续版本同步和赞助者更新；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 5 个 modify/delete）；继续保留 fork 聚合文件结构和六类核心定制行为，并迁入上游分组推理策略、Grok compact/工具协议、调度诊断、缓存计费、Redis ACL 与移动端适配 |
+| Fork 同步前 HEAD | `a2bdf16a5 chore: 准备发布 v0.1.228` | 本次合并 v0.1.164 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.164` -> `cd8bb98c44` | v0.1.164 已合入本 fork；完成合并审核后发布为 `v0.1.229` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.164` -> `cd8bb98c44` | 2026-07-23 发布的官方最新非草稿 release |
+| 上游 main HEAD | `cb24522dd` | 本次同步时的远端 main；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 8 个 modify/delete）；继续保留 fork 聚合文件结构和核心定制行为，并迁入聚合分组、Ollama Cloud 用量、支付宝移动端深链、OpenAI 断流代理隔离及网关修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.163:refs/tags/upstream/v0.1.163 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.163^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.163^{}..HEAD
+git fetch upstream refs/tags/v0.1.164:refs/tags/upstream/v0.1.164 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.164^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.164^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.163` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.164` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.164` 合并说明：
+
+- 新增 `composite` 聚合分组及模型路由表，可把公开模型名按 endpoint、优先级和匹配规则路由到 Anthropic、Gemini、OpenAI、Antigravity 或 Grok 子分组；模型列表、账号复制、订阅计划、渠道监控和网关调度均识别聚合分组。公开别名未配置显式渠道价格时按实际转发模型计费，避免别名误命中家族价格或静默零价；fork 的日/周/月订阅、人民币金额和账号成本统计继续保留。
+- Ollama 账号新增 Cloud 官方用量读取、加密会话保存、手动刷新和可选后台刷新；会话、自动刷新开关及快照均视为服务受管字段，普通账号编辑、批量更新、复制和 CRS 同步不能注入或误覆盖。保存浏览器 Cookie 的请求体整体不写入审计日志，避免会话明文长期留存。
+- OpenAI OAuth 透传会把字符串或单对象 `input` 规范化为列表；流式响应异常断开会按代理维度短暂隔离，收到成功终态后清除状态。fork 的 Responses Lite 工具载体、生图桥接门控、首图 TTFT、逐轮图片计费快照、Agent Identity 脱敏和原生 Codex 空 manifest 行为继续保留。
+- 支付新增支付宝面对面预下单与移动端应用深链，并继续保留 fork 的人民币默认币种、订阅美元兑人民币换算、手续费、升级抵扣和历史空币种回填；管理端订阅计划允许选择 `composite` 订阅分组。
+- 同步 Grok 402 冷却、简易模式默认图片能力、渠道价格模型名归一化、CC Switch Grok Build 归类、具体 GPT-5.6 测试模型和限流恢复日期展示等修复；账号归档过滤、自动倍率探测、每美元人民币成本调度及 Ops 生图 Avg 口径保持不变。
+- 8 个上游拆分文件的增量已移植回 fork 聚合模块，没有恢复已删除的拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和批量生图关键入口继续保留。部署镜像与在线更新仓库仍指向 `DoodleXu/sub2api`，发布继续限定 `linux/amd64` + GHCR。
 
 本次 `v0.1.163` 合并说明：
 
@@ -484,7 +493,14 @@ git diff --name-status refs/tags/upstream/v0.1.163^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.163`。上游 `main` 在该 release 后的版本同步与赞助者更新尚未进入当前 fork；后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.164`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+
+## v0.1.229 发布验证
+
+- 上游同步：完整合入官方 release `v0.1.164`，处理 20 个冲突路径（含 8 个 modify/delete），继续由 fork 聚合模块承载上游拆分语义。
+- 后端门禁：`go test ./...` 全量通过，重点覆盖 composite 路由与计费、Ollama Cloud 会话与用量、OpenAI OAuth 输入规范化、流式断连代理隔离和审计日志凭证省略。
+- 前端门禁：使用 pnpm `9.15.9` frozen install；Vitest 全量 `205` 个测试文件、`1418` 项用例通过，`vue-tsc --noEmit`、ESLint 和生产构建通过。
+- 发布版本：`backend/cmd/server/VERSION` 更新为 `0.1.229`；GitHub Release 与 GHCR 继续只发布 `linux/amd64`。
 
 ## v0.1.228 发布验证
 

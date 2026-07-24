@@ -418,6 +418,7 @@ type OpenAIGatewayService struct {
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
 	openaiSchedulerOnce           sync.Once
+	openaiProxyStreamCircuitOnce  sync.Once
 	openaiWSPassthroughDialerOnce sync.Once
 	openaiModelTransientOnce      sync.Once
 	agentIdentityTaskMu           sync.Mutex
@@ -427,6 +428,7 @@ type OpenAIGatewayService struct {
 	openaiWSPassthroughDialer     openAIWSClientDialer
 	openaiAccountStats            *openAIAccountRuntimeStats
 	openaiModelTransient          *openAIAccountModelTransientState
+	openaiProxyStreamCircuit      *openAIProxyStreamCircuit
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time
@@ -2529,6 +2531,9 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccount(ctx context.
 	if s.isOpenAIAccountRuntimeBlocked(fresh) {
 		return nil
 	}
+	if s.isOpenAIProxyStreamQuarantined(fresh) {
+		return nil
+	}
 	return fresh
 }
 
@@ -2598,6 +2603,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 		if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
 			return nil
 		}
+		if s.isOpenAIProxyStreamQuarantined(account) {
+			return nil
+		}
 		return account
 	}
 
@@ -2616,6 +2624,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 		return nil
 	}
 	if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) {
+		return nil
+	}
+	if s.isOpenAIProxyStreamQuarantined(latest) {
 		return nil
 	}
 	return latest
@@ -7563,6 +7574,34 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 		}
 		normalized = next
 		changed = true
+	}
+
+	if inputResult := gjson.GetBytes(normalized, "input"); inputResult.Exists() {
+		switch {
+		case inputResult.Type == gjson.String:
+			text := inputResult.String()
+			var inputValue any
+			if strings.TrimSpace(text) != "" {
+				inputValue = []any{map[string]any{
+					"type": "message", "role": "user", "content": text,
+				}}
+			} else {
+				inputValue = []any{}
+			}
+			next, err := sjson.SetBytes(normalized, "input", inputValue)
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough body input string: %w", err)
+			}
+			normalized = next
+			changed = true
+		case inputResult.Type == gjson.JSON && !inputResult.IsArray():
+			next, err := sjson.SetRawBytes(normalized, "input", []byte("["+inputResult.Raw+"]"))
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough body input object: %w", err)
+			}
+			normalized = next
+			changed = true
+		}
 	}
 
 	if compact {

@@ -726,6 +726,7 @@ type GatewayService struct {
 	debugClaudeMimic      atomic.Bool
 	channelService        *ChannelService
 	resolver              *ModelPricingResolver
+	compositeResolver     *CompositeRouteResolver
 	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
@@ -759,6 +760,7 @@ func NewGatewayService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	channelService *ChannelService,
 	resolver *ModelPricingResolver,
+	compositeResolver *CompositeRouteResolver,
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *GatewayService {
@@ -795,6 +797,7 @@ func NewGatewayService(
 		tlsFPProfileService:   tlsFPProfileService,
 		channelService:        channelService,
 		resolver:              resolver,
+		compositeResolver:     compositeResolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 	}
@@ -1659,9 +1662,24 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		if err != nil {
 			return nil, err
 		}
+		if group == nil {
+			return nil, ErrGroupNotFound
+		}
 		groupID = resolvedGroupID
 		ctx = s.withGroupContext(ctx, group)
 		platform = group.Platform
+		if group.Platform == PlatformComposite {
+			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
+			}
+			platform = decision.TargetPlatform
+			requestedModel = decision.UpstreamModel
+			ctx = WithCompositeRouteDecision(ctx, decision)
+		}
 	} else {
 		// 无分组时只使用原生 anthropic 平台
 		platform = PlatformAnthropic
@@ -1811,7 +1829,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
-	platform, hasForcePlatform, err := s.resolvePlatform(ctx, groupID, group)
+	platform, hasForcePlatform, err := s.resolvePlatform(ctx, groupID, group, requestedModel)
 	if err != nil {
 		return nil, err
 	}
@@ -1843,9 +1861,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return excluded
 	}
 
-	// 获取模型路由配置（仅 anthropic 平台）
+	// 获取模型路由配置（anthropic 目标平台；composite 分组按目标平台判断）
 	var routingAccountIDs []int64
-	if group != nil && requestedModel != "" && group.Platform == PlatformAnthropic {
+	if group != nil && requestedModel != "" && platform == PlatformAnthropic &&
+		(group.Platform == PlatformAnthropic || group.Platform == PlatformComposite) {
 		routingAccountIDs = group.GetRoutingAccountIDs(requestedModel)
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] context group routing: group_id=%d model=%s enabled=%v rules=%d matched_ids=%v session=%s sticky_account=%d",
@@ -2439,8 +2458,9 @@ func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupI
 		}
 		return nil
 	}
-	// Preserve existing behavior: model routing only applies to anthropic groups.
-	if group.Platform != PlatformAnthropic {
+	// Model routing applies only to requests resolved to Anthropic. Composite
+	// groups may still use those rules once their model resolved to Anthropic.
+	if group.Platform != PlatformAnthropic && group.Platform != PlatformComposite {
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: non-anthropic group platform: group_id=%d group_platform=%s model=%s", group.ID, group.Platform, requestedModel)
 		}
@@ -2505,18 +2525,41 @@ func (s *GatewayService) checkClaudeCodeRestriction(ctx context.Context, groupID
 	return group, resolvedID, nil
 }
 
-func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, group *Group) (string, bool, error) {
+func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, group *Group, requestedModel string) (string, bool, error) {
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
 	if hasForcePlatform && forcePlatform != "" {
 		return forcePlatform, true, nil
 	}
+	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+		return platform, false, nil
+	}
 	if group != nil {
+		if group.Platform == PlatformComposite {
+			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
+			if err != nil {
+				return "", false, err
+			}
+			if !ok {
+				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
+			}
+			return decision.TargetPlatform, false, nil
+		}
 		return group.Platform, false, nil
 	}
 	if groupID != nil {
 		group, err := s.resolveGroupByID(ctx, *groupID)
 		if err != nil {
 			return "", false, err
+		}
+		if group.Platform == PlatformComposite {
+			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
+			if err != nil {
+				return "", false, err
+			}
+			if !ok {
+				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
+			}
+			return decision.TargetPlatform, false, nil
 		}
 		return group.Platform, false, nil
 	}
@@ -9171,10 +9214,19 @@ func PlatformFromAPIKey(apiKey *APIKey) string {
 // 后扣运行在 worker 池的 background ctx 上没有 ForcePlatform，因此后扣平台由 handler
 // 预先算定、经 RecordUsageInput.QuotaPlatform 传入，不要在后扣链路用 worker ctx 调用本函数。
 func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
-	if fp, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && fp != "" {
-		return fp
+	if ctx != nil {
+		if fp, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && fp != "" {
+			return fp
+		}
 	}
-	return PlatformFromAPIKey(apiKey)
+	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+		return platform
+	}
+	platform := PlatformFromAPIKey(apiKey)
+	if platform == PlatformComposite {
+		return ""
+	}
+	return platform
 }
 
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
@@ -9745,13 +9797,18 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, timezone.Now())
 
 	// 确定计费模型
-	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
+	concreteBillingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
+	billingModel := concreteBillingModel
 	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" {
 		billingModel = input.ChannelMappedModel
 	}
 	if input.BillingModelSource == BillingModelSourceRequested && input.OriginalModel != "" {
 		billingModel = input.OriginalModel
 	}
+	if apiKey.Group != nil && apiKey.Group.Platform == PlatformComposite {
+		billingModel = s.compositeBillableModel(ctx, apiKey, billingModel, concreteBillingModel)
+	}
+	billingModel = s.billableModelWithFallback(ctx, apiKey, billingModel, result.UpstreamModel, result.Model)
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
 	requestedModel := result.Model
@@ -9804,6 +9861,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	quotaPlatform := input.QuotaPlatform
 	if quotaPlatform == "" {
 		quotaPlatform = PlatformFromAPIKey(apiKey)
+		if quotaPlatform == PlatformComposite && account != nil {
+			quotaPlatform = account.Platform
+		}
 	}
 	requestID := usageLog.RequestID
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
@@ -9825,6 +9885,48 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 
 	return nil
+}
+
+func (s *GatewayService) compositeBillableModel(ctx context.Context, apiKey *APIKey, billingModel, concreteBillingModel string) string {
+	if concreteBillingModel == "" || billingModel == concreteBillingModel {
+		return billingModel
+	}
+	if s.resolveChannelPricing(ctx, billingModel, apiKey) != nil {
+		return billingModel
+	}
+	logger.LegacyPrintf("service.gateway", "[Billing] composite billing model %q has no explicit channel pricing, billing by concrete model %q", billingModel, concreteBillingModel)
+	return concreteBillingModel
+}
+
+func (s *GatewayService) billableModelWithFallback(ctx context.Context, apiKey *APIKey, billingModel string, fallbacks ...string) string {
+	if s.hasResolvableTokenPricing(ctx, billingModel, apiKey) {
+		return billingModel
+	}
+	for _, fallback := range fallbacks {
+		fallback = strings.TrimSpace(fallback)
+		if fallback == "" || fallback == billingModel {
+			continue
+		}
+		if s.hasResolvableTokenPricing(ctx, fallback, apiKey) {
+			logger.LegacyPrintf("service.gateway", "[Billing] billing model %q has no pricing, falling back to concrete model %q", billingModel, fallback)
+			return fallback
+		}
+	}
+	return billingModel
+}
+
+func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model string, apiKey *APIKey) bool {
+	if strings.TrimSpace(model) == "" {
+		return false
+	}
+	if s.resolveChannelPricing(ctx, model, apiKey) != nil {
+		return true
+	}
+	if s.billingService == nil {
+		return false
+	}
+	_, err := s.billingService.GetModelPricing(model)
+	return err == nil
 }
 
 // calculateRecordUsageCost 根据请求类型和选项计算费用。
@@ -10855,6 +10957,34 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
+}
+
+// GetSchedulablePlatforms returns the concrete platforms that currently have
+// schedulable accounts in the target group.
+func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
+	platforms := make(map[string]struct{})
+	if s == nil || s.accountRepo == nil {
+		return platforms
+	}
+
+	var accounts []Account
+	var err error
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulable(ctx)
+	}
+	if err != nil {
+		return platforms
+	}
+
+	for _, acc := range accounts {
+		platform := strings.TrimSpace(acc.Platform)
+		if platform != "" {
+			platforms[platform] = struct{}{}
+		}
+	}
+	return platforms
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {

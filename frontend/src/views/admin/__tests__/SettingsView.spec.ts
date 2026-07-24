@@ -20,6 +20,10 @@ const {
   getNotificationConfig,
   updateNotificationConfig,
   testNotificationTransport,
+  getUpstreamBillingProbeSettings,
+  updateUpstreamBillingProbeSettings,
+  getOllamaCloudUsageSettings,
+  updateOllamaCloudUsageSettings,
   getGroups,
   listProxies,
   getProviders,
@@ -46,6 +50,16 @@ const {
   getNotificationConfig: vi.fn(),
   updateNotificationConfig: vi.fn(),
   testNotificationTransport: vi.fn(),
+  getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({
+    enabled: true,
+    interval_minutes: 30,
+  }),
+  updateUpstreamBillingProbeSettings: vi.fn().mockImplementation(async (payload) => payload),
+  getOllamaCloudUsageSettings: vi.fn().mockResolvedValue({
+    enabled: false,
+    interval_minutes: 60,
+  }),
+  updateOllamaCloudUsageSettings: vi.fn().mockImplementation(async (payload) => payload),
   getGroups: vi.fn(),
   listProxies: vi.fn(),
   getProviders: vi.fn(),
@@ -78,6 +92,12 @@ vi.mock("@/api", () => ({
       getNotificationConfig,
       updateNotificationConfig,
       testNotificationTransport,
+    },
+    accounts: {
+      getUpstreamBillingProbeSettings,
+      updateUpstreamBillingProbeSettings,
+      getOllamaCloudUsageSettings,
+      updateOllamaCloudUsageSettings,
     },
     groups: {
       getAll: getGroups,
@@ -580,6 +600,16 @@ async function openSecurityTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openGatewayTab(wrapper: ReturnType<typeof mountView>) {
+  const gatewayTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.gateway"));
+
+  expect(gatewayTabButton).toBeDefined();
+  await gatewayTabButton?.trigger("click");
+  await flushPromises();
+}
+
 async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   const usersTabButton = wrapper
     .findAll("button")
@@ -607,6 +637,10 @@ describe("admin SettingsView payment visible method controls", () => {
     getNotificationConfig.mockReset();
     updateNotificationConfig.mockReset();
     testNotificationTransport.mockReset();
+    getUpstreamBillingProbeSettings.mockReset();
+    updateUpstreamBillingProbeSettings.mockReset();
+    getOllamaCloudUsageSettings.mockReset();
+    updateOllamaCloudUsageSettings.mockReset();
     getGroups.mockReset();
     listProxies.mockReset();
     getProviders.mockReset();
@@ -684,6 +718,16 @@ describe("admin SettingsView payment visible method controls", () => {
     getNotificationConfig.mockResolvedValue({ ...baseNotificationConfig });
     updateNotificationConfig.mockImplementation(async (payload) => payload);
     testNotificationTransport.mockResolvedValue({ ok: true });
+    getUpstreamBillingProbeSettings.mockResolvedValue({
+      enabled: true,
+      interval_minutes: 30,
+    });
+    updateUpstreamBillingProbeSettings.mockImplementation(async (payload) => payload);
+    getOllamaCloudUsageSettings.mockResolvedValue({
+      enabled: false,
+      interval_minutes: 60,
+    });
+    updateOllamaCloudUsageSettings.mockImplementation(async (payload) => payload);
     getGroups.mockResolvedValue([]);
     listProxies.mockResolvedValue({
       items: [],
@@ -994,6 +1038,31 @@ describe("admin SettingsView payment visible method controls", () => {
       "保留原版高级调度开关。仅在老调度方案下启用原有的高级调度行为",
     );
     expect(wrapper.text()).not.toContain("OpenAI 实验调度策略");
+  });
+
+  it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const card = wrapper.get('[data-testid="ollama-cloud-usage-global-settings"]');
+    expect(card.isVisible()).toBe(true);
+    expect(
+      (card.get('[data-testid="ollama-cloud-usage-global-enabled"]').element as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+    expect(card.find('[data-testid="ollama-cloud-usage-global-interval"]').exists()).toBe(false);
+
+    await card.get('[data-testid="ollama-cloud-usage-global-enabled"]').setValue(true);
+    await card.get('[data-testid="ollama-cloud-usage-global-interval"]').setValue(90);
+    await card.get('[data-testid="ollama-cloud-usage-global-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateOllamaCloudUsageSettings).toHaveBeenCalledWith({
+      enabled: true,
+      interval_minutes: 90,
+    });
   });
 
   it("places and explains rate controls for both scheduling modes", async () => {
