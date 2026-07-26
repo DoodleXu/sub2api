@@ -76,7 +76,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// model before entering the generic account error path. This keeps the
 	// account available to other models and avoids the account runtime blocker.
 	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized &&
-		!(statusCode == http.StatusTooManyRequests && account.IsOpenAIContinueSchedulingAfterLimitEnabled()) &&
+		(statusCode != http.StatusTooManyRequests || !account.IsOpenAIContinueSchedulingAfterLimitEnabled()) &&
 		len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel[0]) {
 		return true
