@@ -152,7 +152,12 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 			`{"error":{"message":"` + key.runtimeID + ` ` + key.taskID + ` AgentAssertion assertion-count-secret"}}`,
 		)),
 	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream: upstream,
+	}
 	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -160,11 +165,14 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 
 	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
 	require.Error(t, err)
-	combined := err.Error() + rec.Body.String()
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	combined := err.Error() + string(failoverErr.ResponseBody) + rec.Body.String()
 	require.NotContains(t, combined, key.runtimeID)
 	require.NotContains(t, combined, key.taskID)
 	require.NotContains(t, combined, "assertion-count-secret")
 	require.Contains(t, combined, "[redacted]")
+	require.False(t, c.Writer.Written())
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentityTransportError(t *testing.T) {
@@ -185,7 +193,12 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 	upstream := &httpUpstreamRecorder{err: errors.New(
 		key.runtimeID + " " + key.taskID + " AgentAssertion assertion-transport-secret",
 	)}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream: upstream,
+	}
 	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -193,11 +206,13 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 
 	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
 	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
 	combined := err.Error() + rec.Body.String()
 	require.NotContains(t, combined, key.runtimeID)
 	require.NotContains(t, combined, key.taskID)
 	require.NotContains(t, combined, "assertion-transport-secret")
-	require.Contains(t, combined, "[redacted]")
+	require.False(t, c.Writer.Written())
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentityReadError(t *testing.T) {
@@ -229,11 +244,76 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 
 	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
 	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
 	combined := err.Error() + rec.Body.String()
 	require.NotContains(t, combined, key.runtimeID)
 	require.NotContains(t, combined, key.taskID)
 	require.NotContains(t, combined, "assertion-read-secret")
-	require.Contains(t, combined, "[redacted]")
+	require.False(t, c.Writer.Written())
+}
+
+func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_ReturnsFailoverWithoutWritingUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
+	account := &Account{
+		ID: 115, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+		Status:      StatusActive, Schedulable: true,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": []string{"60"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"private account limit detail"}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream: upstream,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+
+	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "private account limit detail")
+	require.False(t, c.Writer.Written())
+}
+
+func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_PreservesUnsupportedClientResponseMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
+	account := &Account{
+		ID: 116, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": "http://upstream.example"},
+		Status:      StatusActive, Schedulable: true,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"The input_tokens endpoint was not found"}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
+			Enabled: false, AllowInsecureHTTP: true,
+		}}},
+		httpUpstream: upstream,
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+
+	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, GatewayFailureScopeProvider, failoverErr.Scope)
+	require.Equal(t, http.StatusNotFound, failoverErr.ClientStatusCode)
+	require.Equal(t, "Token counting is not supported by upstream", failoverErr.ClientMessage)
+	require.False(t, c.Writer.Written())
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPlatformEndpointUnsupported(t *testing.T) {

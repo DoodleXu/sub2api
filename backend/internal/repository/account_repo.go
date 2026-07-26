@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -1825,7 +1826,7 @@ func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.Accou
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			rateLimitSchedulablePredicate(now),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority))
 }
@@ -1865,7 +1866,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		return rows, nil
 	}
 
-	rows, err := r.sql.QueryContext(ctx, `
+	query := fmt.Sprintf(`
 		SELECT
 			ag.group_id,
 			a.id AS account_id,
@@ -1880,12 +1881,28 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.deleted_at IS NULL
 			AND a.status = $2
 			AND a.schedulable = TRUE
-			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
+			AND (
+				a.temp_unschedulable_until IS NULL
+				OR a.temp_unschedulable_until <= $3
+				OR (
+					a.platform = 'openai'
+					AND a.extra @> '{"%s": true}'::jsonb
+					AND a.temp_unschedulable_reason LIKE '%%"status_code":429%%'
+				)
+			)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
-			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
+			AND (
+				a.rate_limit_reset_at IS NULL
+				OR a.rate_limit_reset_at <= $3
+				OR (
+					a.platform = 'openai'
+					AND a.extra @> '{"%s": true}'::jsonb
+				)
+			)
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+	`, service.OpenAIContinueSchedulingAfterLimitExtraKey, service.OpenAIContinueSchedulingAfterLimitExtraKey)
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(groupIDs), service.StatusActive, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -1932,7 +1949,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			rateLimitSchedulablePredicate(now),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -1967,7 +1984,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			rateLimitSchedulablePredicate(now),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -1989,7 +2006,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			rateLimitSchedulablePredicate(now),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -2014,7 +2031,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			rateLimitSchedulablePredicate(now),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -2966,7 +2983,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 				tempUnschedulablePredicate(),
 				notExpiredPredicate(now),
 				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+				rateLimitSchedulablePredicate(now),
 			)
 		}
 	}
@@ -3069,13 +3086,41 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {
-	return dbpredicate.Account(func(s *entsql.Selector) {
+	notBlocked := dbpredicate.Account(func(s *entsql.Selector) {
 		col := s.C("temp_unschedulable_until")
 		s.Where(entsql.Or(
 			entsql.IsNull(col),
 			entsql.LTE(col, entsql.Expr("NOW()")),
 		))
 	})
+	return dbaccount.Or(
+		notBlocked,
+		dbaccount.And(
+			openAIContinueAfterLimitPredicate(),
+			dbaccount.TempUnschedulableReasonContains(`"status_code":429`),
+		),
+	)
+}
+
+func openAIContinueAfterLimitPredicate() dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		s.Where(entsql.And(
+			entsql.EQ(s.C(dbaccount.FieldPlatform), service.PlatformOpenAI),
+			sqljson.ValueEQ(
+				dbaccount.FieldExtra,
+				true,
+				sqljson.Path(service.OpenAIContinueSchedulingAfterLimitExtraKey),
+			),
+		))
+	})
+}
+
+func rateLimitSchedulablePredicate(now time.Time) dbpredicate.Account {
+	return dbaccount.Or(
+		dbaccount.RateLimitResetAtIsNil(),
+		dbaccount.RateLimitResetAtLTE(now),
+		openAIContinueAfterLimitPredicate(),
+	)
 }
 
 func notExpiredPredicate(now time.Time) dbpredicate.Account {

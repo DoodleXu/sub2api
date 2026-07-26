@@ -38,6 +38,7 @@ func (h *OpenAIGatewayHandler) TryCodexModels(c *gin.Context) bool {
 	failedAccountIDs := make(map[int64]struct{})
 	switchCount := 0
 	var lastUpstreamErr error
+	lastUpstreamErrSuppressed := false
 
 	for {
 		account, err := h.gatewayService.SelectAccountForModelWithExclusions(c.Request.Context(), apiKey.GroupID, "", "", failedAccountIDs)
@@ -46,6 +47,10 @@ func (h *OpenAIGatewayHandler) TryCodexModels(c *gin.Context) bool {
 				return true
 			}
 			if lastUpstreamErr != nil {
+				if lastUpstreamErrSuppressed {
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+					return true
+				}
 				h.errorResponse(c, infraerrors.Code(lastUpstreamErr), "upstream_error", infraerrors.Message(lastUpstreamErr))
 				return true
 			}
@@ -60,16 +65,22 @@ func (h *OpenAIGatewayHandler) TryCodexModels(c *gin.Context) bool {
 				return true
 			}
 			fallbackEligible := codexModelsManifestFallbackEligible(err)
-			if (service.IsRetryableCodexModelsManifestError(err) || fallbackEligible) && switchCount < maxAccountSwitches {
+			suppressClientError := account.IsOpenAIContinueSchedulingAfterLimitEnabled()
+			if (suppressClientError || service.IsRetryableCodexModelsManifestError(err) || fallbackEligible) && switchCount < maxAccountSwitches {
 				failedAccountIDs[account.ID] = struct{}{}
 				switchCount++
 				if !fallbackEligible {
 					lastUpstreamErr = err
+					lastUpstreamErrSuppressed = suppressClientError
 				}
 				continue
 			}
 			if fallbackEligible {
 				return false
+			}
+			if suppressClientError {
+				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				return true
 			}
 			h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
 			return true

@@ -534,6 +534,9 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
+	if account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
+		return !account.IsSchedulableIgnoringRateLimit()
+	}
 	if !account.IsSchedulable() {
 		return true
 	}
@@ -639,6 +642,7 @@ type UpstreamFailoverError struct {
 	NextAccountAction        NextAccountAction
 	ClientStatusCode         int
 	ClientMessage            string
+	SuppressClientError      bool // 限额后继续调度账号的错误不得直接返回用户侧
 }
 
 func (e *UpstreamFailoverError) Error() string {

@@ -82,8 +82,12 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	defaultMappedModel string,
 ) error {
 	if account == nil {
-		writeAnthropicCountTokensError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI accounts")
-		return fmt.Errorf("count_tokens: missing account")
+		return &UpstreamFailoverError{
+			StatusCode:       http.StatusServiceUnavailable,
+			Scope:            GatewayFailureScopeAccount,
+			ClientStatusCode: http.StatusServiceUnavailable,
+			ClientMessage:    "No available OpenAI accounts",
+		}
 	}
 
 	prepared, err := prepareOpenAIInputTokensCountRequest(body, account, defaultMappedModel)
@@ -108,13 +112,25 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
-		return fmt.Errorf("get access token: %w", err)
+		return &UpstreamFailoverError{
+			StatusCode:       http.StatusBadGateway,
+			Stage:            GatewayFailureStageAccountAuth,
+			Scope:            GatewayFailureScopeAccount,
+			Reason:           GatewayFailureReason("count_tokens_access_token"),
+			ClientStatusCode: http.StatusBadGateway,
+			ClientMessage:    "Failed to get access token",
+		}
 	}
 	identityMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
 	if metadataErr != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to resolve account credentials")
-		return fmt.Errorf("resolve agent identity credentials for input_tokens redaction: %w", metadataErr)
+		return &UpstreamFailoverError{
+			StatusCode:       http.StatusBadGateway,
+			Stage:            GatewayFailureStageAccountAuth,
+			Scope:            GatewayFailureScopeAccount,
+			Reason:           GatewayFailureReason("count_tokens_identity_metadata"),
+			ClientStatusCode: http.StatusBadGateway,
+			ClientMessage:    "Failed to resolve account credentials",
+		}
 	}
 	redactSensitiveBody := identityMetadata.redactor
 
@@ -129,36 +145,56 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	for {
 		upstreamReq, buildErr := s.buildInputTokensUpstreamRequest(ctx, c, account, upstreamBody, token)
 		if buildErr != nil {
-			writeAnthropicCountTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
-			return fmt.Errorf("build input_tokens request: %w", buildErr)
+			return &UpstreamFailoverError{
+				StatusCode:       http.StatusInternalServerError,
+				Scope:            GatewayFailureScopeAccount,
+				Reason:           GatewayFailureReason("count_tokens_build_request"),
+				ClientStatusCode: http.StatusInternalServerError,
+				ClientMessage:    "Failed to build request",
+			}
 		}
 		identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			safeErr := sanitizeUpstreamErrorMessage(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
-			setOpsUpstreamError(c, 0, safeErr, "")
-			writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-			return fmt.Errorf("openai input_tokens upstream request failed: %s", safeErr)
+			redactedErr := fmt.Errorf("openai input_tokens upstream request failed: %s", redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
+			return s.handleOpenAIUpstreamTransportError(ctx, c, account, redactedErr, false)
 		}
 
 		respBody, err = io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(redactAgentIdentitySensitiveText(redactSensitiveBody, err.Error()))
-			writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
-			return fmt.Errorf("read input_tokens response: %s", safeErr)
+			setOpsUpstreamError(c, 0, safeErr, "")
+			return &UpstreamFailoverError{
+				StatusCode:       http.StatusBadGateway,
+				ResponseBody:     []byte(`{"error":{"message":"failed to read upstream response"}}`),
+				ClientStatusCode: http.StatusBadGateway,
+				ClientMessage:    "Failed to read response",
+			}
 		}
 		if agentIdentity && !agentTaskRecoveryTried && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			agentTaskRecoveryTried = true
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); recoveryErr != nil {
-				writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream authentication failed")
-				return fmt.Errorf("recover input_tokens agent identity task: %w", recoveryErr)
+				return &UpstreamFailoverError{
+					StatusCode:       http.StatusBadGateway,
+					Stage:            GatewayFailureStageAccountAuth,
+					Scope:            GatewayFailureScopeAccount,
+					Reason:           GatewayFailureReason("count_tokens_identity_recovery"),
+					ClientStatusCode: http.StatusBadGateway,
+					ClientMessage:    "Upstream authentication failed",
+				}
 			}
 			refreshedMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
 			if metadataErr != nil {
-				writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to resolve account credentials")
-				return fmt.Errorf("refresh agent identity credentials for input_tokens redaction: %w", metadataErr)
+				return &UpstreamFailoverError{
+					StatusCode:       http.StatusBadGateway,
+					Stage:            GatewayFailureStageAccountAuth,
+					Scope:            GatewayFailureScopeAccount,
+					Reason:           GatewayFailureReason("count_tokens_identity_refresh"),
+					ClientStatusCode: http.StatusBadGateway,
+					ClientMessage:    "Failed to resolve account credentials",
+				}
 			}
 			redactSensitiveBody = refreshedMetadata.redactor
 			identityMetadata = refreshedMetadata
@@ -175,14 +211,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 			return nil
 		}
 
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
-
-		if isOpenAIInputTokensUnsupported(resp.StatusCode, respBody) {
-			writeAnthropicCountTokensError(c, http.StatusNotFound, "not_found_error", "Token counting is not supported by upstream")
-			return nil
-		}
+		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, prepared.UpstreamModel)
 
 		upstreamDetail := ""
 		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
@@ -194,24 +223,27 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		}
 		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 
-		errMsg := "Upstream request failed"
-		switch resp.StatusCode {
-		case 429:
-			errMsg = "Rate limit exceeded"
-		case 500, 502, 503, 504, 529:
-			errMsg = "Upstream service temporarily unavailable"
+		failoverErr := &UpstreamFailoverError{
+			StatusCode:      resp.StatusCode,
+			ResponseBody:    respBody,
+			ResponseHeaders: resp.Header.Clone(),
 		}
-		writeAnthropicCountTokensError(c, resp.StatusCode, "upstream_error", errMsg)
-		if upstreamMsg == "" {
-			return fmt.Errorf("input_tokens upstream error: %d", resp.StatusCode)
+		if isOpenAIInputTokensUnsupported(resp.StatusCode, respBody) {
+			failoverErr.Scope = GatewayFailureScopeProvider
+			failoverErr.ClientStatusCode = http.StatusNotFound
+			failoverErr.ClientMessage = "Token counting is not supported by upstream"
 		}
-		return fmt.Errorf("input_tokens upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+		return failoverErr
 	}
 
 	inputTokens := gjson.GetBytes(respBody, "input_tokens")
 	if !inputTokens.Exists() {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response missing input_tokens")
-		return fmt.Errorf("input_tokens response missing input_tokens field")
+		return &UpstreamFailoverError{
+			StatusCode:       http.StatusBadGateway,
+			ResponseBody:     []byte(`{"error":{"message":"upstream response missing input_tokens"}}`),
+			ClientStatusCode: http.StatusBadGateway,
+			ClientMessage:    "Upstream response missing input_tokens",
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

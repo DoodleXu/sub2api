@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 
 	"entgo.io/ent/dialect"
@@ -76,7 +77,39 @@ func TestListSchedulableAccountLoadsUsesSingleProjectionQuery(t *testing.T) {
 	} {
 		require.Contains(t, normalized, predicateColumn)
 	}
+	require.Contains(t, normalized, service.OpenAIContinueSchedulingAfterLimitExtraKey)
+	require.Contains(t, normalized, "temp_unschedulable_reason")
+	require.Contains(t, normalized, "LIKE")
 	_, orderClause, hasOrder := strings.Cut(normalized, " ORDER BY ")
 	require.True(t, hasOrder, "projection query must preserve schedulable account order: %s", normalized)
 	require.Contains(t, orderClause, `"priority" ASC`)
+}
+
+func TestListSchedulableCapacityIncludesOpenAILimitContinuationAccounts(t *testing.T) {
+	var capturedSQL string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(captureEntQueryMatcher{actual: &capturedSQL}))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	driver := entsql.OpenDB(dialect.Postgres, db)
+	client := dbent.NewClient(dbent.Driver(driver))
+	t.Cleanup(func() { _ = client.Close() })
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+
+	mock.ExpectQuery("group capacity schedulable projection").
+		WithArgs(sqlmock.AnyArg(), service.StatusActive, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"group_id", "account_id", "concurrency", "extra", "session_window_start", "session_window_end", "session_window_status",
+		}))
+
+	rows, err := repo.ListSchedulableCapacityByGroupIDs(context.Background(), []int64{1})
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	normalized := normalizeSQLWhitespace(capturedSQL)
+	require.Contains(t, normalized, service.OpenAIContinueSchedulingAfterLimitExtraKey)
+	require.Contains(t, normalized, "rate_limit_reset_at")
+	require.Contains(t, normalized, "temp_unschedulable_reason")
+	require.Contains(t, normalized, `status_code":429`)
 }

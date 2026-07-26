@@ -161,6 +161,9 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
+	if a != nil && a.IsOpenAIContinueSchedulingAfterLimitEnabled() {
+		return a.IsSchedulableIgnoringRateLimit()
+	}
 	if a.IsArchived() || !a.IsActive() || !a.Schedulable {
 		return false
 	}

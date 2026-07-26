@@ -569,14 +569,18 @@ func (s *OpenAIGatewayService) blockGrokCredentialRuntime(account *Account, unti
 	mu := s.openAIAccountRuntimeBlockLock(account.ID)
 	mu.Lock()
 	before, hadBefore := s.openaiAccountRuntimeBlockUntil.Load(account.ID)
+	beforeReason, hadBeforeReason := s.openaiAccountRuntimeBlockReason.Load(account.ID)
+	beforeHardBlock, hadBeforeHardBlock := s.openaiAccountRuntimeHardBlockUntil.Load(account.ID)
 	installedGeneration, changed := s.blockAccountSchedulingLocked(account, until, reason)
 	installed, installedOK := s.openaiAccountRuntimeBlockUntil.Load(account.ID)
 	installedUntil, isTime := installed.(time.Time)
+	installedHardBlock, hasInstalledHardBlock := s.openaiAccountRuntimeHardBlockUntil.Load(account.ID)
 	mu.Unlock()
-	if !changed || !installedOK || !isTime {
+	hardBlockChanged := hadBeforeHardBlock != hasInstalledHardBlock || (hadBeforeHardBlock && beforeHardBlock != installedHardBlock)
+	if (!changed && !hardBlockChanged) || !installedOK || !isTime {
 		return func() {}
 	}
-	if hadBefore {
+	if changed && !hardBlockChanged && hadBefore {
 		if beforeUntil, ok := before.(time.Time); ok && beforeUntil.Equal(installedUntil) {
 			return func() {}
 		}
@@ -593,12 +597,23 @@ func (s *OpenAIGatewayService) blockGrokCredentialRuntime(account *Account, unti
 		if !ok || !isTime || !currentUntil.Equal(installedUntil) {
 			return
 		}
-		if hadBefore {
+		if changed && hadBefore {
 			s.openaiAccountRuntimeBlockUntil.Store(account.ID, before)
-			s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
-			return
+		} else if changed {
+			s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
 		}
-		s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
+		if changed {
+			if hadBeforeReason {
+				s.openaiAccountRuntimeBlockReason.Store(account.ID, beforeReason)
+			} else {
+				s.openaiAccountRuntimeBlockReason.Delete(account.ID)
+			}
+		}
+		if hadBeforeHardBlock {
+			s.openaiAccountRuntimeHardBlockUntil.Store(account.ID, beforeHardBlock)
+		} else {
+			s.openaiAccountRuntimeHardBlockUntil.Delete(account.ID)
+		}
 		s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
 	}
 }

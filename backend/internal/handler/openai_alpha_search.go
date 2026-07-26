@@ -114,6 +114,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	}
 
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(c, nil, searchID)
+	scheduleCtx := h.gatewayService.WithOpenAIAccountScheduleSessionContext(c.Request.Context(), apiKey.GroupID, "", sessionHash, body)
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
@@ -123,7 +124,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 	for {
 		selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
+			scheduleCtx,
 			apiKey.GroupID,
 			"",
 			sessionHash,
@@ -192,6 +193,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			reqLog.Warn("openai_alpha_search.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			return
 		}
+		service.PrepareOpenAILimitContinuationFailover(account, failoverErr)
 
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(requestedModel), false, nil)
 		if c.Writer.Size() != writerSizeBeforeForward {

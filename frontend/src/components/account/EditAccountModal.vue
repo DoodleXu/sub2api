@@ -2018,6 +2018,32 @@
         v-if="account?.platform === 'openai'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
+        <div
+          class="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20"
+        >
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.continueSchedulingAfterLimit') }}</label>
+              <p class="input-hint mt-1">{{ t('admin.accounts.continueSchedulingAfterLimitHint') }}</p>
+            </div>
+            <button
+              type="button"
+              @click="continueSchedulingAfterLimit = !continueSchedulingAfterLimit"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                continueSchedulingAfterLimit ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+              data-testid="continue-scheduling-after-limit"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  continueSchedulingAfterLimit ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+        </div>
         <div class="space-y-2">
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('admin.accounts.autoPause5hDisabled') }}</label>
@@ -2801,6 +2827,7 @@ const autoPause5hThreshold = ref<number | null>(null)
 const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
+const continueSchedulingAfterLimit = ref(false)
 const upstreamBillingAutoProbeEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
@@ -3286,6 +3313,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
 	autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
 	autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
+	continueSchedulingAfterLimit.value = extra?.openai_continue_scheduling_after_limit === true
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
@@ -4582,6 +4610,11 @@ const handleSubmit = async () => {
 			newExtra.auto_pause_7d_disabled = true
 		} else {
 			delete newExtra.auto_pause_7d_disabled
+		}
+		if (continueSchedulingAfterLimit.value) {
+			newExtra.openai_continue_scheduling_after_limit = true
+		} else {
+			delete newExtra.openai_continue_scheduling_after_limit
 		}
 
 		delete newExtra.codex_image_generation_bridge_enabled

@@ -75,7 +75,9 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// Isolate a custom temporary-unschedulable match to the known upstream
 	// model before entering the generic account error path. This keeps the
 	// account available to other models and avoids the account runtime blocker.
-	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
+	if s.rateLimitService != nil && statusCode != http.StatusUnauthorized &&
+		!(statusCode == http.StatusTooManyRequests && account.IsOpenAIContinueSchedulingAfterLimitEnabled()) &&
+		len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel[0]) {
 		return true
 	}
@@ -167,7 +169,7 @@ func (s *OpenAIGatewayService) openAIAccountRuntimeBlockLock(accountID int64) *s
 	return mu
 }
 
-func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, until time.Time, _ string) (uint64, bool) {
+func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, until time.Time, reason string) (uint64, bool) {
 	generation := s.openaiAccountRuntimeBlockSequence.Add(1)
 	s.openaiAccountRuntimeBlockGeneration.Store(account.ID, generation)
 	now := time.Now()
@@ -175,12 +177,16 @@ func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, un
 	if blockUntil.IsZero() || !blockUntil.After(now) {
 		blockUntil = now.Add(openAIStopSchedulingBridgeCooldown)
 	}
+	if !isOpenAILimitRuntimeBlockReason(reason) {
+		s.extendOpenAIAccountRuntimeHardBlockUntil(account.ID, blockUntil)
+	}
 
 	for {
 		current, loaded := s.openaiAccountRuntimeBlockUntil.Load(account.ID)
 		if !loaded {
 			actual, stored := s.openaiAccountRuntimeBlockUntil.LoadOrStore(account.ID, blockUntil)
 			if !stored {
+				s.recordOpenAIAccountRuntimeBlockReason(account.ID, reason)
 				return generation, true
 			}
 			current = actual
@@ -189,6 +195,7 @@ func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, un
 		currentUntil, ok := current.(time.Time)
 		if !ok || currentUntil.IsZero() {
 			if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+				s.recordOpenAIAccountRuntimeBlockReason(account.ID, reason)
 				return generation, true
 			}
 			continue
@@ -197,6 +204,7 @@ func (s *OpenAIGatewayService) blockAccountSchedulingLocked(account *Account, un
 			return generation, false
 		}
 		if s.openaiAccountRuntimeBlockUntil.CompareAndSwap(account.ID, current, blockUntil) {
+			s.recordOpenAIAccountRuntimeBlockReason(account.ID, reason)
 			return generation, true
 		}
 	}
@@ -210,6 +218,8 @@ func (s *OpenAIGatewayService) ClearAccountSchedulingBlock(accountID int64) {
 	mu.Lock()
 	defer mu.Unlock()
 	s.openaiAccountRuntimeBlockUntil.Delete(accountID)
+	s.openaiAccountRuntimeBlockReason.Delete(accountID)
+	s.openaiAccountRuntimeHardBlockUntil.Delete(accountID)
 	s.openaiAccountRuntimeBlockGeneration.Store(accountID, s.openaiAccountRuntimeBlockSequence.Add(1))
 }
 
@@ -227,6 +237,8 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlocked(account *Account) b
 	cooldownUntil, ok := value.(time.Time)
 	if !ok || cooldownUntil.IsZero() {
 		s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
+		s.openaiAccountRuntimeBlockReason.Delete(account.ID)
+		s.openaiAccountRuntimeHardBlockUntil.Delete(account.ID)
 		s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
 		return false
 	}
@@ -234,6 +246,8 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlocked(account *Account) b
 		return true
 	}
 	s.openaiAccountRuntimeBlockUntil.Delete(account.ID)
+	s.openaiAccountRuntimeBlockReason.Delete(account.ID)
+	s.openaiAccountRuntimeHardBlockUntil.Delete(account.ID)
 	s.openaiAccountRuntimeBlockGeneration.Store(account.ID, s.openaiAccountRuntimeBlockSequence.Add(1))
 	return false
 }
@@ -300,6 +314,72 @@ func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Acc
 	return s != nil && (s.isOpenAIAccountRuntimeBlocked(account) || s.isOpenAIAccountModelRuntimeBlocked(account, requestedModel))
 }
 
+func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlockedWithContext(ctx context.Context, account *Account, requestedModel string) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	if openAIAccountLimitContinuationAllowed(ctx, account) && s.isOpenAIAccountLimitRuntimeBlocked(account) {
+		return s.isOpenAIAccountModelRuntimeBlocked(account, requestedModel)
+	}
+	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)
+}
+
+func isOpenAILimitRuntimeBlockReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return reason == "429" || reason == "429_fallback" || strings.Contains(reason, "rate_limit")
+}
+
+func (s *OpenAIGatewayService) recordOpenAIAccountRuntimeBlockReason(accountID int64, reason string) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	s.openaiAccountRuntimeBlockReason.Store(accountID, reason)
+}
+
+func (s *OpenAIGatewayService) extendOpenAIAccountRuntimeHardBlockUntil(accountID int64, until time.Time) {
+	for {
+		current, loaded := s.openaiAccountRuntimeHardBlockUntil.Load(accountID)
+		if !loaded {
+			if _, loaded = s.openaiAccountRuntimeHardBlockUntil.LoadOrStore(accountID, until); !loaded {
+				return
+			}
+			continue
+		}
+		currentUntil, ok := current.(time.Time)
+		if ok && !until.After(currentUntil) {
+			return
+		}
+		if s.openaiAccountRuntimeHardBlockUntil.CompareAndSwap(accountID, current, until) {
+			return
+		}
+	}
+}
+
+func (s *OpenAIGatewayService) isOpenAIAccountRuntimeHardBlocked(accountID int64) bool {
+	value, ok := s.openaiAccountRuntimeHardBlockUntil.Load(accountID)
+	if !ok {
+		return false
+	}
+	until, ok := value.(time.Time)
+	if ok && time.Now().Before(until) {
+		return true
+	}
+	s.openaiAccountRuntimeHardBlockUntil.Delete(accountID)
+	return false
+}
+
+func (s *OpenAIGatewayService) isOpenAIAccountLimitRuntimeBlocked(account *Account) bool {
+	if s == nil || account == nil || !s.isOpenAIAccountRuntimeBlocked(account) {
+		return false
+	}
+	if s.isOpenAIAccountRuntimeHardBlocked(account.ID) {
+		return false
+	}
+	reason, _ := s.openaiAccountRuntimeBlockReason.Load(account.ID)
+	reasonText, _ := reason.(string)
+	return isOpenAILimitRuntimeBlockReason(reasonText)
+}
+
 func (s *OpenAIGatewayService) recordOpenAIOAuth429() {
 	if s == nil {
 		return
@@ -327,6 +407,9 @@ func (s *OpenAIGatewayService) isOpenAIOAuth429Storm() bool {
 }
 
 func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState) bool {
+	if account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
+		return false
+	}
 	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}

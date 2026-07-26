@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -142,55 +143,116 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 
-	requestStart := time.Now()
-	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	currentRoutingModel := routingModel
 	if preferredMappedModel != "" {
 		currentRoutingModel = preferredMappedModel
 	}
-	selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-		c.Request.Context(),
-		apiKey.GroupID,
-		"",
-		sessionHash,
-		currentRoutingModel,
-		nil,
-		service.OpenAIUpstreamTransportAny,
-		service.OpenAIEndpointCapabilityChatCompletions,
-		false,
-		false,
-		false,
-		openAICompatibleRequestPlatform(c.Request.Context(), apiKey),
-	)
-	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
-	if err != nil {
-		requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
-		reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-		}
-		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
-	}
-	if selection == nil || selection.Account == nil {
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimited(c)
-		}
-		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
-	}
-
-	account := selection.Account
-	setOpsSelectedAccount(c, account.ID, account.Platform)
-	if selection.Acquired && selection.ReleaseFunc != nil {
-		defer selection.ReleaseFunc()
-	}
 	forwardBody := mappedBodyForMessages(channelMapping.Mapped, channelMapping.MappedModel)
 	defaultMappedModel := preferredMappedModel
-
-	if err := h.gatewayService.ForwardCountTokensAsAnthropic(c.Request.Context(), c, account, forwardBody, defaultMappedModel); err != nil {
-		reqLog.Error("openai_count_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	maxAccountSwitches := h.maxAccountSwitches
+	if maxAccountSwitches <= 0 {
+		maxAccountSwitches = 3
 	}
+	failedAccountIDs := make(map[int64]struct{})
+	var lastFailoverErr *service.UpstreamFailoverError
+	var oauth429FailoverState service.OpenAIOAuth429FailoverState
+	switchCount := 0
+	routingStart := time.Now()
+
+	for {
+		// count_tokens is a stateless preflight. Never pass its derived content hash
+		// into the scheduler, otherwise it can create a sticky binding that makes the
+		// subsequent real message look like a continuation instead of a session start.
+		selection, _, selectErr := h.gatewayService.SelectAccountWithSchedulerForCapability(
+			c.Request.Context(),
+			apiKey.GroupID,
+			"",
+			"",
+			currentRoutingModel,
+			failedAccountIDs,
+			service.OpenAIUpstreamTransportAny,
+			service.OpenAIEndpointCapabilityChatCompletions,
+			false,
+			false,
+			false,
+			requestPlatform,
+		)
+		service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if selectErr != nil || selection == nil || selection.Account == nil {
+			if lastFailoverErr != nil {
+				h.handleCountTokensFailoverExhausted(c, lastFailoverErr)
+				return
+			}
+			reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(selectErr, requestPlatform)))
+			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, selectErr)
+			}
+			h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
+			return
+		}
+
+		account := selection.Account
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+		forwardErr := func() error {
+			if selection.Acquired && selection.ReleaseFunc != nil {
+				defer selection.ReleaseFunc()
+			}
+			return h.gatewayService.ForwardCountTokensAsAnthropic(c.Request.Context(), c, account, forwardBody, defaultMappedModel)
+		}()
+		if forwardErr == nil {
+			return
+		}
+
+		var failoverErr *service.UpstreamFailoverError
+		if !errors.As(forwardErr, &failoverErr) {
+			reqLog.Error("openai_count_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(forwardErr))
+			if !c.Writer.Written() {
+				h.anthropicErrorResponse(c, http.StatusBadGateway, "api_error", "Upstream request failed")
+			}
+			return
+		}
+		prepareOpenAICountTokensFailover(account, failoverErr)
+		failedAccountIDs[account.ID] = struct{}{}
+		lastFailoverErr = failoverErr
+		if !failoverErr.ShouldRetryNextAccount() || switchCount >= maxAccountSwitches {
+			h.handleCountTokensFailoverExhausted(c, failoverErr)
+			return
+		}
+		switchCount++
+		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+			h.handleCountTokensFailoverExhausted(c, failoverErr)
+			return
+		}
+		reqLog.Warn("openai_count_tokens.upstream_failover_switching",
+			zap.Int64("account_id", account.ID),
+			zap.Int("upstream_status", failoverErr.StatusCode),
+			zap.Int("switch_count", switchCount),
+		)
+	}
+}
+
+func prepareOpenAICountTokensFailover(account *service.Account, failoverErr *service.UpstreamFailoverError) {
+	if account == nil || failoverErr == nil {
+		return
+	}
+	if !account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
+		// count_tokens historically used only one account. Preserve that behavior
+		// unless this account explicitly opted into best-effort continuation.
+		failoverErr.NextAccountAction = service.NextAccountStop
+	}
+	service.PrepareOpenAILimitContinuationFailover(account, failoverErr)
+}
+
+func (h *OpenAIGatewayHandler) handleCountTokensFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
+	if failoverErr != nil && !failoverErr.SuppressClientError && failoverErr.ClientStatusCode > 0 && failoverErr.ClientMessage != "" {
+		errType := "api_error"
+		if failoverErr.ClientStatusCode == http.StatusNotFound {
+			errType = "not_found_error"
+		}
+		h.anthropicErrorResponse(c, failoverErr.ClientStatusCode, errType, failoverErr.ClientMessage)
+		return
+	}
+	h.handleAnthropicFailoverExhausted(c, failoverErr, false)
 }

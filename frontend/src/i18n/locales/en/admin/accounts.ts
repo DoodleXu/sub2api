@@ -749,6 +749,8 @@ export default {
 	  autoPause5hDisabled: 'Disable 5h auto-pause',
 	  autoPause7dDisabled: 'Disable 7d auto-pause',
 	  autoPauseDisabledHint: 'When enabled, this account is never auto-paused (even if a global default threshold is configured).',
+	  continueSchedulingAfterLimit: 'Keep Trying After Limits',
+	  continueSchedulingAfterLimitHint: 'When enabled, existing sessions may still try this account after any account limit or 429. Failures automatically fall back to another account without exposing this account\'s upstream error. Once the real 5h/7d limit is reached, new session-start requests skip this account.',
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: 'Quota Control',
