@@ -6084,6 +6084,97 @@ func sanitizeEncryptedReasoningInputItem(item any) (next any, changed bool, keep
 	return inputItem, true, true
 }
 
+// SanitizeOpenAICrossModeFailoverReasoning derives a failover request body by
+// dropping provider-specific encrypted reasoning items in full. The input is
+// treated as immutable.
+func SanitizeOpenAICrossModeFailoverReasoning(body []byte) (sanitized []byte, changed bool, err error) {
+	if len(body) == 0 || !gjson.GetBytes(body, "input").Exists() {
+		return body, false, nil
+	}
+	var decoded map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return body, false, fmt.Errorf("decode cross-mode failover body: %w", err)
+	}
+	if !dropOpenAIEncryptedReasoningInputItems(decoded) {
+		return body, false, nil
+	}
+	out, marshalErr := marshalOpenAIUpstreamJSON(decoded)
+	if marshalErr != nil {
+		return body, false, fmt.Errorf("serialize cross-mode failover body: %w", marshalErr)
+	}
+	return out, true, nil
+}
+
+func dropOpenAIEncryptedReasoningInputItems(reqBody map[string]any) bool {
+	inputValue, has := reqBody["input"]
+	if !has {
+		return false
+	}
+	switch input := inputValue.(type) {
+	case []any:
+		filtered := input[:0]
+		changed := false
+		for _, item := range input {
+			if isOpenAIEncryptedReasoningInputItem(item) {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if !changed {
+			return false
+		}
+		if len(filtered) == 0 {
+			delete(reqBody, "input")
+		} else {
+			reqBody["input"] = filtered
+		}
+		return true
+	case []map[string]any:
+		filtered := input[:0]
+		changed := false
+		for _, item := range input {
+			if isOpenAIEncryptedReasoningInputItem(item) {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if !changed {
+			return false
+		}
+		if len(filtered) == 0 {
+			delete(reqBody, "input")
+		} else {
+			reqBody["input"] = filtered
+		}
+		return true
+	case map[string]any:
+		if !isOpenAIEncryptedReasoningInputItem(input) {
+			return false
+		}
+		delete(reqBody, "input")
+		return true
+	default:
+		return false
+	}
+}
+
+func isOpenAIEncryptedReasoningInputItem(item any) bool {
+	inputItem, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	itemType, _ := inputItem["type"].(string)
+	if strings.TrimSpace(itemType) != "reasoning" {
+		return false
+	}
+	_, has := inputItem["encrypted_content"]
+	return has
+}
+
 func normalizeOpenAIResponsesInputArgumentsInBody(body []byte) ([]byte, bool, error) {
 	if !openAIResponsesInputArgumentsMayNeedNormalize(body) {
 		return body, false, nil
@@ -6621,7 +6712,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		RequestID:           requestID,
 		Model:               result.Model,
 		RequestedModel:      requestedModel,
-		UpstreamModel:       optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamModel:       optionalTrimmedStringPtr(result.UpstreamModel),
 		ServiceTier:         result.ServiceTier,
 		ReasoningEffort:     result.ReasoningEffort,
 		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
@@ -6790,7 +6881,7 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 		RequestID:             requestID,
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
-		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
 		ChannelID:             optionalInt64Ptr(input.ChannelID),
 		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
 		BillingMode:           &billingMode,

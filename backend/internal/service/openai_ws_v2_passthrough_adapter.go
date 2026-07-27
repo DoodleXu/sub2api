@@ -26,6 +26,9 @@ type openAIWSClientFrameConn struct {
 	interTurnIdleTimeout time.Duration
 	interTurnStarted     chan struct{}
 	waitingForNextTurn   atomic.Bool
+	// The relay observes upstream payloads, while clients must keep seeing the
+	// model identifier they supplied for the current turn.
+	restoreResponseModel func([]byte) []byte
 }
 
 func (c *openAIWSClientFrameConn) markTurnStarted() {
@@ -203,15 +206,34 @@ func (m *openAIWSPassthroughUsageMeta) captureWrittenTurn(sequence uint64, polic
 		return
 	}
 	requestModel := m.requestModelForFrame(policyOutput)
-	// 首帧进入 adapter 前可能已把 gpt-5.4-xhigh 这类请求模型归一为
-	// 上游模型；InitialRequestModel 保留了计费/推理强度所需的原始值。
-	// 后续 turn 则以每帧显式 model 或 session.update fallback 为准。
+	// The first frame may already contain an upstream-normalized model before
+	// it reaches the adapter. Keep the original model supplied by ingress.
 	if sequence == 1 && strings.TrimSpace(m.sessionRequestModel) != "" {
 		requestModel = strings.TrimSpace(m.sessionRequestModel)
 	}
+	m.captureWrittenTurnWithRequestModel(sequence, policyOutput, mappedModel, requestModel)
+}
+
+func (m *openAIWSPassthroughUsageMeta) captureWrittenTurnWithRequestModel(
+	sequence uint64,
+	policyOutput []byte,
+	mappedModel string,
+	requestModel string,
+) {
+	if m == nil || sequence == 0 {
+		return
+	}
+	requestModel = strings.TrimSpace(requestModel)
+	if requestModel == "" {
+		requestModel = m.requestModelForFrame(policyOutput)
+	}
+	upstreamModel := strings.TrimSpace(mappedModel)
+	if upstreamModel == "" {
+		upstreamModel = strings.TrimSpace(gjson.GetBytes(policyOutput, "model").String())
+	}
 	meta := openAIWSPassthroughTurnMeta{
 		requestModel:    requestModel,
-		upstreamModel:   strings.TrimSpace(mappedModel),
+		upstreamModel:   upstreamModel,
 		serviceTier:     extractOpenAIServiceTierFromBody(policyOutput),
 		reasoningEffort: extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, requestModel),
 	}
@@ -257,6 +279,20 @@ func (m *openAIWSPassthroughUsageMeta) latestTurn() (openAIWSPassthroughTurnMeta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.latest, m.hasLatest
+}
+
+func (m *openAIWSPassthroughUsageMeta) turnModels(fallback string) (string, string) {
+	requestModel := strings.TrimSpace(fallback)
+	upstreamModel := requestModel
+	if meta, ok := m.latestTurn(); ok {
+		if meta.requestModel != "" {
+			requestModel = meta.requestModel
+		}
+		if meta.upstreamModel != "" {
+			upstreamModel = meta.upstreamModel
+		}
+	}
+	return requestModel, upstreamModel
 }
 
 func openAIWSPassthroughRequestModelForFrame(payload []byte) string {
@@ -653,6 +689,14 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if msgType == coderws.MessageText {
+		if normalized, changed := normalizeCompletedImageGenerationStatus(payload); changed {
+			payload = normalized
+		}
+		if c.restoreResponseModel != nil {
+			payload = c.restoreResponseModel(payload)
+		}
+	}
 	return c.conn.Write(ctx, msgType, payload)
 }
 
@@ -722,10 +766,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// negotiated at session.update time. Without this fallback, an empty
 	// model would miss any admin-configured model whitelist and be silently
 	// passed through, defeating that policy on every frame after the first.
-	capturedSessionModel := openAIWSPassthroughPolicyModelForFrame(account, firstClientMessage)
 	initialRequestModel := ""
 	if hooks != nil {
-		initialRequestModel = hooks.InitialRequestModel
+		initialRequestModel = strings.TrimSpace(hooks.InitialRequestModel)
+	}
+	if initialRequestModel == "" {
+		initialRequestModel = openAIWSPassthroughRequestModelForFrame(firstClientMessage)
+	}
+	if hooks != nil && hooks.MapRequestModel != nil {
+		mappedModel, mapErr := hooks.MapRequestModel(1, initialRequestModel)
+		if mapErr != nil {
+			return mapErr
+		}
+		if mappedModel = strings.TrimSpace(mappedModel); mappedModel != "" {
+			firstClientMessage = s.ReplaceModelInBody(firstClientMessage, mappedModel)
+		}
+	}
+	capturedSessionModel := openAIWSPassthroughPolicyModelForFrame(account, firstClientMessage)
+	if capturedSessionModel != "" && capturedSessionModel != strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String()) {
+		firstClientMessage = s.ReplaceModelInBody(firstClientMessage, capturedSessionModel)
 	}
 	usageMeta := newOpenAIWSPassthroughUsageMeta(initialRequestModel, firstClientMessage)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
@@ -931,6 +990,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		controlCtx:           ctx,
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
+		restoreResponseModel: func(payload []byte) []byte {
+			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			if !openAIWSEventMayContainModel(eventType) {
+				return payload
+			}
+			requestModel, upstreamModel := usageMeta.turnModels("")
+			return replaceOpenAIWSMessageModel(payload, upstreamModel, requestModel)
+		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: clientFrameConn,
@@ -969,23 +1036,36 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 				}
 			}
-			if isResponseCreate && hooks != nil {
-				turnNo := int(completedTurns.Load()) + 1
-				if turnNo < 2 {
-					turnNo = 2
+			turnNo := int(completedTurns.Load()) + 1
+			if turnNo < 2 {
+				turnNo = 2
+			}
+			requestModelForThisFrame := ""
+			if isResponseCreate {
+				requestModelForThisFrame = usageMeta.requestModelForFrame(payload)
+				if requestModelForThisFrame == "" {
+					requestModelForThisFrame = capturedSessionModel
 				}
-				if hooks.BeforeTurn != nil {
-					if err := hooks.BeforeTurn(turnNo); err != nil {
-						return payload, nil, err
+				usageMeta.sessionRequestModel = requestModelForThisFrame
+				if hooks != nil {
+					if hooks.BeforeTurn != nil {
+						if err := hooks.BeforeTurn(turnNo); err != nil {
+							return payload, nil, err
+						}
 					}
-				}
-				if hooks.BeforeRequest != nil {
-					requestModel := usageMeta.requestModelForFrame(payload)
-					if requestModel == "" {
-						requestModel = capturedSessionModel
+					if hooks.BeforeRequest != nil {
+						if err := hooks.BeforeRequest(turnNo, payload, requestModelForThisFrame); err != nil {
+							return payload, nil, err
+						}
 					}
-					if err := hooks.BeforeRequest(turnNo, payload, requestModel); err != nil {
-						return payload, nil, err
+					if hooks.MapRequestModel != nil {
+						upstreamModel, err := hooks.MapRequestModel(turnNo, requestModelForThisFrame)
+						if err != nil {
+							return payload, nil, err
+						}
+						if upstreamModel = strings.TrimSpace(upstreamModel); upstreamModel != "" {
+							payload = s.ReplaceModelInBody(payload, upstreamModel)
+						}
 					}
 				}
 			}
@@ -1008,6 +1088,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			model := openAIWSPassthroughPolicyModelForFrame(account, payload)
 			if model == "" {
 				model = capturedSessionModel
+			}
+			if isResponseCreate && model != "" && model != strings.TrimSpace(gjson.GetBytes(payload, "model").String()) {
+				payload = s.ReplaceModelInBody(payload, model)
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			if policyErr == nil && blocked == nil {
@@ -1080,7 +1163,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if mappedModel == "" {
 					mappedModel = capturedSessionModel
 				}
-				usageMeta.captureWrittenTurn(sequence, payload, mappedModel)
+				usageMeta.captureWrittenTurnWithRequestModel(
+					sequence,
+					payload,
+					mappedModel,
+					usageMeta.sessionRequestModel,
+				)
 			},
 			OnResponseCreateAborted: usageMeta.discardTurn,
 			ReadClientFrame:         readNextClientFrame,
@@ -1094,9 +1182,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
 				turnNo := int(completedTurns.Add(1))
 				turnMeta, hasTurnMeta := usageMeta.takeTurn(turn.TurnSequence)
-				requestModel := turn.RequestModel
+				turnRequestModel := turn.RequestModel
 				if hasTurnMeta && turnMeta.requestModel != "" {
-					requestModel = turnMeta.requestModel
+					turnRequestModel = turnMeta.requestModel
+				}
+				turnUpstreamModel := turnMeta.upstreamModel
+				if turnUpstreamModel == "" {
+					turnUpstreamModel = turnRequestModel
 				}
 				turnResult := &OpenAIForwardResult{
 					RequestID: turn.RequestID,
@@ -1107,17 +1199,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
 						ImageOutputTokens:        turn.Usage.ImageOutputTokens,
 					},
-					Model:              requestModel,
-					UpstreamModel:      turnMeta.upstreamModel,
-					ServiceTier:        turnMeta.serviceTier,
-					ReasoningEffort:    turnMeta.reasoningEffort,
-					Stream:             true,
-					OpenAIWSMode:       true,
-					ResponseHeaders:    cloneHeader(handshakeHeaders),
-					Duration:           turn.Duration,
-					FirstTokenMs:       turn.FirstTokenMs,
-					ImageFirstOutputMs: turn.ImageFirstOutputMs,
-					ImageCount:         turn.ImageCount,
+					Model:                 turnRequestModel,
+					UpstreamModel:         turnUpstreamModel,
+					ServiceTier:           turnMeta.serviceTier,
+					ReasoningEffort:       turnMeta.reasoningEffort,
+					Stream:                true,
+					OpenAIWSMode:          true,
+					UpstreamTerminalEvent: normalizeOpenAIWSTerminalEvent(turn.TerminalEventType),
+					ResponseHeaders:       cloneHeader(handshakeHeaders),
+					Duration:              turn.Duration,
+					FirstTokenMs:          turn.FirstTokenMs,
+					ImageFirstOutputMs:    turn.ImageFirstOutputMs,
+					ImageCount:            turn.ImageCount,
 				}
 				if turn.ImageCount > 0 {
 					turnResult.BillingModel = turnMeta.imageModel
@@ -1125,11 +1218,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnResult.ImageInputSize = turnMeta.imageInputSize
 				}
 				logOpenAIWSV2Passthrough(
-					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
+					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s turn_requested_model=%s turn_upstream_model=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
 					account.ID,
 					turnNo,
 					truncateOpenAIWSLogValue(turnResult.RequestID, openAIWSIDValueMaxLen),
 					truncateOpenAIWSLogValue(turn.TerminalEventType, openAIWSLogValueMaxLen),
+					truncateOpenAIWSLogValue(turnRequestModel, openAIWSLogValueMaxLen),
+					truncateOpenAIWSLogValue(turnUpstreamModel, openAIWSLogValueMaxLen),
 					turnResult.Duration.Milliseconds(),
 					openAIWSFirstTokenMsForLog(turnResult.FirstTokenMs),
 					turnResult.Usage.InputTokens,
@@ -1219,6 +1314,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	latestTurnMeta, _ := usageMeta.latestTurn()
+	resultRequestModel, resultUpstreamModel := usageMeta.turnModels(relayResult.RequestModel)
 	result := &OpenAIForwardResult{
 		RequestID: relayResult.RequestID,
 		Usage: OpenAIUsage{
@@ -1228,20 +1324,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,
 			ImageOutputTokens:        relayResult.Usage.ImageOutputTokens,
 		},
-		Model:              relayResult.RequestModel,
-		UpstreamModel:      latestTurnMeta.upstreamModel,
-		ServiceTier:        latestTurnMeta.serviceTier,
-		ReasoningEffort:    latestTurnMeta.reasoningEffort,
-		Stream:             true,
-		OpenAIWSMode:       true,
-		ResponseHeaders:    cloneHeader(handshakeHeaders),
-		Duration:           relayResult.Duration,
-		FirstTokenMs:       relayResult.FirstTokenMs,
-		ImageFirstOutputMs: relayResult.ImageFirstOutputMs,
-		ImageCount:         relayResult.ImageCount,
-	}
-	if latestTurnMeta.requestModel != "" {
-		result.Model = latestTurnMeta.requestModel
+		Model:                 resultRequestModel,
+		UpstreamModel:         resultUpstreamModel,
+		ServiceTier:           latestTurnMeta.serviceTier,
+		ReasoningEffort:       latestTurnMeta.reasoningEffort,
+		Stream:                true,
+		OpenAIWSMode:          true,
+		UpstreamTerminalEvent: normalizeOpenAIWSTerminalEvent(relayResult.TerminalEventType),
+		ResponseHeaders:       cloneHeader(handshakeHeaders),
+		Duration:              relayResult.Duration,
+		FirstTokenMs:          relayResult.FirstTokenMs,
+		ImageFirstOutputMs:    relayResult.ImageFirstOutputMs,
+		ImageCount:            relayResult.ImageCount,
 	}
 	if relayResult.ImageCount > 0 {
 		result.BillingModel = latestTurnMeta.imageModel

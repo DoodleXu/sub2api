@@ -10,23 +10,42 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `84afe28b7 fix(openai): 调整限流绕过条件写法` | 本次合并 v0.1.165 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.165` -> `e9a58c1cb8` | v0.1.165 已合入本 fork；完成门禁后计划发布为 `v0.1.231` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.165` -> `e9a58c1cb8` | 2026-07-25 发布的官方最新非草稿 release |
-| 上游 main HEAD | `7d3a896fc` | 本次同步时的远端 main；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 10 个 modify/delete）；继续保留 fork 聚合文件结构和核心定制行为，并迁入 ChatGPT Live、Claude Opus 5、客户端会话关联、Ollama 请求驱动刷新、注册邮箱别名查重及网关修复 |
+| Fork 同步前 HEAD | `8b47699ee chore: 准备发布 v0.1.231` | 本次合并 v0.1.166 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.166` -> `dc893dd0b8` | v0.1.166 已合入本 fork；fork 版本继续保持 `0.1.231` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.166` -> `dc893dd0b8` | 2026-07-27 发布的官方最新非草稿 release |
+| 上游 main HEAD | `59ce11c78` | 本次同步时的远端 main；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 26 个冲突路径（含 10 个 modify/delete）；继续保留 fork 聚合文件结构、核心定制行为和完整 WebSocket 逐轮计费元数据，并迁入面板 API 限流、设置局部更新、多币种支付统计及网关兼容修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.165:refs/tags/upstream/v0.1.165 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.165^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.165^{}..HEAD
+git fetch upstream refs/tags/v0.1.166:refs/tags/upstream/v0.1.166 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.166^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.165` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.166` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.166` 合并说明：
+
+- 新增可由后台配置的面板 API 限流：认证接口按用户、公开接口按安全解析后的真实客户端 IP 区分，继续保留 fork 的自定义 key、Redis 异常 fail-close 和 Retry-After 行为；登录、管理、支付和用户高频入口均接入对应限流等级，签到入口原有限流不被替换。
+- 系统设置 PUT 改为识别请求中实际出现的 JSON 字段，未提交字段保持存量值；上游拆分 handler/service 语义已移植回 fork 聚合文件，并在更新后刷新运行时设置缓存，没有恢复已删除的拆分模块。
+- OpenAI/Codex 吸收跨账号故障转移 reasoning 清理、WebSocket 每轮请求/上游模型追踪、最终上游模型统计和 Antigravity 兼容加固；fork 继续保留每轮图片计费、首图耗时、完整 `UpstreamModel`、Responses Lite 和 Agent Identity 行为，客户端仍看到原始请求模型。
+- 管理端用量新增 Request ID 过滤并沿用大表快速分页；requested/upstream model 统计口径与最终转发模型对齐。支付看板改为按币种分组展示，继续保持 fork 的人民币默认、汇率、手续费、升级抵扣和实际成本口径。
+- Caddy 配置关闭会造成 SSE 缓冲的压缩链路，并加入可移植的配置回归脚本；CI 只在 Ubuntu 验证该脚本，未恢复 Apple Container 或改变 `linux/amd64 + GHCR` 发布约束。
+- 可用渠道移动端、分组描述与下拉框边界、监控时间线、注册推广码、安全审计配置、Gemini/Grok/Composite 路由和依赖安全更新均已同步；官方 sponsor 清理随 release 保持一致。
+- 10 个上游拆分文件的增量已移植回 fork 聚合模块后继续删除；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、备份恢复和 fork 更新来源均保留。
+
+### v0.1.166 合并验证
+
+- `merge-tree` 预检和实际合并共确认 26 个冲突路径，其中 10 个为上游拆分文件的 modify/delete 冲突；解决后无未合并路径、无冲突标记，10 个拆分文件保持删除。
+- 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 与 `TZ=UTC go vet -tags=unit ./...` 通过；额外覆盖设置局部更新、面板限流、用量 Request ID、OpenAI reasoning failover、WebSocket 逐轮模型和支付多币种测试。
+- `make test-integration` 已执行；除 `internal/middleware` 和 `internal/server/routes` 的 Redis testcontainers 用例外，其余包通过。上述两包因本机 Docker daemon 未运行、无法连接 Docker socket 而未执行到断言，需由具备 Docker 的 CI 复验。
+- 前端 `pnpm test:run` 通过 209 个测试文件、1449 个测试；`pnpm typecheck`、`pnpm lint:check` 和 `pnpm build` 均通过。多币种收入图的共享坐标轴保持中性数值，tooltip 按数据集实际币种格式化。
+- `/bin/sh deploy/test-caddyfile-cache.sh` 通过；签到、运营中心、生图任务、成本聚合、备份恢复关键文件及 `DoodleXu/sub2api` 镜像/更新来源检查通过。
+- `backend/cmd/server/VERSION` 保持 `0.1.231`，本次只合并 `refs/tags/upstream/v0.1.166^{}`，没有合入标签之后的 `upstream/main` 提交。
 
 本次 `v0.1.165` 合并说明：
 

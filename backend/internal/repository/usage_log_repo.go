@@ -184,11 +184,12 @@ func usageLogModelDimensionExpression(source string, alias string) string {
 	model := usageLogQualifiedColumn(alias, "model")
 	upstreamModel := usageLogQualifiedColumn(alias, "upstream_model")
 	requestedExpr := fmt.Sprintf("COALESCE(NULLIF(TRIM(%s), ''), %s)", requestedModel, model)
+	upstreamExpr := fmt.Sprintf("COALESCE(NULLIF(TRIM(%s), ''), %s)", upstreamModel, model)
 	switch usagestats.NormalizeModelSource(source) {
 	case usagestats.ModelSourceUpstream:
-		return fmt.Sprintf("COALESCE(NULLIF(TRIM(%s), ''), %s)", upstreamModel, requestedExpr)
+		return upstreamExpr
 	case usagestats.ModelSourceMapping:
-		return fmt.Sprintf("(%s || ' -> ' || COALESCE(NULLIF(TRIM(%s), ''), %s))", requestedExpr, upstreamModel, requestedExpr)
+		return fmt.Sprintf("(%s || ' -> ' || %s)", requestedExpr, upstreamExpr)
 	default:
 		return requestedExpr
 	}
@@ -3428,6 +3429,10 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(args)+1))
 		args = append(args, filters.GroupID)
 	}
+	if requestID := strings.TrimSpace(filters.RequestID); requestID != "" {
+		conditions = append(conditions, fmt.Sprintf("request_id = $%d", len(args)+1))
+		args = append(args, requestID)
+	}
 	if strings.TrimSpace(filters.Model) != "" {
 		conditions = append(conditions, fmt.Sprintf("%s = $%d", usageLogModelDimensionExpression(filters.ModelFilterSource, ""), len(args)+1))
 		args = append(args, filters.Model)
@@ -4279,11 +4284,12 @@ func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayS
 // resolveModelDimensionExpression maps model source type to a safe SQL expression.
 func resolveModelDimensionExpression(modelType string) string {
 	requestedExpr := "COALESCE(NULLIF(TRIM(requested_model), ''), model)"
+	upstreamExpr := "COALESCE(NULLIF(TRIM(upstream_model), ''), model)"
 	switch usagestats.NormalizeModelSource(modelType) {
 	case usagestats.ModelSourceUpstream:
-		return fmt.Sprintf("COALESCE(NULLIF(TRIM(upstream_model), ''), %s)", requestedExpr)
+		return upstreamExpr
 	case usagestats.ModelSourceMapping:
-		return fmt.Sprintf("(%s || ' -> ' || COALESCE(NULLIF(TRIM(upstream_model), ''), %s))", requestedExpr, requestedExpr)
+		return fmt.Sprintf("(%s || ' -> ' || %s)", requestedExpr, upstreamExpr)
 	default:
 		return requestedExpr
 	}

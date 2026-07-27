@@ -34,35 +34,47 @@ import {
 import type { TooltipItem } from 'chart.js'
 import { Line } from 'vue-chartjs'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import type { DailyPaymentStats } from '@/types/payment'
+import { formatCurrency } from '@/utils/format'
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const { t } = useI18n()
 
 const props = defineProps<{
-  data: { date: string; amount: number; count: number }[]
+  data: DailyPaymentStats[]
   loading?: boolean
 }>()
 
-function formatCurrency(value: number): string {
-  return `¥${value.toFixed(2)}`
-}
+const currencies = computed(() =>
+  [...new Set((props.data || []).flatMap(day => Object.keys(day.amount)))].sort()
+)
+
+const colors = [
+  ['rgb(59, 130, 246)', 'rgba(59, 130, 246, 0.1)'],
+  ['rgb(168, 85, 247)', 'rgba(168, 85, 247, 0.1)'],
+  ['rgb(245, 158, 11)', 'rgba(245, 158, 11, 0.1)'],
+  ['rgb(239, 68, 68)', 'rgba(239, 68, 68, 0.1)'],
+]
 
 const chartData = computed(() => {
   if (!props.data || props.data.length === 0) return null
   return {
     labels: props.data.map(d => d.date),
     datasets: [
-      {
-        label: t('payment.admin.revenue'),
-        data: props.data.map(d => d.amount),
-        borderColor: 'rgb(59, 130, 246)',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      },
+      ...currencies.value.map((currency, index) => {
+        const [borderColor, backgroundColor] = colors[index % colors.length]
+        return {
+          label: `${currency} ${t('payment.admin.revenue')}`,
+          data: props.data.map(day => day.amount[currency] || 0),
+          borderColor,
+          backgroundColor,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        }
+      }),
       {
         label: t('payment.admin.orderCount'),
         data: props.data.map(d => d.count),
@@ -88,9 +100,6 @@ const chartOptions = {
       display: true,
       position: 'left' as const,
       title: { display: true, text: t('payment.admin.revenue') },
-      ticks: {
-        callback: (value: string | number) => formatCurrency(Number(value)),
-      },
     },
     y1: {
       type: 'linear' as const,
@@ -113,7 +122,8 @@ const chartOptions = {
           if (context.dataset.yAxisID === 'y1') {
             return `${label}: ${value}`
           }
-          return `${label}: ${formatCurrency(value)}`
+          const currency = currencies.value[context.datasetIndex] || 'USD'
+          return `${label}: ${formatCurrency(value, currency)}`
         },
       },
     },
