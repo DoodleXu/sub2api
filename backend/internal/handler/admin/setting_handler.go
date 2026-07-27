@@ -1378,6 +1378,41 @@ func omittedSettingKeys(sentFields map[string]json.RawMessage) service.OmittedSe
 	return omitted
 }
 
+// hydrateOmittedSettingsRequest 用存量设置补齐请求中未出现的非指针字段，使后续
+// 跨字段校验基于“存量值 + 本次补丁”的有效配置。omitted 仍负责阻止这些补充值
+// 被持久化，因此显式提交零值的清空语义保持不变。
+func hydrateOmittedSettingsRequest(
+	req *UpdateSettingsRequest,
+	previous *service.SystemSettings,
+	sentFields map[string]json.RawMessage,
+) {
+	if req == nil || previous == nil {
+		return
+	}
+	requestValue := reflect.ValueOf(req).Elem()
+	previousValue := reflect.ValueOf(previous).Elem()
+	requestType := requestValue.Type()
+	for i := 0; i < requestType.NumField(); i++ {
+		field := requestType.Field(i)
+		if field.Type.Kind() == reflect.Ptr {
+			continue
+		}
+		jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if jsonName == "" || jsonName == "-" {
+			continue
+		}
+		if _, sent := sentFields[jsonName]; sent {
+			continue
+		}
+		target := requestValue.Field(i)
+		source := previousValue.FieldByName(field.Name)
+		if !target.CanSet() || !source.IsValid() || !source.Type().AssignableTo(target.Type()) {
+			continue
+		}
+		target.Set(source)
+	}
+}
+
 // UpdateSettings 更新系统设置
 // PUT /api/v1/admin/settings
 func (h *SettingHandler) UpdateSettings(c *gin.Context) {
@@ -1398,6 +1433,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	auditRequest := req
+	hydrateOmittedSettingsRequest(&req, previousSettings, sentFields)
 	previousAuthSourceDefaults, err := h.settingService.GetAuthSourceDefaultSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -2909,8 +2946,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
-	h.auditSettingsUpdate(c, previousSettings, settings, previousAuthSourceDefaults, authSourceDefaults, req)
-
 	// 重新获取设置返回
 	updatedSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -2923,6 +2958,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	h.auditSettingsUpdate(
+		c,
+		previousSettings,
+		updatedSettings,
+		previousAuthSourceDefaults,
+		updatedAuthSourceDefaults,
+		auditRequest,
+	)
 	updatedDefaultSubscriptions := make([]dto.DefaultSubscriptionSetting, 0, len(updatedSettings.DefaultSubscriptions))
 	for _, sub := range updatedSettings.DefaultSubscriptions {
 		updatedDefaultSubscriptions = append(updatedDefaultSubscriptions, dto.DefaultSubscriptionSetting{

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -63,6 +64,29 @@ func TestUserRepositoryExistsByEmailAliasIgnoresMalformedInput(t *testing.T) {
 	got, err := repo.ExistsByEmailAlias(context.Background(), "not-an-email")
 	require.NoError(t, err)
 	require.False(t, got)
+}
+
+func TestUserRepositoryExistsByEmailAliasFailsClosedWhenCandidatesAreTruncated(t *testing.T) {
+	repo, _ := newUserEntRepo(t)
+	const local = "abcdefghijkl"
+	for mask := 0; mask <= emailAliasCandidateLimit; mask++ {
+		seedUserForAliasTest(t, repo, dottedAliasLocal(local, mask)+"@qq.com")
+	}
+
+	got, err := repo.ExistsByEmailAlias(context.Background(), dottedAliasLocal(local, 63)+"@qq.com")
+	require.ErrorContains(t, err, "candidate set exceeds safe limit")
+	require.False(t, got)
+}
+
+func dottedAliasLocal(local string, mask int) string {
+	var result strings.Builder
+	for i, char := range local {
+		if i > 0 && mask&(1<<(i-1)) != 0 {
+			_ = result.WriteByte('.')
+		}
+		_, _ = result.WriteRune(char)
+	}
+	return result.String()
 }
 
 func TestUserRepositoryCreateWithEmailAliasGuard(t *testing.T) {

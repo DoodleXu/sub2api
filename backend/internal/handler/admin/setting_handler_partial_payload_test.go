@@ -19,11 +19,13 @@ import (
 
 func TestUpdateSettingsPartialPayloadKeepsUnsentKeys(t *testing.T) {
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
-		service.SettingKeySiteName:         "Example Gateway",
-		service.SettingKeySiteSubtitle:     "Example Gateway Platform",
-		service.SettingKeySMTPHost:         "smtp.example.com",
-		service.SettingKeySMTPFrom:         "noreply@example.com",
-		service.SettingKeyTurnstileEnabled: "true",
+		service.SettingKeySiteName:           "Example Gateway",
+		service.SettingKeySiteSubtitle:       "Example Gateway Platform",
+		service.SettingKeySMTPHost:           "smtp.example.com",
+		service.SettingKeySMTPFrom:           "noreply@example.com",
+		service.SettingKeyTurnstileEnabled:   "true",
+		service.SettingKeyTurnstileSiteKey:   "stored-site-key",
+		service.SettingKeyTurnstileSecretKey: "stored-secret-key",
 	})
 
 	rec := doUpdateSettings(t, h, map[string]any{"risk_control_enabled": true}, nil)
@@ -64,4 +66,33 @@ func TestUpdateSettingsSMTPFromAliasIsWritable(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	require.Equal(t, "new@example.com", repo.values[service.SettingKeySMTPFrom])
+}
+
+func TestUpdateSettingsPartialPayloadValidatesEffectiveTurnstileConfig(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyTurnstileEnabled:   "true",
+		service.SettingKeyTurnstileSiteKey:   "stored-site-key",
+		service.SettingKeyTurnstileSecretKey: "stored-secret-key",
+	})
+
+	rec := doUpdateSettings(t, h, map[string]any{"turnstile_enabled": true}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "stored-site-key", repo.values[service.SettingKeyTurnstileSiteKey])
+	require.Equal(t, "stored-secret-key", repo.values[service.SettingKeyTurnstileSecretKey])
+}
+
+func TestUpdateSettingsPartialPayloadRejectsInvalidOIDCPatchWhenAlreadyEnabled(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOIDCConnectEnabled:             "true",
+		service.SettingKeyOIDCConnectClientID:            "stored-client-id",
+		service.SettingKeyOIDCConnectIssuerURL:           "https://issuer.example.com",
+		service.SettingKeyOIDCConnectScopes:              "openid email profile",
+		service.SettingKeyOIDCConnectRedirectURL:         "https://gateway.example.com/api/v1/auth/oauth/oidc/callback",
+		service.SettingKeyOIDCConnectFrontendRedirectURL: "/auth/oidc/callback",
+	})
+
+	rec := doUpdateSettings(t, h, map[string]any{"oidc_connect_issuer_url": "not-a-url"}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "OIDC Issuer URL must be an absolute http(s) URL")
+	require.Equal(t, "https://issuer.example.com", repo.values[service.SettingKeyOIDCConnectIssuerURL])
 }

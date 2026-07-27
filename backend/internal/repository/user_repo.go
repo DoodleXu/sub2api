@@ -958,7 +958,7 @@ func existsByEmailAliasWithClient(ctx context.Context, client *dbent.Client, ema
 	}
 	candidates, err := client.User.Query().
 		Where(dbuser.Or(preds...)).
-		Limit(emailAliasCandidateLimit).
+		Limit(emailAliasCandidateLimit + 1).
 		Select(dbuser.FieldEmail).
 		Strings(ctx)
 	if err != nil {
@@ -967,10 +967,13 @@ func existsByEmailAliasWithClient(ctx context.Context, client *dbent.Client, ema
 
 	// 探针会有过度匹配（点号只在 Gmail 家族无意义），最终判定必须回到完整归一化规则。
 	identity := service.NormalizeEmailForAliasDedup(email)
-	for _, candidate := range candidates {
+	for _, candidate := range candidates[:min(len(candidates), emailAliasCandidateLimit)] {
 		if service.NormalizeEmailForAliasDedup(candidate) == identity {
 			return true, nil
 		}
+	}
+	if len(candidates) > emailAliasCandidateLimit {
+		return false, fmt.Errorf("email alias candidate set exceeds safe limit of %d", emailAliasCandidateLimit)
 	}
 	return false, nil
 }
