@@ -29,6 +29,7 @@ const (
 	liveClosedRecordTTL           = 24 * time.Hour
 	liveObserverPollInterval      = 250 * time.Millisecond
 	liveUpstreamBodyLimit         = 2 << 20
+	liveCompensationTimeout       = 5 * time.Second
 )
 
 var (
@@ -225,7 +226,16 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
 		if saveErr := store.SaveLiveCall(ctx, record, mappingTTL); saveErr != nil {
+			cleanupErr := s.closeUntrackedUpstreamLiveCall(account, created.CallID, attestation)
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			if cleanupErr != nil {
+				logger.FromContext(ctx).Warn(
+					"OpenAI Live 映射保存失败后的上游关闭补偿失败",
+					zap.Int64("account_id", account.ID),
+					zap.String("call_hash", record.CallHash),
+					zap.String("error_type", fmt.Sprintf("%T", cleanupErr)),
+				)
+			}
 			return nil, fmt.Errorf("save live call mapping: %w", saveErr)
 		}
 		created.Account = account
@@ -411,6 +421,18 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	account *Account,
 	record *LiveCallRecord,
 ) (http.Header, error) {
+	attestation, err := s.decryptLiveAttestation(record)
+	if err != nil {
+		return nil, err
+	}
+	return s.liveSidebandHeadersWithAttestation(ctx, account, attestation)
+}
+
+func (s *OpenAIGatewayService) liveSidebandHeadersWithAttestation(
+	ctx context.Context,
+	account *Account,
+	attestation string,
+) (http.Header, error) {
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -422,13 +444,44 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
 		return nil, err
 	}
-	attestation, err := s.decryptLiveAttestation(record)
-	if err != nil {
-		return nil, err
-	}
 	headers.Set(liveAttestationHeader, attestation)
 	applyLiveUpstreamIdentityHeaders(headers)
 	return headers, nil
+}
+
+func (s *OpenAIGatewayService) dialLiveSidebandForAccount(
+	ctx context.Context,
+	account *Account,
+	callID string,
+	attestation string,
+) (liveFrameConn, error) {
+	if account == nil || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
+		return nil, ErrLiveUnavailable
+	}
+	headers, err := s.liveSidebandHeadersWithAttestation(ctx, account, attestation)
+	if err != nil {
+		return nil, err
+	}
+	return s.dialLiveSidebandWithHeaders(ctx, account, callID, headers)
+}
+
+func (s *OpenAIGatewayService) dialLiveSidebandWithHeaders(
+	ctx context.Context,
+	account *Account,
+	callID string,
+	headers http.Header,
+) (liveFrameConn, error) {
+	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(callID)
+	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
+	if err != nil {
+		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
+	}
+	raw, ok := conn.(liveFrameConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, errors.New("live sideband transport does not support raw frames")
+	}
+	return raw, nil
 }
 
 func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *LiveCallRecord) (liveFrameConn, error) {
@@ -443,17 +496,18 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if err != nil {
 		return nil, err
 	}
-	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
-	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
+	return s.dialLiveSidebandWithHeaders(ctx, account, record.CallID, headers)
+}
+
+func (s *OpenAIGatewayService) closeUntrackedUpstreamLiveCall(account *Account, callID, attestation string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), liveCompensationTimeout)
+	defer cancel()
+	upstream, err := s.dialLiveSidebandForAccount(ctx, account, callID, attestation)
 	if err != nil {
-		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
+		return err
 	}
-	raw, ok := conn.(liveFrameConn)
-	if !ok {
-		_ = conn.Close()
-		return nil, errors.New("live sideband transport does not support raw frames")
-	}
-	return raw, nil
+	defer func() { _ = upstream.Close() }()
+	return upstream.WriteFrame(ctx, coderws.MessageText, []byte(`{"type":"session.close"}`))
 }
 
 func (s *OpenAIGatewayService) GetLiveCallForIdentity(
@@ -613,12 +667,17 @@ func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
 	if err != nil || !claimed {
 		return
 	}
+	nextLeaseRefresh := time.Time{}
 	for {
 		record, getErr := store.GetLiveCall(context.Background(), callHash)
 		if getErr != nil || record.Controller != LiveControllerObserver {
 			return
 		}
 		if !time.Now().Before(record.ExpiresAt) {
+			s.finalizeLiveCall(record)
+			return
+		}
+		if !s.refreshLiveObserverLeaseIfDue(record, &nextLeaseRefresh) {
 			s.finalizeLiveCall(record)
 			return
 		}
@@ -631,6 +690,7 @@ func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
 		}
 		runErr := s.runLiveObserverConnection(record, upstream)
 		_ = upstream.Close()
+		nextLeaseRefresh = time.Now().Add(liveLeaseRefreshInterval)
 		if errors.Is(runErr, ErrLiveControllerChanged) {
 			return
 		}
@@ -642,6 +702,19 @@ func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
 			return
 		}
 	}
+}
+
+func (s *OpenAIGatewayService) refreshLiveObserverLeaseIfDue(record *LiveCallRecord, nextRefresh *time.Time) bool {
+	if nextRefresh != nil && !nextRefresh.IsZero() && time.Now().Before(*nextRefresh) {
+		return true
+	}
+	if !s.refreshLiveLease(record) {
+		return false
+	}
+	if nextRefresh != nil {
+		*nextRefresh = time.Now().Add(liveLeaseRefreshInterval)
+	}
+	return true
 }
 
 func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord, upstream liveFrameConn) error {

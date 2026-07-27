@@ -85,6 +85,7 @@ type liveTestDialer struct {
 	conn    *liveTestFrameConn
 	url     string
 	headers http.Header
+	err     error
 }
 
 func (d *liveTestDialer) Dial(
@@ -95,6 +96,9 @@ func (d *liveTestDialer) Dial(
 ) (openAIWSClientConn, int, http.Header, error) {
 	d.url = wsURL
 	d.headers = headers.Clone()
+	if d.err != nil {
+		return nil, http.StatusBadGateway, nil, d.err
+	}
 	return d.conn, http.StatusSwitchingProtocols, nil, nil
 }
 
@@ -181,8 +185,10 @@ func (s *liveTestStore) MarkLiveCallClosed(_ context.Context, callHash string, _
 
 type liveTestConcurrencyCache struct {
 	ConcurrencyCache
-	mu       sync.Mutex
-	releases int
+	mu          sync.Mutex
+	refreshes   int
+	releases    int
+	failRefresh bool
 }
 
 func (c *liveTestConcurrencyCache) AcquireLiveLease(
@@ -198,6 +204,92 @@ func (c *liveTestConcurrencyCache) AcquireLiveLease(
 	return true, nil
 }
 
+func TestCloseUntrackedUpstreamLiveCallSendsSessionClose(t *testing.T) {
+	account := &Account{
+		ID:          11,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 2,
+		Credentials: map[string]any{
+			"access_token":       "test-access-token",
+			"chatgpt_account_id": "acct_test",
+		},
+	}
+	upstream := newLiveTestFrameConn()
+	dialer := &liveTestDialer{conn: upstream}
+	service := &OpenAIGatewayService{openaiWSPassthroughDialer: dialer}
+
+	require.NoError(t, service.closeUntrackedUpstreamLiveCall(
+		account,
+		"call_untracked",
+		`{"v":1,"s":0,"t":"v1.sideband"}`,
+	))
+
+	frame := <-upstream.writes
+	require.Equal(t, coderws.MessageText, frame.messageType)
+	require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
+	require.Equal(t, "wss://chatgpt.com/backend-api/codex/call_untracked", dialer.url)
+	require.Equal(t, "Bearer test-access-token", dialer.headers.Get("Authorization"))
+	require.Equal(t, `{"v":1,"s":0,"t":"v1.sideband"}`, dialer.headers.Get(liveAttestationHeader))
+}
+
+func TestRefreshLiveObserverLeaseIfDue(t *testing.T) {
+	cache := &liveTestConcurrencyCache{}
+	service := &OpenAIGatewayService{concurrencyService: NewConcurrencyService(cache)}
+	record := &LiveCallRecord{AccountID: 1, UserID: 2, APIKeyID: 3, LeaseID: "lease"}
+	nextRefresh := time.Now().Add(-time.Second)
+
+	require.True(t, service.refreshLiveObserverLeaseIfDue(record, &nextRefresh))
+	cache.mu.Lock()
+	require.Equal(t, 1, cache.refreshes)
+	cache.mu.Unlock()
+	require.True(t, nextRefresh.After(time.Now()))
+
+	require.True(t, service.refreshLiveObserverLeaseIfDue(record, &nextRefresh))
+	cache.mu.Lock()
+	require.Equal(t, 1, cache.refreshes, "未到续租时间不应额外访问 Redis")
+	cache.failRefresh = true
+	cache.mu.Unlock()
+	nextRefresh = time.Time{}
+	require.False(t, service.refreshLiveObserverLeaseIfDue(record, &nextRefresh))
+}
+
+func TestObserveLiveCallFinalizesBeforeDialWhenLeaseIsLost(t *testing.T) {
+	record := &LiveCallRecord{
+		CallID:     "call_lease_lost",
+		CallHash:   hashLiveCallID("call_lease_lost"),
+		AccountID:  11,
+		APIKeyID:   22,
+		UserID:     33,
+		LeaseID:    "lease-lost",
+		CreatedAt:  time.Now().Add(-time.Second),
+		ExpiresAt:  time.Now().Add(time.Hour),
+		Controller: LiveControllerPending,
+	}
+	store := &liveTestStore{}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	concurrencyCache := &liveTestConcurrencyCache{failRefresh: true}
+	usageRepo := &liveTestUsageRepo{}
+	service := &OpenAIGatewayService{
+		cache:              store,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		usageLogRepo:       usageRepo,
+	}
+
+	service.observeLiveCall(record.CallHash)
+
+	closed, err := store.GetLiveCall(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerClosed, closed.Controller)
+	concurrencyCache.mu.Lock()
+	require.Equal(t, 1, concurrencyCache.refreshes)
+	require.Equal(t, 1, concurrencyCache.releases)
+	concurrencyCache.mu.Unlock()
+	usageRepo.mu.Lock()
+	require.Len(t, usageRepo.logs, 1)
+	usageRepo.mu.Unlock()
+}
+
 func (c *liveTestConcurrencyCache) RefreshLiveLease(
 	context.Context,
 	int64,
@@ -205,7 +297,10 @@ func (c *liveTestConcurrencyCache) RefreshLiveLease(
 	int64,
 	string,
 ) (bool, error) {
-	return true, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshes++
+	return !c.failRefresh, nil
 }
 
 func (c *liveTestConcurrencyCache) ReleaseLiveLease(
