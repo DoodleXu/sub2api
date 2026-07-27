@@ -30,13 +30,14 @@ git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
 
 本次 `v0.1.166` 合并说明：
 
-- 新增可由后台配置的面板 API 限流：认证接口按用户、公开接口按安全解析后的真实客户端 IP 区分，继续保留 fork 的自定义 key、Redis 异常 fail-close 和 Retry-After 行为；登录、管理、支付和用户高频入口均接入对应限流等级，签到入口原有限流不被替换。
+- 新增可由后台配置的面板 API 限流：认证接口按用户、公开接口按安全解析后的真实客户端 IP 区分，继续保留 fork 的自定义 key、Redis 异常 fail-open 和 Retry-After 行为；登录、管理、支付和用户高频入口均接入对应限流等级，签到入口原有限流不被替换。
 - 系统设置 PUT 改为识别请求中实际出现的 JSON 字段，未提交字段保持存量值；上游拆分 handler/service 语义已移植回 fork 聚合文件，并在更新后刷新运行时设置缓存，没有恢复已删除的拆分模块。
 - OpenAI/Codex 吸收跨账号故障转移 reasoning 清理、WebSocket 每轮请求/上游模型追踪、最终上游模型统计和 Antigravity 兼容加固；fork 继续保留每轮图片计费、首图耗时、完整 `UpstreamModel`、Responses Lite 和 Agent Identity 行为，客户端仍看到原始请求模型。
 - 管理端用量新增 Request ID 过滤并沿用大表快速分页；requested/upstream model 统计口径与最终转发模型对齐。支付看板改为按币种分组展示，继续保持 fork 的人民币默认、汇率、手续费、升级抵扣和实际成本口径。
 - Caddy 配置关闭会造成 SSE 缓冲的压缩链路，并加入可移植的配置回归脚本；CI 只在 Ubuntu 验证该脚本，未恢复 Apple Container 或改变 `linux/amd64 + GHCR` 发布约束。
 - 可用渠道移动端、分组描述与下拉框边界、监控时间线、注册推广码、安全审计配置、Gemini/Grok/Composite 路由和依赖安全更新均已同步；官方 sponsor 清理随 release 保持一致。
 - 10 个上游拆分文件的增量已移植回 fork 聚合模块后继续删除；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、备份恢复和 fork 更新来源均保留。
+- 发版前全面审核修复：Live 映射保存失败会在独立超时内补偿关闭已创建的上游会话，observer 拨号重试期间持续续租并在租约丢失时终结；设置局部 PUT 先合并存量值再做跨字段校验；邮箱别名候选达到安全上限时失败关闭，避免固定截断产生漏判。
 
 ### v0.1.166 合并验证
 
