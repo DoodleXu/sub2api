@@ -90,11 +90,16 @@ type OpenAIEndpointCapability string
 const openAILongContextBillingEnabledKey = "openai_long_context_billing_enabled"
 
 const (
-	OpenAIEndpointCapabilityChatCompletions     OpenAIEndpointCapability = "chat_completions"
-	OpenAIEndpointCapabilityEmbeddings          OpenAIEndpointCapability = "embeddings"
-	OpenAIEndpointCapabilityResponsesNative     OpenAIEndpointCapability = "responses_native"
-	OpenAIEndpointCapabilityAlphaSearch         OpenAIEndpointCapability = "alpha_search"
-	OpenAIEndpointCapabilityResponses           OpenAIEndpointCapability = "responses"
+	OpenAIEndpointCapabilityChatCompletions OpenAIEndpointCapability = "chat_completions"
+	OpenAIEndpointCapabilityEmbeddings      OpenAIEndpointCapability = "embeddings"
+	OpenAIEndpointCapabilityResponsesNative OpenAIEndpointCapability = "responses_native"
+	OpenAIEndpointCapabilityAlphaSearch     OpenAIEndpointCapability = "alpha_search"
+	OpenAIEndpointCapabilityLive            OpenAIEndpointCapability = "live"
+	OpenAIEndpointCapabilityResponses       OpenAIEndpointCapability = "responses"
+	// OpenAIEndpointCapabilityGrokMediaGeneration keeps image/video generation
+	// away from Grok accounts that are explicitly disabled or whose billing
+	// entitlement probe was forbidden. Video status lookups intentionally do not
+	// require this capability so already-submitted requests remain queryable.
 	OpenAIEndpointCapabilityGrokMediaGeneration OpenAIEndpointCapability = "grok_media_generation"
 )
 
@@ -1446,6 +1451,11 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
+	case OpenAIEndpointCapabilityLive:
+		return a.Platform == PlatformOpenAI &&
+			a.Type == AccountTypeOAuth &&
+			!a.IsOpenAIPersonalAccessToken() &&
+			!a.IsOpenAIAgentIdentity()
 	case OpenAIEndpointCapabilityResponses:
 		if a.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(a.Extra) {
 			return false

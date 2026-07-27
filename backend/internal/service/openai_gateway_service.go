@@ -28,6 +28,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/cespare/xxhash/v2"
@@ -414,6 +415,8 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	liveAttestation       liveattestation.Provider
+	liveAttestationCipher SecretEncryptor
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -505,6 +508,8 @@ func NewOpenAIGatewayService(
 		balanceNotifyService:  balanceNotifyService,
 		settingService:        settingService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+		liveAttestation:       liveattestation.NewProvider(),
+		liveAttestationCipher: newLiveAttestationCipher(cfg),
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 	}
@@ -1317,18 +1322,20 @@ const (
 	codeBuddyConversationHeader   = "X-Conversation-ID"
 )
 
+var explicitOpenAIHeaderSessionNames = []string{
+	"session_id",
+	"conversation_id",
+	openCodeSessionAffinityHeader,
+	openCodeSessionIDHeader,
+	openCodeNativeSessionHeader,
+	codeBuddyConversationHeader,
+}
+
 func explicitOpenAIHeaderSessionID(c *gin.Context) string {
 	if c == nil {
 		return ""
 	}
-	for _, header := range []string{
-		"session_id",
-		"conversation_id",
-		openCodeSessionAffinityHeader,
-		openCodeSessionIDHeader,
-		openCodeNativeSessionHeader,
-		codeBuddyConversationHeader,
-	} {
+	for _, header := range explicitOpenAIHeaderSessionNames {
 		if sessionID := strings.TrimSpace(c.GetHeader(header)); sessionID != "" {
 			return sessionID
 		}
@@ -2908,6 +2915,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return nil, err
 		}
 	}
+	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
+		body, err = stripOpenAIResponsesInputNamespaces(body)
+		if err != nil {
+			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": err.Error(), "param": "input",
+			}})
+			return nil, err
+		}
+	}
 	if !passthroughEnabled {
 		normalizedJSONBody, changed, normalizeErr := ensureResponsesJSONModeInputInstructionInBody(body)
 		if normalizeErr != nil {
@@ -2929,6 +2946,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+	}
+	if account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {
+		sanitizedBody, changed, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(body)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("sanitize OpenAI Responses input item IDs: %w", sanitizeErr)
+		}
+		if changed {
+			body = sanitizedBody
+			originalBody = sanitizedBody
+			requestView = newOpenAIRequestView(sanitizedBody)
+			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+			originalModel = reqModel
+		}
 	}
 
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
@@ -6380,6 +6410,7 @@ type OpenAIRecordUsageInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string // 请求的 User-Agent
 	IPAddress          string // 请求的客户端 IP 地址
+	SessionID          string // 客户端显式会话标识，仅用于用量行会话关联
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
@@ -6406,6 +6437,7 @@ type CyberPolicyUsageInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string
 	IPAddress          string
+	SessionID          string
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	ChannelUsageFields
@@ -6440,6 +6472,7 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		UpstreamEndpoint:   in.UpstreamEndpoint,
 		UserAgent:          in.UserAgent,
 		IPAddress:          in.IPAddress,
+		SessionID:          in.SessionID,
 		RequestPayloadHash: in.RequestPayloadHash,
 		APIKeyService:      in.APIKeyService,
 		ChannelUsageFields: in.ChannelUsageFields,
@@ -6668,6 +6701,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input.IPAddress != "" {
 		usageLog.IPAddress = &input.IPAddress
 	}
+	usageLog.SessionID = optionalTrimmedStringPtr(input.SessionID)
 
 	if apiKey.GroupID != nil {
 		usageLog.GroupID = apiKey.GroupID

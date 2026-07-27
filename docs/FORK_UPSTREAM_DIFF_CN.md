@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-24
+最后更新：2026-07-27
 
 ## 当前对比基线
 
@@ -10,23 +10,32 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `a2bdf16a5 chore: 准备发布 v0.1.228` | 本次合并 v0.1.164 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.164` -> `cd8bb98c44` | v0.1.164 已合入本 fork；完成合并审核后发布为 `v0.1.229` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.164` -> `cd8bb98c44` | 2026-07-23 发布的官方最新非草稿 release |
-| 上游 main HEAD | `cb24522dd` | 本次同步时的远端 main；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 8 个 modify/delete）；继续保留 fork 聚合文件结构和核心定制行为，并迁入聚合分组、Ollama Cloud 用量、支付宝移动端深链、OpenAI 断流代理隔离及网关修复 |
+| Fork 同步前 HEAD | `84afe28b7 fix(openai): 调整限流绕过条件写法` | 本次合并 v0.1.165 前的 fork 基线 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.165` -> `e9a58c1cb8` | v0.1.165 已合入本 fork；完成门禁后计划发布为 `v0.1.231` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.165` -> `e9a58c1cb8` | 2026-07-25 发布的官方最新非草稿 release |
+| 上游 main HEAD | `7d3a896fc` | 本次同步时的远端 main；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 20 个冲突路径（含 10 个 modify/delete）；继续保留 fork 聚合文件结构和核心定制行为，并迁入 ChatGPT Live、Claude Opus 5、客户端会话关联、Ollama 请求驱动刷新、注册邮箱别名查重及网关修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.164:refs/tags/upstream/v0.1.164 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.164^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.164^{}..HEAD
+git fetch upstream refs/tags/v0.1.165:refs/tags/upstream/v0.1.165 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.165^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.165^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.164` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.165` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.165` 合并说明：
+
+- 新增 ChatGPT Live 网关与 `/v1/live`、Codex realtime calls 路由，接入组级开关、并发租约、用量记录及 macOS attestation；API Key 鉴权快照升至 v18，同时保留 fork 的人民币定价、reasoning effort、限额后继续调度和聚合分组字段。
+- Claude Opus 5 的模型清单、Bedrock 默认映射、定价、上下文窗口和限流 scope 已迁入；OpenAI/Grok/Gemini 同步吸收 Responses item ID 净化、input namespace 清理、池模式同账号重试、Grok 孤立 tool choice/5xx 冷却及 Gemini 图片输出修复。
+- `usage_logs.session_id` 贯通普通网关、OpenAI、图片、Grok 和批量图片入口，用于关联客户端显式会话标识；fork 聚合仓储同时补齐既有 `image_input_tokens` / `image_input_cost` 的单条、批量、best-effort 写入与读取，继续保留独立 `image_first_output_ms` 口径。
+- Ollama Cloud 用量改为按请求活动驱动刷新，并修复 PostgreSQL 14/15/16 到期判断；公告编辑新增预览与统一富文本样式，弹窗继续保留 fork 的 body overflow 恢复和 DOMPurify 清洗。
+- 注册查重增加邮箱别名规范化、根点与并发竞态防护；前端 Live 能力探测在旧测试桩或缺失方法时显式降级为不支持，避免未处理 Promise。
+- 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义，没有恢复已删除的 10 个拆分文件；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、备份恢复及 `linux/amd64 + GHCR` 发布约束均保留。
 
 ## 2026-07-24 Fork 定制：OpenAI 限额后继续尝试调度
 
