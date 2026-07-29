@@ -72,12 +72,16 @@ Why?
 
 3. **Test locally**
    ```bash
-   # Apply migration
-   make migrate-up
+   # Validate embedded migration metadata and checksum rules
+   go test ./migrations -count=1
 
-   # Test rollback
-   make migrate-down
+   # Start an isolated PostgreSQL + application instance. Migrations are
+   # applied automatically during application startup.
+   # Never point this verification at a production database.
    ```
+   - Verify both an empty database and an upgrade from a representative backup
+   - Restart the application to verify the migration is idempotently recorded
+   - Rehearse recovery by restoring the backup or applying a new compensating migration
 
 4. **Commit and deploy**
    ```bash
@@ -124,9 +128,10 @@ touch migrations/018_your_new_change.sql
    - One logical change per migration
    - Easier to review and rollback
 
-2. **Write reversible migrations**
-   - Always provide a working Down migration
-   - Test rollback before committing
+2. **Use forward-only recovery**
+   - Do not add `Down` sections; the runner only applies immutable forward files
+   - Revert schema changes with a new compensating migration
+   - Rehearse database backup restoration for changes that cannot be safely compensated
 
 3. **Use transactions**
    - Wrap DDL statements in transactions when possible
@@ -137,9 +142,10 @@ touch migrations/018_your_new_change.sql
    - Document any special considerations
 
 5. **Test in development first**
-   - Apply migration locally
+   - Apply migration against an isolated empty database and a representative existing database
    - Verify data integrity
-   - Test rollback
+   - Restart and verify the migration is not applied twice
+   - Test the documented backup-restore or compensating-migration recovery path
 
 ## Example Migration
 

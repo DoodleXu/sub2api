@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-27
+最后更新：2026-07-29
 
 ## 当前对比基线
 
@@ -27,6 +27,15 @@ git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
 ```
 
 如上游 release tag 更新，先把 `v0.1.166` 替换为新的官方 release tag，再更新本节。
+
+## 2026-07-29 全项目审核修复
+
+- 支付管理写操作（配置、取消/补单、退款、套餐和服务商实例）纳入现有 step-up 2FA 门控；支付读取保持 admin auth + 审计语义，公开订单恢复查询接入 fork 面板公开 IP 限流。前端订单、套餐和支付服务商管理复用统一的 15 分钟 TOTP 挑战与管理 API Key 拒绝提示。
+- Release 增加严格 tag 格式、默认分支祖先关系以及精确 SHA 的 CI/Security Scan 成功校验；手动 tag 输入统一通过环境变量传入 shell，发布、前端构建和 VERSION 产物固定使用同一已验证 tag。
+- 管理端用量导出从存在已知高危漏洞的 `xlsx` 依赖改为带公式注入防护的 UTF-8 CSV，并清理失效安全例外；例外检查器兼容 Python 3.9，要求原因、缓解、责任人和到期日，并拒绝过期或已不匹配当前审计的条目。DOMPurify、Mermaid、UUID、YAML 同步固定到已修复版本，生产依赖审计最终为低/中/高/严重漏洞全部 0。
+- 分组、代理、兑换码和旧 dashboard realtime 的未实现统计接口不再返回伪造的全零或 100% 成功数据，改为稳定的 `501 / STATS_NOT_IMPLEMENTED`；前端移除未使用的伪统计客户端声明。后续实现真实聚合前不得恢复成功响应。
+- standalone Compose 示例补齐外部 PostgreSQL/Redis 必填变量；迁移文档统一为不可变、forward-only 和补偿迁移/备份恢复语义。并发测试在 `TestMain` 一次性设置 Gin 全局模式，异步 dashboard 测试桩改用原子计数，恢复批量账号负载集成断言。账号管理的大型交互弹窗改为按需加载，主视图生产 chunk 从约 678 KB 降至约 158 KB。
+- pnpm 9/11 的 overrides 保持同源一致，CI、Security Scan、Docker 和 Release 的 frozen install 使用同一安全锁文件；Docker 多阶段构建固定在原生 `BUILDPLATFORM` 执行 Node/Go 工具，再按 `TARGETOS/TARGETARCH` 交叉编译，避免 Apple Silicon 构建 `linux/amd64` 时在 QEMU 下触发 esbuild Go runtime 崩溃。
 
 本次 `v0.1.166` 合并说明：
 
@@ -529,7 +538,7 @@ git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.164`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.1.166`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
 ## v0.1.229 发布验证
 
