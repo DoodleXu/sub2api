@@ -19,7 +19,6 @@ import (
 )
 
 func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletions(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":false}`)
 	rec := httptest.NewRecorder()
@@ -55,7 +54,6 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 }
 
 func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":true}`)
 	rec := httptest.NewRecorder()
@@ -104,7 +102,6 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 }
 
 func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyBuiltInTools(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tools":[{"type":"image_generation"}]}`)
 	rec := httptest.NewRecorder()
@@ -135,7 +132,6 @@ func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyBuiltInTools(t
 }
 
 func TestForwardResponses_ForceChatCompletionsAllowsMixedHostedAndCustomTools(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.6-sol","input":"run pwd","stream":false,"tools":[{"type":"image_generation"},{"type":"custom","name":"exec","description":"Run a shell command"}]}`)
 	rec := httptest.NewRecorder()
@@ -164,7 +160,6 @@ func TestForwardResponses_ForceChatCompletionsAllowsMixedHostedAndCustomTools(t 
 }
 
 func TestForwardResponses_ForceChatCompletionsRoutesResponsesLiteTools(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{
 		"model":"gpt-5.6-sol",
@@ -258,7 +253,6 @@ func TestRequiresNativeOpenAIResponses_ResponsesLiteAdditionalTools(t *testing.T
 }
 
 func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyToolChoice(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"draw","stream":false,"tool_choice":{"type":"image_generation"}}`)
 	rec := httptest.NewRecorder()
@@ -289,7 +283,6 @@ func TestForwardResponses_ForceChatCompletionsRejectsResponsesOnlyToolChoice(t *
 }
 
 func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-reasoner","input":"hello","stream":true}`)
 	rec := httptest.NewRecorder()
@@ -328,7 +321,6 @@ func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *test
 }
 
 func TestForwardResponses_AutoSupportedAccountStillUsesResponsesEndpoint(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","input":"hello","stream":false}`)
 	rec := httptest.NewRecorder()

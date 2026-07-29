@@ -80,7 +80,6 @@ func TestBuildOpenAIResponsesURL_ProbeURL(t *testing.T) {
 }
 
 func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDownstream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -123,7 +122,6 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 }
 
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"sol","messages":[{"role":"user","content":"hello"}],"reasoning_effort":"max","stream":false}`)
 	rec := httptest.NewRecorder()
@@ -156,7 +154,6 @@ func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T)
 }
 
 func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name      string
@@ -207,7 +204,6 @@ func TestForwardAsRawChatCompletions_NonStreamingCapturesCacheWriteUsage(t *test
 }
 
 func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentNonStreaming(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-reasoner","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	rec := httptest.NewRecorder()
@@ -238,7 +234,6 @@ func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentNonStreami
 }
 
 func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentStreaming(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-reasoner","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -281,7 +276,6 @@ func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentStreaming(
 }
 
 func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentInRequest(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"weather"},{"role":"assistant","reasoning_content":"need tool","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"cloudy"}],"stream":false}`)
 	rec := httptest.NewRecorder()
@@ -309,7 +303,6 @@ func TestForwardAsRawChatCompletions_PreservesDeepSeekReasoningContentInRequest(
 }
 
 func TestForwardAsRawChatCompletions_NormalizesGLMReasoningEffortForUpstream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"glm-5.2","messages":[{"role":"user","content":"hello"}],"reasoning_effort":"xhigh","stream":false}`)
 	rec := httptest.NewRecorder()
@@ -336,7 +329,6 @@ func TestForwardAsRawChatCompletions_NormalizesGLMReasoningEffortForUpstream(t *
 }
 
 func TestForwardAsRawChatCompletions_SilentRefusalTriggersFailover(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := largeRawChatCompletionsBody()
 	rec := httptest.NewRecorder()
@@ -374,7 +366,6 @@ func TestForwardAsRawChatCompletions_SilentRefusalTriggersFailover(t *testing.T)
 }
 
 func TestForwardAsRawChatCompletions_SilentRefusalToolCallsExempt(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := largeRawChatCompletionsBody()
 	rec := httptest.NewRecorder()
@@ -411,7 +402,6 @@ func TestForwardAsRawChatCompletions_SilentRefusalToolCallsExempt(t *testing.T) 
 }
 
 func TestHandleChatStreamingResponse_SilentRefusalReasoningSummaryExempt(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -449,7 +439,6 @@ func TestHandleChatStreamingResponse_SilentRefusalReasoningSummaryExempt(t *test
 }
 
 func TestForwardAsRawChatCompletions_SilentRefusalNormalContentExempt(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := largeRawChatCompletionsBody()
 	rec := httptest.NewRecorder()
@@ -486,7 +475,6 @@ func TestForwardAsRawChatCompletions_SilentRefusalNormalContentExempt(t *testing
 }
 
 func TestForwardAsRawChatCompletions_ClientDisconnectDrainsUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -525,7 +513,6 @@ func TestForwardAsRawChatCompletions_ClientDisconnectDrainsUsage(t *testing.T) {
 }
 
 func TestForwardAsRawChatCompletions_UpstreamRequestIgnoresClientCancel(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
@@ -561,7 +548,6 @@ func TestForwardAsRawChatCompletions_UpstreamRequestIgnoresClientCancel(t *testi
 }
 
 func TestForwardAsChatCompletions_UnknownResponsesSupportFallbackUsesVersionedChatURL(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"glm-4.5-air","messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	rec := httptest.NewRecorder()
@@ -625,7 +611,6 @@ func TestEnsureOpenAIChatStreamUsage(t *testing.T) {
 }
 
 func TestBufferRawChatCompletions_RejectsOversizedResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

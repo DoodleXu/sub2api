@@ -39,7 +39,6 @@ func (r *countTokensRuntimeStateRepo) SetError(_ context.Context, _ int64, _ str
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesInputTokens(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -87,7 +86,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_AgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
 		ID:          111,
@@ -131,7 +129,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_AgentIdentityRecover
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentityError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
 		ID:          112,
@@ -176,7 +173,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentityTransportError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
 		ID:          113,
@@ -216,7 +212,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentityReadError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
 		ID:          114,
@@ -254,7 +249,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_RedactsAgentIdentity
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_ReturnsFailoverWithoutWritingUpstreamError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
 	account := &Account{
 		ID: 115, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
@@ -285,7 +279,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_ReturnsFailoverWitho
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_PreservesUnsupportedClientResponseMetadata(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
 	account := &Account{
 		ID: 116, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1,
@@ -317,7 +310,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_PreservesUnsupported
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPlatformEndpointUnsupported(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"claude-opus-4-1","messages":[{"role":"user","content":"hello"}]}`)
 	account := &Account{
@@ -396,7 +388,6 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPl
 }
 
 func TestOpenAIGatewayService_OpenAIOAuthInputTokensFallbackUsesMinimumWhenEstimateFails(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
