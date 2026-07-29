@@ -36,9 +36,13 @@ type SystemSettings struct {
 	InvitationCodeEnabled            bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                     `json:"totp_enabled"`                   // TOTP 双因素认证
 	TotpEncryptionKeyConfigured      bool                     `json:"totp_encryption_key_configured"` // TOTP 加密密钥是否已配置
-	SessionBindingEnabled            bool                     `json:"session_binding_enabled"`        // 会话 IP/UA 绑定
-	StepUpEnabled                    bool                     `json:"step_up_enabled"`                // 敏感操作 step-up 2FA
-	AuditLogRetentionDays            int                      `json:"audit_log_retention_days"`       // 审计日志保留天数
+	PasskeyEnabled                   bool                     `json:"passkey_enabled"`
+	PasskeyConfigured                bool                     `json:"passkey_configured"`
+	PasskeyRPID                      string                   `json:"passkey_rp_id"`
+	PasskeyRPOrigins                 []string                 `json:"passkey_rp_origins"`
+	SessionBindingEnabled            bool                     `json:"session_binding_enabled"`  // 会话 IP/UA 绑定
+	StepUpEnabled                    bool                     `json:"step_up_enabled"`          // 敏感操作 step-up 2FA
+	AuditLogRetentionDays            int                      `json:"audit_log_retention_days"` // 审计日志保留天数
 	LoginAgreementEnabled            bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
@@ -312,6 +316,11 @@ type SystemSettings struct {
 	DailyCheckinCritMultiplier      float64                                `json:"daily_checkin_crit_multiplier"`
 	DailyCheckinCritMaxRewardUSD    float64                                `json:"daily_checkin_crit_max_reward_usd"`
 
+	// Model Plaza feature (public group/model pricing showcase)
+	ModelPlazaEnabled     bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription string `json:"model_plaza_description"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
@@ -346,6 +355,7 @@ type PublicSettings struct {
 	PasswordResetEnabled             bool                     `json:"password_reset_enabled"`
 	InvitationCodeEnabled            bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                      bool                     `json:"totp_enabled"` // TOTP 双因素认证
+	PasskeyEnabled                   bool                     `json:"passkey_enabled"`
 	LoginAgreementEnabled            bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode               string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt          string                   `json:"login_agreement_updated_at"`
@@ -398,6 +408,8 @@ type PublicSettings struct {
 
 	WebConsoleEnabled         bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
+	ModelPlazaEnabled         bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth     bool   `json:"model_plaza_require_auth"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

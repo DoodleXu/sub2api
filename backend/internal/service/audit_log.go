@@ -23,6 +23,7 @@ const (
 	AuditAuthMethodPasswordTOTP = "password_totp"
 	AuditAuthMethodOAuth        = "oauth"
 	AuditAuthMethodOAuthTOTP    = "oauth_totp"
+	AuditAuthMethodPasskey      = "passkey"
 
 	// auditRequestBodyMaxBytes 请求体脱敏后入库的最大长度（字节），超出截断。
 	auditRequestBodyMaxBytes = 16 * 1024

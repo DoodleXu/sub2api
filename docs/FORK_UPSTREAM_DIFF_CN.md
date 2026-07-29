@@ -10,23 +10,23 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `8b47699ee chore: 准备发布 v0.1.231` | 本次合并 v0.1.166 前的 fork 基线 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.166` -> `dc893dd0b8` | v0.1.166 已合入本 fork；fork 版本继续保持 `0.1.231` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.166` -> `dc893dd0b8` | 2026-07-27 发布的官方最新非草稿 release |
-| 上游 main HEAD | `59ce11c78` | 本次同步时的远端 main；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 26 个冲突路径（含 10 个 modify/delete）；继续保留 fork 聚合文件结构、核心定制行为和完整 WebSocket 逐轮计费元数据，并迁入面板 API 限流、设置局部更新、多币种支付统计及网关兼容修复 |
+| Fork 同步前 HEAD | `11f664188 docs: 完善部署审核与恢复指引` | 本次合并 v0.1.168 前的 fork 基线，已包含 2026-07-29 全项目审核修复的 6 个功能 commit |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | v0.1.168 已合入本 fork；fork 版本继续保持 `0.1.232` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | 2026-07-29 发布的官方最新非草稿 release |
+| 上游 main HEAD | `5a6143097` | 本次同步时比 v0.1.168 release 多 2 个提交；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 29 个冲突路径（含 9 个 modify/delete）；继续保留 fork 聚合文件结构、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和完整 WebSocket 逐轮计费元数据，并迁入 Passkey、模型广场、按列更新及网关可靠性修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.166:refs/tags/upstream/v0.1.166 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.166^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
+git fetch upstream refs/tags/v0.1.168:refs/tags/upstream/v0.1.168 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.168^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.168^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.166` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.168` 替换为新的官方 release tag，再更新本节。
 
 ## 2026-07-29 全项目审核修复
 
@@ -36,6 +36,24 @@ git diff --name-status refs/tags/upstream/v0.1.166^{}..HEAD
 - 分组、代理、兑换码和旧 dashboard realtime 的未实现统计接口不再返回伪造的全零或 100% 成功数据，改为稳定的 `501 / STATS_NOT_IMPLEMENTED`；前端移除未使用的伪统计客户端声明。后续实现真实聚合前不得恢复成功响应。
 - standalone Compose 示例补齐外部 PostgreSQL/Redis 必填变量；迁移文档统一为不可变、forward-only 和补偿迁移/备份恢复语义。并发测试在 `TestMain` 一次性设置 Gin 全局模式，异步 dashboard 测试桩改用原子计数，恢复批量账号负载集成断言。账号管理的大型交互弹窗改为按需加载，主视图生产 chunk 从约 678 KB 降至约 158 KB。
 - pnpm 9/11 的 overrides 保持同源一致，CI、Security Scan、Docker 和 Release 的 frozen install 使用同一安全锁文件；Docker 多阶段构建固定在原生 `BUILDPLATFORM` 执行 Node/Go 工具，再按 `TARGETOS/TARGETARCH` 交叉编译，避免 Apple Silicon 构建 `linux/amd64` 时在 QEMU 下触发 esbuild Go runtime 崩溃。
+
+本次 `v0.1.168` 合并说明：
+
+- 新增官方 Passkey/WebAuthn 登录：部署配置继续作为安全边界，后台可控制运行时开关并展示 RP ID/origins 状态；登录、session、审计方法、迁移、Redis challenge store、用户 Profile 与管理设置均已接入。fork 的密码/OAuth/TOTP 审计方法和 step-up 支付门控保持不变。
+- 新增模型广场公开页、可选登录要求、说明文案、渠道分组与定价展示；路由使用 optional JWT，同时保留 fork 的 `/unsupported`、可用渠道、Web Console、签到和运营中心入口。管理设置中的 Web Console 与模型广场保持两个独立配置卡。
+- 用户和 API Key 管理写路径改为显式列掩码，余额调整使用原子接口，避免并发计费、批量限额或状态更新被旧快照覆盖；API Key 编辑继续使用 fork 的分组/订阅绑定解析，并按上游规则转义名称。订阅 ID 仅随绑定字段更新，不会在编辑其他列时被旧快照覆盖。
+- Codex models 保留 fork `TryCodexModels` fallback、限额后切号和错误隐藏，并吸收上游 API Key manifest normalization/ETag；Claude OAuth 在 system prompt 转入 messages 时保留客户端最后一个 `cache_control` 断点及 TTL。
+- Live observer 同时保留 fork 拨号重试期间续租、租约丢失终结和创建失败补偿关闭，并吸收上游 store 抖动有限重试、claim 错误到期兜底 finalize，避免 usage log 或并发租约静默丢失。
+- Kimi K3、Claude 5 状态别名、Antigravity/Gemini/OpenAI 兼容、Prompt Audit 配置与 JWT 安全依赖更新已同步；安全审计 ConfigManager 使用运行时配置，Wire 已重新生成。
+- 9 个上游拆分文件的增量已移植回 fork 的 `setting_handler.go`、`setting_service.go`、`admin_service.go` 和 `gateway_service.go` 后继续删除；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、备份恢复及 `linux/amd64 + GHCR` 发布约束均保留。
+
+### v0.1.168 合并验证
+
+- `merge-tree` 预检和实际合并共确认 29 个冲突路径，其中 9 个为上游拆分文件的 modify/delete 冲突；解决后无未合并路径、无冲突标记，9 个拆分文件保持删除。
+- 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 与 `TZ=UTC go vet -tags=unit ./...` 通过；定向覆盖 Passkey、模型广场、设置聚合、用户/API Key 按列更新、原子余额、Codex manifest、Claude cache breakpoint 和 Live 生命周期。
+- 前端 `pnpm test:run` 通过 213 个测试文件、1470 个测试；`pnpm typecheck`、`pnpm lint:check` 和 `pnpm build` 均通过。新增模型广场产物正常生成，AccountsView 主 chunk 约 158 kB。
+- `go run -mod=mod github.com/google/wire/cmd/wire` 成功重新生成 `wire_gen.go`；补齐 Wire 运行所需的 `github.com/google/subcommands` 校验和后，`cmd/server` unit 通过。
+- `backend/cmd/server/VERSION` 保持 `0.1.232`，本次只合并 `refs/tags/upstream/v0.1.168^{}`，没有合入标签之后的 2 个 `upstream/main` 提交。
 
 本次 `v0.1.166` 合并说明：
 

@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AppHeader from '@/components/layout/AppHeader.vue'
 
@@ -76,6 +77,7 @@ function mountHeader() {
 
 describe('AppHeader', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     routeState.path = '/admin/operations/daily-checkin'
     routeState.name = 'AdminDailyCheckin'
     routeState.params = {}
