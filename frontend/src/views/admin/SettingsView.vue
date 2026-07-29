@@ -12157,30 +12157,55 @@ const hasAnyPaymentTypeEnabled = computed(
   () => form.payment_enabled_types.length > 0,
 );
 
-function togglePaymentType(type: string) {
+async function togglePaymentType(type: string) {
   if (form.payment_enabled_types.includes(type)) {
+    // Disable all provider instances matching this type
+    if (!(await disableProvidersByType(type))) return;
     form.payment_enabled_types = form.payment_enabled_types.filter(
       (t) => t !== type,
     );
-    // Disable all provider instances matching this type
-    disableProvidersByType(type);
   } else {
     form.payment_enabled_types = [...form.payment_enabled_types, type];
   }
 }
 
-async function disableProvidersByType(type: string) {
+function handlePaymentStepUpError(error: unknown): boolean {
+  if (isStepUpCancelled(error)) {
+    return true;
+  }
+  if (!isStepUpBlocked(error)) {
+    return false;
+  }
+  appStore.showError(
+    stepUpBlockReason(error) === "STEP_UP_ADMIN_API_KEY_FORBIDDEN"
+      ? t("stepUp.adminApiKeyForbidden")
+      : t("stepUp.notEnabled"),
+  );
+  return true;
+}
+
+async function disableProvidersByType(type: string): Promise<boolean> {
   const matching = providers.value.filter(
     (p) => p.provider_key === type && p.enabled,
   );
   for (const p of matching) {
     try {
-      await adminAPI.payment.updateProvider(p.id, { enabled: false });
+      await settingsStepUp.run(() =>
+        adminAPI.payment.updateProvider(p.id, { enabled: false }),
+      );
       p.enabled = false;
     } catch (err: unknown) {
+      if (!handlePaymentStepUpError(err)) {
+        appStore.showError(
+          extractI18nErrorMessage(err, t, "payment.errors", t("common.error")),
+        );
+      }
       slog("disable provider failed", p.id, err);
+      await loadProviders();
+      return false;
     }
   }
+  return true;
 }
 
 function slog(...args: unknown[]) {
@@ -12384,9 +12409,13 @@ async function handleSaveProvider(payload: Partial<ProviderInstance>) {
     }
 
     if (editingProvider.value) {
-      await adminAPI.payment.updateProvider(editingProvider.value.id, payload);
+      await settingsStepUp.run(() =>
+        adminAPI.payment.updateProvider(editingProvider.value!.id, payload),
+      );
     } else {
-      await adminAPI.payment.createProvider(payload);
+      await settingsStepUp.run(() =>
+        adminAPI.payment.createProvider(payload),
+      );
     }
     showProviderDialog.value = false;
     // Reload full list (API returns decrypted/formatted data with correct sort order)
@@ -12394,6 +12423,7 @@ async function handleSaveProvider(payload: Partial<ProviderInstance>) {
     // Auto-save settings so provider changes take effect immediately
     await saveSettings();
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return;
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
   } finally {
     providerSaving.value = false;
@@ -12429,9 +12459,12 @@ async function handleToggleField(
     payload.allow_user_refund = false;
   }
   try {
-    await adminAPI.payment.updateProvider(provider.id, payload);
+    await settingsStepUp.run(() =>
+      adminAPI.payment.updateProvider(provider.id, payload),
+    );
     await loadProviders();
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return;
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
   }
 }
@@ -12455,11 +12488,14 @@ async function handleToggleType(provider: ProviderInstance, type: string) {
     return;
   }
   try {
-    await adminAPI.payment.updateProvider(provider.id, {
-      supported_types: updated,
-    } as any);
+    await settingsStepUp.run(() =>
+      adminAPI.payment.updateProvider(provider.id, {
+        supported_types: updated,
+      } as any),
+    );
     await loadProviders();
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return;
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
   }
 }
@@ -12473,15 +12509,16 @@ async function handleReorderProviders(
   updates: { id: number; sort_order: number }[],
 ) {
   try {
-    await Promise.all(
-      updates.map((u) =>
+    await settingsStepUp.run(() =>
+      Promise.all(updates.map((u) =>
         adminAPI.payment.updateProvider(u.id, {
           sort_order: u.sort_order,
         } as Partial<ProviderInstance>),
-      ),
+      )),
     );
     await loadProviders();
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return;
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
     loadProviders();
   }
@@ -12490,11 +12527,14 @@ async function handleReorderProviders(
 async function handleDeleteProvider() {
   if (!deletingProviderId.value) return;
   try {
-    await adminAPI.payment.deleteProvider(deletingProviderId.value);
+    await settingsStepUp.run(() =>
+      adminAPI.payment.deleteProvider(deletingProviderId.value!),
+    );
     appStore.showSuccess(t("common.deleted"));
     showDeleteProviderDialog.value = false;
     loadProviders();
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return;
     appStore.showError(extractI18nErrorMessage(err, t, "payment.errors", t("common.error")));
   }
 }

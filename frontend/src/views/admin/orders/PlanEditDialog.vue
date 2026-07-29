@@ -88,6 +88,7 @@
       </div>
     </template>
   </BaseDialog>
+  <TotpStepUpDialog :controller="paymentStepUp" />
 </template>
 
 <script setup lang="ts">
@@ -96,6 +97,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import type { AdminPaymentConfig } from '@/api/admin/payment'
+import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatPaymentAmount } from '@/components/payment/currency'
 import type { SubscriptionPlan } from '@/types/payment'
@@ -107,6 +109,7 @@ import GroupBadge from '@/components/common/GroupBadge.vue'
 import { platformTextClass } from '@/utils/platformColors'
 import { allowsDailyLimit, allowsMonthlyLimit, allowsWeeklyLimit, isSubscriptionType } from '@/utils/subscriptionType'
 import { normalizeValidityUnit } from '@/utils/validityUnit'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const props = defineProps<{
   show: boolean
@@ -122,6 +125,18 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const paymentStepUp = useStepUp()
+
+function handlePaymentStepUpError(error: unknown): boolean {
+  if (isStepUpCancelled(error)) return true
+  if (!isStepUpBlocked(error)) return false
+  appStore.showError(
+    stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+      ? t('stepUp.adminApiKeyForbidden')
+      : t('stepUp.notEnabled')
+  )
+  return true
+}
 
 const saving = ref(false)
 const planForm = reactive({ name: '', group_id: null as number | null, description: '', price: 0, original_price: 0, currency: 'CNY', validity_days: 30, validity_unit: 'days', sort_order: 0, for_sale: true })
@@ -219,12 +234,15 @@ async function handleSavePlan() {
   saving.value = true
   try {
     const data = buildPlanPayload()
-    if (props.plan) { await adminPaymentAPI.updatePlan(props.plan.id, data) }
-    else { await adminPaymentAPI.createPlan(data) }
+    if (props.plan) { await paymentStepUp.run(() => adminPaymentAPI.updatePlan(props.plan!.id, data)) }
+    else { await paymentStepUp.run(() => adminPaymentAPI.createPlan(data)) }
     appStore.showSuccess(t('common.saved'))
     emit('close')
     emit('saved')
-  } catch (err: unknown) { appStore.showError(extractApiErrorMessage(err, t('common.error'))) }
+  } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  }
   finally { saving.value = false }
 }
 </script>

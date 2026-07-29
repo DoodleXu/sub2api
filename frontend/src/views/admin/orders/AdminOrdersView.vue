@@ -120,6 +120,7 @@
     </BaseDialog>
 
     <AdminRefundDialog :show="showRefundDialog" :order="selectedOrder" :submitting="refundSubmitting" @confirm="handleRefund" @cancel="showRefundDialog = false" />
+    <TotpStepUpDialog :controller="paymentStepUp" />
   </AppLayout>
 </template>
 
@@ -128,6 +129,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
+import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { formatOrderDateTime } from '@/components/payment/orderUtils'
 import type { PaymentOrder } from '@/types/payment'
@@ -139,6 +141,7 @@ import Icon from '@/components/icons/Icon.vue'
 import AdminRefundDialog from '@/components/admin/payment/AdminRefundDialog.vue'
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 interface AuditLog {
   id: number
@@ -150,6 +153,18 @@ interface AuditLog {
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const paymentStepUp = useStepUp()
+
+function handlePaymentStepUpError(error: unknown): boolean {
+  if (isStepUpCancelled(error)) return true
+  if (!isStepUpBlocked(error)) return false
+  appStore.showError(
+    stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+      ? t('stepUp.adminApiKeyForbidden')
+      : t('stepUp.notEnabled')
+  )
+  return true
+}
 
 const ordersLoading = ref(false)
 const orders = ref<PaymentOrder[]>([])
@@ -228,13 +243,19 @@ async function showOrderDetail(order: PaymentOrder) {
 }
 
 async function handleCancelOrder(order: PaymentOrder) {
-  try { await adminPaymentAPI.cancelOrder(order.id); appStore.showSuccess(t('payment.admin.orderCancelled')); loadOrders() }
-  catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  try { await paymentStepUp.run(() => adminPaymentAPI.cancelOrder(order.id)); appStore.showSuccess(t('payment.admin.orderCancelled')); loadOrders() }
+  catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
 }
 
 async function handleRetryOrder(order: PaymentOrder) {
-  try { await adminPaymentAPI.retryRecharge(order.id); appStore.showSuccess(t('payment.admin.retrySuccess')); loadOrders() }
-  catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  try { await paymentStepUp.run(() => adminPaymentAPI.retryRecharge(order.id)); appStore.showSuccess(t('payment.admin.retrySuccess')); loadOrders() }
+  catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
 }
 
 async function openRefundDialog(order: PaymentOrder) {
@@ -257,7 +278,7 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
   if (!selectedOrder.value) return
   refundSubmitting.value = true
   try {
-    const res = await adminPaymentAPI.refundOrder(selectedOrder.value.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force, subscription_days_to_deduct: data.subscription_days_to_deduct })
+    const res = await paymentStepUp.run(() => adminPaymentAPI.refundOrder(selectedOrder.value!.id, { amount: data.amount, reason: data.reason, deduct_balance: data.deduct_balance, force: data.force, subscription_days_to_deduct: data.subscription_days_to_deduct }))
     if (res.data.success) {
       appStore.showSuccess(t('payment.admin.refundSuccess'))
       showRefundDialog.value = false
@@ -271,14 +292,17 @@ async function handleRefund(data: { amount: number; reason: string; deduct_balan
      return
     }
     appStore.showError(res.data.warning || t('common.error'))
-  } catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
   finally { refundSubmitting.value = false }
 }
 
 async function handleQueryRefund(order: PaymentOrder) {
   refundQueryingIds.value = new Set(refundQueryingIds.value).add(order.id)
   try {
-    const res = await adminPaymentAPI.queryRefund(order.id)
+    const res = await paymentStepUp.run(() => adminPaymentAPI.queryRefund(order.id))
     if (res.data.success) {
       appStore.showSuccess(t('payment.admin.refundSuccess'))
     } else if (isRefundPendingWarning(res.data.warning)) {
@@ -288,6 +312,7 @@ async function handleQueryRefund(order: PaymentOrder) {
     }
     loadOrders()
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     const next = new Set(refundQueryingIds.value)

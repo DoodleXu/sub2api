@@ -71,6 +71,7 @@
     <PlanEditDialog :show="showPlanDialog" :plan="editingPlan" :groups="groups" :payment-config="paymentConfig" @close="showPlanDialog = false" @saved="loadPlans" />
 
     <ConfirmDialog :show="showDeletePlanDialog" :title="t('payment.admin.deletePlan')" :message="t('payment.admin.deletePlanConfirm')" :confirm-text="t('common.delete')" danger @confirm="handleDeletePlan" @cancel="showDeletePlanDialog = false" />
+    <TotpStepUpDialog :controller="paymentStepUp" />
   </AppLayout>
 </template>
 
@@ -80,6 +81,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
 import type { AdminPaymentConfig } from '@/api/admin/payment'
+import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import adminAPI from '@/api/admin'
 import type { SubscriptionPlan } from '@/types/payment'
@@ -94,9 +96,22 @@ import PlanEditDialog from './PlanEditDialog.vue'
 import { currencySymbol } from '@/components/payment/currency'
 import { platformTextClass } from '@/utils/platformColors'
 import { formatValidityPeriod } from '@/utils/validityUnit'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const paymentStepUp = useStepUp()
+
+function handlePaymentStepUpError(error: unknown): boolean {
+  if (isStepUpCancelled(error)) return true
+  if (!isStepUpBlocked(error)) return false
+  appStore.showError(
+    stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+      ? t('stepUp.adminApiKeyForbidden')
+      : t('stepUp.notEnabled')
+  )
+  return true
+}
 
 function planCurrencySymbol(currency?: string): string {
   return currencySymbol(currency)
@@ -179,9 +194,10 @@ function openPlanEdit(plan: SubscriptionPlan | null) {
 /** Quick toggle for_sale from the list */
 async function toggleForSale(plan: SubscriptionPlan) {
   try {
-    await adminPaymentAPI.updatePlan(plan.id, { for_sale: !plan.for_sale })
+    await paymentStepUp.run(() => adminPaymentAPI.updatePlan(plan.id, { for_sale: !plan.for_sale }))
     plan.for_sale = !plan.for_sale
   } catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   }
 }
@@ -189,8 +205,11 @@ async function toggleForSale(plan: SubscriptionPlan) {
 function confirmDeletePlan(plan: SubscriptionPlan) { deletingPlanId.value = plan.id; showDeletePlanDialog.value = true }
 async function handleDeletePlan() {
   if (!deletingPlanId.value) return
-  try { await adminPaymentAPI.deletePlan(deletingPlanId.value); appStore.showSuccess(t('common.deleted')); showDeletePlanDialog.value = false; loadPlans() }
-  catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  try { await paymentStepUp.run(() => adminPaymentAPI.deletePlan(deletingPlanId.value!)); appStore.showSuccess(t('common.deleted')); showDeletePlanDialog.value = false; loadPlans() }
+  catch (err: unknown) {
+    if (handlePaymentStepUpError(err)) return
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
 }
 
 // ==================== Lifecycle ====================
