@@ -671,20 +671,11 @@ func (h *GroupHandler) Delete(c *gin.Context) {
 // GetStats handles getting group statistics
 // GET /api/v1/admin/groups/:id/stats
 func (h *GroupHandler) GetStats(c *gin.Context) {
-	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	if _, err := strconv.ParseInt(c.Param("id"), 10, 64); err != nil {
 		response.BadRequest(c, "Invalid group ID")
 		return
 	}
-
-	// Return mock data for now
-	response.Success(c, gin.H{
-		"total_api_keys":  0,
-		"active_api_keys": 0,
-		"total_requests":  0,
-		"total_cost":      0.0,
-	})
-	_ = groupID // TODO: implement actual stats
+	respondStatsNotImplemented(c)
 }
 
 // GetUsageSummary returns today's and cumulative cost for all groups.
