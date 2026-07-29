@@ -937,6 +937,7 @@ export default {
     timeRange: 'Time Range',
     exportCsv: 'Export CSV',
     exportExcel: 'Export Excel',
+    exportCSV: 'Export CSV',
     exportingProgress: 'Exporting data...',
     exportedCount: 'Exported {current}/{total} records',
     estimatedTime: 'Estimated time remaining: {time}',

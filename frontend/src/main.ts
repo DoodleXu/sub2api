@@ -2,8 +2,11 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
-import i18n, { initI18n } from './i18n'
+import i18n, { initI18n, setLocaleChangedHandler } from './i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
+import { applyRouteSEO, resolveRouteSEO } from '@/router/title'
 import { updateFavicon } from '@/utils/branding'
 import { isIOSDevice } from '@/utils/device'
 import './style.css'
@@ -30,6 +33,32 @@ function initThemeClass() {
   document.documentElement.classList.toggle('dark', shouldUseDark)
 }
 
+function syncLocaleRouteSEO(): void {
+  const route = router.currentRoute.value
+  const appStore = useAppStore()
+  const authStore = useAuthStore()
+  const adminSettingsStore = useAdminSettingsStore()
+  const siteName = appStore.siteName || 'Sub2API'
+  const seo = resolveRouteSEO(route, {
+    siteName,
+    siteSubtitle: appStore.cachedPublicSettings?.site_subtitle,
+    customMenuItems: [
+      ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
+      ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
+    ],
+    loginAgreementDocuments: appStore.cachedPublicSettings?.login_agreement_documents ?? [],
+  })
+
+  applyRouteSEO({
+    path: route.path,
+    title: seo.title,
+    description: seo.description,
+    siteName,
+    image: appStore.siteLogo || '/logo.png',
+    indexable: seo.indexable,
+  })
+}
+
 async function bootstrap() {
   // Apply theme class globally before app mount to keep all routes consistent.
   initThemeClass()
@@ -43,6 +72,7 @@ async function bootstrap() {
   // This must happen after pinia is installed but before router and i18n
   const appStore = useAppStore()
   appStore.initFromInjectedConfig()
+  setLocaleChangedHandler(syncLocaleRouteSEO)
 
   // Set document title immediately after config is loaded
   if (appStore.siteName && appStore.siteName !== 'Sub2API') {

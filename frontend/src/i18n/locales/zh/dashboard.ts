@@ -290,6 +290,7 @@ export default {
     timeRange: '时间范围',
     exportCsv: '导出 CSV',
     exportExcel: '导出 Excel',
+    exportCSV: '导出 CSV',
     exportingProgress: '正在导出数据...',
     exportedCount: '已导出 {current}/{total} 条',
     estimatedTime: '预计剩余时间：{time}',

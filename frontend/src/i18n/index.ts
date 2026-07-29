@@ -6,6 +6,8 @@ type LocaleMessages = Record<string, any>
 
 const LOCALE_KEY = 'sub2api_locale'
 const DEFAULT_LOCALE: LocaleCode = 'en'
+type LocaleChangedHandler = () => void | Promise<void>
+let localeChangedHandler: LocaleChangedHandler | null = null
 
 function mergeLocaleMessages(base: LocaleMessages, overrides: LocaleMessages): LocaleMessages {
   const merged: LocaleMessages = { ...base }
@@ -86,6 +88,13 @@ export async function initI18n(): Promise<void> {
   document.documentElement.setAttribute('lang', current)
 }
 
+// The application shell owns router/store side effects. Keeping that dependency
+// out of the locale loader avoids circular imports and ineffective mixed
+// static/dynamic imports in the production bundle.
+export function setLocaleChangedHandler(handler: LocaleChangedHandler | null): void {
+  localeChangedHandler = handler
+}
+
 export async function setLocale(locale: string): Promise<void> {
   if (!isLocaleCode(locale)) {
     return
@@ -96,40 +105,7 @@ export async function setLocale(locale: string): Promise<void> {
   localStorage.setItem(LOCALE_KEY, locale)
   document.documentElement.setAttribute('lang', locale)
 
-  // 同步更新浏览器页签标题和 SEO 元信息，使其跟随语言切换
-  const {
-    applyRouteSEO,
-    resolveRouteSEO,
-  } = await import('@/router/title')
-  const { default: router } = await import('@/router')
-  const { useAppStore } = await import('@/stores/app')
-  const { useAuthStore } = await import('@/stores/auth')
-  const { useAdminSettingsStore } = await import('@/stores/adminSettings')
-  const route = router.currentRoute.value
-  const appStore = useAppStore()
-  const siteName = appStore.siteName || 'Sub2API'
-  const siteSubtitle = appStore.cachedPublicSettings?.site_subtitle
-  const authStore = useAuthStore()
-  const adminSettingsStore = useAdminSettingsStore()
-  const customMenuItems = [
-    ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
-    ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
-  ]
-  const seo = resolveRouteSEO(route, {
-    siteName,
-    siteSubtitle,
-    customMenuItems,
-    loginAgreementDocuments: appStore.cachedPublicSettings?.login_agreement_documents ?? [],
-  })
-
-  applyRouteSEO({
-    path: route.path,
-    title: seo.title,
-    description: seo.description,
-    siteName,
-    image: appStore.siteLogo || '/logo.png',
-    indexable: seo.indexable,
-  })
+  await localeChangedHandler?.()
 }
 
 export function getLocale(): LocaleCode {

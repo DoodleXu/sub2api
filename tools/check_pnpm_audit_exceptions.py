@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -6,7 +8,15 @@ from datetime import date
 
 
 HIGH_SEVERITIES = {"high", "critical"}
-REQUIRED_FIELDS = {"package", "advisory", "severity", "mitigation", "expires_on"}
+REQUIRED_FIELDS = {
+    "package",
+    "advisory",
+    "severity",
+    "reason",
+    "mitigation",
+    "expires_on",
+    "owner",
+}
 
 
 def split_kv(line: str) -> tuple[str, str]:
@@ -183,6 +193,11 @@ def main() -> int:
             "severity": exc_severity,
             "expires_on": exc_date,
         }
+        if exc_date < date.today():
+            errors.append(
+                f"Exception expired: {exc_package} ({exc.get('advisory')}) "
+                f"expired on {exc_date.isoformat()}"
+            )
 
     today = date.today()
     missing_exceptions = []
@@ -234,6 +249,16 @@ def main() -> int:
             errors.append(
                 f"- {name} ({sev}) [{advisory_id}] expired on {expires_on}"
             )
+
+    stale_exceptions = [
+        (package, advisory)
+        for package, advisory in exception_index
+        if (package, advisory) not in seen
+    ]
+    if stale_exceptions:
+        errors.append("Exceptions no longer matched by the current audit:")
+        for package, advisory in stale_exceptions:
+            errors.append(f"- {package} [{advisory}]")
 
     if errors:
         sys.stderr.write("\n".join(errors) + "\n")
