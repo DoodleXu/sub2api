@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -108,29 +109,27 @@ func TestOpenAILimitContinuation_429DoesNotCreateCustomTempUnschedulableBlock(t 
 	require.Equal(t, 1, repo.rateLimitCalls)
 }
 
-func TestOpenAILimitContinuation_SessionStartSkipsExhaustedAccount(t *testing.T) {
+func TestOpenAILimitContinuation_AllRequestsPrioritizeExhaustedAccount(t *testing.T) {
 	primary := limitContinuationAccount(71011, 100)
 	secondary := Account{
 		ID: 71012, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5,
+		Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0,
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{primary, secondary}},
 		cfg:         &config.Config{},
 	}
 
-	startCtx := WithOpenAIAccountScheduleSessionStart(context.Background(), true)
-	selected, err := svc.SelectAccountForModelWithExclusions(startCtx, nil, "", "gpt-5.1", nil)
-	require.NoError(t, err)
-	require.Equal(t, secondary.ID, selected.ID)
-
-	continuationCtx := WithOpenAIAccountScheduleSessionStart(context.Background(), false)
-	selected, err = svc.SelectAccountForModelWithExclusions(continuationCtx, nil, "", "gpt-5.1", nil)
+	selected, err := svc.SelectAccountForModelWithExclusions(context.Background(), nil, "", "gpt-5.1", nil)
 	require.NoError(t, err)
 	require.Equal(t, primary.ID, selected.ID)
+
+	selected, err = svc.SelectAccountForModelWithExclusions(context.Background(), nil, "", "gpt-5.1", map[int64]struct{}{primary.ID: {}})
+	require.NoError(t, err)
+	require.Equal(t, secondary.ID, selected.ID)
 }
 
-func TestOpenAILimitContinuation_SessionStartSkipsExhausted7dAccount(t *testing.T) {
+func TestOpenAILimitContinuation_AllRequestsPrioritizeExhausted7dAccount(t *testing.T) {
 	primary := limitContinuationAccount(71013, 20)
 	primary.Extra["codex_7d_used_percent"] = 100.0
 	primary.Extra["codex_7d_reset_at"] = time.Now().Add(6 * 24 * time.Hour).UTC().Format(time.RFC3339)
@@ -143,13 +142,96 @@ func TestOpenAILimitContinuation_SessionStartSkipsExhausted7dAccount(t *testing.
 		cfg:         &config.Config{},
 	}
 
-	ctx := WithOpenAIAccountScheduleSessionStart(context.Background(), true)
-	selected, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	selected, err := svc.SelectAccountForModelWithExclusions(context.Background(), nil, "", "gpt-5.1", nil)
 	require.NoError(t, err)
-	require.Equal(t, secondary.ID, selected.ID)
+	require.Equal(t, primary.ID, selected.ID)
 }
 
-func TestOpenAILimitContinuation_SessionStartAllowsAccountBelowRealLimit(t *testing.T) {
+func TestOpenAILimitContinuation_SchedulerPrioritizesTierThenFallsBackToNormalAccount(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		advanced := advanced
+		t.Run(fmt.Sprintf("advanced=%t", advanced), func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			listCalls := 0
+			overclock := limitContinuationAccount(71015, 100)
+			overclock.Priority = 100
+			normal := Account{
+				ID: 71016, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0,
+			}
+			cache := &schedulerTestGatewayCache{
+				sessionBindings: map[string]int64{"openai:existing": normal.ID},
+			}
+			svc := &OpenAIGatewayService{
+				accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{overclock, normal}, listCalls: &listCalls},
+				cache:       cache,
+				cfg:         &config.Config{},
+			}
+			if advanced {
+				svc.rateLimitService = newOpenAIAdvancedSchedulerRateLimitService("true")
+			}
+
+			selection, _, err := svc.SelectAccountWithScheduler(
+				context.Background(), nil, "", "existing", "gpt-5.1", nil,
+				OpenAIUpstreamTransportAny, false,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.Equal(t, overclock.ID, selection.Account.ID)
+			require.Equal(t, 1, listCalls)
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+
+			selection, _, err = svc.SelectAccountWithScheduler(
+				context.Background(), nil, "", "existing", "gpt-5.1",
+				map[int64]struct{}{overclock.ID: {}}, OpenAIUpstreamTransportAny, false,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.Equal(t, normal.ID, selection.Account.ID)
+			require.Equal(t, 2, listCalls)
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+		})
+	}
+}
+
+func TestOpenAILimitContinuation_SchedulerWithoutPriorityTierListsAccountsOnce(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		advanced := advanced
+		t.Run(fmt.Sprintf("advanced=%t", advanced), func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			listCalls := 0
+			normal := Account{
+				ID: 71017, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Status: StatusActive, Schedulable: true, Concurrency: 1,
+			}
+			svc := &OpenAIGatewayService{
+				accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{normal}, listCalls: &listCalls},
+				cfg:         &config.Config{},
+			}
+			if advanced {
+				svc.rateLimitService = newOpenAIAdvancedSchedulerRateLimitService("true")
+			}
+
+			selection, _, err := svc.SelectAccountWithScheduler(
+				context.Background(), nil, "", "", "gpt-5.1", nil,
+				OpenAIUpstreamTransportAny, false,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.Equal(t, normal.ID, selection.Account.ID)
+			require.Equal(t, 1, listCalls)
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+		})
+	}
+}
+
+func TestOpenAILimitContinuation_AllRequestsAllowAccountBelowRealLimit(t *testing.T) {
 	primary := limitContinuationAccount(71021, 99)
 	primary.Extra["auto_pause_5h_threshold"] = 0.95
 	secondary := Account{
@@ -162,47 +244,9 @@ func TestOpenAILimitContinuation_SessionStartAllowsAccountBelowRealLimit(t *test
 	}
 	svc.BlockAccountScheduling(&primary, time.Now().Add(time.Hour), "429")
 
-	ctx := WithOpenAIAccountScheduleSessionStart(context.Background(), true)
-	selected, err := svc.SelectAccountForModelWithExclusions(ctx, nil, "", "gpt-5.1", nil)
+	selected, err := svc.SelectAccountForModelWithExclusions(context.Background(), nil, "", "gpt-5.1", nil)
 	require.NoError(t, err)
 	require.Equal(t, primary.ID, selected.ID)
-}
-
-func TestOpenAILimitContinuation_SessionClassificationUsesExistingBinding(t *testing.T) {
-	svc := &OpenAIGatewayService{}
-	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{svc.openAISessionCacheKey("existing"): 99}}
-	svc.cache = cache
-
-	startCtx := svc.WithOpenAIAccountScheduleSessionContext(context.Background(), nil, "", "new")
-	require.True(t, openAIAccountScheduleSessionStart(startCtx))
-
-	continuationCtx := svc.WithOpenAIAccountScheduleSessionContext(context.Background(), nil, "", "existing")
-	require.False(t, openAIAccountScheduleSessionStart(continuationCtx))
-
-	previousCtx := svc.WithOpenAIAccountScheduleSessionContext(context.Background(), nil, "resp_123", "new")
-	require.False(t, openAIAccountScheduleSessionStart(previousCtx))
-}
-
-func TestOpenAILimitContinuation_SessionClassificationUsesRequestHistory(t *testing.T) {
-	svc := &OpenAIGatewayService{}
-
-	firstRequest := svc.WithOpenAIAccountScheduleSessionContext(
-		context.Background(), nil, "", "uncached",
-		[]byte(`{"messages":[{"role":"user","content":"hello"}]}`),
-	)
-	require.True(t, openAIAccountScheduleSessionStart(firstRequest))
-
-	continuation := svc.WithOpenAIAccountScheduleSessionContext(
-		context.Background(), nil, "", "uncached",
-		[]byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"continue"}]}`),
-	)
-	require.False(t, openAIAccountScheduleSessionStart(continuation))
-
-	toolContinuation := svc.WithOpenAIAccountScheduleSessionContext(
-		context.Background(), nil, "", "uncached",
-		[]byte(`{"input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`),
-	)
-	require.False(t, openAIAccountScheduleSessionStart(toolContinuation))
 }
 
 func TestOpenAILimitContinuation_BypassesOnlyRateLimitRuntimeBlock(t *testing.T) {

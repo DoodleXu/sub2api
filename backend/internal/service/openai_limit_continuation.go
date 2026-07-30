@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -14,7 +13,29 @@ import (
 // remain authoritative.
 const OpenAIContinueSchedulingAfterLimitExtraKey = "openai_continue_scheduling_after_limit"
 
-type openAIAccountScheduleSessionStartContextKey struct{}
+type openAILimitContinuationSelectionMode uint8
+
+type openAIAccountSelectionPool struct {
+	accounts []Account
+}
+
+const (
+	openAILimitContinuationSelectionNormal openAILimitContinuationSelectionMode = iota
+	openAILimitContinuationSelectionOnly
+	openAILimitContinuationSelectionExclude
+)
+
+func openAIAccountMatchesLimitContinuationSelection(account *Account, mode openAILimitContinuationSelectionMode) bool {
+	enabled := account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled()
+	switch mode {
+	case openAILimitContinuationSelectionOnly:
+		return enabled
+	case openAILimitContinuationSelectionExclude:
+		return !enabled
+	default:
+		return true
+	}
+}
 
 // IsOpenAIContinueSchedulingAfterLimitEnabled reports whether this OpenAI
 // account opted into best-effort scheduling after quota exhaustion or 429s.
@@ -47,98 +68,22 @@ func isOpenAI429TempUnschedulable(account *Account) bool {
 	return gjson.Get(account.TempUnschedulableReason, "status_code").Int() == 429
 }
 
-// WithOpenAIAccountScheduleSessionStart freezes whether the current inbound
-// request starts a new conversation. The value must remain stable across all
-// failover attempts because the first selection may create a sticky binding.
-func WithOpenAIAccountScheduleSessionStart(ctx context.Context, isStart bool) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, openAIAccountScheduleSessionStartContextKey{}, isStart)
-}
-
-func openAIAccountScheduleSessionStart(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	isStart, _ := ctx.Value(openAIAccountScheduleSessionStartContextKey{}).(bool)
-	return isStart
-}
-
-// WithOpenAIAccountScheduleSessionContext classifies a request once, before
-// the first account selection. A previous_response_id, an existing sticky
-// binding, or explicit multi-turn/tool history proves a continuation.
-func (s *OpenAIGatewayService) WithOpenAIAccountScheduleSessionContext(
-	ctx context.Context,
-	groupID *int64,
-	previousResponseID string,
-	sessionHash string,
-	requestBody ...[]byte,
-) context.Context {
-	if strings.TrimSpace(previousResponseID) != "" {
-		return WithOpenAIAccountScheduleSessionStart(ctx, false)
-	}
-	isStart := true
-	if strings.TrimSpace(sessionHash) != "" && s != nil && s.cache != nil {
-		if accountID, err := s.getStickySessionAccountID(ctx, groupID, sessionHash); err == nil && accountID > 0 {
-			isStart = false
-		}
-	}
-	if isStart && len(requestBody) > 0 && openAIRequestBodyProvesContinuation(requestBody[0]) {
-		isStart = false
-	}
-	return WithOpenAIAccountScheduleSessionStart(ctx, isStart)
-}
-
-func openAIRequestBodyProvesContinuation(body []byte) bool {
-	for _, path := range []string{"messages", "input"} {
-		items := gjson.GetBytes(body, path)
-		if !items.Exists() || !items.IsArray() {
+func partitionOpenAILimitContinuationAccounts(accounts []Account) (priority, normal []Account) {
+	priority = make([]Account, 0, len(accounts))
+	normal = make([]Account, 0, len(accounts))
+	for i := range accounts {
+		if accounts[i].IsOpenAIContinueSchedulingAfterLimitEnabled() {
+			priority = append(priority, accounts[i])
 			continue
 		}
-		userMessages := 0
-		continuation := false
-		items.ForEach(func(_, item gjson.Result) bool {
-			role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
-			typeName := strings.ToLower(strings.TrimSpace(item.Get("type").String()))
-			switch role {
-			case "assistant", "tool":
-				continuation = true
-			case "user":
-				userMessages++
-				continuation = userMessages > 1
-			}
-			if typeName == "function_call_output" || typeName == "tool_result" {
-				continuation = true
-			}
-			return !continuation
-		})
-		if continuation {
-			return true
-		}
+		normal = append(normal, accounts[i])
 	}
-	return false
+	return priority, normal
 }
 
 func openAIAccountLimitContinuationAllowed(ctx context.Context, account *Account) bool {
 	_ = ctx
 	return account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled()
-}
-
-// openAIAccountReachedRollingLimit is intentionally stricter than the
-// configurable auto-pause threshold: a new session is rejected only after the
-// real 5h or 7d window reaches 100%.
-func openAIAccountReachedRollingLimit(account *Account, now time.Time) (bool, string) {
-	if account == nil || !account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
-		return false, ""
-	}
-	if readOpenAIQuotaUsedPercent(account.Extra, "5h") >= 100 && !openAIQuotaWindowReset(account.Extra, "5h", now) {
-		return true, "5h"
-	}
-	if readOpenAIQuotaUsedPercent(account.Extra, "7d") >= 100 && !openAIQuotaWindowReset(account.Extra, "7d", now) {
-		return true, "7d"
-	}
-	return false, ""
 }
 
 // PrepareOpenAILimitContinuationFailover makes provider/account failures from

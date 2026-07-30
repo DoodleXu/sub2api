@@ -1,7 +1,12 @@
 <template>
   <div class="flex items-center gap-2">
+    <!-- Opted-in OpenAI accounts remain schedulable while the raw limit window is active. -->
+    <span v-if="isOverclocking" class="badge badge-primary text-xs">
+      {{ t('admin.accounts.status.overclocking') }}
+    </span>
+
     <!-- Rate Limit Display (429) - Two-line layout -->
-    <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
+    <div v-else-if="isRateLimited" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rateLimitResumeText }}</span>
     </div>
@@ -78,7 +83,7 @@
 
     <!-- Model Status Indicators (普通限流 / 超量请求中) -->
     <div
-      v-if="activeModelStatuses.length > 0"
+      v-if="!isOverclocking && activeModelStatuses.length > 0"
       :class="[
         activeModelStatuses.length <= 4
           ? 'flex flex-col gap-1'
@@ -159,6 +164,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { Account } from '@/types'
+import { getAccountLimitSchedulingState } from '@/utils/accountScheduling'
 import { formatCountdown, formatDateTime, formatDateTimeToMinute, formatCountdownWithSuffix, formatTime } from '@/utils/format'
 
 const { t } = useI18n()
@@ -171,11 +177,22 @@ const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void
 }>()
 
-// Computed: is rate limited (429)
-const isRateLimited = computed(() => {
-  if (!props.account.rate_limit_reset_at) return false
-  return new Date(props.account.rate_limit_reset_at) > new Date()
+const limitSchedulingState = computed(() => getAccountLimitSchedulingState(props.account))
+const isExpired = computed(() => {
+  return props.account.auto_pause_on_expired &&
+    typeof props.account.expires_at === 'number' &&
+    props.account.expires_at > 0 &&
+    props.account.expires_at * 1000 <= Date.now()
 })
+const isOverclocking = computed(() => {
+  return limitSchedulingState.value.overclocking &&
+    props.account.status === 'active' &&
+    !props.account.archived_at &&
+    props.account.schedulable &&
+    !isExpired.value &&
+    !isOverloaded.value
+})
+const isRateLimited = computed(() => limitSchedulingState.value.rateLimited)
 
 type AccountModelStatusItem = {
   kind: 'rate_limit' | 'credits_exhausted' | 'credits_active'
@@ -266,11 +283,7 @@ const isOverloaded = computed(() => {
   return new Date(props.account.overload_until) > new Date()
 })
 
-// Computed: is temp unschedulable
-const isTempUnschedulable = computed(() => {
-  if (!props.account.temp_unschedulable_until) return false
-  return new Date(props.account.temp_unschedulable_until) > new Date()
-})
+const isTempUnschedulable = computed(() => limitSchedulingState.value.tempUnschedulable)
 
 const isArchived = computed(() => Boolean(props.account.archived_at))
 

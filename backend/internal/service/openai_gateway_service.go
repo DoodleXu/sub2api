@@ -1469,7 +1469,7 @@ func (s *OpenAIGatewayService) SelectAccountForModel(ctx context.Context, groupI
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 // SelectAccountForModelWithExclusions 选择支持指定模型的账号，同时排除指定的账号。
 func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
-	return s.selectAccountForModelWithExclusions(s.withOpenAIQuotaAutoPauseContext(ctx), groupID, PlatformOpenAI, sessionHash, requestedModel, excludedIDs, false, 0, "", false)
+	return s.selectAccountForModelWithLimitContinuationPriority(s.withOpenAIQuotaAutoPauseContext(ctx), groupID, PlatformOpenAI, sessionHash, requestedModel, excludedIDs, false, 0, "", false)
 }
 
 // noAvailableOpenAISelectionError builds the standard "no account available" error
@@ -1536,15 +1536,6 @@ func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *A
 		return false
 	}
 	if account.IsOpenAI() {
-		if openAIAccountScheduleSessionStart(ctx) {
-			if reached, window := openAIAccountReachedRollingLimit(account, time.Now()); reached {
-				slog.Debug("account_limit_continuation_session_start_skipped",
-					"account_id", account.ID,
-					"window", window,
-				)
-				return false
-			}
-		}
 		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 			// Debug level: this fires per-candidate on the scheduling hot path, so Info
 			// would amplify into log spam once several accounts cross the threshold.
@@ -1910,7 +1901,38 @@ func resolveOpenAIAccountUpstreamModelForRequest(account *Account, requestedMode
 	return upstreamModel
 }
 
-func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, error) {
+func (s *OpenAIGatewayService) selectAccountForModelWithLimitContinuationPriority(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, error) {
+	platform = normalizeOpenAICompatiblePlatform(platform)
+	if len(excludedIDs) == 0 && platform == PlatformOpenAI {
+		accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
+		if err != nil {
+			return nil, fmt.Errorf("query accounts failed: %w", err)
+		}
+		priorityAccounts, normalAccounts := partitionOpenAILimitContinuationAccounts(accounts)
+		if len(priorityAccounts) > 0 {
+			account, selectErr := s.selectAccountForModelWithLimitMode(ctx, groupID, platform, "", requestedModel, excludedIDs, requireCompact, 0, requiredCapability, preferLowUpstreamRate, openAILimitContinuationSelectionOnly, &openAIAccountSelectionPool{accounts: priorityAccounts})
+			if selectErr == nil && account != nil {
+				if sessionHash != "" {
+					_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, account.ID, openaiStickySessionTTL)
+				}
+				return account, nil
+			}
+			if selectErr != nil && !errors.Is(selectErr, ErrNoAvailableAccounts) && !errors.Is(selectErr, ErrNoAvailableCompactAccounts) {
+				return nil, selectErr
+			}
+			return s.selectAccountForModelWithLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate, openAILimitContinuationSelectionExclude, &openAIAccountSelectionPool{accounts: normalAccounts})
+		}
+		return s.selectAccountForModelWithLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate, openAILimitContinuationSelectionNormal, &openAIAccountSelectionPool{accounts: accounts})
+	}
+
+	mode := openAILimitContinuationSelectionNormal
+	if len(excludedIDs) > 0 {
+		mode = openAILimitContinuationSelectionExclude
+	}
+	return s.selectAccountForModelWithLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate, mode, nil)
+}
+
+func (s *OpenAIGatewayService) selectAccountForModelWithLimitMode(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool, limitMode openAILimitContinuationSelectionMode, preloadedPool *openAIAccountSelectionPool) (*Account, error) {
 	platform = normalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
@@ -1921,20 +1943,28 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 
 	// 1. 尝试粘性会话命中
 	// Try sticky session hit
-	if account := s.tryStickySessionHit(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability); account != nil {
-		return account, nil
+	if limitMode != openAILimitContinuationSelectionOnly {
+		if account := s.tryStickySessionHit(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, limitMode); account != nil {
+			return account, nil
+		}
 	}
 
 	// 2. 获取可调度的 OpenAI 账号
 	// Get schedulable OpenAI accounts
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
-	if err != nil {
-		return nil, fmt.Errorf("query accounts failed: %w", err)
+	var accounts []Account
+	if preloadedPool != nil {
+		accounts = preloadedPool.accounts
+	} else {
+		var err error
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform)
+		if err != nil {
+			return nil, fmt.Errorf("query accounts failed: %w", err)
+		}
 	}
 
 	// 3. 按优先级 + LRU 选择最佳账号
 	// Select by priority + LRU
-	selected, compactBlocked := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate)
+	selected, compactBlocked := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate, limitMode)
 
 	if selected == nil {
 		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked)
@@ -1959,7 +1989,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 //
 // tryStickySessionHit attempts to get account from sticky session.
 // Returns account if hit and usable; clears session and returns nil if account is unavailable.
-func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID *int64, platform string, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability) *Account {
+func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID *int64, platform string, sessionHash, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, limitMode openAILimitContinuationSelectionMode) *Account {
 	if sessionHash == "" {
 		return nil
 	}
@@ -1979,6 +2009,9 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 
 	account, err := s.getSchedulableAccount(ctx, accountID)
 	if err != nil {
+		return nil
+	}
+	if !openAIAccountMatchesLimitContinuationSelection(account, limitMode) {
 		return nil
 	}
 
@@ -2007,6 +2040,9 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
+	if !openAIAccountMatchesLimitContinuationSelection(account, limitMode) {
+		return nil
+	}
 	if groupID != nil && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) &&
 		s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -2026,7 +2062,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 // Returns nil if no available account. The second return reports whether at
 // least one candidate was filtered out solely because it lacks compact support
 // (only meaningful when requireCompact=true).
-func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, bool) {
+func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool, limitMode openAILimitContinuationSelectionMode) (*Account, bool) {
 	compactBlocked := false
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 	eligible := make([]*Account, 0, len(accounts))
@@ -2034,6 +2070,9 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 
 	for i := range accounts {
 		acc := &accounts[i]
+		if !openAIAccountMatchesLimitContinuationSelection(acc, limitMode) {
+			continue
+		}
 
 		// 跳过被排除的账号
 		// Skip excluded accounts
@@ -2047,6 +2086,9 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		}
 		fresh = s.recheckSelectedOpenAIAccountFromDB(ctx, fresh, groupID, platform, requestedModel, false, requiredCapability)
 		if fresh == nil {
+			continue
+		}
+		if !openAIAccountMatchesLimitContinuationSelection(fresh, limitMode) {
 			continue
 		}
 		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
@@ -2129,6 +2171,37 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 
 func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool) (*AccountSelectionResult, error) {
 	platform = normalizeOpenAICompatiblePlatform(platform)
+	if len(excludedIDs) == 0 && platform == PlatformOpenAI {
+		accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
+		if err != nil {
+			return nil, err
+		}
+		priorityAccounts, normalAccounts := partitionOpenAILimitContinuationAccounts(accounts)
+		if len(priorityAccounts) > 0 {
+			selection, selectErr := s.selectAccountWithLoadAwarenessForLimitMode(ctx, groupID, platform, "", requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost, openAILimitContinuationSelectionOnly, &openAIAccountSelectionPool{accounts: priorityAccounts})
+			if selectErr == nil && selection != nil && selection.Account != nil {
+				if sessionHash != "" {
+					_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, selection.Account.ID, openaiStickySessionTTL)
+				}
+				return selection, nil
+			}
+			if selectErr != nil && !errors.Is(selectErr, ErrNoAvailableAccounts) && !errors.Is(selectErr, ErrNoAvailableCompactAccounts) {
+				return nil, selectErr
+			}
+			return s.selectAccountWithLoadAwarenessForLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost, openAILimitContinuationSelectionExclude, &openAIAccountSelectionPool{accounts: normalAccounts})
+		}
+		return s.selectAccountWithLoadAwarenessForLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost, openAILimitContinuationSelectionNormal, &openAIAccountSelectionPool{accounts: accounts})
+	}
+
+	mode := openAILimitContinuationSelectionNormal
+	if len(excludedIDs) > 0 {
+		mode = openAILimitContinuationSelectionExclude
+	}
+	return s.selectAccountWithLoadAwarenessForLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost, mode, nil)
+}
+
+func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool, limitMode openAILimitContinuationSelectionMode, preloadedPool *openAIAccountSelectionPool) (*AccountSelectionResult, error) {
+	platform = normalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
 			"group_id", derefGroupID(groupID),
@@ -2146,7 +2219,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		}
 	}
 	if s.concurrencyService == nil || !cfg.LoadBatchEnabled {
-		account, err := s.selectAccountForModelWithExclusions(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate)
+		account, err := s.selectAccountForModelWithLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate, limitMode, preloadedPool)
 		if err != nil {
 			return nil, err
 		}
@@ -2173,9 +2246,15 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		})
 	}
 
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
-	if err != nil {
-		return nil, err
+	var accounts []Account
+	if preloadedPool != nil {
+		accounts = preloadedPool.accounts
+	} else {
+		var err error
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(accounts) == 0 {
 		return nil, ErrNoAvailableAccounts
@@ -2190,11 +2269,16 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	// ============ Layer 1: Sticky session ============
-	if sessionHash != "" {
+	if sessionHash != "" && limitMode != openAILimitContinuationSelectionOnly {
 		accountID := stickyAccountID
 		if accountID > 0 && !isExcluded(accountID) {
 			account, err := s.getSchedulableAccount(ctx, accountID)
 			if err == nil {
+				if !openAIAccountMatchesLimitContinuationSelection(account, limitMode) {
+					account = nil
+				}
+			}
+			if account != nil {
 				clearSticky := shouldClearStickySession(account, requestedModel)
 				if clearSticky {
 					_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -2257,6 +2341,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	for i := range accounts {
 		acc := &accounts[i]
 		if isExcluded(acc.ID) {
+			continue
+		}
+		if !openAIAccountMatchesLimitContinuationSelection(acc, limitMode) {
 			continue
 		}
 		// Scheduler snapshots can be temporarily stale (bucket rebuild is throttled);
@@ -2366,6 +2453,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			if fresh == nil {
 				continue
 			}
+			if !openAIAccountMatchesLimitContinuationSelection(fresh, limitMode) {
+				continue
+			}
 			fresh = s.recheckSelectedOpenAIAccountFromDB(ctx, fresh, groupID, platform, requestedModel, requireCompact, requiredCapability)
 			if fresh == nil {
 				continue
@@ -2401,6 +2491,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		for _, acc := range ordered {
 			fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 			if fresh == nil {
+				continue
+			}
+			if !openAIAccountMatchesLimitContinuationSelection(fresh, limitMode) {
 				continue
 			}
 			fresh = s.recheckSelectedOpenAIAccountFromDB(ctx, fresh, groupID, platform, requestedModel, requireCompact, requiredCapability)
@@ -2449,6 +2542,9 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	for _, acc := range candidates {
 		fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 		if fresh == nil {
+			continue
+		}
+		if !openAIAccountMatchesLimitContinuationSelection(fresh, limitMode) {
 			continue
 		}
 		fresh = s.recheckSelectedOpenAIAccountFromDB(ctx, fresh, groupID, platform, requestedModel, requireCompact, requiredCapability)

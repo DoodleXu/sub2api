@@ -838,56 +838,27 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 			q = q.Where(
 				dbaccount.StatusEQ(status),
 				dbaccount.SchedulableEQ(true),
-				dbaccount.Or(
-					dbaccount.RateLimitResetAtIsNil(),
-					dbaccount.RateLimitResetAtLTE(time.Now()),
-				),
-				dbpredicate.Account(func(s *entsql.Selector) {
-					col := s.C("temp_unschedulable_until")
-					s.Where(entsql.Or(
-						entsql.IsNull(col),
-						entsql.LTE(col, entsql.Expr("NOW()")),
-					))
-				}),
+				rateLimitSchedulablePredicate(time.Now()),
+				tempUnschedulablePredicate(),
 			)
 		case "rate_limited":
 			q = q.Where(
 				dbaccount.StatusEQ(service.StatusActive),
 				dbaccount.RateLimitResetAtGT(time.Now()),
-				dbpredicate.Account(func(s *entsql.Selector) {
-					col := s.C("temp_unschedulable_until")
-					s.Where(entsql.Or(
-						entsql.IsNull(col),
-						entsql.LTE(col, entsql.Expr("NOW()")),
-					))
-				}),
+				dbaccount.Not(openAIContinueAfterLimitPredicate()),
+				tempUnschedulablePredicate(),
 			)
 		case "temp_unschedulable":
 			q = q.Where(
 				dbaccount.StatusEQ(service.StatusActive),
-				dbpredicate.Account(func(s *entsql.Selector) {
-					col := s.C("temp_unschedulable_until")
-					s.Where(entsql.And(
-						entsql.Not(entsql.IsNull(col)),
-						entsql.GT(col, entsql.Expr("NOW()")),
-					))
-				}),
+				dbaccount.Not(tempUnschedulablePredicate()),
 			)
 		case "unschedulable":
 			q = q.Where(
 				dbaccount.StatusEQ(service.StatusActive),
 				dbaccount.SchedulableEQ(false),
-				dbaccount.Or(
-					dbaccount.RateLimitResetAtIsNil(),
-					dbaccount.RateLimitResetAtLTE(time.Now()),
-				),
-				dbpredicate.Account(func(s *entsql.Selector) {
-					col := s.C("temp_unschedulable_until")
-					s.Where(entsql.Or(
-						entsql.IsNull(col),
-						entsql.LTE(col, entsql.Expr("NOW()")),
-					))
-				}),
+				rateLimitSchedulablePredicate(time.Now()),
+				tempUnschedulablePredicate(),
 			)
 		default:
 			q = q.Where(dbaccount.StatusEQ(status))

@@ -472,6 +472,28 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
+			name: "filter_by_status_active_includes_openai_limit_continuation",
+			setup: func(client *dbent.Client) {
+				resetAt := time.Now().Add(10 * time.Minute)
+				mustCreateAccount(s.T(), client, &service.Account{
+					Name:             "active-openai-overclocking",
+					Platform:         service.PlatformOpenAI,
+					Status:           service.StatusActive,
+					Schedulable:      true,
+					RateLimitResetAt: &resetAt,
+					Extra: map[string]any{
+						service.OpenAIContinueSchedulingAfterLimitExtraKey: true,
+					},
+				})
+			},
+			status:    service.StatusActive,
+			wantCount: 1,
+			validate: func(accounts []service.Account) {
+				s.Require().Equal("active-openai-overclocking", accounts[0].Name)
+				s.Require().True(accounts[0].IsSchedulable())
+			},
+		},
+		{
 			name: "filter_by_status_unschedulable_excludes_rate_limited_and_temp_unschedulable",
 			setup: func(client *dbent.Client) {
 				mustCreateAccount(s.T(), client, &service.Account{Name: "active-normal", Status: service.StatusActive, Schedulable: true})
@@ -519,6 +541,24 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			validate: func(accounts []service.Account) {
 				s.Require().Equal("active-rate-limited", accounts[0].Name)
 			},
+		},
+		{
+			name: "filter_by_status_rate_limited_excludes_openai_limit_continuation",
+			setup: func(client *dbent.Client) {
+				resetAt := time.Now().Add(10 * time.Minute)
+				mustCreateAccount(s.T(), client, &service.Account{
+					Name:             "openai-overclocking",
+					Platform:         service.PlatformOpenAI,
+					Status:           service.StatusActive,
+					Schedulable:      true,
+					RateLimitResetAt: &resetAt,
+					Extra: map[string]any{
+						service.OpenAIContinueSchedulingAfterLimitExtraKey: true,
+					},
+				})
+			},
+			status:    "rate_limited",
+			wantCount: 0,
 		},
 		{
 			name: "filter_by_status_temp_unschedulable_excludes_manually_unschedulable",

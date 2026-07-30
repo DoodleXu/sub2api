@@ -127,6 +127,76 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.status.tempUnschedulable')
   })
 
+  it('开启限额后继续调度的 OpenAI 账号只显示超频中', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'openai',
+          rate_limited_at: '2026-07-30T00:00:00Z',
+          rate_limit_reset_at: '2099-07-30T01:00:00Z',
+          temp_unschedulable_until: '2099-07-30T01:00:00Z',
+          temp_unschedulable_reason: '{"status_code":429,"error_message":"rate limited"}',
+          extra: {
+            openai_continue_scheduling_after_limit: true
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.overclocking')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.rateLimited')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.tempUnschedulable')
+    expect(wrapper.text()).not.toContain('429')
+  })
+
+  it('开启开关且尚未限流的 OpenAI 账号也显示超频中', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'openai',
+          extra: {
+            openai_continue_scheduling_after_limit: true
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.overclocking')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.normal')
+  })
+
+  it('已到期且配置自动暂停的 OpenAI 账号不显示超频中', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'openai',
+          expires_at: Math.floor(Date.now() / 1000) - 60,
+          auto_pause_on_expired: true,
+          extra: {
+            openai_continue_scheduling_after_limit: true
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('admin.accounts.status.overclocking')
+  })
+
   it('模型限流 + overages 启用 + 无 AICredits key → 显示 ⚡ (credits_active)', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

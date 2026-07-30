@@ -3,6 +3,7 @@ package service
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -86,6 +87,8 @@ type OpenAIAccountScheduleRequest struct {
 	RequiredImageCapability OpenAIImagesCapability
 	RequireCompact          bool
 	ExcludedIDs             map[int64]struct{}
+	limitContinuationMode   openAILimitContinuationSelectionMode
+	preloadedPool           *openAIAccountSelectionPool
 }
 
 type OpenAIAccountScheduleDecision struct {
@@ -379,6 +382,40 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		s.metrics.recordSelect(decision)
 	}()
 
+	if req.limitContinuationMode == openAILimitContinuationSelectionNormal && len(req.ExcludedIDs) == 0 &&
+		normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI {
+		accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
+		if err != nil {
+			return nil, decision, err
+		}
+		priorityAccounts, normalAccounts := partitionOpenAILimitContinuationAccounts(accounts)
+		if len(priorityAccounts) > 0 {
+			priorityReq := req
+			priorityReq.limitContinuationMode = openAILimitContinuationSelectionOnly
+			priorityReq.preloadedPool = &openAIAccountSelectionPool{accounts: priorityAccounts}
+			selection, candidateCount, topK, loadSkew, selectErr := s.selectByLoadBalance(ctx, priorityReq)
+			if selectErr == nil && selection != nil && selection.Account != nil {
+				decision.Layer = openAIAccountScheduleLayerLoadBalance
+				decision.CandidateCount = candidateCount
+				decision.TopK = topK
+				decision.LoadSkew = loadSkew
+				decision.SelectedAccountID = selection.Account.ID
+				decision.SelectedAccountType = selection.Account.Type
+				return selection, decision, nil
+			}
+			if selectErr != nil && !errors.Is(selectErr, ErrNoAvailableAccounts) && !errors.Is(selectErr, ErrNoAvailableCompactAccounts) {
+				return nil, decision, selectErr
+			}
+			req.limitContinuationMode = openAILimitContinuationSelectionExclude
+			req.preloadedPool = &openAIAccountSelectionPool{accounts: normalAccounts}
+		} else {
+			req.preloadedPool = &openAIAccountSelectionPool{accounts: accounts}
+		}
+	}
+	if req.limitContinuationMode == openAILimitContinuationSelectionNormal && len(req.ExcludedIDs) > 0 {
+		req.limitContinuationMode = openAILimitContinuationSelectionExclude
+	}
+
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if previousResponseID != "" && normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
 		(!req.StickyWeighted || !req.PreviousResponseCanMove) {
@@ -393,6 +430,14 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		)
 		if err != nil {
 			return nil, decision, err
+		}
+		if selection != nil && selection.Account != nil {
+			if !openAIAccountMatchesLimitContinuationSelection(selection.Account, req.limitContinuationMode) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				selection = nil
+			}
 		}
 		if selection != nil && selection.Account != nil {
 			if !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport) {
@@ -1330,9 +1375,15 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	req OpenAIAccountScheduleRequest,
 ) (*AccountSelectionResult, int, int, float64, error) {
 	budget := newOpenAISelectionProbeBudget()
-	accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
-	if err != nil {
-		return nil, 0, 0, 0, err
+	var accounts []Account
+	if req.preloadedPool != nil {
+		accounts = req.preloadedPool.accounts
+	} else {
+		var err error
+		accounts, err = s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
+		if err != nil {
+			return nil, 0, 0, 0, err
+		}
 	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
@@ -1354,6 +1405,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				filterStats.exclude("excluded")
 				continue
 			}
+		}
+		if !openAIAccountMatchesLimitContinuationSelection(account, req.limitContinuationMode) {
+			filterStats.exclude("limit_continuation_tier")
+			continue
 		}
 		if !account.IsSchedulable() {
 			filterStats.exclude("not_schedulable")
@@ -1682,6 +1737,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
 func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) (bool, string) {
 	if account == nil {
 		return false, "account_nil"
+	}
+	if !openAIAccountMatchesLimitContinuationSelection(account, req.limitContinuationMode) {
+		return false, "limit_continuation_tier"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlockedWithContext(ctx, account, req.RequestedModel) {
 		return false, "runtime_blocked"

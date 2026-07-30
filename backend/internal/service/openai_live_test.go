@@ -223,6 +223,31 @@ func TestLiveCreateFailoverUsesExistingOpenAIPolicy(t *testing.T) {
 	require.True(t, service.shouldFailoverLiveCreateError(errors.New("transport failed")))
 }
 
+func TestLiveCreateFailoverSuppressesOverclockingAccountError(t *testing.T) {
+	service := &OpenAIGatewayService{}
+	overclocking := &Account{
+		Platform: PlatformOpenAI,
+		Extra: map[string]any{
+			OpenAIContinueSchedulingAfterLimitExtraKey: true,
+		},
+	}
+
+	upstreamErr := &UpstreamFailoverError{
+		StatusCode:        http.StatusTooManyRequests,
+		NextAccountAction: NextAccountStop,
+	}
+	shouldFailover, clientErr := service.prepareLiveCreateFailover(overclocking, upstreamErr)
+	require.True(t, shouldFailover)
+	require.ErrorIs(t, clientErr, ErrLiveUnavailable)
+	require.True(t, upstreamErr.SuppressClientError)
+	require.Equal(t, NextAccountRetry, upstreamErr.NextAccountAction)
+
+	normalErr := &UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+	shouldFailover, clientErr = service.prepareLiveCreateFailover(&Account{Platform: PlatformOpenAI}, normalErr)
+	require.True(t, shouldFailover)
+	require.Same(t, normalErr, clientErr)
+}
+
 func TestLiveCallIDFromLocation(t *testing.T) {
 	callID, err := liveCallIDFromLocation("https://chatgpt.com/backend-api/codex/call_123?intent=quicksilver")
 	require.NoError(t, err)

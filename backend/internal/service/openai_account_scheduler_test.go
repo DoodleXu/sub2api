@@ -22,7 +22,8 @@ type openAISnapshotCacheStub struct {
 
 type schedulerTestOpenAIAccountRepo struct {
 	AccountRepository
-	accounts []Account
+	accounts  []Account
+	listCalls *int
 }
 
 func (r schedulerTestOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
@@ -35,6 +36,9 @@ func (r schedulerTestOpenAIAccountRepo) GetByID(ctx context.Context, id int64) (
 }
 
 func (r schedulerTestOpenAIAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) {
+	if r.listCalls != nil {
+		(*r.listCalls)++
+	}
 	var result []Account
 	for _, acc := range r.accounts {
 		if acc.Platform == platform {
@@ -45,6 +49,9 @@ func (r schedulerTestOpenAIAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx 
 }
 
 func (r schedulerTestOpenAIAccountRepo) ListSchedulableByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	if r.listCalls != nil {
+		(*r.listCalls)++
+	}
 	var result []Account
 	for _, acc := range r.accounts {
 		if acc.Platform == platform {

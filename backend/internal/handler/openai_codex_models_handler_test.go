@@ -222,6 +222,29 @@ func TestCodexModelsOptedInAccountSuppressesExhaustedError(t *testing.T) {
 	}
 }
 
+func TestCodexModelsOptedInAccountReturnsLaterNormalAccountError(t *testing.T) {
+	handler, upstream, groupID := newCodexModelsFailoverTestHandlerWithOptions(http.StatusBadRequest, 2, 3, true)
+	upstream.statuses = map[int64]int{
+		1: http.StatusBadRequest,
+		2: http.StatusGatewayTimeout,
+	}
+	recorder := performCodexModelsRequest(t, handler, groupID)
+
+	if got, want := upstream.calls(), []int64{1, 2}; !equalInt64Slices(got, want) {
+		t.Fatalf("upstream account calls: got %v, want %v", got, want)
+	}
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "upstream error 504") {
+		t.Fatalf("body does not preserve the later normal account error: %s", body)
+	}
+	if strings.Contains(body, "upstream error 400") {
+		t.Fatalf("body exposes the opted-in account error: %s", body)
+	}
+}
+
 func TestCodexModelsDoesNotFailOverFromUpstreamConfigurationError(t *testing.T) {
 	handler, upstream, groupID := newCodexModelsFailoverTestHandler(http.StatusServiceUnavailable)
 	upstream.firstErr = errors.New("invalid proxy URL")

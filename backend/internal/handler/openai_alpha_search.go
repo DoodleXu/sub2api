@@ -114,7 +114,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	}
 
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(c, nil, searchID)
-	scheduleCtx := h.gatewayService.WithOpenAIAccountScheduleSessionContext(c.Request.Context(), apiKey.GroupID, "", sessionHash, body)
+	scheduleCtx := c.Request.Context()
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError

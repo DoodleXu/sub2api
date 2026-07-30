@@ -199,11 +199,12 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		selection.ReleaseFunc()
 		if createErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
-			if !s.shouldFailoverLiveCreateError(createErr) {
+			shouldFailover, clientErr := s.prepareLiveCreateFailover(account, createErr)
+			if !shouldFailover {
 				return nil, createErr
 			}
 			excluded[account.ID] = struct{}{}
-			lastErr = createErr
+			lastErr = clientErr
 			continue
 		}
 
@@ -265,6 +266,18 @@ func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(err error) bool {
 		"",
 		upstreamErr.ResponseBody,
 	)
+}
+
+func (s *OpenAIGatewayService) prepareLiveCreateFailover(account *Account, err error) (bool, error) {
+	shouldFailover := s.shouldFailoverLiveCreateError(err)
+	var upstreamErr *UpstreamFailoverError
+	if errors.As(err, &upstreamErr) && PrepareOpenAILimitContinuationFailover(account, upstreamErr) {
+		return true, ErrLiveUnavailable
+	}
+	if shouldFailover && account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
+		return true, ErrLiveUnavailable
+	}
+	return shouldFailover, err
 }
 
 func (s *OpenAIGatewayService) createUpstreamLiveCall(

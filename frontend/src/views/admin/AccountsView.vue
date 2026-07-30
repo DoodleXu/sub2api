@@ -528,6 +528,7 @@ import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCel
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
+import { getAccountLimitSchedulingState } from '@/utils/accountScheduling'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
@@ -1864,10 +1865,10 @@ const accountMatchesCurrentFilters = (account: Account) => {
       return false
     }
     const now = Date.now()
-    const rateLimitResetAt = account.rate_limit_reset_at ? new Date(account.rate_limit_reset_at).getTime() : Number.NaN
-    const isRateLimited = Number.isFinite(rateLimitResetAt) && rateLimitResetAt > now
-    const tempUnschedUntil = account.temp_unschedulable_until ? new Date(account.temp_unschedulable_until).getTime() : Number.NaN
-    const isTempUnschedulable = Number.isFinite(tempUnschedUntil) && tempUnschedUntil > now
+    const {
+      rateLimited: isRateLimited,
+      tempUnschedulable: isTempUnschedulable
+    } = getAccountLimitSchedulingState(account, now)
 
     if (filters.status === 'archived') {
       // 已在上方按 archived_at 判断；保留原始 status，不参与其它派生状态判断。

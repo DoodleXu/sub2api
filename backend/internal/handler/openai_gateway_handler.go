@@ -402,7 +402,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	// Generate session hash (header first; fallback to prompt_cache_key)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
-	scheduleCtx := h.gatewayService.WithOpenAIAccountScheduleSessionContext(c.Request.Context(), apiKey.GroupID, previousResponseID, sessionHash, sessionHashBody)
+	scheduleCtx := c.Request.Context()
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
@@ -995,7 +995,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
 	sessionHash, promptCacheKey = resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel, body)
-	scheduleCtx := h.gatewayService.WithOpenAIAccountScheduleSessionContext(c.Request.Context(), apiKey.GroupID, "", sessionHash, body)
+	scheduleCtx := c.Request.Context()
 	if h.rejectIfCyberSessionBlocked(c, apiKey, body, reqModel, cyberBlockFormatAnthropic) {
 		return
 	}
@@ -1698,7 +1698,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		firstMessage,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
-	scheduleCtx := h.gatewayService.WithOpenAIAccountScheduleSessionContext(ctx, apiKey.GroupID, previousResponseID, sessionHash, firstMessage)
+	scheduleCtx := ctx
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
