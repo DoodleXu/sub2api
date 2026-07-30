@@ -354,6 +354,7 @@ git diff --name-status refs/tags/upstream/v0.1.168^{}..HEAD
 
 - 新增 Web Console 开关和默认端点设置：`web_console_enabled`、`web_console_default_endpoint`。
 - 用户侧前端 `/console` 支持 OpenAI-compatible `/v1` 对话、Responses 工具调用、生图模式和本地会话存储。
+- 内置“主端点”使用站内相对 `/v1` 路径，不再把对外展示的 `api_base_url` 当作浏览器跨域请求地址；自定义端点仍保留绝对 URL 和目标端 CORS 约束。历史会话中保存的旧主端点会在恢复轮询时自动映射回站内路径。
 - 生图模式只使用上游异步 Images 契约：浏览器以用户选中的 API Key 请求 `/v1/images/generations/async` 或 `/v1/images/edits/async`，再用同一 Key 轮询 `/v1/images/tasks/{task_id}`。
 - 图片引用、蒙版和生成结果写入浏览器 Cache Storage；对象存储 CORS 阻止读取图片字节时，生成结果降级为预签名直链展示，但缓存、下载和复用为编辑参考图仍需桶允许前端来源的 `GET`/`HEAD`；删除会话只清理本地会话，不再创建或删除 fork 自建后端任务/归档记录。
 

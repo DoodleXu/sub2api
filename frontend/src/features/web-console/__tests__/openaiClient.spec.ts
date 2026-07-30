@@ -56,6 +56,23 @@ describe('web console openai client', () => {
     })
   })
 
+  it('站内主端点使用相对 /v1/responses 路径', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ output_text: '站内响应' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendWebConsoleChat({
+      endpoint: '/',
+      apiKey: 'sk-test',
+      model: 'gpt-5.5',
+      prompt: '你好',
+      history: [],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/v1/responses', expect.objectContaining({
+      method: 'POST',
+    }))
+  })
+
   it('OpenAI 在线对话不会把 Gemini native 端点拼成 /v1beta/v1/responses', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

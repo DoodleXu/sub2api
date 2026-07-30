@@ -379,6 +379,7 @@ interface EndpointOption {
   description?: string
 }
 
+const SITE_ENDPOINT = '/'
 const appStore = useAppStore()
 const sessions = ref<WebConsoleSession[]>([])
 const currentSessionId = ref('')
@@ -422,19 +423,39 @@ const runtimeImageObjectURLs = new Set<string>()
 const publicSettings = computed(() => appStore.cachedPublicSettings)
 const endpointOptions = computed<EndpointOption[]>(() => {
   const settings = publicSettings.value
-  const items: EndpointOption[] = []
+  const items: EndpointOption[] = [{
+    name: '主端点',
+    endpoint: SITE_ENDPOINT,
+    description: '站内相对路径',
+  }]
   const add = (name: string, endpoint: string, description?: string) => {
     const value = endpoint.trim()
-    if (!value || !isAbsoluteHttpEndpoint(value) || !isWebConsoleOpenAICompatibleEndpoint(value) || items.some((item) => item.endpoint === value)) return
+    if (!value || isSiteEndpoint(value) || !isAbsoluteHttpEndpoint(value) || !isWebConsoleOpenAICompatibleEndpoint(value) || items.some((item) => item.endpoint === value)) return
     items.push({ name, endpoint: value, description })
   }
-  add('主端点', settings?.api_base_url || '')
   for (const endpoint of settings?.custom_endpoints || []) {
     add(endpoint.name || endpoint.endpoint, endpoint.endpoint, endpoint.description)
   }
-  add('默认端点', settings?.web_console_default_endpoint || '')
+  const defaultEndpoint = settings?.web_console_default_endpoint || ''
+  if (!isSiteEndpoint(defaultEndpoint)) {
+    add('默认端点', defaultEndpoint)
+  }
   return items
 })
+
+function normalizedEndpoint(endpoint: string): string {
+  return endpoint.trim().replace(/\/+$/, '')
+}
+
+function isSiteEndpoint(endpoint: string): boolean {
+  if (endpoint.trim() === SITE_ENDPOINT) return true
+  const apiBaseURL = normalizedEndpoint(publicSettings.value?.api_base_url || '')
+  return Boolean(apiBaseURL && normalizedEndpoint(endpoint) === apiBaseURL)
+}
+
+function requestEndpoint(endpoint: string): string {
+  return isSiteEndpoint(endpoint) ? SITE_ENDPOINT : endpoint
+}
 
 function isAbsoluteHttpEndpoint(endpoint: string): boolean {
   try {
@@ -1116,7 +1137,7 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
     throw new Error('该编辑请求的参考图缓存已失效，请重新添加参考图后再编辑。')
   }
   const { task } = await asyncImageTasksAPI.create({
-    endpoint: selectedEndpoint.value,
+    endpoint: requestEndpoint(selectedEndpoint.value),
     api_key: selectedKey.value.key,
     mode: message.imageRequest.mode || 'generate',
     model: message.imageRequest.model,
@@ -1127,7 +1148,7 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
   })
   message.imageTaskId = task.task_id || task.id
   message.imageTaskApiKeyId = selectedKey.value.id
-  message.imageTaskEndpoint = selectedEndpoint.value
+  message.imageTaskEndpoint = requestEndpoint(selectedEndpoint.value)
   message.status = task.status
   touchSession(session)
   void pollImageTask(session, message)
@@ -1145,7 +1166,7 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
       try {
         const taskKey = compatibleApiKeys.value.find((key) => key.id === message.imageTaskApiKeyId) || selectedKey.value
         if (!taskKey) return
-        task = await asyncImageTasksAPI.get(message.imageTaskEndpoint || selectedEndpoint.value, taskKey.key, taskID)
+        task = await asyncImageTasksAPI.get(requestEndpoint(message.imageTaskEndpoint || selectedEndpoint.value), taskKey.key, taskID)
       } catch {
         await new Promise((resolve) => window.setTimeout(resolve, 2000))
         continue
@@ -1356,7 +1377,7 @@ async function submit(): Promise<void> {
     } else {
       const result = await sendWebConsoleChat(
         {
-          endpoint: selectedEndpoint.value,
+          endpoint: requestEndpoint(selectedEndpoint.value),
           apiKey: selectedKey.value.key,
           model: model.value.trim(),
           prompt: input,
@@ -1393,8 +1414,9 @@ async function loadApiKeys(): Promise<void> {
 function applyDefaultEndpoint(): void {
   const preferred = publicSettings.value?.web_console_default_endpoint?.trim()
   const options = endpointOptions.value
+  const resolvedPreferred = preferred && !isSiteEndpoint(preferred) ? preferred : SITE_ENDPOINT
   selectedEndpoint.value =
-    (preferred && options.some((item) => item.endpoint === preferred) ? preferred : '') ||
+    (options.some((item) => item.endpoint === resolvedPreferred) ? resolvedPreferred : '') ||
     options[0]?.endpoint ||
     ''
 }

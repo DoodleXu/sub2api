@@ -40,7 +40,7 @@ export function isWebConsoleOpenAICompatibleEndpoint(base: string): boolean {
 
 function endpointUrl(base: string, path: string): string {
   const normalized = base.trim().replace(/\/+$/, '')
-  if (!normalized) return path
+  if (!normalized) return `/v1${path}`
   if (!isWebConsoleOpenAICompatibleEndpoint(normalized)) {
     throw new WebConsoleRequestError('创作台当前只支持 OpenAI-compatible /v1 端点。请选择主端点或 /v1 兼容端点。', 400)
   }

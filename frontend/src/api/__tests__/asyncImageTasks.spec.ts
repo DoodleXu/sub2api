@@ -39,6 +39,22 @@ describe('asyncImageTasksAPI', () => {
     expect(JSON.parse(String(init.body))).toEqual(expect.objectContaining({ size: '1536x1024' }))
   })
 
+  it('uses relative /v1 paths for site-local image submission and polling', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 'imgtask_site', task_id: 'imgtask_site', status: 'processing',
+    }), { status: 202, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await create({
+      endpoint: '/', api_key: 'sk-test', model: 'gpt-image-2', prompt: 'poster',
+      options: { size: '', quality: '', background: '', outputFormat: 'png', count: 1 },
+    })
+    await get('/', 'sk-test', 'imgtask_site')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/v1/images/generations/async', expect.objectContaining({ method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/v1/images/tasks/imgtask_site', expect.objectContaining({ cache: 'no-store' }))
+  })
+
   it('polls with the same key and maps stored result URLs to console assets', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: 'imgtask_1', task_id: 'imgtask_1', status: 'completed',

@@ -318,6 +318,7 @@ describe('WebConsoleView', () => {
 
     await openSelect(wrapper, 'API 端点')
     const endpointOptions = selectOptionTexts().join('\n')
+    expect(endpointOptions).toContain('主端点')
     expect(endpointOptions).toContain('OpenAI v1')
     expect(endpointOptions).not.toContain('Gemini')
     await wrapper.get('button[aria-label="API 端点"]').trigger('click')
@@ -371,7 +372,7 @@ describe('WebConsoleView', () => {
     expect(createImageTaskMock).not.toHaveBeenCalled()
   })
 
-  it('OpenAI 在线对话提交时使用选中的 OpenAI key 和 endpoint', async () => {
+  it('OpenAI 在线对话提交时使用选中的 OpenAI key 和站内端点', async () => {
     sendWebConsoleChatMock.mockResolvedValue({
       text: '你好，有什么可以帮你？',
       usedMode: 'responses',
@@ -386,7 +387,7 @@ describe('WebConsoleView', () => {
 
     expect(sendWebConsoleChatMock).toHaveBeenCalledTimes(1)
     expect(sendWebConsoleChatMock).toHaveBeenCalledWith(expect.objectContaining({
-      endpoint: 'https://api.example.com',
+      endpoint: '/',
       apiKey: 'sk-test',
       model: 'gpt-5.5',
       prompt: '你好',
@@ -394,6 +395,34 @@ describe('WebConsoleView', () => {
       toolChoice: 'auto',
     }))
     expect(wrapper.text()).toContain('你好，有什么可以帮你？')
+  })
+
+  it('管理员指定的自定义默认端点仍使用绝对 URL', async () => {
+    appStore.cachedPublicSettings = {
+      api_base_url: 'https://api.example.com',
+      custom_endpoints: [{
+        name: '备用线路',
+        endpoint: 'https://backup.example.com/v1',
+        description: '',
+      }],
+      web_console_default_endpoint: 'https://backup.example.com/v1',
+    }
+    sendWebConsoleChatMock.mockResolvedValue({
+      text: '备用线路响应',
+      usedMode: 'responses',
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    expect(wrapper.get('button[aria-label="API 端点"]').text()).toContain('备用线路')
+    await wrapper.get('textarea').setValue('你好')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(sendWebConsoleChatMock).toHaveBeenCalledWith(expect.objectContaining({
+      endpoint: 'https://backup.example.com/v1',
+    }))
   })
 
   it('生图模式通过任务接口提交图片生成请求', async () => {
@@ -429,7 +458,7 @@ describe('WebConsoleView', () => {
     expect(createImageTaskMock).toHaveBeenCalledTimes(1)
     expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
       api_key: 'sk-test',
-      endpoint: 'https://api.example.com',
+      endpoint: '/',
       model: 'gpt-image-2',
       prompt: '画一只猫',
     }))
@@ -1095,6 +1124,7 @@ describe('WebConsoleView', () => {
           content: '生图失败：临时拉取失败',
           images: [],
           imageTaskId: 'imgtask_105',
+          imageTaskEndpoint: 'https://api.example.com',
           imageRequest: {
             prompt: '画一张海报',
             model: 'gpt-5.5',
@@ -1122,7 +1152,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith('https://api.example.com', 'sk-test', 'imgtask_105')
+    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_105')
     expect(wrapper.text()).toContain('已生成 1 张图片。')
     expect(wrapper.find('img').attributes('src')).toBe('data:image/png;base64,ZmFrZQ==')
   })
@@ -1199,7 +1229,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith('https://api.example.com', 'sk-test', 'imgtask_107')
+    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_107')
     expect(fetch).toHaveBeenCalledWith('https://bucket.example/images/imgtask_107-0.png?signature=new')
     expect(cachePut).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/9?v=new-hash', expect.any(Response))
     expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-image-restored')
