@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"html"
 	"sort"
 	"strconv"
 	"strings"
@@ -807,7 +806,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 	// 更新字段
 	if req.Name != nil {
-		apiKey.Name = html.EscapeString(*req.Name)
+		apiKey.Name = *req.Name
 		fields.Name = true
 	}
 

@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"html"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,6 +26,7 @@ func (s *apiKeyNameRepoStub) Create(_ context.Context, key *APIKey) error {
 func (s *apiKeyNameRepoStub) Update(_ context.Context, key *APIKey, fields APIKeyUpdateFields) error {
 	clone := *key
 	s.updated = &clone
+	s.apiKey = &clone
 	s.fields = fields
 	return nil
 }
@@ -68,9 +68,8 @@ func TestAPIKeyService_CreatePreservesRawName(t *testing.T) {
 	require.Equal(t, rawName, repo.created.Name)
 }
 
-func TestAPIKeyService_UpdateEscapesName(t *testing.T) {
+func TestAPIKeyService_UpdatePreservesRawNameAcrossRepeatedEdits(t *testing.T) {
 	rawName := `A&B <b>ok</b>`
-	escapedName := html.EscapeString(rawName)
 	repo := &apiKeyNameRepoStub{
 		apiKeyRepoStub: &apiKeyRepoStub{
 			apiKey: &APIKey{ID: 7, UserID: 42, Key: "custom-key-123456", Name: "old", Status: StatusActive},
@@ -78,11 +77,13 @@ func TestAPIKeyService_UpdateEscapesName(t *testing.T) {
 	}
 	svc := &APIKeyService{apiKeyRepo: repo}
 
-	apiKey, err := svc.Update(context.Background(), 7, 42, UpdateAPIKeyRequest{Name: &rawName})
+	for i := 0; i < 2; i++ {
+		apiKey, err := svc.Update(context.Background(), 7, 42, UpdateAPIKeyRequest{Name: &rawName})
 
-	require.NoError(t, err)
-	require.Equal(t, escapedName, apiKey.Name)
-	require.NotNil(t, repo.updated)
-	require.Equal(t, escapedName, repo.updated.Name)
-	require.True(t, repo.fields.Name)
+		require.NoError(t, err)
+		require.Equal(t, rawName, apiKey.Name)
+		require.NotNil(t, repo.updated)
+		require.Equal(t, rawName, repo.updated.Name)
+		require.True(t, repo.fields.Name)
+	}
 }
