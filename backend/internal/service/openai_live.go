@@ -23,17 +23,19 @@ import (
 )
 
 const (
-	defaultLiveMaxSessionDuration = time.Hour
-	liveLeaseRefreshInterval      = 20 * time.Second
-	liveRedisOperationTimeout     = 3 * time.Second
-	liveClosedRecordTTL           = 24 * time.Hour
-	liveObserverPollInterval      = 250 * time.Millisecond
-	liveObserverStoreRetryLimit   = 5
-	liveUpstreamBodyLimit         = 2 << 20
-	liveCompensationTimeout       = 5 * time.Second
+	defaultLiveMaxSessionDuration  = time.Hour
+	liveLeaseRefreshInterval       = 20 * time.Second
+	liveRedisOperationTimeout      = 3 * time.Second
+	liveClosedRecordTTL            = 24 * time.Hour
+	liveObserverPollInterval       = 250 * time.Millisecond
+	liveObserverStoreRetryLimit    = 5
+	liveFinalizeStoreRetryInterval = time.Second
+	liveFinalizeStoreRetryWindow   = 60 * time.Second
+	liveUpstreamBodyLimit          = 2 << 20
+	liveCompensationTimeout        = 5 * time.Second
 )
 
-// liveObserverStoreRetryInterval 是 var 以便测试缩短 store 报错的重试等待。
+// liveObserverStoreRetryInterval 使用 var，便于同步 observer 测试缩短等待。
 var liveObserverStoreRetryInterval = time.Second
 
 var (
@@ -832,7 +834,7 @@ func (s *OpenAIGatewayService) waitForLiveObserverRetry(record *LiveCallRecord) 
 
 // finalizeLiveCallAfterExpiry 是 store 持续报错、observer 无法继续观察时的兜底：
 // 等到会话最长时限 ExpiresAt 再 finalize，保证 usage log 与租约释放最迟在会话到期
-// 时完成。MarkLiveCallClosed 的 first 语义保证与其他恢复路径不会重复落库。
+// 时开始；持久层唯一约束保证与其他恢复路径不会重复落库。
 func (s *OpenAIGatewayService) finalizeLiveCallAfterExpiry(record *LiveCallRecord) {
 	if record == nil {
 		return
@@ -854,31 +856,58 @@ func (s *OpenAIGatewayService) refreshLiveLease(record *LiveCallRecord) bool {
 	return err == nil && refreshed
 }
 
-func (s *OpenAIGatewayService) releaseLiveLease(accountID, userID, apiKeyID int64, leaseID string) {
+func (s *OpenAIGatewayService) releaseLiveLease(accountID, userID, apiKeyID int64, leaseID string) bool {
 	cache, err := s.liveConcurrencyCache()
 	if err != nil {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
 	defer cancel()
-	_ = cache.ReleaseLiveLease(ctx, accountID, userID, apiKeyID, leaseID)
+	return cache.ReleaseLiveLease(ctx, accountID, userID, apiKeyID, leaseID) == nil
 }
 
 func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	if record == nil {
 		return
 	}
+	markOK := s.markLiveCallClosed(record)
+	releaseOK := s.releaseLiveLease(record.AccountID, record.UserID, record.APIKeyID, record.LeaseID)
+	// usage_logs 的 (request_id, api_key_id) 唯一约束才是跨实例的持久幂等边界。
+	// Redis closed 标记不能作为唯一落库机会，否则 Redis 超时或标记后进程退出都会丢日志。
+	s.writeLiveUsageLog(record)
+	if !markOK || !releaseOK {
+		go s.retryLiveFinalizationState(record)
+	}
+}
+
+func (s *OpenAIGatewayService) markLiveCallClosed(record *LiveCallRecord) bool {
 	store, err := s.liveStore()
 	if err != nil {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
-	first, err := store.MarkLiveCallClosed(ctx, record.CallHash, liveClosedRecordTTL)
+	_, err = store.MarkLiveCallClosed(ctx, record.CallHash, liveClosedRecordTTL)
 	cancel()
-	if err != nil || !first {
-		return
+	return err == nil
+}
+
+func (s *OpenAIGatewayService) retryLiveFinalizationState(record *LiveCallRecord) {
+	deadline := time.Now().Add(liveFinalizeStoreRetryWindow)
+	for time.Now().Before(deadline) {
+		time.Sleep(liveFinalizeStoreRetryInterval)
+		markOK := s.markLiveCallClosed(record)
+		releaseOK := s.releaseLiveLease(record.AccountID, record.UserID, record.APIKeyID, record.LeaseID)
+		if markOK && releaseOK {
+			return
+		}
 	}
-	s.releaseLiveLease(record.AccountID, record.UserID, record.APIKeyID, record.LeaseID)
+	logger.FromContext(context.Background()).Warn(
+		"live finalization state reconciliation exhausted",
+		zap.String("call_hash", record.CallHash),
+	)
+}
+
+func (s *OpenAIGatewayService) writeLiveUsageLog(record *LiveCallRecord) {
 	if s.usageLogRepo == nil {
 		return
 	}
@@ -900,8 +929,8 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	// 若确认有意免费，删除本注释即可（零值行为由
 	// TestFinalizeLiveCallIsIdempotentAndWritesZeroUsage 锁定）。
 	//
-	// 这是该会话唯一一次落库机会（MarkLiveCallClosed 已标记 first），失败即永久
-	// 丢失，因此走带日志与同步兜底的 writeUsageLogBestEffort（issue #3656）。
+	// Redis 故障与并发 finalizer 可能重复进入；持久层唯一约束负责幂等，写入失败则
+	// 继续走带日志与同步兜底的 writeUsageLogBestEffort（issue #3656）。
 	writeUsageLogBestEffort(context.Background(), s.usageLogRepo, &UsageLog{
 		UserID:           record.UserID,
 		APIKeyID:         record.APIKeyID,

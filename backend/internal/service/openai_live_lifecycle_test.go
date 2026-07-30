@@ -119,6 +119,8 @@ type liveTestStore struct {
 	claimErr         error
 	getCallErr       error
 	getControllerErr error
+	markErr          error
+	markFailures     int
 }
 
 func (s *liveTestStore) SaveLiveCall(_ context.Context, record *LiveCallRecord, _ time.Duration) error {
@@ -188,6 +190,10 @@ func (s *liveTestStore) GetLiveController(_ context.Context, callHash string) (s
 func (s *liveTestStore) MarkLiveCallClosed(_ context.Context, callHash string, _ time.Duration) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.markFailures > 0 {
+		s.markFailures--
+		return false, s.markErr
+	}
 	if s.record == nil || s.record.CallHash != callHash || s.record.Controller == LiveControllerClosed {
 		return false, nil
 	}
@@ -198,10 +204,13 @@ func (s *liveTestStore) MarkLiveCallClosed(_ context.Context, callHash string, _
 
 type liveTestConcurrencyCache struct {
 	ConcurrencyCache
-	mu          sync.Mutex
-	refreshes   int
-	releases    int
-	failRefresh bool
+	mu              sync.Mutex
+	refreshes       int
+	releases        int
+	released        bool
+	failRefresh     bool
+	releaseErr      error
+	releaseFailures int
 }
 
 func (c *liveTestConcurrencyCache) AcquireLiveLease(
@@ -324,8 +333,15 @@ func (c *liveTestConcurrencyCache) ReleaseLiveLease(
 	string,
 ) error {
 	c.mu.Lock()
-	c.releases++
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.releaseFailures > 0 {
+		c.releaseFailures--
+		return c.releaseErr
+	}
+	if !c.released {
+		c.released = true
+		c.releases++
+	}
 	return nil
 }
 
@@ -338,6 +354,11 @@ type liveTestUsageRepo struct {
 func (r *liveTestUsageRepo) Create(_ context.Context, log *UsageLog) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.logs {
+		if existing.RequestID == log.RequestID && existing.APIKeyID == log.APIKeyID {
+			return false, nil
+		}
+	}
 	copy := *log
 	r.logs = append(r.logs, &copy)
 	return true, nil
@@ -650,6 +671,56 @@ func TestObserveLiveCallStoreOutageFallsBackToExpiryFinalize(t *testing.T) {
 	}
 }
 
+func TestObserveLiveCallRecoversFinalizationAfterRedisOutage(t *testing.T) {
+	restoreObserver := liveObserverStoreRetryInterval
+	liveObserverStoreRetryInterval = time.Millisecond
+	t.Cleanup(func() { liveObserverStoreRetryInterval = restoreObserver })
+
+	record := &LiveCallRecord{
+		CallID:     "call_redis_recovery",
+		CallHash:   hashLiveCallID("call_redis_recovery"),
+		AccountID:  11,
+		APIKeyID:   22,
+		UserID:     33,
+		LeaseID:    "lease-1",
+		Model:      "gpt-live-test",
+		CreatedAt:  time.Now().Add(-time.Minute),
+		ExpiresAt:  time.Now().Add(-time.Second),
+		Controller: LiveControllerPending,
+	}
+	store := &liveTestStore{
+		claimErr:     errors.New("redis: connection refused"),
+		markErr:      errors.New("redis: connection refused"),
+		markFailures: 1,
+	}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	concurrencyCache := &liveTestConcurrencyCache{
+		releaseErr:      errors.New("redis: connection refused"),
+		releaseFailures: 1,
+	}
+	usageRepo := &liveTestUsageRepo{}
+	svc := &OpenAIGatewayService{
+		cache:              store,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		usageLogRepo:       usageRepo,
+	}
+
+	svc.observeLiveCall(record)
+
+	usageRepo.mu.Lock()
+	require.Len(t, usageRepo.logs, 1, "Redis 故障不能阻止 usage log 持久化")
+	usageRepo.mu.Unlock()
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		closed := store.record != nil && store.record.Controller == LiveControllerClosed
+		store.mu.Unlock()
+		concurrencyCache.mu.Lock()
+		released := concurrencyCache.releases == 1
+		concurrencyCache.mu.Unlock()
+		return closed && released
+	}, 2*time.Second, 10*time.Millisecond, "Redis 恢复后必须补齐 closed 标记与租约释放")
+}
+
 type liveTestBestEffortUsageRepo struct {
 	liveTestUsageRepo
 	bestEffortErr   error
@@ -663,8 +734,7 @@ func (r *liveTestBestEffortUsageRepo) CreateBestEffort(_ context.Context, _ *Usa
 	return r.bestEffortErr
 }
 
-// TestFinalizeLiveCallUsageLogFallsBackToSyncCreate 锁定：finalize 是该会话唯一一次
-// 落库机会（MarkLiveCallClosed 已标记 first），best-effort 写入失败必须走同步 Create
+// TestFinalizeLiveCallUsageLogFallsBackToSyncCreate 锁定：best-effort 写入失败必须走同步 Create
 // 兜底，而不是丢弃错误。
 func TestFinalizeLiveCallUsageLogFallsBackToSyncCreate(t *testing.T) {
 	record := &LiveCallRecord{
