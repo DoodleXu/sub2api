@@ -46,8 +46,6 @@ func (r *errTailReader) Read(p []byte) (int, error) {
 func (r *errTailReader) Close() error { return nil }
 
 func TestForwardAsAnthropic_ForceChatCompletionsPreservesFinalModelReasoningEffort(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	tests := []struct {
 		name       string
 		model      string

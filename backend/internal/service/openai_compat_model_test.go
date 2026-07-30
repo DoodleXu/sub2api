@@ -233,7 +233,6 @@ func TestForwardAsAnthropic_NormalizesRoutingAndEffortForGpt54XHigh(t *testing.T
 
 func TestForwardAsAnthropic_PreservesMaxForFinalGPT56ResponsesModel(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name          string
