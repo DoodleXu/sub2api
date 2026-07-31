@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1253,6 +1256,21 @@ func (s *notificationEmailTestSMTPServer) lastMessage() string {
 		return ""
 	}
 	return s.messageBodies[len(s.messageBodies)-1]
+}
+
+func (s *notificationEmailTestSMTPServer) lastMessageBody(t *testing.T) string {
+	t.Helper()
+
+	message, err := mail.ReadMessage(strings.NewReader(s.lastMessage()))
+	require.NoError(t, err)
+
+	bodyReader := io.Reader(message.Body)
+	if strings.EqualFold(message.Header.Get("Content-Transfer-Encoding"), "quoted-printable") {
+		bodyReader = quotedprintable.NewReader(message.Body)
+	}
+	body, err := io.ReadAll(bodyReader)
+	require.NoError(t, err)
+	return string(body)
 }
 
 func (s *notificationEmailTestSMTPServer) close() {

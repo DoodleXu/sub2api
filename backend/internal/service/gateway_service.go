@@ -10891,6 +10891,7 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 		"stream",
 		"stop_sequences",
 		"stop",
+		"max_tokens",
 	} {
 		if gjson.GetBytes(out, path).Exists() {
 			if next, ok := deleteJSONPathBytes(out, path); ok {

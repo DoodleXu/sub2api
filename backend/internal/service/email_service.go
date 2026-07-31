@@ -199,27 +199,18 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 }
 
 func (s *EmailService) SendEmailWithConfigAndHeaders(config *SMTPConfig, to, subject, body string, headers map[string]string) error {
-	// Sanitize all SMTP header fields to prevent header injection (CR/LF removal).
-	to = sanitizeEmailHeader(to)
-	subject = sanitizeEmailHeader(subject)
-
-	from := sanitizeEmailHeader(config.From)
-	if config.FromName != "" {
-		from = fmt.Sprintf("%s <%s>", sanitizeEmailHeader(config.FromName), sanitizeEmailHeader(config.From))
+	message, err := buildSMTPMessageWithHeaders(config, to, subject, body, headers)
+	if err != nil {
+		return err
 	}
-
-	extraHeaders := formatEmailHeaders(headers)
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n%sMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		from, to, subject, extraHeaders, body)
-
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	auth := smtp.PlainAuth("", config.Username, config.Password, config.Host)
 
 	if config.UseTLS {
-		return s.sendMailTLS(addr, auth, config.From, to, []byte(msg), config.Host)
+		return s.sendMailTLS(addr, auth, message.envelopeFrom, message.envelopeTo, message.data, config.Host)
 	}
 
-	return s.sendMailPlain(addr, auth, config.From, to, []byte(msg), config.Host)
+	return s.sendMailPlain(addr, auth, message.envelopeFrom, message.envelopeTo, message.data, config.Host)
 }
 
 func formatEmailHeaders(headers map[string]string) string {

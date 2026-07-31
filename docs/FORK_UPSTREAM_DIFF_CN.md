@@ -10,23 +10,42 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `11f664188 docs: 完善部署审核与恢复指引` | 本次合并 v0.1.168 前的 fork 基线，已包含 2026-07-29 全项目审核修复的 6 个功能 commit |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | v0.1.168 已合入本 fork；fork 发布版本推进至 `0.1.235` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | 2026-07-29 发布的官方最新非草稿 release |
-| 上游 main HEAD | `5a6143097` | 本次同步时比 v0.1.168 release 多 2 个提交；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 29 个冲突路径（含 9 个 modify/delete）；继续保留 fork 聚合文件结构、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和完整 WebSocket 逐轮计费元数据，并迁入 Passkey、模型广场、按列更新及网关可靠性修复 |
+| Fork 同步前 HEAD | `bf709af7d fix: 优化生图队列页面体验` | 本次合并 v0.1.169 前的 fork 基线；工作树干净，本地比 `origin/main` 多 1 个已提交的生图队列 UI 优化 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.169` -> `26d894ef4` | v0.1.169 已合入本 fork；fork 发布版本保持 `0.1.235` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.169` -> `26d894ef4` | 2026-07-31 发布的官方最新非草稿 release |
+| 上游 main HEAD | `7ceabb3fd` | 本次同步时比 v0.1.169 release 多 1 个 VERSION 同步提交；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 12 个冲突路径（含 4 个 modify/delete）；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、邮件退订和完整 OpenAI 调度/计费语义，并迁入 URL 路径安全、代理断流 fail-open、标准 SMTP MIME、定价资源与订阅展示修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.168:refs/tags/upstream/v0.1.168 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.168^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.168^{}..HEAD
+git fetch upstream refs/tags/v0.1.169:refs/tags/upstream/v0.1.169 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.169^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.169^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.168` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.169` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.169` 合并说明：
+
+- 合入 GHSA-vrxq-qm4h-6hgg 上游 URL 路径片段安全修复：官方确认 `v0.1.135` 至 `v0.1.168` 受影响，要求尽快升级至 `v0.1.169`。Responses 子路径和 Gemini 模型名在拼接上游 URL 前使用闭集允许清单校验，非法路径在入口拒绝，构造层继续 fail-closed。上游拆分文件 `openai_gateway_request_body.go` 保持删除，对应实现迁入 fork 聚合 `openai_gateway_service.go`。
+- OpenAI 代理断流熔断改为调度偏好：正常选择仍优先避开隔离代理，只有隔离导致无可用账号时才带上下文标记重试一次；同一代理 3 秒内的并发断流折叠为一次失败事件，并支持 `gateway.openai_proxy_stream_circuit.disabled` 紧急关闭。fork 的超频层、每美元成本、高级/实验调度、粘性和平台感知资格判断保持不变。
+- Anthropic `count_tokens` 在转发前同时剥离 `max_tokens` 等生成参数；上游拆分 `gateway_count_tokens.go` 保持删除，修复迁入 `gateway_service.go`。
+- SMTP 发送改用标准 MIME 构造，补齐合法地址解析、编码主题、Date、Message-ID 与 quoted-printable；同时保留 fork 的安全自定义 Header，邮件群发继续发送 `List-Unsubscribe` 与一键退订头。
+- GoReleaser 镜像上下文带入 `backend/resources`，避免发布二进制和镜像缺少定价兜底资源；Compose 默认加入 `no-new-privileges:true`。自行维护 `docker-compose.yml` 的部署需同步该 `security_opt`，本次其余变更无破坏性。fork 继续只发布 `linux/amd64` GHCR 镜像，不恢复 DockerHub、多架构、Apple Container 或 `.goreleaser.simple.yaml`。
+- 同步 GPT-5.6 Luna/Terra 和 GLM-5.2 定价、组合模型渠道展示、Qwen3Guard 辅助字段、Claude auto classifier、不可调度账号跳过 Token 刷新、标准清理日志等级及 Passkey 部署提示。
+- 订阅套餐长标题改为可换行且保留完整 title，到期时间按本地日历与不足 24 小时的时分显示；继续保留 fork 的人民币默认币种、升级抵扣、手续费和日/周/月订阅额度及批量周额度重置。
+- 冲突解决继续使用 fork 聚合模块承载上游拆分文件语义；签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Agent Identity、Responses Lite、首图 TTFT 和逐轮图片计费关键入口均未删除。
+
+### v0.1.169 合并验证
+
+- 合并前以 `git merge-tree` 预检，实际 merge 与预检一致，共 12 个冲突路径；冲突标记、未合并索引和空白错误均在提交前清零。
+- 后端通过 `TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...` 及 `TZ=UTC go test -race -failfast -tags=unit -count=1 ./internal/service`；代理断流、调度 fail-open、URL 校验、SMTP 和 `count_tokens` 另以定向 race 测试复核。
+- 前端通过 `pnpm typecheck`、`pnpm lint:check`、`pnpm test:run`（216 个测试文件、1495 个测试）和 `pnpm build`。
+- 部署与发布脚本通过 Compose `no-new-privileges`、Docker runtime resources、Caddy 缓存/SSE 和 release tag 验证；runtime resources 门禁按实际 Docker build 逐项要求 `backend/resources`，兼容 fork 单一 `linux/amd64` 构建且不恢复 `.goreleaser.simple.yaml`。
+- 当前环境未安装 `goreleaser`，未执行本地 `goreleaser check`；`.goreleaser.yaml` 的单架构资源注入由上述脚本门禁覆盖。
 
 ## 2026-07-29 全项目审核修复
 
