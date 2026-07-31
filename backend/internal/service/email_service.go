@@ -199,7 +199,15 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 }
 
 func (s *EmailService) SendEmailWithConfigAndHeaders(config *SMTPConfig, to, subject, body string, headers map[string]string) error {
-	message, err := buildSMTPMessageWithHeaders(config, to, subject, body, headers)
+	var (
+		message smtpMessage
+		err     error
+	)
+	if len(headers) == 0 {
+		message, err = buildSMTPMessage(config, to, subject, body)
+	} else {
+		message, err = buildSMTPMessageWithHeaders(config, to, subject, body, headers)
+	}
 	if err != nil {
 		return err
 	}
