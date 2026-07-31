@@ -42,6 +42,7 @@ describe('ImageGenerationQueueView', () => {
     expect(wrapper.text()).toContain('admin.imageGenerations.processing')
     expect(wrapper.text()).toContain('2')
     expect(wrapper.text()).not.toContain('prompt')
+    expect(wrapper.findAll('h1')).toHaveLength(1)
   })
 
   it('keeps the current cursor when polling a later page', async () => {
@@ -50,10 +51,24 @@ describe('ImageGenerationQueueView', () => {
       .mockResolvedValue({ items: [], has_more: false, stats: { processing: 0, completed: 0, failed: 0 } })
     const wrapper = mount(ImageGenerationQueueView)
     await flushPromises()
-    await wrapper.get('button:nth-of-type(2)').trigger('click')
+    await wrapper.get('[data-test="next-page"]').trigger('click')
     await flushPromises()
 
     expect(listTasks).toHaveBeenLastCalledWith({ status: 'all', cursor: 'page-2', limit: 50 })
+  })
+
+  it('refreshes in place without showing the table skeleton again', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(ImageGenerationQueueView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="next-page"]').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(listTasks).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('imgtask_1')
+    expect(wrapper.findAll('.animate-pulse')).toHaveLength(0)
   })
 
   it('stops polling when auto refresh is disabled', async () => {
@@ -62,8 +77,7 @@ describe('ImageGenerationQueueView', () => {
     await flushPromises()
     const initialCalls = listTasks.mock.calls.length
 
-    const checkbox = wrapper.get('input[type="checkbox"]')
-    await checkbox.setValue(false)
+    await wrapper.get('[role="switch"]').trigger('click')
     await vi.advanceTimersByTimeAsync(4000)
 
     expect(listTasks.mock.calls.length).toBe(initialCalls)
