@@ -4,31 +4,31 @@
       <section class="border-b border-gray-200 pb-5 dark:border-dark-700">
         <div class="flex flex-wrap items-end justify-between gap-4">
           <div class="min-w-0">
-            <p class="text-xs font-medium text-gray-500 dark:text-gray-400">异步生图对象存储</p>
+            <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.storageEyebrow') }}</p>
             <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span class="font-mono text-sm text-gray-800 dark:text-gray-100">{{ bucket || '未配置' }}</span>
+              <span class="font-mono text-sm text-gray-800 dark:text-gray-100">{{ bucket || t('admin.imageGenerations.notConfigured') }}</span>
               <span class="font-mono text-xs text-gray-500 dark:text-gray-400">{{ configuredPrefix || 'images/' }}</span>
             </div>
           </div>
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" title="刷新对象列表" @click="reload">
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" :title="t('common.refresh')" @click="reload">
             <Icon name="refresh" size="sm" class="mr-2" />
-            刷新
+            {{ t('common.refresh') }}
           </button>
         </div>
       </section>
 
       <section class="grid gap-3 sm:grid-cols-3">
         <div class="border-l-2 border-primary-500 pl-3">
-          <div class="text-xs text-gray-500 dark:text-gray-400">当前页对象</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.pageObjects') }}</div>
           <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ items.length }}</div>
         </div>
         <div class="border-l-2 border-emerald-500 pl-3">
-          <div class="text-xs text-gray-500 dark:text-gray-400">当前页容量</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.pageSize') }}</div>
           <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ formatBytes(pageBytes) }}</div>
         </div>
         <div class="border-l-2 border-gray-300 pl-3 dark:border-dark-600">
-          <div class="text-xs text-gray-500 dark:text-gray-400">数据来源</div>
-          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">上游异步生图桶</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.source') }}</div>
+          <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.imageGenerations.asyncBucket') }}</div>
         </div>
       </section>
 
@@ -39,8 +39,8 @@
           :placeholder="configuredPrefix || 'images/'"
           @keyup.enter="applyPrefix"
         />
-        <button type="button" class="btn btn-primary btn-sm" @click="applyPrefix">查看前缀</button>
-        <button type="button" class="btn btn-secondary btn-sm" @click="resetPrefix">重置</button>
+        <button type="button" class="btn btn-primary btn-sm" @click="applyPrefix">{{ t('admin.imageGenerations.viewPrefix') }}</button>
+        <button type="button" class="btn btn-secondary btn-sm" @click="resetPrefix">{{ t('common.reset') }}</button>
       </section>
 
       <div v-if="errorMessage" class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
@@ -63,21 +63,21 @@
               <span>{{ formatTime(item.last_modified) }}</span>
             </div>
             <div class="mt-3 flex gap-2">
-              <button type="button" class="btn btn-secondary btn-sm flex-1" @click="preview = item">预览</button>
-              <a class="btn btn-secondary btn-sm flex-1" :href="item.url" :download="objectName(item.key)">下载</a>
+              <button type="button" class="btn btn-secondary btn-sm flex-1" @click="preview = item">{{ t('common.preview') }}</button>
+              <a class="btn btn-secondary btn-sm flex-1" :href="item.url" :download="objectName(item.key)">{{ t('common.download') }}</a>
             </div>
           </div>
         </article>
       </section>
 
       <section v-else class="py-20 text-center text-sm text-gray-500 dark:text-gray-400">
-        当前前缀下没有异步生图结果
+        {{ t('admin.imageGenerations.noObjects') }}
       </section>
 
       <div class="flex items-center justify-between border-t border-gray-200 pt-4 dark:border-dark-700">
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="cursorHistory.length === 0 || loading" @click="previousPage">上一页</button>
-        <span class="text-xs text-gray-500 dark:text-gray-400">第 {{ cursorHistory.length + 1 }} 页</span>
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="!hasMore || loading" @click="nextPage">下一页</button>
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="cursorHistory.length === 0 || loading" @click="previousPage">{{ t('pagination.previous') }}</button>
+        <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.page', { page: cursorHistory.length + 1 }) }}</span>
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="!hasMore || loading" @click="nextPage">{{ t('pagination.next') }}</button>
       </div>
     </div>
 
@@ -85,7 +85,7 @@
       <div class="flex max-h-[92vh] max-w-6xl flex-col bg-white dark:bg-dark-900">
         <div class="flex items-center justify-between gap-4 border-b border-gray-200 px-4 py-3 dark:border-dark-700">
           <p class="min-w-0 truncate font-mono text-xs text-gray-700 dark:text-gray-200">{{ preview.key }}</p>
-          <button type="button" class="icon-btn" title="关闭" @click="preview = null"><Icon name="x" /></button>
+          <button type="button" class="icon-btn" :title="t('common.close')" @click="preview = null"><Icon name="x" /></button>
         </div>
         <img :src="preview.url" :alt="preview.key" class="min-h-0 max-h-[80vh] w-auto max-w-full object-contain" />
       </div>
@@ -95,10 +95,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import imageGenerationsAPI, { type AsyncImageObject } from '@/api/admin/imageGenerations'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+
+const { t } = useI18n()
 
 const items = ref<AsyncImageObject[]>([])
 const loading = ref(false)
@@ -127,7 +130,7 @@ async function load(): Promise<void> {
     hasMore.value = Boolean(page.has_more && page.next_cursor)
   } catch (error: any) {
     items.value = []
-    errorMessage.value = error?.message || '读取异步生图对象失败，请检查 ListBucket 权限。'
+    errorMessage.value = error?.message || t('admin.imageGenerations.loadObjectsFailed')
   } finally {
     loading.value = false
   }

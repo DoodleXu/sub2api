@@ -669,12 +669,36 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/admin/image-generations',
     name: 'AdminImageGenerations',
-    component: () => import('@/views/admin/ImageGenerationsView.vue'),
+    redirect: '/admin/image-generations/results',
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
       title: 'Image Generations',
       titleKey: 'nav.imageGenerations',
+      descriptionKey: 'admin.imageGenerations.description'
+    }
+  },
+  {
+    path: '/admin/image-generations/queue',
+    name: 'AdminImageGenerationQueue',
+    component: () => import('@/views/admin/ImageGenerationQueueView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Image Generation Queue',
+      titleKey: 'nav.imageGenerationQueue',
+      descriptionKey: 'admin.imageGenerations.queueDescription'
+    }
+  },
+  {
+    path: '/admin/image-generations/results',
+    name: 'AdminImageGenerationResults',
+    component: () => import('@/views/admin/ImageGenerationsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Image Generation Results',
+      titleKey: 'nav.imageGenerationResults',
       descriptionKey: 'admin.imageGenerations.description'
     }
   },

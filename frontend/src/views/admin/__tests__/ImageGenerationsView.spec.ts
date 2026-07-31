@@ -7,6 +7,11 @@ const list = vi.hoisted(() => vi.fn())
 vi.mock('@/api/admin/imageGenerations', () => ({ default: { list } }))
 vi.mock('@/components/layout/AppLayout.vue', () => ({ default: { template: '<div><slot /></div>' } }))
 vi.mock('@/components/icons/Icon.vue', () => ({ default: { template: '<span />' } }))
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({
+    t: (key: string, values?: Record<string, unknown>) => values ? `${key}:${JSON.stringify(values)}` : key,
+  }),
+}))
 
 describe('ImageGenerationsView', () => {
   beforeEach(() => {
