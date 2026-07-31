@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-30
+最后更新：2026-07-31
 
 ## 当前对比基线
 
@@ -11,7 +11,7 @@
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
 | Fork 同步前 HEAD | `11f664188 docs: 完善部署审核与恢复指引` | 本次合并 v0.1.168 前的 fork 基线，已包含 2026-07-29 全项目审核修复的 6 个功能 commit |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | v0.1.168 已合入本 fork；fork 发布版本推进至 `0.1.233` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | v0.1.168 已合入本 fork；fork 发布版本推进至 `0.1.235` |
 | 上游最新 release 基线 | `refs/tags/upstream/v0.1.168` -> `99c8e4bf7` | 2026-07-29 发布的官方最新非草稿 release |
 | 上游 main HEAD | `5a6143097` | 本次同步时比 v0.1.168 release 多 2 个提交；未越过 release 标签合并 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 29 个冲突路径（含 9 个 modify/delete）；继续保留 fork 聚合文件结构、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理和完整 WebSocket 逐轮计费元数据，并迁入 Passkey、模型广场、按列更新及网关可靠性修复 |
