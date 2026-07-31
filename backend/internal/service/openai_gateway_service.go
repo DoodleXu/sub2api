@@ -268,10 +268,14 @@ type OpenAIForwardResult struct {
 	ImageInputSize        string
 	ImageOutputSize       string
 	ImageOutputSizes      []string
-	ImageSizeSource       string
-	ImageSizeBreakdown    map[string]int
-	VideoCount            int
-	VideoResolution       string
+	// ImageResponseBody is populated only for successful non-streaming image
+	// responses so the gateway handler can archive the original JSON without
+	// changing the client-visible payload.
+	ImageResponseBody  []byte
+	ImageSizeSource    string
+	ImageSizeBreakdown map[string]int
+	VideoCount         int
+	VideoResolution    string
 	// VideoDurationSeconds is the requested generated video duration normalized to 1-15 seconds.
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。

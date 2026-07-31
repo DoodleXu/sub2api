@@ -466,6 +466,12 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		VideoCount:           usage.VideoCount,
 		VideoResolution:      usage.VideoResolution,
 		VideoDurationSeconds: usage.VideoDurationSeconds,
+		ImageResponseBody: func() []byte {
+			if endpoint == GrokMediaEndpointImagesGenerations || endpoint == GrokMediaEndpointImagesEdits {
+				return respBody
+			}
+			return nil
+		}(),
 	}, nil
 }
 

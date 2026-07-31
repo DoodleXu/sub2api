@@ -150,6 +150,21 @@ func (u *ImageResultUploader) Rewrite(ctx context.Context, taskID string, result
 	return rewritten.payload, nil
 }
 
+// Archive uploads image data to object storage while keeping the original
+// response untouched. It is used by synchronous image endpoints, which must
+// preserve their existing response and billing behavior.
+func (u *ImageResultUploader) Archive(ctx context.Context, archiveID string, result json.RawMessage) error {
+	if u == nil || u.storage == nil {
+		return nil
+	}
+	archiveID = strings.TrimSpace(archiveID)
+	if archiveID == "" {
+		archiveID = "sync-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	}
+	_, err := u.rewriteTracked(ctx, archiveID, result, nil)
+	return err
+}
+
 func (u *ImageResultUploader) rewriteTracked(ctx context.Context, taskID string, result json.RawMessage, track imagePendingObjectTracker) (_ *imageRewriteResult, retErr error) {
 	if u == nil || u.storage == nil {
 		return &imageRewriteResult{payload: result, active: true}, nil

@@ -70,6 +70,13 @@ type ImageStorageSettingService struct {
 	uploader *ImageResultUploader
 	enabled  bool
 	retryAt  time.Time
+
+	archiveQueueOnce    sync.Once
+	archiveQueue        chan imageArchiveJob
+	archiveQueueMu      sync.Mutex
+	archivePendingBytes int64
+	archiveQueueClosed  bool
+	archiveQueueWG      sync.WaitGroup
 }
 
 func NewImageStorageSettingService(

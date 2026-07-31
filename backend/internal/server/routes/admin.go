@@ -195,6 +195,7 @@ func registerImageGenerationRoutes(admin *gin.RouterGroup, h *handler.Handlers) 
 	images := admin.Group("/image-generations")
 	{
 		images.GET("", h.Admin.ImageGeneration.List)
+		images.GET("/tasks", h.Admin.ImageGeneration.ListTasks)
 	}
 }
 

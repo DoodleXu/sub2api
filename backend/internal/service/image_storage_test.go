@@ -129,6 +129,19 @@ func TestImageResultUploaderRewritesURL(t *testing.T) {
 	require.Contains(t, string(parsed.Data[0]["url"]), "https://cdn.test/images/imgtask_xyz-")
 }
 
+func TestImageResultUploaderArchivesWithoutChangingOriginalResponse(t *testing.T) {
+	storage := &fakeImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	original := json.RawMessage(`{"created":1,"data":[{"b64_json":"` + b64 + `","revised_prompt":"keep this response"}]}`)
+
+	require.NoError(t, uploader.Archive(context.Background(), "sync-archive", original))
+	require.Len(t, storage.saved, 1)
+	require.Regexp(t, `^images/sync-archive-[0-9a-f]{12}-0\.png$`, storage.saved[0].key)
+	require.Equal(t, pngBytes, storage.saved[0].data)
+	require.JSONEq(t, `{"created":1,"data":[{"b64_json":"`+b64+`","revised_prompt":"keep this response"}]}`, string(original))
+}
+
 func TestImageResultUploaderRejectsUnsafeDownloadURL(t *testing.T) {
 	called := false
 	client := &http.Client{Transport: imageRoundTripFunc(func(req *http.Request) (*http.Response, error) {

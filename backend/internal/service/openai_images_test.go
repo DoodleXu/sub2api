@@ -1594,6 +1594,41 @@ func TestCollectOpenAIImagesFromResponsesBody_MultilineSSE(t *testing.T) {
 	require.JSONEq(t, `{"images":1}`, string(usageRaw))
 }
 
+func TestOpenAIGatewayServiceForwardImages_OAuthNonStreamingReturnsArchiveBody(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","stream":false,"response_format":"b64_json"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	svc.httpUpstream = &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000012,\"tool_usage\":{\"image_gen\":{\"images\":1}},\"output\":[{\"type\":\"image_generation_call\",\"result\":\"T0s=\",\"output_format\":\"png\"}]}}\n\n" +
+					"data: [DONE]\n\n",
+			)),
+		},
+	}
+	account := &Account{
+		ID: 12, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"access_token": "token-123"},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.NotEmpty(t, result.ImageResponseBody)
+	require.JSONEq(t, rec.Body.String(), string(result.ImageResponseBody))
+	require.Equal(t, 1, result.ImageCount)
+}
+
 func TestOpenAIGatewayServiceForwardImages_OAuthStreamingHandlesOutputItemDoneFallback(t *testing.T) {
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","stream":true,"response_format":"url"}`)
 

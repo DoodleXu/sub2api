@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -75,6 +76,15 @@ func (s *recordingStorage) Save(_ context.Context, key, _ string, _ []byte) (str
 
 func (s *recordingStorage) Delete(context.Context, string) error { return nil }
 
+type archiveQueueStorage struct{ saved chan []byte }
+
+func (s *archiveQueueStorage) Save(_ context.Context, _ string, _ string, data []byte) (string, error) {
+	s.saved <- append([]byte(nil), data...)
+	return "https://cdn.example.com/image.png", nil
+}
+
+func (s *archiveQueueStorage) Delete(context.Context, string) error { return nil }
+
 func newImageStorageFixture(t *testing.T, fallback config.ImageStorageConfig) (*ImageStorageSettingService, *stubSettingRepo, *[]config.ImageStorageConfig) {
 	return newImageStorageFixtureWithKey(t, fallback, true)
 }
@@ -131,6 +141,27 @@ func TestImageStorageSettingsToggleTakesEffectWithoutRestart(t *testing.T) {
 	require.False(t, enabled, "turning it back off must also apply immediately")
 
 	require.Len(t, *built, 1, "the S3 client is built only when the feature is on")
+}
+
+func TestImageStorageSettingsArchiveQueueRunsOutsideRequestPath(t *testing.T) {
+	storage := &archiveQueueStorage{saved: make(chan []byte, 1)}
+	factory := func(_ context.Context, _ *config.ImageStorageConfig) (ImageStorage, error) {
+		return storage, nil
+	}
+	svc := NewImageStorageSettingService(nil, nil, nil, factory, config.ImageStorageConfig{
+		Enabled: true, Bucket: "images", AccessKeyID: "ak", SecretAccessKey: "sk", Prefix: "images/",
+	})
+	t.Cleanup(svc.CloseImageArchiveQueue)
+
+	payload := json.RawMessage(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(pngBytes) + `"}]}`)
+	require.True(t, svc.EnqueueImageArchive("sync-test", payload, 1))
+
+	select {
+	case got := <-storage.saved:
+		require.Equal(t, pngBytes, got)
+	case <-time.After(time.Second):
+		t.Fatal("archive worker did not process the queued image")
+	}
 }
 
 func TestImageStorageSettingsInvalidatesWhenBackupS3Changes(t *testing.T) {

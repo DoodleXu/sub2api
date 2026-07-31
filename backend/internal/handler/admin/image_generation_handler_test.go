@@ -6,10 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +34,7 @@ func TestImageGenerationListUsesConfiguredAsyncPrefix(t *testing.T) {
 	browser := &imageStorageBrowserStub{}
 	h := NewImageGenerationHandler(settings, func(context.Context, *config.ImageStorageConfig) (service.ImageStorageBrowser, error) {
 		return browser, nil
-	})
+	}, nil)
 	router := gin.New()
 	router.GET("/admin/image-generations", h.List)
 
@@ -54,7 +58,7 @@ func TestImageGenerationListRejectsPrefixOutsideAsyncNamespace(t *testing.T) {
 	h := NewImageGenerationHandler(settings, func(context.Context, *config.ImageStorageConfig) (service.ImageStorageBrowser, error) {
 		factoryCalled = true
 		return &imageStorageBrowserStub{}, nil
-	})
+	}, nil)
 	router := gin.New()
 	router.GET("/admin/image-generations", h.List)
 
@@ -62,4 +66,46 @@ func TestImageGenerationListRejectsPrefixOutsideAsyncNamespace(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/image-generations?prefix=backups/", nil))
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.False(t, factoryCalled)
+}
+
+func TestImageGenerationListTasksFiltersSensitiveTaskFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := repository.NewImageTaskStore(rdb)
+	tasks := service.NewImageTaskService(store)
+	t.Cleanup(tasks.Close)
+	now := time.Now().Unix()
+	record := &service.ImageTaskRecord{
+		ID: "imgtask_admin_1", UserID: 7, APIKeyID: 9, Platform: service.PlatformOpenAI,
+		Operation: "generation", Model: "gpt-image-2", ImageCount: 1,
+		Status: service.ImageTaskStatusCompleted, HTTPStatus: http.StatusOK,
+		Result:            json.RawMessage(`{"prompt":"private prompt","data":[{"url":"https://cdn.example.test/image.png"}]}`),
+		PendingObjectKeys: []string{"images/internal-key.png"}, CreatedAt: now - 2, ExpiresAt: now + 3600,
+	}
+	require.NoError(t, store.Save(context.Background(), record, time.Hour))
+
+	h := NewImageGenerationHandler(nil, nil, tasks)
+	router := gin.New()
+	router.GET("/admin/image-generations/tasks", h.ListTasks)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/image-generations/tasks", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	body := recorder.Body.String()
+	require.NotContains(t, body, "private prompt")
+	require.NotContains(t, body, "internal-key.png")
+	var envelope struct {
+		Data struct {
+			Items []struct {
+				ResultCount int      `json:"result_count"`
+				ResultURLs  []string `json:"result_urls"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Len(t, envelope.Data.Items, 1)
+	require.Equal(t, 1, envelope.Data.Items[0].ResultCount)
+	require.Equal(t, []string{"https://cdn.example.test/image.png"}, envelope.Data.Items[0].ResultURLs)
 }

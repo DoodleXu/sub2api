@@ -172,7 +172,7 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	}
 
 	taskCtx, recorder, cancel := newAsyncImageContext(c, body, h.tasks.ExecutionTimeout())
-	task, err := h.tasks.Create(c.Request.Context(), service.ImageTaskOwner{UserID: apiKey.UserID, APIKeyID: apiKey.ID})
+	task, err := h.tasks.Create(c.Request.Context(), service.ImageTaskOwner{UserID: apiKey.UserID, APIKeyID: apiKey.ID}, h.taskMetadata(c, platform, body))
 	if err != nil {
 		cancel()
 		releaseAdmission()
@@ -283,6 +283,29 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 	return nil
 }
 
+func (h *AsyncImageHandler) taskMetadata(c *gin.Context, platform string, body []byte) service.ImageTaskMetadata {
+	metadata := service.ImageTaskMetadata{
+		Platform:  platform,
+		Operation: "generation",
+	}
+	if strings.Contains(c.Request.URL.Path, "/images/edits") {
+		metadata.Operation = "edit"
+	}
+	if platform == service.PlatformGrok {
+		parsed := service.ParseGrokMediaRequest(c.GetHeader("Content-Type"), body)
+		metadata.Model = parsed.Model
+		metadata.ImageCount = parsed.N
+		return metadata
+	}
+	if h.openAI != nil && h.openAI.gatewayService != nil {
+		if parsed, err := h.openAI.gatewayService.ParseOpenAIImagesRequest(c, body); err == nil {
+			metadata.Model = parsed.Model
+			metadata.ImageCount = parsed.N
+		}
+	}
+	return metadata
+}
+
 func (h *AsyncImageHandler) executeWithGateway(platform string, c *gin.Context) {
 	if h.openAI == nil {
 		imageTaskJSONError(c, http.StatusServiceUnavailable, "api_error", "image gateway is unavailable")
@@ -388,6 +411,7 @@ func newAsyncImageContext(c *gin.Context, body []byte, timeoutDuration time.Dura
 	request.URL.Path = strings.TrimSuffix(request.URL.Path, "/async")
 
 	taskCtx := c.Copy()
+	taskCtx.Set("async_image_task", true)
 	recorder := httptest.NewRecorder()
 	recorderCtx, _ := gin.CreateTestContext(recorder)
 	taskCtx.Writer = recorderCtx.Writer

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -77,4 +78,121 @@ func TestImageTaskStoreListsAbandonedProcessingWithoutObjectManifest(t *testing.
 		ids = append(ids, task.ID)
 	}
 	require.ElementsMatch(t, []string{"imgtask_processing", "imgtask_failed_pending"}, ids)
+}
+
+func TestImageTaskStoreListsAdminTasksByStatusAndCursor(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb)
+	ctx := context.Background()
+	for _, task := range []*service.ImageTaskRecord{
+		{ID: "imgtask_old", Status: service.ImageTaskStatusCompleted, CreatedAt: 10},
+		{ID: "imgtask_new", Status: service.ImageTaskStatusProcessing, CreatedAt: 30},
+		{ID: "imgtask_failed", Status: service.ImageTaskStatusFailed, CreatedAt: 20},
+	} {
+		require.NoError(t, store.Save(ctx, task, time.Hour))
+	}
+	adminStore, ok := store.(service.ImageTaskAdminStore)
+	require.True(t, ok)
+
+	first, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: "all", Limit: 2})
+	require.NoError(t, err)
+	require.True(t, first.HasMore)
+	require.Equal(t, []string{"imgtask_new", "imgtask_failed"}, []string{first.Tasks[0].ID, first.Tasks[1].ID})
+	require.Equal(t, 1, first.Stats.Processing)
+	require.Equal(t, 1, first.Stats.Completed)
+	require.Equal(t, 1, first.Stats.Failed)
+
+	second, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: "all", Cursor: first.NextCursor, Limit: 2})
+	require.NoError(t, err)
+	require.False(t, second.HasMore)
+	require.Equal(t, []string{"imgtask_old"}, []string{second.Tasks[0].ID})
+
+	failed, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: service.ImageTaskStatusFailed, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, failed.Tasks, 1)
+	require.Equal(t, "imgtask_failed", failed.Tasks[0].ID)
+}
+
+func TestImageTaskStoreCleansExpiredAdminIndexMembers(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb)
+	ctx := context.Background()
+	valid := &service.ImageTaskRecord{ID: "imgtask_valid", Status: service.ImageTaskStatusCompleted, CreatedAt: 20}
+	expired := &service.ImageTaskRecord{ID: "imgtask_expired", Status: service.ImageTaskStatusFailed, CreatedAt: 10}
+	require.NoError(t, store.Save(ctx, valid, time.Hour))
+	require.NoError(t, store.Save(ctx, expired, time.Second))
+	mr.FastForward(2 * time.Second)
+
+	adminStore, ok := store.(service.ImageTaskAdminStore)
+	require.True(t, ok)
+	page, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: "all", Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 0, page.Stats.Failed)
+	require.Equal(t, 1, page.Stats.Completed)
+	require.Equal(t, []string{"imgtask_valid"}, []string{page.Tasks[0].ID})
+	_, err = rdb.ZScore(ctx, imageTaskStatusIndex(service.ImageTaskStatusFailed), expired.ID).Result()
+	require.ErrorIs(t, err, redis.Nil)
+}
+
+func TestImageTaskStoreAdminCursorHandlesLegacyZeroCreatedAt(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb)
+	ctx := context.Background()
+	for _, task := range []*service.ImageTaskRecord{
+		{ID: "imgtask_zero_b", Status: service.ImageTaskStatusCompleted, CreatedAt: 0},
+		{ID: "imgtask_zero_a", Status: service.ImageTaskStatusCompleted, CreatedAt: 0},
+	} {
+		require.NoError(t, store.Save(ctx, task, time.Hour))
+	}
+
+	adminStore, ok := store.(service.ImageTaskAdminStore)
+	require.True(t, ok)
+	first, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: service.ImageTaskStatusCompleted, Limit: 1})
+	require.NoError(t, err)
+	require.True(t, first.HasMore)
+	require.Equal(t, "imgtask_zero_b", first.Tasks[0].ID)
+
+	second, err := adminStore.ListAdmin(ctx, service.ImageTaskAdminQuery{Status: service.ImageTaskStatusCompleted, Cursor: first.NextCursor, Limit: 1})
+	require.NoError(t, err)
+	require.False(t, second.HasMore)
+	require.Equal(t, "imgtask_zero_a", second.Tasks[0].ID)
+}
+
+func TestImageTaskStoreAdminCursorDoesNotDropLargeSameSecondPage(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb)
+	ctx := context.Background()
+	const total = 2050
+	for index := 0; index < total; index++ {
+		taskID := fmt.Sprintf("imgtask_same_second_%04d", index)
+		require.NoError(t, store.Save(ctx, &service.ImageTaskRecord{
+			ID: taskID, Status: service.ImageTaskStatusCompleted, CreatedAt: 42,
+		}, time.Hour))
+	}
+
+	adminStore, ok := store.(service.ImageTaskAdminStore)
+	require.True(t, ok)
+	seen := make(map[string]struct{}, total)
+	query := service.ImageTaskAdminQuery{Status: service.ImageTaskStatusCompleted, Limit: 50}
+	for {
+		page, err := adminStore.ListAdmin(ctx, query)
+		require.NoError(t, err)
+		for _, task := range page.Tasks {
+			seen[task.ID] = struct{}{}
+		}
+		if !page.HasMore {
+			break
+		}
+		require.NotEmpty(t, page.NextCursor)
+		query.Cursor = page.NextCursor
+	}
+	require.Len(t, seen, total)
 }

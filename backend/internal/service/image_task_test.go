@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -168,4 +169,25 @@ func TestImageTaskServiceMapsStoreFailures(t *testing.T) {
 
 	_, err := svc.Create(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2})
 	require.ErrorIs(t, err, ErrImageTaskUnavailable)
+}
+
+type imageTaskAdminMemoryStore struct {
+	imageTaskMemoryStore
+	listAdminCalled bool
+}
+
+func (s *imageTaskAdminMemoryStore) ListAdmin(context.Context, ImageTaskAdminQuery) (*ImageTaskAdminPage, error) {
+	s.listAdminCalled = true
+	return &ImageTaskAdminPage{}, nil
+}
+
+func TestImageTaskServiceRejectsInvalidAdminCursorAsBadRequest(t *testing.T) {
+	store := &imageTaskAdminMemoryStore{}
+	svc := NewImageTaskService(store)
+
+	_, err := svc.ListAdmin(context.Background(), ImageTaskAdminQuery{Cursor: "not-a-valid-cursor"})
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+	require.Equal(t, "INVALID_IMAGE_TASK_CURSOR", infraerrors.Reason(err))
+	require.False(t, store.listAdminCalled)
 }

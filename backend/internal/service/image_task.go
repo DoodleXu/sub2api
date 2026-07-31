@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -48,6 +49,10 @@ type ImageTaskRecord struct {
 	ID                string          `json:"id"`
 	UserID            int64           `json:"user_id"`
 	APIKeyID          int64           `json:"api_key_id"`
+	Platform          string          `json:"platform,omitempty"`
+	Operation         string          `json:"operation,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	ImageCount        int             `json:"image_count,omitempty"`
 	Status            string          `json:"status"`
 	HTTPStatus        int             `json:"http_status,omitempty"`
 	Result            json.RawMessage `json:"result,omitempty"`
@@ -76,6 +81,41 @@ type ImageTask struct {
 type ImageTaskOwner struct {
 	UserID   int64
 	APIKeyID int64
+}
+
+type ImageTaskMetadata struct {
+	Platform   string
+	Operation  string
+	Model      string
+	ImageCount int
+}
+
+type ImageTaskAdminQuery struct {
+	Status string
+	Cursor string
+	Limit  int
+}
+
+type ImageTaskAdminStats struct {
+	Processing int `json:"processing"`
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+}
+
+type ImageTaskAdminPage struct {
+	Tasks      []*ImageTaskRecord
+	NextCursor string
+	HasMore    bool
+	Stats      ImageTaskAdminStats
+}
+
+type ImageTaskAdminStore interface {
+	ListAdmin(ctx context.Context, query ImageTaskAdminQuery) (*ImageTaskAdminPage, error)
+}
+
+type imageTaskAdminCursor struct {
+	CreatedAt int64  `json:"created_at"`
+	ID        string `json:"id"`
 }
 
 type ImageTaskStore interface {
@@ -111,6 +151,27 @@ type ImageTaskService struct {
 	cleanupCtx       context.Context
 	cleanupWG        sync.WaitGroup
 	taskUploaders    sync.Map // task ID -> uploader snapshot captured at admission
+}
+
+func EncodeImageTaskAdminCursor(createdAt int64, id string) string {
+	payload, _ := json.Marshal(imageTaskAdminCursor{CreatedAt: createdAt, ID: id})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func DecodeImageTaskAdminCursor(value string) (createdAt int64, id string, err error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, "", nil
+	}
+	payload, decodeErr := base64.RawURLEncoding.DecodeString(value)
+	if decodeErr != nil {
+		return 0, "", infraerrors.BadRequest("INVALID_IMAGE_TASK_CURSOR", "invalid image task cursor")
+	}
+	var cursor imageTaskAdminCursor
+	if unmarshalErr := json.Unmarshal(payload, &cursor); unmarshalErr != nil || cursor.CreatedAt < 0 || strings.TrimSpace(cursor.ID) == "" {
+		return 0, "", infraerrors.BadRequest("INVALID_IMAGE_TASK_CURSOR", "invalid image task cursor")
+	}
+	return cursor.CreatedAt, cursor.ID, nil
 }
 
 func NewImageTaskService(store ImageTaskStore) *ImageTaskService {
@@ -308,7 +369,7 @@ func (s *ImageTaskService) ExecutionTimeout() time.Duration {
 	return s.executionTimeout
 }
 
-func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*ImageTask, error) {
+func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner, metadata ...ImageTaskMetadata) (*ImageTask, error) {
 	if s == nil || s.store == nil {
 		return nil, ErrImageTaskUnavailable
 	}
@@ -325,6 +386,12 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 		CreatedAt: now.Unix(),
 		ExpiresAt: now.Add(s.ttl).Unix(),
 	}
+	if len(metadata) > 0 {
+		task.Platform = strings.TrimSpace(metadata[0].Platform)
+		task.Operation = strings.TrimSpace(metadata[0].Operation)
+		task.Model = strings.TrimSpace(metadata[0].Model)
+		task.ImageCount = metadata[0].ImageCount
+	}
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {
 		return nil, ErrImageTaskUnavailable.WithCause(err)
 	}
@@ -332,6 +399,34 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner) (*I
 		s.taskUploaders.Store(task.ID, uploader)
 	}
 	return imageTaskToPublic(task), nil
+}
+
+func (s *ImageTaskService) ListAdmin(ctx context.Context, query ImageTaskAdminQuery) (*ImageTaskAdminPage, error) {
+	if s == nil || s.store == nil {
+		return nil, ErrImageTaskUnavailable
+	}
+	store, ok := s.store.(ImageTaskAdminStore)
+	if !ok {
+		return nil, ErrImageTaskUnavailable
+	}
+	if query.Limit <= 0 {
+		query.Limit = 50
+	}
+	if query.Limit > 100 {
+		query.Limit = 100
+	}
+	query.Status = strings.TrimSpace(query.Status)
+	if query.Status != "" && query.Status != "all" && query.Status != ImageTaskStatusProcessing && query.Status != ImageTaskStatusCompleted && query.Status != ImageTaskStatusFailed {
+		return nil, infraerrors.BadRequest("INVALID_IMAGE_TASK_STATUS", "invalid image task status")
+	}
+	if _, _, err := DecodeImageTaskAdminCursor(query.Cursor); err != nil {
+		return nil, err
+	}
+	page, err := store.ListAdmin(ctx, query)
+	if err != nil {
+		return nil, ErrImageTaskUnavailable.WithCause(err)
+	}
+	return page, nil
 }
 
 func (s *ImageTaskService) Get(ctx context.Context, owner ImageTaskOwner, id string) (*ImageTask, error) {

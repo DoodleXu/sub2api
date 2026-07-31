@@ -42,6 +42,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
 	cfg                        *config.Config
+	imageStorageSettings       *service.ImageStorageSettingService
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -213,6 +214,31 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
+	}
+}
+
+func (h *OpenAIGatewayHandler) SetImageStorageSettingService(settings *service.ImageStorageSettingService) {
+	if h != nil {
+		h.imageStorageSettings = settings
+	}
+}
+
+func (h *OpenAIGatewayHandler) archiveStandardImageResult(c *gin.Context, result *service.OpenAIForwardResult) {
+	if h == nil || c == nil || result == nil || result.Stream || c.GetBool("async_image_task") || len(result.ImageResponseBody) == 0 || result.ImageCount <= 0 || h.imageStorageSettings == nil {
+		return
+	}
+	archiveID := "sync-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	payload := result.ImageResponseBody
+	// Usage recording does not need the raw response. Transfer ownership to the
+	// bounded archive queue so large image payloads are released from the request
+	// result as soon as admission finishes.
+	result.ImageResponseBody = nil
+	if !h.imageStorageSettings.EnqueueImageArchive(archiveID, payload, result.ImageCount) {
+		logger.L().Warn("image_archive.standard_queue_rejected",
+			zap.String("archive_id", archiveID),
+			zap.Int("image_count", result.ImageCount),
+			zap.String("reason", "archive queue is full or image response exceeds the queue byte limit"),
+		)
 	}
 }
 
