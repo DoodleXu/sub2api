@@ -283,7 +283,7 @@ func (s *imageTaskStore) cleanupAdminIndexes(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				stale := make([]interface{}, 0)
+				stale := make([]any, 0)
 				for index, value := range values {
 					if value == nil {
 						stale = append(stale, ids[index])

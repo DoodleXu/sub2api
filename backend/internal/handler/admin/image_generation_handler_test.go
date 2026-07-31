@@ -9,11 +9,8 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +21,30 @@ type imageStorageBrowserStub struct {
 func (s *imageStorageBrowserStub) List(_ context.Context, prefix, _ string, _ int) (*service.ImageStorageObjectPage, error) {
 	s.prefix = prefix
 	return &service.ImageStorageObjectPage{Items: []service.ImageStorageObject{{Key: prefix + "imgtask_1-0.png"}}}, nil
+}
+
+type imageTaskAdminStoreStub struct {
+	page *service.ImageTaskAdminPage
+}
+
+func (s *imageTaskAdminStoreStub) Save(context.Context, *service.ImageTaskRecord, time.Duration) error {
+	return nil
+}
+
+func (s *imageTaskAdminStoreStub) Get(context.Context, string) (*service.ImageTaskRecord, error) {
+	return nil, service.ErrImageTaskNotFound
+}
+
+func (s *imageTaskAdminStoreStub) Transition(context.Context, string, string, *service.ImageTaskRecord, time.Duration) (bool, error) {
+	return false, nil
+}
+
+func (s *imageTaskAdminStoreStub) ListPending(context.Context, int) ([]*service.ImageTaskRecord, error) {
+	return nil, nil
+}
+
+func (s *imageTaskAdminStoreStub) ListAdmin(context.Context, service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {
+	return s.page, nil
 }
 
 func TestImageGenerationListUsesConfiguredAsyncPrefix(t *testing.T) {
@@ -70,21 +91,16 @@ func TestImageGenerationListRejectsPrefixOutsideAsyncNamespace(t *testing.T) {
 
 func TestImageGenerationListTasksFiltersSensitiveTaskFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	mr := miniredis.RunT(t)
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-	store := repository.NewImageTaskStore(rdb)
-	tasks := service.NewImageTaskService(store)
-	t.Cleanup(tasks.Close)
 	now := time.Now().Unix()
-	record := &service.ImageTaskRecord{
+	store := &imageTaskAdminStoreStub{page: &service.ImageTaskAdminPage{Tasks: []*service.ImageTaskRecord{{
 		ID: "imgtask_admin_1", UserID: 7, APIKeyID: 9, Platform: service.PlatformOpenAI,
 		Operation: "generation", Model: "gpt-image-2", ImageCount: 1,
 		Status: service.ImageTaskStatusCompleted, HTTPStatus: http.StatusOK,
 		Result:            json.RawMessage(`{"prompt":"private prompt","data":[{"url":"https://cdn.example.test/image.png"}]}`),
 		PendingObjectKeys: []string{"images/internal-key.png"}, CreatedAt: now - 2, ExpiresAt: now + 3600,
-	}
-	require.NoError(t, store.Save(context.Background(), record, time.Hour))
+	}}}}
+	tasks := service.NewImageTaskService(store)
+	t.Cleanup(tasks.Close)
 
 	h := NewImageGenerationHandler(nil, nil, tasks)
 	router := gin.New()
