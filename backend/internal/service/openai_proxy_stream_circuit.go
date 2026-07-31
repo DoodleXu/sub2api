@@ -271,6 +271,46 @@ func (s *OpenAIGatewayService) clearOpenAIProxyStreamDisconnect(account *Account
 // proxies: a degraded proxy is strictly better than answering 502 (#5056).
 type openAIProxyStreamQuarantineBypassKey struct{}
 
+// openAIProxyStreamQuarantineObservation records the quarantined proxies that
+// were actually considered by one scheduling pass. Keeping this state in the
+// request context prevents an unrelated circuit entry from triggering a
+// fail-open retry for another group or model.
+type openAIProxyStreamQuarantineObservation struct {
+	mu       sync.Mutex
+	proxyIDs map[int64]struct{}
+}
+
+type openAIProxyStreamQuarantineObservationKey struct{}
+
+func withOpenAIProxyStreamQuarantineObservation(ctx context.Context) (context.Context, *openAIProxyStreamQuarantineObservation) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	observation := &openAIProxyStreamQuarantineObservation{}
+	return context.WithValue(ctx, openAIProxyStreamQuarantineObservationKey{}, observation), observation
+}
+
+func (o *openAIProxyStreamQuarantineObservation) record(proxyID int64) {
+	if o == nil || proxyID <= 0 {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.proxyIDs == nil {
+		o.proxyIDs = make(map[int64]struct{}, 1)
+	}
+	o.proxyIDs[proxyID] = struct{}{}
+}
+
+func (o *openAIProxyStreamQuarantineObservation) count() int {
+	if o == nil {
+		return 0
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return len(o.proxyIDs)
+}
+
 func withOpenAIProxyStreamQuarantineBypass(ctx context.Context) context.Context {
 	return context.WithValue(ctx, openAIProxyStreamQuarantineBypassKey{}, true)
 }
@@ -292,7 +332,13 @@ func (s *OpenAIGatewayService) isOpenAIProxyStreamQuarantined(ctx context.Contex
 		return false
 	}
 	circuit := s.getOpenAIProxyStreamCircuit()
-	return circuit != nil && circuit.isBlocked(proxyID, time.Now())
+	blocked := circuit != nil && circuit.isBlocked(proxyID, time.Now())
+	if blocked && ctx != nil {
+		if observation, ok := ctx.Value(openAIProxyStreamQuarantineObservationKey{}).(*openAIProxyStreamQuarantineObservation); ok {
+			observation.record(proxyID)
+		}
+	}
+	return blocked
 }
 
 // logOpenAIProxyStreamQuarantineFailOpen emits a rate-limited warning when a

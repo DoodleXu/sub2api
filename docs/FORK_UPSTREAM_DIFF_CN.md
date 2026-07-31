@@ -31,7 +31,7 @@ git diff --name-status refs/tags/upstream/v0.1.169^{}..HEAD
 本次 `v0.1.169` 合并说明：
 
 - 合入 GHSA-vrxq-qm4h-6hgg 上游 URL 路径片段安全修复：官方确认 `v0.1.135` 至 `v0.1.168` 受影响，要求尽快升级至 `v0.1.169`。Responses 子路径和 Gemini 模型名在拼接上游 URL 前使用闭集允许清单校验，非法路径在入口拒绝，构造层继续 fail-closed。上游拆分文件 `openai_gateway_request_body.go` 保持删除，对应实现迁入 fork 聚合 `openai_gateway_service.go`。
-- OpenAI 代理断流熔断改为调度偏好：正常选择仍优先避开隔离代理，只有隔离导致无可用账号时才带上下文标记重试一次；同一代理 3 秒内的并发断流折叠为一次失败事件，并支持 `gateway.openai_proxy_stream_circuit.disabled` 紧急关闭。fork 的超频层、每美元成本、高级/实验调度、粘性和平台感知资格判断保持不变。
+- OpenAI 代理断流熔断改为调度偏好：正常选择仍优先避开隔离代理，只有本次请求中具备模型、能力、配额和传输资格的候选确实被代理隔离挡住时，才带上下文标记重试一次；审计后已将原先的全局隔离计数收窄为请求级候选观察，避免其他分组或不合格账号触发重复调度与误导告警。同一代理 3 秒内的并发断流折叠为一次失败事件，并支持 `gateway.openai_proxy_stream_circuit.disabled` 紧急关闭。fork 的超频层、每美元成本、高级/实验调度、粘性和平台感知资格判断保持不变。
 - Anthropic `count_tokens` 在转发前同时剥离 `max_tokens` 等生成参数；上游拆分 `gateway_count_tokens.go` 保持删除，修复迁入 `gateway_service.go`。
 - SMTP 发送改用标准 MIME 构造，补齐合法地址解析、编码主题、Date、Message-ID 与 quoted-printable；同时保留 fork 的安全自定义 Header，邮件群发继续发送 `List-Unsubscribe` 与一键退订头。
 - GoReleaser 镜像上下文带入 `backend/resources`，避免发布二进制和镜像缺少定价兜底资源；Compose 默认加入 `no-new-privileges:true`。自行维护 `docker-compose.yml` 的部署需同步该 `security_opt`，本次其余变更无破坏性。fork 继续只发布 `linux/amd64` GHCR 镜像，不恢复 DockerHub、多架构、Apple Container 或 `.goreleaser.simple.yaml`。

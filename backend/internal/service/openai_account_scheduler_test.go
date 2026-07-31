@@ -1494,8 +1494,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_FailsOpenWhenAllProxies
 	}
 	cfg := &config.Config{}
 	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	listCalls := 0
 	svc := &OpenAIGatewayService{
-		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts, listCalls: &listCalls},
 		cfg:                cfg,
 		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
 		openaiProxyStreamCircuit: newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
@@ -1516,8 +1517,50 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_FailsOpenWhenAllProxies
 	require.NotNil(t, selection.Account)
 	require.NotNil(t, selection.Account.ProxyID)
 	require.Equal(t, proxyA, *selection.Account.ProxyID)
+	require.Equal(t, 2, listCalls, "an eligible quarantined candidate must trigger exactly one fail-open retry")
 	require.True(t, svc.openaiProxyStreamCircuit.isBlocked(proxyA, time.Now()),
 		"fail-open must not clear the quarantine; only a completed stream or TTL expiry does")
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DoesNotFailOpenForIneligibleQuarantinedCandidate(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	proxyA := int64(5057)
+	accounts := []Account{
+		{
+			ID:          505701,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			ProxyID:     &proxyA,
+		},
+	}
+	listCalls := 0
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts, listCalls: &listCalls},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiProxyStreamCircuit: newOpenAIProxyStreamCircuit(openAIProxyStreamCircuitSettings{
+			failureThreshold: 1,
+			failureWindow:    time.Minute,
+			quarantineTTL:    10 * time.Minute,
+			maxEntries:       16,
+		}),
+	}
+	svc.openaiProxyStreamCircuit.recordFailure(proxyA, time.Now())
+
+	selection, _, err := svc.SelectAccountWithScheduler(
+		context.Background(), nil, "", "", "grok-4.5", nil, OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.EqualError(t, err, "no available OpenAI accounts supporting model: grok-4.5 (pool=1, filtered: model_not_supported=1)")
+	require.Nil(t, selection)
+	require.Equal(t, 1, listCalls,
+		"an account that cannot serve the requested model must not make its quarantined proxy trigger a second pass")
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyRateLimitedAccountFallsBackToFreshCandidate(t *testing.T) {
