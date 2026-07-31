@@ -16,6 +16,26 @@ The aliases are `/images/generations/async`, `/images/edits/async`, and `/images
 
 Only OpenAI and Grok groups are supported. Requests use the same JSON or multipart payload as the corresponding synchronous endpoint. Streaming image requests are rejected because a polled task returns one final JSON result.
 
+## Admin queue monitoring
+
+Administrators can inspect the live async task queue at **Admin -> Image Generations -> Image Queue**. The page is read-only: it does not add a second executor or a stop operation, and it pauses its two-second refresh while the browser tab is hidden.
+
+The queue API is:
+
+```text
+GET /api/v1/admin/image-generations/tasks
+```
+
+It accepts `status=all|processing|completed|failed`, `limit` (clamped to a bounded page size), and an opaque `cursor`. Results are ordered newest first by creation time and task ID. The response includes `items`, `next_cursor`, `has_more`, and status counts. Each item contains task metadata such as platform, generation/edit operation, model, image count, timestamps, duration, HTTP status, result URL count/links, and the existing failure reason when present. Prompt text, raw task payloads, API key secrets, raw result JSON, and internal object keys are never returned.
+
+The **Image Results** page retains the existing read-only object browser at `/admin/image-generations/results`; the old `/admin/image-generations` address redirects there so existing bookmarks continue to work.
+
+## Synchronous result archiving
+
+Successful non-streaming OpenAI/Grok image generations and edits are also archived to the same dynamically configured async image bucket and prefix. The client still receives the original upstream response, including its original image URLs or `b64_json`; the archive is an additional side effect and does not change routing, billing, or response semantics. Streaming SSE responses are not archived.
+
+The standard archive runs through a bounded background queue with both job and byte limits, so object-storage latency does not hold the synchronous gateway request or its concurrency slots. If the queue is full, the response is still successful and the service emits a structured warning. Upload failures emit `image_archive.standard_upload_failed`; async tasks continue to use their existing upload, Redis state transition, and failure-compensation path, so an async result is uploaded only once.
+
 ## Enabling the feature (object storage)
 
 Asynchronous image tasks are **disabled by default** and gated on object storage. When the switch is off — or the S3 credentials are incomplete — the async endpoints return `404` and never create a task or write to Redis. This is deliberate: without offloading, large `b64_json` results (several MB each, e.g. `gpt-image-1`) would accumulate in Redis and exhaust its memory.

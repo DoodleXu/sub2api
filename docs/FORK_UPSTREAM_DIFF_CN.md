@@ -395,8 +395,9 @@ git diff --name-status refs/tags/upstream/v0.1.168^{}..HEAD
 主要差异：
 
 - 2026-07-22 起统一采用上游 `/v1/images/generations/async`、`/v1/images/edits/async` 与 `/v1/images/tasks/{task_id}`：Web 创作台直接使用用户选中的同一 API Key 提交和轮询，不再维护 fork 自建的 `web_console_image_tasks` 执行器。
-- 移除本地/S3 双轨归档运行时、同步生图旁路归档、独立归档设置、归档清空与签名资产代理；历史 `image_generation_records`、`image_generation_assets`、`web_console_image_tasks` 表和迁移暂时保留为遗留数据，不再读写，也不在升级时自动删除历史文件。
-- 管理后台 `/admin/image-generations` 直接按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载；接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
+- 移除本地/S3 双轨归档运行时、独立归档设置、归档清空与签名资产代理；历史 `image_generation_records`、`image_generation_assets`、`web_console_image_tasks` 表和迁移暂时保留为遗留数据，不再读写，也不在升级时自动删除历史文件。
+- 2026-07-31 起，标准 OpenAI/Grok 非流式生图与编辑复用异步生图桶做尽力归档，但不改写客户端原始响应；流式响应不归档，归档通过有界后台队列执行，不占用标准请求并发槽，队列满或归档失败都不阻断标准请求。
+- 2026-07-31 起，管理后台“生图管理”拆分为“生图队列”和“生图结果”：队列复用 Redis 异步任务记录和现有执行器，只读展示状态、耗时、失败原因和结果链接，支持状态筛选、游标分页和可见页面两秒轮询；结果页继续按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载。接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
 - 管理页除异步上传/删除/生命周期读取权限外，还要求对象存储凭证具有 `ListBucket`/`ListObjectsV2` 权限；页面本身只读，对象保留与删除继续由异步任务补偿和桶生命周期规则负责。
 - 创作台把提交时的 API Key ID、端点和 `imgtask_*` 保存到本地会话，用原 Key 恢复轮询；结果 URL 会写入浏览器 Cache Storage，避免预签名 URL 到期影响已打开会话；若桶 CORS 拒绝脚本读取，则保留当前预签名直链用于 `<img>` 展示且不把签名持久化到本地会话。
 
