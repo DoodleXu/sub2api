@@ -307,7 +307,9 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 
 - 账号上增加 `total_cost_cny`，支持创建、更新、批量更新和增量成本录入。
 - usage/dashboard 聚合返回 `total_account_cost`、`total_cost_cny`、`average_cost_cny_per_usd`、`today_real_cost_cny` 等字段。
-- dashboard 的人民币成本卡使用账号维度小时聚合，并仅对尚未进入连续覆盖区间的明细前缀/尾部读取 `usage_logs`，避免首屏反复全表分组；历史账号成本使用独立水位按天分块、按时间预算连续回填，逐块释放常规聚合锁并输出覆盖进度，不重跑其他 dashboard 聚合维度，也不饿死实时指标。
+- dashboard 成本链路为“账号小时聚合 → 账号日聚合 → 单行成本快照”，请求时只读取成本快照，禁止对 coverage 前缀/尾部同步回扫 `usage_logs`；`/admin/dashboard/cost-summary` 与核心 Token 快照独立，成本聚合故障只返回最近 30 分钟内旧值并标记 `stale`，不会拖垮首屏。
+- 历史账号成本与默认无筛选模型统计共用独立覆盖水位，启动后先处理当前小时和最近日期，再向历史倒序按日分块；每个分块独立获取并释放聚合锁，实时聚合优先。完整历史区间 coverage 不足时成本显示“聚合中”、用户趋势/排行/模型统计返回局部不可用，均不回扫大表；包含当前未结束日期的请求会把未来尾部截到实际小时聚合水位，完整历史日仍使用日表，当前日期使用小时表，避免默认首屏因次日零点尚未覆盖而错误返回空数据。
+- `snapshot-v2` 对趋势、模型、分组、用户趋势和排行实行 3 秒独立预算，允许部分成功并返回 `partial_errors` / `section_durations_ms`；核心统计使用 1 秒预算。Redis 统计缓存默认调整为 2 分钟新鲜、30 分钟兜底。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
 - 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。
 
@@ -318,6 +320,9 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - `backend/internal/repository/account_repo.go`
 - `backend/internal/repository/usage_log_repo.go`
 - `backend/internal/repository/dashboard_aggregation_repo.go`
+- `backend/internal/handler/admin/dashboard_snapshot_v2_handler.go`
+- `backend/internal/service/dashboard_service.go`
+- `frontend/src/api/admin/dashboard.ts`
 - `frontend/src/views/admin/DashboardView.vue`
 - `frontend/src/types/index.ts`
 - `frontend/src/components/account/AccountUsageCell.vue`
@@ -331,6 +336,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - `backend/migrations/150_restore_dashboard_account_cost_columns.sql`
 - `backend/migrations/152_usage_dashboard_user_stats.sql`
 - `backend/migrations/174_dashboard_account_cost_hourly.sql`
+- `backend/migrations/193_dashboard_cost_snapshot.sql`
 
 相关提交线索：
 
@@ -343,7 +349,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 
 同步上游注意：
 
-- 上游若重构 usage log、dashboard aggregation 或 account schema，必须保留 `total_cost_cny`、账号成本小时聚合，以及“聚合覆盖区间 + 原始尾部”的不重不漏逻辑。
+- 上游若重构 usage log、dashboard aggregation 或 account schema，必须保留 `total_cost_cny`、账号小时/日成本聚合、模型小时/日聚合、单行成本快照，以及“coverage 不完整时绝不在 dashboard 请求中回扫原始日志”的边界。
 - 成本口径涉及经营数据，合并后至少跑 dashboard/usage/account 相关测试，并人工检查后台金额单位是否仍为 `¥`。
 
 ### 4. 账号归档
@@ -394,6 +400,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - 用户侧前端 `/console` 支持 OpenAI-compatible `/v1` 对话、Responses 工具调用、生图模式和本地会话存储。
 - 内置“主端点”使用站内相对 `/v1` 路径，不再把对外展示的 `api_base_url` 当作浏览器跨域请求地址；自定义端点仍保留绝对 URL 和目标端 CORS 约束。历史会话中保存的旧主端点会在恢复轮询时自动映射回站内路径。
 - 生图模式只使用上游异步 Images 契约：浏览器以用户选中的 API Key 请求 `/v1/images/generations/async` 或 `/v1/images/edits/async`，再用同一 Key 轮询 `/v1/images/tasks/{task_id}`。
+- 2026-08-02 起，创作台轮询保留 HTTP 状态与上游错误码，只对网络故障、5xx、408/425/429 等可恢复错误继续重试；任务 404、鉴权失败等确定性 4xx 会立即停止、标记本地消息失败并清除失效任务引用。离开 `/console` 时通过 `AbortController` 取消全部在途任务查询和等待定时器，避免旧组件在后台继续轮询、重新进入后叠加重复请求。
 - 图片引用、蒙版和生成结果写入浏览器 Cache Storage；对象存储 CORS 阻止读取图片字节时，生成结果降级为预签名直链展示，但缓存、下载和复用为编辑参考图仍需桶允许前端来源的 `GET`/`HEAD`；删除会话只清理本地会话，不再创建或删除 fork 自建后端任务/归档记录。
 
 关键代码：
@@ -424,6 +431,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 同步上游注意：
 
 - 上游若更新 OpenAI Responses、tool call、异步 Images 路由或任务结果格式，要同步检查 `openaiClient.ts`、`asyncImageTasks.ts` 与创作台轮询逻辑的请求/响应兼容。
+- 上游若改异步任务错误契约或轮询实现，必须保留“确定性 4xx 终止、临时错误有限重试、组件卸载主动取消”三条边界，不能恢复无差别重试或跨路由存活的后台轮询。
 - 上游若调整公共设置加载或路由守卫，要确认 Web Console 开关仍在刷新后生效。
 
 ### 6. 生图管理
@@ -436,7 +444,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - 移除本地/S3 双轨归档运行时、独立归档设置、归档清空与签名资产代理；历史 `image_generation_records`、`image_generation_assets`、`web_console_image_tasks` 表和迁移暂时保留为遗留数据，不再读写，也不在升级时自动删除历史文件。
 - 2026-07-31 起，标准 OpenAI/Grok 非流式生图与编辑复用异步生图桶做尽力归档，但不改写客户端原始响应；流式响应不归档，归档通过有界后台队列执行，不占用标准请求并发槽，队列满或归档失败都不阻断标准请求。
 - 2026-07-31 起，管理后台“生图管理”拆分为“生图队列”和“生图结果”：队列复用 Redis 异步任务记录和现有执行器，只读展示状态、耗时、失败原因和结果链接，支持状态筛选、游标分页和可见页面两秒轮询；结果页继续按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载。接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
-- 2026-08-02 起，生图队列在执行态 Redis TTL 键之外写入 PostgreSQL `image_task_history` 历史表，后台可查看已完成/失败/处理中全部历史记录，并通过 `start_date`/`end_date` 与浏览器时区按日期筛选；历史结果仍只投影安全运营元数据，不暴露 prompt 或内部对象键。
+- 2026-08-02 起，生图队列在执行态 Redis TTL 键之外写入 PostgreSQL `image_task_history` 历史表，后台可查看已完成/失败/处理中全部历史记录，并通过 `start_date`/`end_date` 与浏览器时区按日期筛选；历史结果仍只投影安全运营元数据，不暴露 prompt 或内部对象键。创建和终态转换使用 PostgreSQL 事务包住待提交历史状态，再执行 Redis 写入/CAS；Redis 写入失败时事务回滚，数据库提交结果不明确时使用独立短超时清理或按 Redis 现态对账。若 Redis key 在转换窗口内过期，历史记录落为 `failed/task_expired`，不恢复为永久 `processing`。
 - 生图队列复用管理后台统一的表格、筛选、开关和弹窗组件：页面标题只由全局顶栏展示，任务内容使用不透明表面和可换行的停止原因；自动轮询仅原位更新数据，首次加载后不再反复切换骨架屏。
 - 管理页除异步上传/删除/生命周期读取权限外，还要求对象存储凭证具有 `ListBucket`/`ListObjectsV2` 权限；页面本身只读，对象保留与删除继续由异步任务补偿和桶生命周期规则负责。
 - 创作台把提交时的 API Key ID、端点和 `imgtask_*` 保存到本地会话，用原 Key 恢复轮询；结果 URL 会写入浏览器 Cache Storage，避免预签名 URL 到期影响已打开会话；若桶 CORS 拒绝脚本读取，则保留当前预签名直链用于 `<img>` 展示且不把签名持久化到本地会话。
