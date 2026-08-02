@@ -1057,7 +1057,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupRequiresReaggregationBefo
 	s.Require().InEpsilon(6.0, stats.TodayRealCostCNY, 0.0001)
 }
 
-func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
+func (s *UsageLogRepoSuite) TestDashboardStatsWithRangeWithoutCostSnapshotLeavesRatesUnavailable() {
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)
 	rangeStart := todayStart.Add(-24 * time.Hour)
@@ -1132,7 +1132,8 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 	// account_cost = COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1) = total_cost
 	s.Require().Equal(1.5, stats.TotalAccountCost)
 	s.Require().Equal(102.0, stats.TotalCostCNY)
-	s.Require().InEpsilon(102.0/2.3, stats.AverageCostCNYPerUSD, 0.0001, "dashboard cost per USD must match the account list cumulative weighted average")
+	s.Require().Zero(stats.AverageCostCNYPerUSD, "cost rates must remain unavailable until the materialized snapshot is published")
+	s.Require().Zero(stats.TodayRealCostCNY, "dashboard requests must not rebuild CNY costs from usage_logs")
 	s.Require().InEpsilon(150.0, stats.AverageDurationMs, 0.0001)
 }
 
@@ -1907,7 +1908,7 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats_EmptyRange() {
 
 // --- GetUserUsageTrend ---
 
-func (s *UsageLogRepoSuite) TestGetUserUsageTrend() {
+func (s *UsageLogRepoSuite) TestGetUserUsageTrendReturnsEmptyWithoutAggregateCoverage() {
 	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend1@test.com"})
 	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend2@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-usertrend1", Name: "k1"})
@@ -1924,7 +1925,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrend() {
 
 	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
 	s.Require().NoError(err, "GetUserUsageTrend")
-	s.Require().GreaterOrEqual(len(trend), 2)
+	s.Require().Empty(trend, "dashboard user trend must stay unavailable until aggregate coverage exists")
 }
 
 func (s *UsageLogRepoSuite) TestGetUserUsageTrendUsesDashboardUserAggregates() {
@@ -1959,7 +1960,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendUsesDashboardUserAggregates() {
 	s.Require().Equal(int64(300), trend[2].Tokens)
 }
 
-func (s *UsageLogRepoSuite) TestGetUserUsageTrendFallsBackWhenDashboardUserAggregatesNotCovered() {
+func (s *UsageLogRepoSuite) TestGetUserUsageTrendReturnsEmptyWhenDashboardUserAggregatesNotCovered() {
 	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-partial1@test.com"})
 	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "usertrend-partial2@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-usertrend-partial1", Name: "k1"})
@@ -1979,10 +1980,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendFallsBackWhenDashboardUserAggre
 
 	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
 	s.Require().NoError(err)
-	s.Require().Len(trend, 3, "partial aggregate rows must not hide raw rows outside the covered range")
-	s.Require().Equal(user1.ID, trend[0].UserID)
-	s.Require().Equal(user2.ID, trend[1].UserID)
-	s.Require().Equal(user1.ID, trend[2].UserID)
+	s.Require().Empty(trend, "partial historical coverage must be reported as unavailable without scanning usage_logs")
 }
 
 func (s *UsageLogRepoSuite) TestGetUserSpendingRankingUsesDashboardUserAggregates() {
@@ -2020,7 +2018,7 @@ func (s *UsageLogRepoSuite) TestGetUserSpendingRankingUsesDashboardUserAggregate
 	s.Require().Equal(int64(750), ranking.TotalTokens)
 }
 
-func (s *UsageLogRepoSuite) TestGetUserSpendingRankingFallsBackWhenDashboardUserAggregatesNotCovered() {
+func (s *UsageLogRepoSuite) TestGetUserSpendingRankingReturnsEmptyWhenDashboardUserAggregatesNotCovered() {
 	user1 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-partial1@test.com"})
 	user2 := mustCreateUser(s.T(), s.client, &service.User{Email: "ranking-partial2@test.com"})
 	apiKey1 := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user1.ID, Key: "sk-ranking-partial1", Name: "k1"})
@@ -2040,10 +2038,10 @@ func (s *UsageLogRepoSuite) TestGetUserSpendingRankingFallsBackWhenDashboardUser
 
 	ranking, err := s.repo.GetUserSpendingRanking(s.ctx, startTime, endTime, 10)
 	s.Require().NoError(err)
-	s.Require().Len(ranking.Ranking, 2, "partial aggregate rows must not hide raw rows outside the covered range")
-	s.Require().Equal(2.5, ranking.TotalActualCost)
-	s.Require().Equal(int64(3), ranking.TotalRequests)
-	s.Require().Equal(int64(750), ranking.TotalTokens)
+	s.Require().Empty(ranking.Ranking, "partial historical coverage must be reported as unavailable without scanning usage_logs")
+	s.Require().Zero(ranking.TotalActualCost)
+	s.Require().Zero(ranking.TotalRequests)
+	s.Require().Zero(ranking.TotalTokens)
 }
 
 // --- GetAPIKeyUsageTrend ---
