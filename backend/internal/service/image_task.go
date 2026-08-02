@@ -43,8 +43,9 @@ const (
 	imageTaskCompletionNotCommitted
 )
 
-// ImageTaskRecord is the private Redis representation of an asynchronous image
-// request. Ownership fields are intentionally omitted from the public view.
+// ImageTaskRecord is the private execution and history representation of an
+// asynchronous image request. Ownership fields are intentionally omitted from
+// the public view.
 type ImageTaskRecord struct {
 	ID                string          `json:"id"`
 	UserID            int64           `json:"user_id"`
@@ -91,9 +92,11 @@ type ImageTaskMetadata struct {
 }
 
 type ImageTaskAdminQuery struct {
-	Status string
-	Cursor string
-	Limit  int
+	Status  string
+	Cursor  string
+	Limit   int
+	StartAt int64
+	EndAt   int64
 }
 
 type ImageTaskAdminStats struct {
@@ -418,6 +421,9 @@ func (s *ImageTaskService) ListAdmin(ctx context.Context, query ImageTaskAdminQu
 	query.Status = strings.TrimSpace(query.Status)
 	if query.Status != "" && query.Status != "all" && query.Status != ImageTaskStatusProcessing && query.Status != ImageTaskStatusCompleted && query.Status != ImageTaskStatusFailed {
 		return nil, infraerrors.BadRequest("INVALID_IMAGE_TASK_STATUS", "invalid image task status")
+	}
+	if query.StartAt < 0 || query.EndAt < 0 || (query.StartAt > 0 && query.EndAt > 0 && query.StartAt >= query.EndAt) {
+		return nil, infraerrors.BadRequest("INVALID_IMAGE_TASK_DATE_RANGE", "invalid image task date range")
 	}
 	if _, _, err := DecodeImageTaskAdminCursor(query.Cursor); err != nil {
 		return nil, err

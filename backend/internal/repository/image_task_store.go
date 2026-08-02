@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -41,6 +42,7 @@ return 1
 
 type imageTaskStore struct {
 	rdb            *redis.Client
+	db             *sql.DB
 	scanMu         sync.Mutex
 	scanCursor     uint64
 	indexMu        sync.Mutex
@@ -48,13 +50,16 @@ type imageTaskStore struct {
 	indexCleanedAt time.Time
 }
 
-func NewImageTaskStore(rdb *redis.Client) service.ImageTaskStore {
-	return &imageTaskStore{rdb: rdb}
+func NewImageTaskStore(rdb *redis.Client, db *sql.DB) service.ImageTaskStore {
+	return &imageTaskStore{rdb: rdb, db: db}
 }
 
 func (s *imageTaskStore) Save(ctx context.Context, task *service.ImageTaskRecord, ttl time.Duration) error {
 	data, err := json.Marshal(task)
 	if err != nil {
+		return err
+	}
+	if err := s.upsertHistory(ctx, task); err != nil {
 		return err
 	}
 	pipe := s.rdb.TxPipeline()
@@ -65,8 +70,11 @@ func (s *imageTaskStore) Save(ctx context.Context, task *service.ImageTaskRecord
 	if isImageTaskStatus(task.Status) {
 		pipe.ZAdd(ctx, imageTaskStatusIndex(task.Status), redis.Z{Score: float64(task.CreatedAt), Member: task.ID})
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err = pipe.Exec(ctx); err != nil {
+		_ = s.deleteHistory(ctx, task.ID)
+		return err
+	}
+	return nil
 }
 
 func (s *imageTaskStore) Get(ctx context.Context, id string) (*service.ImageTaskRecord, error) {
@@ -130,8 +138,18 @@ func (s *imageTaskStore) ListPending(ctx context.Context, limit int) ([]*service
 }
 
 func (s *imageTaskStore) Transition(ctx context.Context, id, expectedStatus string, task *service.ImageTaskRecord, ttl time.Duration) (bool, error) {
+	previous, err := s.Get(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if previous.Status != expectedStatus {
+		return false, nil
+	}
 	data, err := json.Marshal(task)
 	if err != nil {
+		return false, err
+	}
+	if err := s.upsertHistory(ctx, task); err != nil {
 		return false, err
 	}
 	ttlMillis := ttl.Milliseconds()
@@ -144,12 +162,18 @@ func (s *imageTaskStore) Transition(ctx context.Context, id, expectedStatus stri
 		imageTaskStatusIndex(task.Status),
 	}, expectedStatus, data, ttlMillis, task.CreatedAt, task.ID).Int64()
 	if err != nil {
+		s.reconcileHistoryFromRuntime(ctx, id)
 		return false, err
 	}
 	if result < 0 {
+		_ = s.upsertHistory(ctx, previous)
 		return false, service.ErrImageTaskNotFound
 	}
-	return result == 1, nil
+	if result != 1 {
+		s.reconcileHistoryFromRuntime(ctx, id)
+		return false, nil
+	}
+	return true, nil
 }
 
 func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {
@@ -158,6 +182,9 @@ func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskA
 	}
 	if err := s.cleanupAdminIndexes(ctx); err != nil {
 		return nil, err
+	}
+	if s.db != nil {
+		return s.listAdminHistory(ctx, query)
 	}
 	statuses := imageTaskStatuses
 	if query.Status != "" && query.Status != "all" {
@@ -171,7 +198,7 @@ func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskA
 	seen := make(map[string]struct{})
 	tasks := make([]*service.ImageTaskRecord, 0, query.Limit+1)
 	for _, status := range statuses {
-		statusTasks, err := s.listAdminStatusTasks(ctx, status, query.Limit, hasCursor, cursorCreatedAt, cursorID)
+		statusTasks, err := s.listAdminStatusTasks(ctx, status, query.Limit, hasCursor, cursorCreatedAt, cursorID, query.StartAt, query.EndAt)
 		if err != nil {
 			return nil, err
 		}
@@ -199,7 +226,7 @@ func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskA
 		page.NextCursor = service.EncodeImageTaskAdminCursor(last.CreatedAt, last.ID)
 	}
 	for _, status := range imageTaskStatuses {
-		count, countErr := s.rdb.ZCard(ctx, imageTaskStatusIndex(status)).Result()
+		count, countErr := s.countAdminStatus(ctx, status, query.StartAt, query.EndAt)
 		if countErr != nil {
 			return nil, countErr
 		}
@@ -215,17 +242,27 @@ func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskA
 	return page, nil
 }
 
-func (s *imageTaskStore) listAdminStatusTasks(ctx context.Context, status string, limit int, hasCursor bool, cursorCreatedAt int64, cursorID string) ([]*service.ImageTaskRecord, error) {
+func (s *imageTaskStore) listAdminStatusTasks(ctx context.Context, status string, limit int, hasCursor bool, cursorCreatedAt int64, cursorID string, startAt, endAt int64) ([]*service.ImageTaskRecord, error) {
 	const batchSize int64 = 256
 	maxScore := "+inf"
+	minScore := "-inf"
+	if endAt > 0 {
+		maxScore = strconv.FormatInt(endAt-1, 10)
+	}
+	if startAt > 0 {
+		minScore = strconv.FormatInt(startAt, 10)
+	}
 	if hasCursor {
-		maxScore = strconv.FormatInt(cursorCreatedAt, 10)
+		cursorMax := strconv.FormatInt(cursorCreatedAt, 10)
+		if endAt <= 0 || cursorCreatedAt < endAt {
+			maxScore = cursorMax
+		}
 	}
 	tasks := make([]*service.ImageTaskRecord, 0, limit+1)
 	var offset int64
 	for {
 		entries, err := s.rdb.ZRevRangeByScoreWithScores(ctx, imageTaskStatusIndex(status), &redis.ZRangeBy{
-			Max: maxScore, Min: "-inf", Offset: offset, Count: batchSize,
+			Max: maxScore, Min: minScore, Offset: offset, Count: batchSize,
 		}).Result()
 		if err != nil {
 			return nil, err
@@ -256,6 +293,168 @@ func (s *imageTaskStore) listAdminStatusTasks(ctx context.Context, status string
 		}
 	}
 	return tasks, nil
+}
+
+func (s *imageTaskStore) countAdminStatus(ctx context.Context, status string, startAt, endAt int64) (int64, error) {
+	if startAt <= 0 && endAt <= 0 {
+		return s.rdb.ZCard(ctx, imageTaskStatusIndex(status)).Result()
+	}
+	min, max := "-inf", "+inf"
+	if startAt > 0 {
+		min = strconv.FormatInt(startAt, 10)
+	}
+	if endAt > 0 {
+		max = strconv.FormatInt(endAt-1, 10)
+	}
+	return s.rdb.ZCount(ctx, imageTaskStatusIndex(status), min, max).Result()
+}
+
+func (s *imageTaskStore) upsertHistory(ctx context.Context, task *service.ImageTaskRecord) error {
+	if s.db == nil || task == nil {
+		return nil
+	}
+	var resultJSON, errorJSON any
+	if len(task.Result) > 0 {
+		resultJSON = string(task.Result)
+	}
+	if len(task.Error) > 0 {
+		errorJSON = string(task.Error)
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO image_task_history (
+    task_id, user_id, api_key_id, platform, operation, model, image_count,
+    status, http_status, result_json, error_json, created_at, completed_at, expires_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    to_timestamp($12), CASE WHEN $13::bigint > 0 THEN to_timestamp($13) ELSE NULL END, to_timestamp($14)
+)
+ON CONFLICT (task_id) DO UPDATE SET
+    status = EXCLUDED.status,
+    http_status = EXCLUDED.http_status,
+    result_json = EXCLUDED.result_json,
+    error_json = EXCLUDED.error_json,
+    completed_at = EXCLUDED.completed_at,
+    expires_at = EXCLUDED.expires_at`,
+		task.ID, task.UserID, task.APIKeyID, task.Platform, task.Operation, task.Model, task.ImageCount,
+		task.Status, task.HTTPStatus, resultJSON, errorJSON, task.CreatedAt, unixTimeValue(task.CompletedAt), task.ExpiresAt)
+	return err
+}
+
+func (s *imageTaskStore) deleteHistory(ctx context.Context, id string) error {
+	if s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM image_task_history WHERE task_id = $1", strings.TrimSpace(id))
+	return err
+}
+
+func (s *imageTaskStore) reconcileHistoryFromRuntime(ctx context.Context, id string) {
+	if s.db == nil {
+		return
+	}
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return
+	}
+	_ = s.upsertHistory(ctx, current)
+}
+
+func (s *imageTaskStore) listAdminHistory(ctx context.Context, query service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {
+	cursorCreatedAt, cursorID, err := service.DecodeImageTaskAdminCursor(query.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	where := []string{"1=1"}
+	args := make([]any, 0, 8)
+	addArg := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if query.Status != "" && query.Status != "all" {
+		where = append(where, "status = "+addArg(query.Status))
+	}
+	if query.StartAt > 0 {
+		where = append(where, "created_at >= to_timestamp("+addArg(query.StartAt)+")")
+	}
+	if query.EndAt > 0 {
+		where = append(where, "created_at < to_timestamp("+addArg(query.EndAt)+")")
+	}
+	if cursorID != "" {
+		createdArg := addArg(cursorCreatedAt)
+		idArg := addArg(cursorID)
+		where = append(where, "(created_at < to_timestamp("+createdArg+") OR (created_at = to_timestamp("+createdArg+") AND task_id < "+idArg+"))")
+	}
+	limitArg := addArg(query.Limit + 1)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,
+       status, http_status, result_json, error_json,
+       EXTRACT(EPOCH FROM created_at)::bigint,
+       CASE WHEN completed_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM completed_at)::bigint END,
+       EXTRACT(EPOCH FROM expires_at)::bigint
+FROM image_task_history
+WHERE `+strings.Join(where, " AND ")+`
+ORDER BY created_at DESC, task_id DESC
+LIMIT `+limitArg, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks := make([]*service.ImageTaskRecord, 0, query.Limit+1)
+	for rows.Next() {
+		var task service.ImageTaskRecord
+		var completedAt sql.NullInt64
+		var resultJSON, errorJSON []byte
+		if err := rows.Scan(&task.ID, &task.UserID, &task.APIKeyID, &task.Platform, &task.Operation, &task.Model, &task.ImageCount,
+			&task.Status, &task.HTTPStatus, &resultJSON, &errorJSON, &task.CreatedAt, &completedAt, &task.ExpiresAt); err != nil {
+			return nil, err
+		}
+		task.Result = resultJSON
+		task.Error = errorJSON
+		if completedAt.Valid {
+			value := completedAt.Int64
+			task.CompletedAt = &value
+		}
+		tasks = append(tasks, &task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	page := &service.ImageTaskAdminPage{HasMore: len(tasks) > query.Limit}
+	if page.HasMore {
+		tasks = tasks[:query.Limit]
+	}
+	page.Tasks = tasks
+	if page.HasMore && len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		page.NextCursor = service.EncodeImageTaskAdminCursor(last.CreatedAt, last.ID)
+	}
+	statsArgs := make([]any, 0, 2)
+	statsWhere := []string{"1=1"}
+	if query.StartAt > 0 {
+		statsArgs = append(statsArgs, query.StartAt)
+		statsWhere = append(statsWhere, "created_at >= to_timestamp($"+strconv.Itoa(len(statsArgs))+")")
+	}
+	if query.EndAt > 0 {
+		statsArgs = append(statsArgs, query.EndAt)
+		statsWhere = append(statsWhere, "created_at < to_timestamp($"+strconv.Itoa(len(statsArgs))+")")
+	}
+	err = s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FILTER (WHERE status = 'processing'),
+       COUNT(*) FILTER (WHERE status = 'completed'),
+       COUNT(*) FILTER (WHERE status = 'failed')
+FROM image_task_history WHERE `+strings.Join(statsWhere, " AND "), statsArgs...).Scan(
+		&page.Stats.Processing, &page.Stats.Completed, &page.Stats.Failed)
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
+func unixTimeValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (s *imageTaskStore) cleanupAdminIndexes(ctx context.Context) error {
@@ -333,6 +532,9 @@ func (s *imageTaskStore) ensureAdminIndexes(ctx context.Context) error {
 				continue
 			}
 			if err := s.rdb.ZAdd(ctx, imageTaskStatusIndex(task.Status), redis.Z{Score: float64(task.CreatedAt), Member: task.ID}).Err(); err != nil {
+				return err
+			}
+			if err := s.upsertHistory(ctx, &task); err != nil {
 				return err
 			}
 		}

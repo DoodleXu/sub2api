@@ -133,6 +133,13 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	require.True(t, webConsoleImageTasksRegclass.Valid, "expected web_console_image_tasks table to exist")
 	requireColumn(t, tx, "web_console_image_tasks", "user_deleted_at", "timestamp with time zone", 0, true)
 
+	var imageTaskHistoryRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.image_task_history')").Scan(&imageTaskHistoryRegclass))
+	require.True(t, imageTaskHistoryRegclass.Valid, "expected image_task_history table to exist")
+	requireColumn(t, tx, "image_task_history", "task_id", "character varying", 96, false)
+	requireColumn(t, tx, "image_task_history", "result_json", "jsonb", 0, true)
+	requireIndex(t, tx, "image_task_history", "idx_image_task_history_status_created")
+
 	// security_secrets table should exist
 	var securitySecretsRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.security_secrets')").Scan(&securitySecretsRegclass))

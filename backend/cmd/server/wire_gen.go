@@ -268,7 +268,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentHandler := admin.NewPaymentHandler(paymentService, paymentConfigService)
 	affiliateHandler := admin.NewAffiliateHandler(affiliateService, adminService)
 	imageStorageBrowserFactory := repository.ProvideImageStorageBrowserFactory()
-	imageTaskStore := repository.NewImageTaskStore(redisClient)
+	imageTaskStore := repository.NewImageTaskStore(redisClient, db)
 	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService)
 	imageGenerationHandler := admin.NewImageGenerationHandler(imageStorageSettingService, imageStorageBrowserFactory, imageTaskService)
 	complianceHandler := admin.NewComplianceHandler(settingService)

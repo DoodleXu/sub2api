@@ -24,7 +24,8 @@ func (s *imageStorageBrowserStub) List(_ context.Context, prefix, _ string, _ in
 }
 
 type imageTaskAdminStoreStub struct {
-	page *service.ImageTaskAdminPage
+	page  *service.ImageTaskAdminPage
+	query service.ImageTaskAdminQuery
 }
 
 func (s *imageTaskAdminStoreStub) Save(context.Context, *service.ImageTaskRecord, time.Duration) error {
@@ -43,8 +44,27 @@ func (s *imageTaskAdminStoreStub) ListPending(context.Context, int) ([]*service.
 	return nil, nil
 }
 
-func (s *imageTaskAdminStoreStub) ListAdmin(context.Context, service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {
+func (s *imageTaskAdminStoreStub) ListAdmin(_ context.Context, query service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {
+	s.query = query
 	return s.page, nil
+}
+
+func TestImageGenerationListTasksParsesDateRangeInUserTimezone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &imageTaskAdminStoreStub{page: &service.ImageTaskAdminPage{}}
+	tasks := service.NewImageTaskService(store)
+	t.Cleanup(tasks.Close)
+	h := NewImageGenerationHandler(nil, nil, tasks)
+	router := gin.New()
+	router.GET("/admin/image-generations/tasks", h.ListTasks)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/image-generations/tasks?start_date=2026-08-01&end_date=2026-08-02&timezone=Asia%2FShanghai", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	start, err := time.ParseInLocation("2006-01-02", "2026-08-01", time.FixedZone("CST", 8*60*60))
+	require.NoError(t, err)
+	require.Equal(t, start.Unix(), store.query.StartAt)
+	require.Equal(t, start.AddDate(0, 0, 2).Unix(), store.query.EndAt)
 }
 
 func TestImageGenerationListUsesConfiguredAsyncPrefix(t *testing.T) {

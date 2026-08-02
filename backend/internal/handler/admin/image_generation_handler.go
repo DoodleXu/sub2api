@@ -2,11 +2,13 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -84,10 +86,17 @@ func (h *ImageGenerationHandler) ListTasks(c *gin.Context) {
 		response.BadRequest(c, "async image task storage is unavailable")
 		return
 	}
+	startAt, endAt, err := imageTaskDateRange(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	page, err := h.tasks.ListAdmin(c.Request.Context(), service.ImageTaskAdminQuery{
-		Status: c.Query("status"),
-		Cursor: c.Query("cursor"),
-		Limit:  intQuery(c, "limit", 50),
+		Status:  c.Query("status"),
+		Cursor:  c.Query("cursor"),
+		Limit:   intQuery(c, "limit", 50),
+		StartAt: startAt,
+		EndAt:   endAt,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -105,6 +114,31 @@ func (h *ImageGenerationHandler) ListTasks(c *gin.Context) {
 		"stats":       page.Stats,
 		"server_time": now.UnixMilli(),
 	})
+}
+
+func imageTaskDateRange(c *gin.Context) (int64, int64, error) {
+	startRaw := strings.TrimSpace(c.Query("start_date"))
+	endRaw := strings.TrimSpace(c.Query("end_date"))
+	userTimezone := strings.TrimSpace(c.Query("timezone"))
+	var startAt, endAt int64
+	if startRaw != "" {
+		start, err := appTimezone.ParseInUserLocation("2006-01-02", startRaw, userTimezone)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid start_date format, use YYYY-MM-DD")
+		}
+		startAt = start.Unix()
+	}
+	if endRaw != "" {
+		end, err := appTimezone.ParseInUserLocation("2006-01-02", endRaw, userTimezone)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid end_date format, use YYYY-MM-DD")
+		}
+		endAt = end.AddDate(0, 0, 1).Unix()
+	}
+	if startAt > 0 && endAt > 0 && startAt >= endAt {
+		return 0, 0, fmt.Errorf("start_date must be before or equal to end_date")
+	}
+	return startAt, endAt, nil
 }
 
 func imageGenerationTaskToView(task *service.ImageTaskRecord, now time.Time) imageGenerationTaskView {

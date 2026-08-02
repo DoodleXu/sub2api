@@ -1566,6 +1566,8 @@ export default {
       refreshingEveryTwoSeconds: '每 2 秒更新',
       lastUpdated: '最近更新：{time}',
       statusFilter: '状态',
+      startDate: '开始日期',
+      endDate: '结束日期',
       allStatuses: '全部状态',
       processing: '处理中',
       completed: '已完成',

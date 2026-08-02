@@ -59,6 +59,17 @@
                 />
               </div>
 
+              <div class="grid w-full gap-3 sm:grid-cols-2 lg:w-auto">
+                <div class="w-full sm:w-44">
+                  <label for="image-task-start-date" class="input-label">{{ t('admin.imageGenerations.startDate') }}</label>
+                  <input id="image-task-start-date" v-model="startDate" type="date" class="input w-full" @change="applyDateFilter" />
+                </div>
+                <div class="w-full sm:w-44">
+                  <label for="image-task-end-date" class="input-label">{{ t('admin.imageGenerations.endDate') }}</label>
+                  <input id="image-task-end-date" v-model="endDate" type="date" class="input w-full" @change="applyDateFilter" />
+                </div>
+              </div>
+
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                   <span v-if="autoRefresh" class="inline-flex items-center gap-1.5">
@@ -267,6 +278,8 @@ const { t } = useI18n()
 const items = ref<AsyncImageTaskAdmin[]>([])
 const selectedTask = ref<AsyncImageTaskAdmin | null>(null)
 const status = ref('all')
+const startDate = ref('')
+const endDate = ref('')
 const loading = ref(false)
 const initialLoading = ref(true)
 const manualRefreshing = ref(false)
@@ -304,7 +317,15 @@ async function load(options: { background?: boolean } = {}): Promise<void> {
   manualRefreshing.value = hasLoaded.value && !options.background
   errorMessage.value = ''
   try {
-    const page = await imageGenerationsAPI.listTasks({ status: status.value, cursor: cursor.value || undefined, limit: 50 })
+    const params: Parameters<typeof imageGenerationsAPI.listTasks>[0] = {
+      status: status.value,
+      cursor: cursor.value || undefined,
+      limit: 50,
+    }
+    if (startDate.value) params.start_date = startDate.value
+    if (endDate.value) params.end_date = endDate.value
+    if (startDate.value || endDate.value) params.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    const page = await imageGenerationsAPI.listTasks(params)
     items.value = page.items || []
     nextCursor.value = page.next_cursor || ''
     hasMore.value = Boolean(page.has_more && page.next_cursor)
@@ -397,6 +418,14 @@ function setStatusFilter(value: string | number | boolean | null): void {
   items.value = []
   hasLoaded.value = false
   reload()
+}
+
+function applyDateFilter(): void {
+  cursor.value = ''
+  nextCursor.value = ''
+  cursorHistory.value = []
+  hasLoaded.value = false
+  void load()
 }
 
 watch(autoRefresh, setRefreshTimer)

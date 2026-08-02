@@ -58,7 +58,7 @@ export async function list(params: { prefix?: string; cursor?: string; limit?: n
   return data
 }
 
-export async function listTasks(params: { status?: string; cursor?: string; limit?: number } = {}) {
+export async function listTasks(params: { status?: string; cursor?: string; limit?: number; start_date?: string; end_date?: string; timezone?: string } = {}) {
   const { data } = await apiClient.get<AsyncImageTaskPage>('/admin/image-generations/tasks', { params })
   return data
 }

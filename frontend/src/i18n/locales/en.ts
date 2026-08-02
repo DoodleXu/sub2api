@@ -1562,6 +1562,8 @@ export default {
       refreshingEveryTwoSeconds: 'Updates every 2 seconds',
       lastUpdated: 'Last updated: {time}',
       statusFilter: 'Status',
+      startDate: 'Start date',
+      endDate: 'End date',
       allStatuses: 'All statuses',
       processing: 'Processing',
       completed: 'Completed',

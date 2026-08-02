@@ -82,4 +82,22 @@ describe('ImageGenerationQueueView', () => {
 
     expect(listTasks.mock.calls.length).toBe(initialCalls)
   })
+
+  it('sends the selected date range and resets pagination', async () => {
+    listTasks
+      .mockResolvedValueOnce({ items: [], has_more: true, next_cursor: 'page-2', stats: { processing: 0, completed: 0, failed: 0 } })
+      .mockResolvedValue({ items: [], has_more: false, stats: { processing: 0, completed: 0, failed: 0 } })
+    const wrapper = mount(ImageGenerationQueueView)
+    await flushPromises()
+    await wrapper.get('[data-test="next-page"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('#image-task-start-date').setValue('2026-08-01')
+    await wrapper.get('#image-task-end-date').setValue('2026-08-02')
+    await wrapper.get('#image-task-end-date').trigger('change')
+    await flushPromises()
+
+    expect(listTasks).toHaveBeenLastCalledWith({ status: 'all', cursor: undefined, limit: 50, start_date: '2026-08-01', end_date: '2026-08-02', timezone: expect.any(String) })
+    expect(wrapper.get('[data-test="previous-page"]').attributes('disabled')).toBeDefined()
+  })
 })

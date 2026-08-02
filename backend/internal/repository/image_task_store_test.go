@@ -6,17 +6,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
+func TestImageTaskStoreListsPersistentHistoryWithDateRange(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewImageTaskStore(rdb, db)
+
+	columns := []string{"task_id", "user_id", "api_key_id", "platform", "operation", "model", "image_count", "status", "http_status", "result_json", "error_json", "created_at", "completed_at", "expires_at"}
+	mock.ExpectQuery(`SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,`).
+		WithArgs(service.ImageTaskStatusCompleted, int64(100), int64(200), 11).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("imgtask_history", int64(7), int64(9), "openai", "generation", "gpt-image-1", 1, "completed", 200, []byte(`{"data":[]}`), nil, int64(150), int64(160), int64(300)))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FILTER`).
+		WithArgs(int64(100), int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"processing", "completed", "failed"}).AddRow(0, 1, 0))
+
+	page, err := store.(service.ImageTaskAdminStore).ListAdmin(context.Background(), service.ImageTaskAdminQuery{
+		Status: service.ImageTaskStatusCompleted, StartAt: 100, EndAt: 200, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Tasks, 1)
+	require.Equal(t, "imgtask_history", page.Tasks[0].ID)
+	require.Equal(t, 1, page.Stats.Completed)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestImageTaskStoreRoundTripAndTTL(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	task := &service.ImageTaskRecord{
 		ID:        "imgtask_123",
 		UserID:    7,
@@ -49,7 +77,7 @@ func TestImageTaskStoreMissing(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 
 	_, err := store.Get(context.Background(), "imgtask_missing")
 	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
@@ -59,7 +87,7 @@ func TestImageTaskStoreListsAbandonedProcessingWithoutObjectManifest(t *testing.
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	ctx := context.Background()
 	tasks := []*service.ImageTaskRecord{
 		{ID: "imgtask_processing", Status: service.ImageTaskStatusProcessing},
@@ -84,7 +112,7 @@ func TestImageTaskStoreListsAdminTasksByStatusAndCursor(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	ctx := context.Background()
 	for _, task := range []*service.ImageTaskRecord{
 		{ID: "imgtask_old", Status: service.ImageTaskStatusCompleted, CreatedAt: 10},
@@ -119,7 +147,7 @@ func TestImageTaskStoreCleansExpiredAdminIndexMembers(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	ctx := context.Background()
 	valid := &service.ImageTaskRecord{ID: "imgtask_valid", Status: service.ImageTaskStatusCompleted, CreatedAt: 20}
 	expired := &service.ImageTaskRecord{ID: "imgtask_expired", Status: service.ImageTaskStatusFailed, CreatedAt: 10}
@@ -142,7 +170,7 @@ func TestImageTaskStoreAdminCursorHandlesLegacyZeroCreatedAt(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	ctx := context.Background()
 	for _, task := range []*service.ImageTaskRecord{
 		{ID: "imgtask_zero_b", Status: service.ImageTaskStatusCompleted, CreatedAt: 0},
@@ -168,7 +196,7 @@ func TestImageTaskStoreAdminCursorDoesNotDropLargeSameSecondPage(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	store := NewImageTaskStore(rdb)
+	store := NewImageTaskStore(rdb, nil)
 	ctx := context.Background()
 	const total = 2050
 	for index := 0; index < total; index++ {
