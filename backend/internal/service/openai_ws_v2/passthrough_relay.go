@@ -196,7 +196,13 @@ func Relay(
 		return writeUpstream(msgType, payload)
 	}
 	writeClient := func(msgType coderws.MessageType, payload []byte) error {
-		writeCtx, cancel := context.WithTimeout(relayCtx, writeTimeout)
+		// 下行写超时故意不挂在 relayCtx 上：coder/websocket 在已武装的 write
+		// ctx 被取消时会直接硬关连接（context.AfterFunc 的 stop 不等待执行中
+		// 的回调），外部取消若落在一次已成功写入的解除武装窗口内，会连同尚未
+		// 发出的 close 帧一起冲掉，客户端只能看到裸 EOF 而收不到关闭码。与读
+		// 侧 conn.Read(context.Background()) 同理，取消路径的连接回收由各退出
+		// 分支的显式 Close/CloseNow 兜底。
+		writeCtx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 		defer cancel()
 		return clientConn.WriteFrame(writeCtx, msgType, payload)
 	}
@@ -567,8 +573,8 @@ func runUpstreamToClient(
 		if observedEvent.abortedSequence > 0 && onResponseCreateAborted != nil {
 			onResponseCreateAborted(observedEvent.abortedSequence)
 		}
-		emitTurnComplete(onTurnComplete, state, observedEvent)
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
+			emitTurnComplete(onTurnComplete, state, observedEvent)
 			if droppedFrames != nil {
 				droppedFrames.Add(1)
 			}
@@ -611,6 +617,9 @@ func runUpstreamToClient(
 		if afterClientWrite != nil {
 			afterClientWrite(msgType, payload, nil)
 		}
+		// 终态必须先成功写给客户端，再执行可能包含同步计费/持久化的 turn
+		// 回调；否则回调阻塞会让客户端在上游已完成时仍读超时。
+		emitTurnComplete(onTurnComplete, state, observedEvent)
 		wroteDownstream = true
 		if afterWriteClient != nil {
 			afterWriteClient()

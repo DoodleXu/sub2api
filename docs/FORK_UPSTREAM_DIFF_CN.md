@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-07-31
+最后更新：2026-08-02
 
 ## 当前对比基线
 
@@ -10,23 +10,42 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `bf709af7d fix: 优化生图队列页面体验` | 本次合并 v0.1.169 前的 fork 基线；工作树干净，本地比 `origin/main` 多 1 个已提交的生图队列 UI 优化 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.169` -> `26d894ef4` | v0.1.169 已合入本 fork；fork 发布版本保持 `0.1.235` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.169` -> `26d894ef4` | 2026-07-31 发布的官方最新非草稿 release |
-| 上游 main HEAD | `7ceabb3fd` | 本次同步时比 v0.1.169 release 多 1 个 VERSION 同步提交；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 12 个冲突路径（含 4 个 modify/delete）；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、邮件退订和完整 OpenAI 调度/计费语义，并迁入 URL 路径安全、代理断流 fail-open、标准 SMTP MIME、定价资源与订阅展示修复 |
+| Fork 同步前 HEAD | `f2c42a818 feat: 增加生图历史记录与日期筛选` | 本次合并 v0.1.170 前的 fork 基线；同步在隔离 worktree 中执行，未覆盖主工作树 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.170` -> `c043c2477` | v0.1.170 已合入本 fork；fork 发布版本保持 `0.1.237` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.170` -> `c043c2477` | 2026-08-02 发布的官方最新非草稿 release |
+| 上游 main HEAD | `7e2e9ba05` | 本次同步时比 v0.1.170 release 多 1 个 VERSION 同步提交；未越过 release 标签合并 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 54 个冲突路径（含 17 个 modify/delete）；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入分组利润控制、上游倍率同步、流式部分用量、紧凑首页和内容审核代理等能力 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.169:refs/tags/upstream/v0.1.169 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.169^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.169^{}..HEAD
+git fetch upstream refs/tags/v0.1.170:refs/tags/upstream/v0.1.170 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.170^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.169` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把 `v0.1.170` 替换为新的官方 release tag，再更新本节。
+
+本次 `v0.1.170` 合并说明：
+
+- 分组新增按 token 请求生效的利润控制、最低利润率和安全缓冲；HTTP、WebSocket、旧调度器、负载感知、混合路由、粘性会话与 failover 统一携带同一 pricing 时刻和利润门，抢槽后会用最新账号快照终检。fork 的人民币定价、每美元成本、超频层、Responses Lite、生图意图隔离和完整调度语义继续保留，API Key 鉴权快照升至 v19。
+- API Key 上游计费探测扩展到多个平台，并可选择把上游声明倍率同步回账号；探测开关、同步开关和手工倍率采用原子更新与所有权冲突校验，普通编辑、批量更新、复制、CRS 同步和身份变更不会泄漏或覆盖服务受管状态。
+- Anthropic 流式响应在缺失终态或读取中断时保留已观察到的 input/output/cache token，并继续交给 usage 记录链路，避免上游已计量而本地整次漏记；failover 错误仍保持无部分结果，防止成功重试后双重计费。
+- 新增简洁首页预设、按当前筛选条件全选账号和批量删除并发限制；管理端分组利润控制、账号倍率同步、内容审核代理和支付方式布局同步更新，同时保留 fork 的账号归档、生图历史/任务、运营中心和定制导航。
+- 内容审核支持指定代理出站；SMTP 正式发送与测试连接复用统一建连路径；OpenAI/Codex 同步流式 429 语义、陈旧 compaction 恢复、OAuth Responses namespace 工具保留、WebSocket relay 生命周期和工具输出图片桥接修复。
+- WebSocket 用量提交保持单次 mandatory 语义，避免冲突合并把新旧提交路径串联后重复记账；v2 passthrough 恢复逐 turn 的 `BeforeTurn` 回调，使长连接在峰谷、倍率和余额变化后重新执行利润与计费资格复核，终态事件先写客户端再执行可能同步阻塞的计费回调。
+- Grok 同步 pool mode 冷却绕过、billing ping SSE 过滤和缓冲限制；图片任务 offload 严格解码 data URL；订阅月度窗口按套餐周期对齐，安全审计新增窄范围同步阻断模式，模型广场与支付组件吸收上游 UI 修复。
+- 17 个上游拆分文件继续保持删除，相关增量移植回 fork 的聚合 handler/service 文件；没有恢复会与 fork 目录结构重复的拆分实现。
+
+### v0.1.170 合并验证
+
+- 合并前以 `git merge-tree` 预检，实际 merge 共确认 54 个冲突路径，其中 17 个为上游拆分文件的 modify/delete 冲突；拆分文件保持删除，行为迁入 fork 聚合模块。
+- 后端已执行 `go generate ./cmd/server`；`TZ=UTC go test -tags=unit -count=1 ./...` 全量通过，`go vet -tags=unit ./...` 通过。定向回归覆盖分组利润控制、OpenAI 利润门、上游倍率同步、流式部分用量、紧凑首页、账号复制受管状态、WebSocket 单次记账与逐 turn 计费复核。
+- 前端 `pnpm typecheck`、`pnpm lint:check`、`pnpm build` 均通过；`pnpm test:run` 共 `221` 个测试文件、`1544` 个用例全部通过。
+- `git diff --check` 通过，工作树未检出冲突标记；所有冲突路径在提交前统一加入索引并再次确认无 unmerged entry。
+- `backend/cmd/server/VERSION` 保持 `0.1.237`，本次只合并 `refs/tags/upstream/v0.1.170^{}`，没有合入标签之后的 VERSION 同步提交。
 
 本次 `v0.1.169` 合并说明：
 

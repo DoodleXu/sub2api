@@ -60,7 +60,7 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"codex_primary_over_secondary_percent": {}, "codex_usage_updated_at": {},
 	"codex_5h_used_percent": {}, "codex_5h_reset_after_seconds": {}, "codex_5h_window_minutes": {}, "codex_5h_reset_at": {},
 	"codex_7d_used_percent": {}, "codex_7d_reset_after_seconds": {}, "codex_7d_window_minutes": {}, "codex_7d_reset_at": {},
-	UpstreamBillingProbeEnabledExtraKey: {}, UpstreamBillingProbeExtraKey: {},
+	UpstreamBillingProbeEnabledExtraKey: {}, UpstreamBillingRateSyncEnabledExtraKey: {}, UpstreamBillingProbeExtraKey: {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -143,6 +143,7 @@ func cloneAccountValuePointer[T any](value *T) *T {
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
+	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)

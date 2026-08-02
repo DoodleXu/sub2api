@@ -140,6 +140,7 @@ type SystemSettings struct {
 	DocURL                      string
 	HomeContent                 string
 	SiteLaunchAt                string
+	CompactHomeEnabled          bool
 	HideCcsImportButton         bool
 	PurchaseSubscriptionEnabled bool
 	PurchaseSubscriptionURL     string
@@ -332,6 +333,7 @@ type PublicSettings struct {
 	DocURL                           string
 	HomeContent                      string
 	SiteLaunchAt                     string
+	CompactHomeEnabled               bool
 	HideCcsImportButton              bool
 
 	PurchaseSubscriptionEnabled bool

@@ -453,6 +453,11 @@
                   <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
                 </div>
               </div>
+              <div>
+                <label class="input-label">{{ t('admin.riskControl.proxy') }}</label>
+                <ProxySelector v-model="configForm.proxy_id" :proxies="proxies" />
+                <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.proxyHint') }}</p>
+              </div>
             </div>
 
             <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm dark:border-dark-700 dark:bg-dark-800">
@@ -1539,6 +1544,7 @@ import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import ProxySelector from '@/components/common/ProxySelector.vue'
 import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationAllowedHash,
@@ -1557,7 +1563,7 @@ import type {
   UpdateContentModerationConfig,
   UpsertContentModerationUserPolicyPayload,
 } from '@/api/admin/riskControl'
-import type { AdminGroup, AdminUser, SelectOption } from '@/types'
+import type { AdminGroup, AdminUser, Proxy, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -1651,6 +1657,7 @@ const selectedPolicyUser = ref<PolicyUserSummary | null>(null)
 const editingUserPolicyID = ref<number | null>(null)
 const forcedWhitelistUserIDs = ref<number[]>([])
 const whitelistUserSearchResults = ref<AdminUser[]>([])
+const proxies = ref<Proxy[]>([])
 const logs = ref<ContentModerationLog[]>([])
 const allowedHashes = ref<ContentModerationAllowedHash[]>([])
 const status = ref<ContentModerationRuntimeStatus | null>(null)
@@ -1673,6 +1680,7 @@ const configForm = reactive({
   mode: 'pre_block' as ModerationMode,
   base_url: 'https://api.openai.com',
   model: 'omni-moderation-latest',
+  proxy_id: null as number | null,
   api_keys_text: '',
   api_key_configured: false,
   api_key_masked: '',
@@ -2208,6 +2216,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.mode = config.mode
   configForm.base_url = config.base_url || 'https://api.openai.com'
   configForm.model = config.model || 'omni-moderation-latest'
+  configForm.proxy_id = config.proxy_id || null
   configForm.api_keys_text = ''
   configForm.api_key_configured = config.api_key_configured
   configForm.api_key_masked = config.api_key_masked || ''
@@ -2250,16 +2259,22 @@ function applyConfig(config: ContentModerationConfig) {
 async function loadAll() {
   loading.value = true
   try {
-	    const [config, groupItems, runtimeStatus, policies] = await Promise.all([
-	      adminAPI.riskControl.getConfig(),
-	      adminAPI.groups.getAll(),
-	      adminAPI.riskControl.getStatus(),
-	      adminAPI.riskControl.listUserPolicies(),
-	    ])
-	    applyConfig(config)
-	    groups.value = groupItems
-	    status.value = runtimeStatus
-	    userPolicies.value = policies
+    const proxyPromise = adminAPI.proxies?.getAll
+      ? adminAPI.proxies.getAll().catch(() => [] as Proxy[])
+      : Promise.resolve([] as Proxy[])
+    const [config, groupItems, runtimeStatus, policies, proxyItems] = await Promise.all([
+      adminAPI.riskControl.getConfig(),
+      adminAPI.groups.getAll(),
+      adminAPI.riskControl.getStatus(),
+      adminAPI.riskControl.listUserPolicies(),
+      // 代理列表加载失败或旧测试/嵌入环境未提供该 API 时，不阻塞风控页面。
+      proxyPromise,
+    ])
+    applyConfig(config)
+    groups.value = groupItems
+    status.value = runtimeStatus
+    userPolicies.value = policies
+    proxies.value = proxyItems
     if (Array.isArray(runtimeStatus.api_key_statuses)) {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
       prunePendingDeleteAPIKeyHashes()
@@ -2303,6 +2318,8 @@ async function saveConfig() {
       mode: configForm.mode,
       base_url: configForm.base_url,
       model: configForm.model,
+      // 后端语义：0 清除代理（直连），>0 指定代理
+      proxy_id: configForm.proxy_id ?? 0,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
       retry_count: Number(configForm.retry_count) || 0,
       sample_rate: Number(configForm.sample_rate) || 0,
@@ -2637,6 +2654,8 @@ async function testApiKeys(useInputKeys: boolean) {
       base_url: configForm.base_url,
       model: configForm.model,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
+      // 与保存语义一致：0 强制直连，>0 指定代理，确保测试与实际审计走同一条链路
+      proxy_id: configForm.proxy_id ?? 0,
       prompt: moderationTestPrompt.value,
       images: moderationTestImages.value,
     })

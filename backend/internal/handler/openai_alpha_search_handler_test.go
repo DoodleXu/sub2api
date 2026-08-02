@@ -57,6 +57,7 @@ func TestOpenAIGatewayHandlerAlphaSearch_ContentModerationBlocksSearchQuery(t *t
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	groupID := int64(7301)

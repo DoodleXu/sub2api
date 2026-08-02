@@ -576,7 +576,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		}
 		message := extractOpenAISSEErrorMessage(payload)
 		if openAIStreamFailedEventShouldFailover(payload, message) {
-			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message, resp.Header)
 		}
 		if errMsg, matched := s.writeOpenAIResponseFailedCompatError(c, account, payload, message, writeAnthropicError); matched {
 			return nil, fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
@@ -960,7 +960,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					return true
 				}
 				if !clientOutputStarted && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
-					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message, resp.Header)
 					return true
 				}
 				if errMsg, matched := s.writeOpenAIResponseFailedCompatError(c, account, payloadBytes, message, writeAnthropicError); matched {

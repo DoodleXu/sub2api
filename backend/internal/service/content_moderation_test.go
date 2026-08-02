@@ -838,7 +838,7 @@ func TestContentModerationApplyForcedWhitelist_UsesActiveAdmins(t *testing.T) {
 		9:  {ID: 9, Email: "disabled-admin@example.com", Role: RoleAdmin, Status: StatusDisabled},
 		42: {ID: 42, Email: "safe@example.com", Role: RoleUser, Status: StatusActive},
 	}}
-	svc := NewContentModerationService(&contentModerationTestSettingRepo{values: map[string]string{}}, nil, nil, nil, userRepo, nil, nil)
+	svc := NewContentModerationService(&contentModerationTestSettingRepo{values: map[string]string{}}, nil, nil, nil, userRepo, nil, nil, nil)
 
 	require.NoError(t, svc.applyForcedWhitelist(context.Background(), cfg, true, true))
 
@@ -892,6 +892,7 @@ func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T
 		}},
 		repo,
 		&contentModerationTestHashCache{},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -952,10 +953,10 @@ func TestContentModerationCheck_AllowedHashSkipsKeywordBlock(t *testing.T) {
 		repo,
 		hashCache,
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		Endpoint: "/v1/messages",
@@ -1011,10 +1012,10 @@ func TestContentModerationCheck_DBAllowedHashSkipsKeywordBlockAndWarmsCache(t *t
 		repo,
 		hashCache,
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   1001,
@@ -1067,10 +1068,11 @@ func TestContentModerationCheck_DBMissDoesNotTrustStaleRedisAllowedHash(t *testi
 		repo,
 		hashCache,
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
+
 	svc.allowedHashLegacyRedisImported.Store(true)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
@@ -1116,10 +1118,10 @@ func TestContentModerationCheck_LegacyRedisAllowedHashIsImportedToDB(t *testing.
 		repo,
 		hashCache,
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   1001,
@@ -1160,7 +1162,7 @@ func TestContentModerationCheck_LegacyRedisImportMarkerPreventsRestartReimport(t
 		SettingKeyRiskControlEnabled:      "true",
 		SettingKeyContentModerationConfig: string(rawCfg),
 	}}
-	svc := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil)
+	svc := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil, nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   1001,
@@ -1182,7 +1184,7 @@ func TestContentModerationCheck_LegacyRedisImportMarkerPreventsRestartReimport(t
 	require.NoError(t, err)
 	require.True(t, added, "simulate stale Redis allowed hash left after a best-effort cache clear failure")
 
-	restarted := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil)
+	restarted := NewContentModerationService(settingRepo, repo, hashCache, nil, nil, nil, nil, nil)
 	decision, err = restarted.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   1001,
 		Protocol: ContentModerationProtocolOpenAIChat,
@@ -1343,10 +1345,10 @@ func TestContentModerationCheck_UserPolicyOverridesKeywordBlockResponse(t *testi
 		repo,
 		&contentModerationTestHashCache{},
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   42,
@@ -1412,10 +1414,10 @@ func TestContentModerationCheck_UserPolicyCanAutoBanOnKeywordBlock(t *testing.T)
 		repo,
 		&contentModerationTestHashCache{},
 		nil,
-		userRepo,
+		userRepo, nil,
+
 		invalidator,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:    1001,
@@ -1464,10 +1466,10 @@ func TestContentModerationCheck_UserPolicyCacheAvoidsRepeatedMissLoads(t *testin
 		repo,
 		&contentModerationTestHashCache{},
 		nil,
+		nil, nil,
+
 		nil,
-		nil,
-		nil,
-	)
+		nil)
 
 	input := ContentModerationCheckInput{
 		UserID:   1001,
@@ -1525,10 +1527,10 @@ func TestContentModerationCheck_ObserveModeAppliesUserPolicySideEffects(t *testi
 		repo,
 		&contentModerationTestHashCache{},
 		nil,
-		userRepo,
+		userRepo, nil,
+
 		invalidator,
-		nil,
-	)
+		nil)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:    1001,
@@ -1579,6 +1581,7 @@ func TestContentModerationCheck_KeywordsIgnoredInObserveMode(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
@@ -1620,6 +1623,7 @@ func TestContentModerationCheck_KeywordOnlyStrategySkipsAPIOnMiss(t *testing.T) 
 		}},
 		repo,
 		&contentModerationTestHashCache{},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -1666,6 +1670,7 @@ func TestContentModerationCheck_APIOnlyStrategyIgnoresKeywordList(t *testing.T) 
 		}},
 		repo,
 		&contentModerationTestHashCache{},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -1777,6 +1782,7 @@ func TestContentModerationLoadConfig_LegacyConfigDefaultsModelFilterToAll(t *tes
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	cfg, err := svc.loadConfig(context.Background())
@@ -1862,10 +1868,10 @@ func TestContentModerationCheck_DerivedAdminWhitelistDoesNotAssumeUIDOne(t *test
 		repo,
 		&contentModerationTestHashCache{},
 		nil,
-		userRepo,
+		userRepo, nil,
+
 		nil,
-		nil,
-	)
+		nil)
 
 	adminDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   7,
@@ -1905,10 +1911,11 @@ func TestContentModerationCheck_UsesCachedForcedWhitelistWhenAdminLookupFails(t 
 		&contentModerationTestRepo{},
 		&contentModerationTestHashCache{},
 		nil,
-		userRepo,
+		userRepo, nil,
+
 		nil,
-		nil,
-	)
+		nil)
+
 	svc.setCachedForcedWhitelistUserIDs([]int64{7})
 
 	adminDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
@@ -1956,6 +1963,7 @@ func newContentModerationModelFilterTestService(t *testing.T, cfg *ContentModera
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	return svc, repo
 }
@@ -1969,7 +1977,7 @@ func TestContentModerationUpdateConfig_AppendsAndDeletesAPIKeys(t *testing.T) {
 	repo := &contentModerationTestSettingRepo{values: map[string]string{
 		SettingKeyContentModerationConfig: string(rawCfg),
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
 	deleteHashes := []string{moderationAPIKeyHash("sk-old-a")}
 	addKeys := []string{"sk-new-c", "sk-old-b"}
 
@@ -1996,7 +2004,7 @@ func TestContentModerationUpdateConfig_ReplacesAPIKeysWhenRequested(t *testing.T
 	repo := &contentModerationTestSettingRepo{values: map[string]string{
 		SettingKeyContentModerationConfig: string(rawCfg),
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
 	deleteHashes := []string{moderationAPIKeyHash("sk-old-a")}
 	replaceKeys := []string{"sk-new-only"}
 
@@ -2023,7 +2031,7 @@ func TestContentModerationUpdateConfig_SavesCustomThresholds(t *testing.T) {
 	repo := &contentModerationTestSettingRepo{values: map[string]string{
 		SettingKeyContentModerationConfig: string(rawCfg),
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
 	thresholds := map[string]float64{
 		"sexual":     0.72,
 		"harassment": 1.25,
@@ -2059,7 +2067,7 @@ func TestContentModerationUpdateConfig_ForcesAdminWhitelist(t *testing.T) {
 		7:  {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
 		42: {ID: 42, Email: "safe@example.com", Role: RoleUser, Status: StatusActive},
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil, nil)
 	whitelistUserIDs := []int64{42, 42}
 
 	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
@@ -2088,7 +2096,7 @@ func TestContentModerationUpdateConfig_DoesNotPersistDerivedAdminAsConfiguredWhi
 		7: {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
 		8: {ID: 8, Email: "next-admin@example.com", Role: RoleAdmin, Status: StatusActive},
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil, nil)
 	whitelistUserIDs := []int64{7}
 
 	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
@@ -2124,7 +2132,7 @@ func TestContentModerationUpdateConfig_RejectsUnknownWhitelistUser(t *testing.T)
 	userRepo := &contentModerationTestUserRepo{users: map[int64]*User{
 		7: {ID: 7, Email: "admin@example.com", Role: RoleAdmin, Status: StatusActive},
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, userRepo, nil, nil, nil)
 	whitelistUserIDs := []int64{42}
 
 	_, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
@@ -2142,7 +2150,7 @@ func TestContentModerationUpdateConfig_RejectsTooManyWhitelistUsers(t *testing.T
 	repo := &contentModerationTestSettingRepo{values: map[string]string{
 		SettingKeyContentModerationConfig: string(rawCfg),
 	}}
-	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil, nil)
 	whitelistUserIDs := make([]int64, 0, maxContentModerationWhitelistUserIDs+1)
 	for id := int64(2); len(whitelistUserIDs) < maxContentModerationWhitelistUserIDs+1; id++ {
 		whitelistUserIDs = append(whitelistUserIDs, id)
@@ -2317,6 +2325,7 @@ func TestContentModerationCheck_OpenAIResponsesRecordsNonHitForCodexPayload(t *t
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	body := []byte(`{
@@ -2377,6 +2386,7 @@ func TestContentModerationCheck_PreBlockBlocksCodexResponsesLatestUserInput(t *t
 		}},
 		repo,
 		&contentModerationTestHashCache{},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -2450,6 +2460,7 @@ func TestContentModerationStatusTracksPreBlockSyncMetrics(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	for _, prompt := range []string{"blocked prompt", "clean prompt"} {
@@ -2500,6 +2511,7 @@ func TestContentModerationStatusTracksPreBlockAPIKeyLoad(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	for idx := 0; idx < 4; idx++ {
@@ -2541,6 +2553,7 @@ func TestContentModerationStatusTracksPreBlockLocalBlocks(t *testing.T) {
 		}},
 		&contentModerationTestRepo{},
 		&contentModerationTestHashCache{},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -2593,7 +2606,7 @@ func TestContentModerationCallModeration_400DoesNotFreezeAPIKey(t *testing.T) {
 	cfg.BaseURL = server.URL
 	cfg.APIKeys = []string{"sk-test"}
 	cfg.RetryCount = 5
-	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 
 	_, err := svc.callModeration(context.Background(), cfg, "hello")
 
@@ -2632,7 +2645,7 @@ func TestContentModerationCallModeration_FreezesByHTTPStatus(t *testing.T) {
 			cfg.BaseURL = server.URL
 			cfg.APIKeys = []string{"sk-test"}
 			cfg.RetryCount = 0
-			svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil)
+			svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil, nil)
 
 			_, err := svc.callModeration(context.Background(), cfg, "hello")
 
@@ -2658,6 +2671,7 @@ func TestContentModerationTestAPIKeys_400DoesNotFreezeAPIKey(t *testing.T) {
 
 	svc := NewContentModerationService(
 		&contentModerationTestSettingRepo{values: map[string]string{}},
+		nil,
 		nil,
 		nil,
 		nil,
@@ -2707,6 +2721,7 @@ func TestContentModerationCheck_PreHashUsesRedisHashCache(t *testing.T) {
 		hashCache,
 		nil,
 		userRepo,
+		nil,
 		nil,
 		nil,
 	)
@@ -2776,6 +2791,7 @@ func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
@@ -2809,7 +2825,7 @@ func TestContentModerationAutoBanSkipsAdminAccount(t *testing.T) {
 	require.NoError(t, repo.CreateLog(context.Background(), newContentModerationFlaggedLog(userID)))
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: userID, Role: RoleAdmin, Status: StatusActive}}
 	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
 
 	svc.persistContentModerationLog(context.Background(), cfg, newContentModerationFlaggedLog(userID), "", false, true)
 
@@ -2836,7 +2852,7 @@ func TestContentModerationAutoBanDisablesRegularUserAtThreshold(t *testing.T) {
 	require.NoError(t, repo.CreateLog(context.Background(), newContentModerationFlaggedLog(userID)))
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: userID, Role: RoleUser, Status: StatusActive}}
 	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
 
 	svc.persistContentModerationLog(context.Background(), cfg, newContentModerationFlaggedLog(userID), "", false, true)
 
@@ -2857,7 +2873,7 @@ func TestContentModerationAdminBelowBanThresholdRecordsViolationOnly(t *testing.
 	repo := &contentModerationTestRepo{}
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: userID, Role: RoleAdmin, Status: StatusActive}}
 	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
 
 	svc.persistContentModerationLog(context.Background(), cfg, newContentModerationFlaggedLog(userID), "", false, true)
 
@@ -2927,6 +2943,7 @@ func TestContentModerationCheck_PreBlockFlaggedWritesRedisHashCache(t *testing.T
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	body := []byte(`{"messages":[{"role":"user","content":"repeat blocked prompt"}]}`)
@@ -2965,7 +2982,7 @@ func TestContentModerationViolationEmailDedupeSuppressesHashRetry(t *testing.T) 
 	smtpServer := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
 	emailSvc := newContentModerationEmailTestService(settingRepo)
-	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, nil, emailSvc)
 
 	first := newContentModerationFlaggedLog(userID)
 	first.InputHash = inputHash
@@ -2994,7 +3011,7 @@ func TestContentModerationViolationEmailDedupeAllowsDifferentInputsAndUsers(t *t
 	smtpServer := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
 	emailSvc := newContentModerationEmailTestService(settingRepo)
-	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, nil, emailSvc)
 
 	first := newContentModerationFlaggedLog(1001)
 	first.UserEmail = "same@example.com"
@@ -3032,7 +3049,7 @@ func TestContentModerationViolationEmailDedupeFailOpenOnCacheError(t *testing.T)
 	smtpServer := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
 	emailSvc := newContentModerationEmailTestService(settingRepo)
-	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, nil, emailSvc)
 
 	log := newContentModerationFlaggedLog(1001)
 	log.InputHash = strings.Repeat("a", 64)
@@ -3051,7 +3068,7 @@ func TestContentModerationAccountDisabledEmailBypassesViolationDedupe(t *testing
 	smtpServer := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, settingRepo.SetMultiple(context.Background(), smtpServer.settings()))
 	emailSvc := newContentModerationEmailTestService(settingRepo)
-	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, emailSvc)
+	svc := NewContentModerationService(nil, &contentModerationTestRepo{}, hashCache, nil, nil, nil, nil, emailSvc)
 
 	first := newContentModerationFlaggedLog(1001)
 	first.InputHash = strings.Repeat("a", 64)
@@ -3153,6 +3170,7 @@ func TestContentModerationCheck_AsyncFlaggedWritesRedisHashCache(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	decision := svc.checkSync(context.Background(), ContentModerationCheckInput{
@@ -3190,7 +3208,7 @@ func TestContentModerationUnbanUser_ActivatesUserAndInvalidatesAuthCache(t *test
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 1001, Email: "user@example.com", Status: StatusDisabled}}
 	invalidator := &contentModerationTestAuthCacheInvalidator{}
 	repo := &contentModerationTestRepo{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
 
 	result, err := svc.UnbanUser(context.Background(), 1001)
 
@@ -3206,7 +3224,7 @@ func TestContentModerationUnbanUser_ActiveUserOnlyInvalidatesAuthCache(t *testin
 	userRepo := &contentModerationTestUserRepo{user: &User{ID: 1001, Email: "user@example.com", Status: StatusActive}}
 	invalidator := &contentModerationTestAuthCacheInvalidator{}
 	repo := &contentModerationTestRepo{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
 
 	result, err := svc.UnbanUser(context.Background(), 1001)
 
@@ -3222,7 +3240,7 @@ func contentModerationIntPtr(v int) *int {
 
 func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing.T) {
 	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
-	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil)
+	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
 
 	// 默认值必须是 false（计入，保持现状）
 	view, err := svc.GetConfig(context.Background())
