@@ -29,6 +29,24 @@ export interface AsyncImageTask {
   result?: { data?: Array<{ url?: string; revised_prompt?: string }> } | null
 }
 
+export class AsyncImageTaskAPIError extends Error {
+  readonly status: number
+  readonly code: string
+
+  constructor(message: string, status: number, code = '') {
+    super(message)
+    this.name = 'AsyncImageTaskAPIError'
+    this.status = status
+    this.code = code
+  }
+}
+
+export function isTerminalAsyncImageTaskError(error: unknown): error is AsyncImageTaskAPIError {
+  if (!(error instanceof AsyncImageTaskAPIError)) return false
+  if (error.status < 400 || error.status >= 500) return false
+  return ![408, 425, 429].includes(error.status)
+}
+
 function endpointURL(base: string, path: string): string {
   const normalized = base.trim().replace(/\/+$/, '')
   if (normalized.endsWith('/v1')) return `${normalized}${path}`
@@ -39,7 +57,8 @@ async function decodeResponse(response: Response): Promise<any> {
   const body = await response.json().catch(() => null)
   if (response.ok) return body
   const message = body?.error?.message || body?.message || `HTTP ${response.status}`
-  throw new Error(String(message))
+  const code = body?.error?.code || body?.code || ''
+  throw new AsyncImageTaskAPIError(String(message), response.status, String(code))
 }
 
 function dataURLFile(reference: WebConsoleImageReference, fallbackName: string): File {
@@ -108,10 +127,11 @@ export async function create(request: CreateAsyncImageTaskRequest): Promise<{ ta
   return { task }
 }
 
-export async function get(endpoint: string, apiKey: string, id: string): Promise<AsyncImageTask> {
+export async function get(endpoint: string, apiKey: string, id: string, signal?: AbortSignal): Promise<AsyncImageTask> {
   const response = await fetch(endpointURL(endpoint, `/images/tasks/${encodeURIComponent(id)}`), {
     headers: { Authorization: `Bearer ${apiKey}` },
     cache: 'no-store',
+    signal,
   })
   return decodeResponse(response) as Promise<AsyncImageTask>
 }

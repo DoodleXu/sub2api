@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,31 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+type deleteImageTaskBeforeEvalHook struct {
+	once    sync.Once
+	control *redis.Client
+	key     string
+}
+
+func (h *deleteImageTaskBeforeEvalHook) DialHook(next redis.DialHook) redis.DialHook {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return next(ctx, network, addr)
+	}
+}
+
+func (h *deleteImageTaskBeforeEvalHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "eval" || cmd.Name() == "evalsha" {
+			h.once.Do(func() { _ = h.control.Del(context.Background(), h.key).Err() })
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (h *deleteImageTaskBeforeEvalHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
 
 func TestImageTaskStoreListsPersistentHistoryWithDateRange(t *testing.T) {
 	mr := miniredis.RunT(t)
@@ -71,6 +98,73 @@ func TestImageTaskStoreRoundTripAndTTL(t *testing.T) {
 	got, err = store.Get(context.Background(), task.ID)
 	require.NoError(t, err)
 	require.Equal(t, service.ImageTaskStatusCompleted, got.Status)
+}
+
+func TestImageTaskStoreSaveRollsBackHistoryWhenRuntimeWriteFails(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewImageTaskStore(rdb, db)
+	task := &service.ImageTaskRecord{
+		ID: "imgtask_runtime_failure", UserID: 7, APIKeyID: 9,
+		Status: service.ImageTaskStatusProcessing, CreatedAt: 100, ExpiresAt: 200,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO image_task_history").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectRollback()
+	mr.Close()
+
+	err = store.Save(context.Background(), task, time.Hour)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageTaskStoreTransitionMarksHistoryFailedWhenRuntimeExpires(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	control := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() {
+		_ = rdb.Close()
+		_ = control.Close()
+	})
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewImageTaskStore(rdb, db)
+	task := &service.ImageTaskRecord{
+		ID: "imgtask_expired_during_transition", UserID: 7, APIKeyID: 9,
+		Status: service.ImageTaskStatusProcessing, CreatedAt: 100, ExpiresAt: 200,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO image_task_history").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, store.Save(context.Background(), task, time.Hour))
+
+	rdb.AddHook(&deleteImageTaskBeforeEvalHook{control: control, key: imageTaskKey(task.ID)})
+	completed := *task
+	completed.Status = service.ImageTaskStatusCompleted
+	completedAt := int64(150)
+	completed.CompletedAt = &completedAt
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO image_task_history").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectRollback()
+	mock.ExpectExec("INSERT INTO image_task_history").
+		WithArgs(
+			task.ID, task.UserID, task.APIKeyID, task.Platform, task.Operation, task.Model, task.ImageCount,
+			service.ImageTaskStatusFailed, 410, nil, sqlmock.AnyArg(), task.CreatedAt, sqlmock.AnyArg(), task.ExpiresAt,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	transitioned, err := store.Transition(context.Background(), task.ID, service.ImageTaskStatusProcessing, &completed, time.Hour)
+	require.False(t, transitioned)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestImageTaskStoreMissing(t *testing.T) {

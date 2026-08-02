@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WebConsoleView from '../WebConsoleView.vue'
+import { AsyncImageTaskAPIError } from '@/api/asyncImageTasks'
 import { loadWebConsoleSessions, saveWebConsoleSessions } from '@/features/web-console/storage'
 import type { WebConsoleSession } from '@/features/web-console/types'
 
@@ -156,6 +157,7 @@ describe('WebConsoleView', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -1152,7 +1154,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_105')
+    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_105', expect.any(AbortSignal))
     expect(wrapper.text()).toContain('已生成 1 张图片。')
     expect(wrapper.find('img').attributes('src')).toBe('data:image/png;base64,ZmFrZQ==')
   })
@@ -1229,7 +1231,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_107')
+    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-test', 'imgtask_107', expect.any(AbortSignal))
     expect(fetch).toHaveBeenCalledWith('https://bucket.example/images/imgtask_107-0.png?signature=new')
     expect(cachePut).toHaveBeenCalledWith('/__sub2api_web_console_image_cache__/9?v=new-hash', expect.any(Response))
     expect(wrapper.find('img').attributes('src')).toBe('blob:web-console-image-restored')
@@ -1282,6 +1284,163 @@ describe('WebConsoleView', () => {
     expect(wrapper.text()).toContain('已生成 1 张图片。')
 
     wrapper.unmount()
+  })
+
+  it('任务已过期时停止轮询并清除本地失效任务引用', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image-expired',
+        title: '过期生图会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image-expired',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageTaskId: 'imgtask_expired',
+          imageTaskApiKeyId: 1,
+          imageTaskEndpoint: '/',
+          imageRequest: {
+            prompt: '一张过期的海报',
+            model: 'gpt-image-2',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'processing',
+          created_at: '2026-08-01T00:00:00.000Z',
+        }],
+      }),
+    ])
+    getImageTaskMock.mockRejectedValue(new AsyncImageTaskAPIError(
+      'image task not found',
+      404,
+      'IMAGE_TASK_NOT_FOUND',
+    ))
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(getImageTaskMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('生图任务已过期或不存在，请重新生成。')
+    const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
+    expect(stored[0].messages[0]).toEqual(expect.objectContaining({
+      status: 'failed',
+      content: '生图任务已过期或不存在，请重新生成。',
+    }))
+    expect(stored[0].messages[0].imageTaskId).toBeUndefined()
+    expect(stored[0].messages[0].imageTaskApiKeyId).toBeUndefined()
+    expect(stored[0].messages[0].imageTaskEndpoint).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('临时限流仍会等待后重试并恢复已完成任务', async () => {
+    vi.useFakeTimers()
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image-retry',
+        title: '等待恢复的生图会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image-retry',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageTaskId: 'imgtask_retry',
+          imageTaskApiKeyId: 1,
+          imageTaskEndpoint: '/',
+          imageRequest: {
+            prompt: '一张等待恢复的海报',
+            model: 'gpt-image-2',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'processing',
+          created_at: '2026-08-02T00:00:00.000Z',
+        }],
+      }),
+    ])
+    getImageTaskMock
+      .mockRejectedValueOnce(new AsyncImageTaskAPIError('rate limited', 429, 'RATE_LIMITED'))
+      .mockResolvedValueOnce({
+        id: 'imgtask_retry',
+        task_id: 'imgtask_retry',
+        status: 'completed',
+        assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
+      })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    expect(getImageTaskMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('生图任务已提交，正在生成图片。')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(getImageTaskMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('已生成 1 张图片。')
+    expect(wrapper.find('img').attributes('src')).toBe('data:image/png;base64,ZmFrZQ==')
+
+    wrapper.unmount()
+  })
+
+  it('离开创作台时取消在途轮询且不会在后台继续重试', async () => {
+    vi.useFakeTimers()
+    saveWebConsoleSessions([
+      session({
+        id: 'session-image-polling',
+        title: '轮询中的生图会话',
+        mode: 'image',
+        messages: [{
+          id: 'message-image-polling',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageTaskId: 'imgtask_polling',
+          imageTaskApiKeyId: 1,
+          imageTaskEndpoint: '/',
+          imageRequest: {
+            prompt: '一张仍在生成的海报',
+            model: 'gpt-image-2',
+            options: {
+              size: '',
+              quality: '',
+              background: '',
+              outputFormat: 'png',
+              count: 1,
+            },
+          },
+          status: 'processing',
+          created_at: '2026-08-02T00:00:00.000Z',
+        }],
+      }),
+    ])
+    getImageTaskMock.mockRejectedValue(new TypeError('temporary network error'))
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+
+    expect(getImageTaskMock).toHaveBeenCalledTimes(1)
+    const signal = getImageTaskMock.mock.calls[0]?.[3] as AbortSignal
+    expect(signal.aborted).toBe(false)
+
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(getImageTaskMock).toHaveBeenCalledTimes(1)
   })
 
   it('生成结果可以作为下一次编辑的参考图', async () => {

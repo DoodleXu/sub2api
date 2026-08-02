@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 const imageTaskKeyPrefix = "image_task:"
 const imageTaskIndexPrefix = "image_task:index:"
 const imageTaskIndexCleanupInterval = 10 * time.Second
+const imageTaskHistoryReconcileTimeout = 5 * time.Second
 
 var imageTaskStatuses = []string{
 	service.ImageTaskStatusProcessing,
@@ -59,9 +61,32 @@ func (s *imageTaskStore) Save(ctx context.Context, task *service.ImageTaskRecord
 	if err != nil {
 		return err
 	}
-	if err := s.upsertHistory(ctx, task); err != nil {
+	var historyTx *sql.Tx
+	if s.db != nil {
+		historyTx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func(tx *sql.Tx) { _ = tx.Rollback() }(historyTx)
+		if err := upsertImageTaskHistory(ctx, historyTx, task); err != nil {
+			return err
+		}
+	}
+	if err = s.saveRuntime(ctx, task, data, ttl); err != nil {
 		return err
 	}
+	if historyTx != nil {
+		if err = historyTx.Commit(); err != nil {
+			if cleanupErr := s.deleteRuntimeDetached(task.ID); cleanupErr != nil {
+				return fmt.Errorf("commit image task history: %w; rollback runtime: %v", err, cleanupErr)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *imageTaskStore) saveRuntime(ctx context.Context, task *service.ImageTaskRecord, data []byte, ttl time.Duration) error {
 	pipe := s.rdb.TxPipeline()
 	pipe.Set(ctx, imageTaskKey(task.ID), data, ttl)
 	for _, status := range imageTaskStatuses {
@@ -70,11 +95,8 @@ func (s *imageTaskStore) Save(ctx context.Context, task *service.ImageTaskRecord
 	if isImageTaskStatus(task.Status) {
 		pipe.ZAdd(ctx, imageTaskStatusIndex(task.Status), redis.Z{Score: float64(task.CreatedAt), Member: task.ID})
 	}
-	if _, err = pipe.Exec(ctx); err != nil {
-		_ = s.deleteHistory(ctx, task.ID)
-		return err
-	}
-	return nil
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (s *imageTaskStore) Get(ctx context.Context, id string) (*service.ImageTaskRecord, error) {
@@ -149,8 +171,16 @@ func (s *imageTaskStore) Transition(ctx context.Context, id, expectedStatus stri
 	if err != nil {
 		return false, err
 	}
-	if err := s.upsertHistory(ctx, task); err != nil {
-		return false, err
+	var historyTx *sql.Tx
+	if s.db != nil {
+		historyTx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return false, err
+		}
+		defer func(tx *sql.Tx) { _ = tx.Rollback() }(historyTx)
+		if err := upsertImageTaskHistory(ctx, historyTx, task); err != nil {
+			return false, err
+		}
 	}
 	ttlMillis := ttl.Milliseconds()
 	if ttlMillis <= 0 {
@@ -162,16 +192,33 @@ func (s *imageTaskStore) Transition(ctx context.Context, id, expectedStatus stri
 		imageTaskStatusIndex(task.Status),
 	}, expectedStatus, data, ttlMillis, task.CreatedAt, task.ID).Int64()
 	if err != nil {
-		s.reconcileHistoryFromRuntime(ctx, id)
+		if historyTx != nil {
+			_ = historyTx.Rollback()
+		}
+		s.reconcileHistoryFromRuntimeDetached(id)
 		return false, err
 	}
 	if result < 0 {
-		_ = s.upsertHistory(ctx, previous)
+		if historyTx != nil {
+			_ = historyTx.Rollback()
+		}
+		if historyErr := s.markExpiredHistoryDetached(previous); historyErr != nil {
+			return false, fmt.Errorf("%w: persist expired image task history: %v", service.ErrImageTaskNotFound, historyErr)
+		}
 		return false, service.ErrImageTaskNotFound
 	}
 	if result != 1 {
-		s.reconcileHistoryFromRuntime(ctx, id)
+		if historyTx != nil {
+			_ = historyTx.Rollback()
+		}
+		s.reconcileHistoryFromRuntimeDetached(id)
 		return false, nil
+	}
+	if historyTx != nil {
+		if err := historyTx.Commit(); err != nil {
+			s.reconcileHistoryFromRuntimeDetached(id)
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -313,6 +360,13 @@ func (s *imageTaskStore) upsertHistory(ctx context.Context, task *service.ImageT
 	if s.db == nil || task == nil {
 		return nil
 	}
+	return upsertImageTaskHistory(ctx, s.db, task)
+}
+
+func upsertImageTaskHistory(ctx context.Context, executor sqlExecutor, task *service.ImageTaskRecord) error {
+	if executor == nil || task == nil {
+		return nil
+	}
 	var resultJSON, errorJSON any
 	if len(task.Result) > 0 {
 		resultJSON = string(task.Result)
@@ -320,7 +374,7 @@ func (s *imageTaskStore) upsertHistory(ctx context.Context, task *service.ImageT
 	if len(task.Error) > 0 {
 		errorJSON = string(task.Error)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := executor.ExecContext(ctx, `
 INSERT INTO image_task_history (
     task_id, user_id, api_key_id, platform, operation, model, image_count,
     status, http_status, result_json, error_json, created_at, completed_at, expires_at
@@ -340,23 +394,45 @@ ON CONFLICT (task_id) DO UPDATE SET
 	return err
 }
 
-func (s *imageTaskStore) deleteHistory(ctx context.Context, id string) error {
-	if s.db == nil {
-		return nil
-	}
-	_, err := s.db.ExecContext(ctx, "DELETE FROM image_task_history WHERE task_id = $1", strings.TrimSpace(id))
-	return err
-}
-
-func (s *imageTaskStore) reconcileHistoryFromRuntime(ctx context.Context, id string) {
+func (s *imageTaskStore) reconcileHistoryFromRuntimeDetached(id string) {
 	if s.db == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), imageTaskHistoryReconcileTimeout)
+	defer cancel()
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return
 	}
 	_ = s.upsertHistory(ctx, current)
+}
+
+func (s *imageTaskStore) markExpiredHistoryDetached(previous *service.ImageTaskRecord) error {
+	if s.db == nil || previous == nil {
+		return nil
+	}
+	expired := *previous
+	completedAt := time.Now().UTC().Unix()
+	expired.Status = service.ImageTaskStatusFailed
+	expired.HTTPStatus = http.StatusGone
+	expired.Result = nil
+	expired.Error = json.RawMessage(`{"error":{"type":"task_expired","message":"image task runtime state expired before transition completed"}}`)
+	expired.CompletedAt = &completedAt
+	ctx, cancel := context.WithTimeout(context.Background(), imageTaskHistoryReconcileTimeout)
+	defer cancel()
+	return s.upsertHistory(ctx, &expired)
+}
+
+func (s *imageTaskStore) deleteRuntimeDetached(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), imageTaskHistoryReconcileTimeout)
+	defer cancel()
+	pipe := s.rdb.TxPipeline()
+	pipe.Del(ctx, imageTaskKey(id))
+	for _, status := range imageTaskStatuses {
+		pipe.ZRem(ctx, imageTaskStatusIndex(status), id)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (s *imageTaskStore) listAdminHistory(ctx context.Context, query service.ImageTaskAdminQuery) (*service.ImageTaskAdminPage, error) {

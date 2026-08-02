@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { create, get, taskAssets } from '../asyncImageTasks'
+import { AsyncImageTaskAPIError, create, get, isTerminalAsyncImageTaskError, taskAssets } from '../asyncImageTasks'
 
 describe('asyncImageTasksAPI', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -69,5 +69,26 @@ describe('asyncImageTasksAPI', () => {
     expect(taskAssets(task)).toEqual([expect.objectContaining({
       id: 'imgtask_1-0', url: 'https://bucket.example/images/imgtask_1-0.png',
     })])
+  })
+
+  it('preserves task error status/code and forwards abort signals', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'IMAGE_TASK_NOT_FOUND', message: 'image task not found' },
+    }), { status: 404, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    const error = await get('/', 'sk-test', 'imgtask_missing', controller.signal).catch((reason) => reason)
+
+    expect(error).toBeInstanceOf(AsyncImageTaskAPIError)
+    expect(error).toEqual(expect.objectContaining({
+      status: 404,
+      code: 'IMAGE_TASK_NOT_FOUND',
+      message: 'image task not found',
+    }))
+    expect(isTerminalAsyncImageTaskError(error)).toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith('/v1/images/tasks/imgtask_missing', expect.objectContaining({
+      signal: controller.signal,
+    }))
   })
 })

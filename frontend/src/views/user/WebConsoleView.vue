@@ -347,6 +347,7 @@ import Icon from '@/components/icons/Icon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { asyncImageTasksAPI, keysAPI } from '@/api'
 import type { AsyncImageTaskAsset } from '@/api/asyncImageTasks'
+import { AsyncImageTaskAPIError, isTerminalAsyncImageTaskError } from '@/api/asyncImageTasks'
 import { useAppStore } from '@/stores/app'
 import { isSubscriptionType } from '@/utils/subscriptionType'
 import type { ApiKey } from '@/types'
@@ -408,6 +409,7 @@ const referenceFileInput = ref<HTMLInputElement | null>(null)
 const maskFileInput = ref<HTMLInputElement | null>(null)
 const deletingSessionIds = new Set<string>()
 const pollingImageTaskIds = new Set<string>()
+const imageTaskPollingController = new AbortController()
 const restoringImageSessionIds = new Set<string>()
 const pendingImageEditPayloads = new Map<string, {
   referenceImages: WebConsoleImageReference[]
@@ -1124,6 +1126,41 @@ function failedImageContent(message?: string): string {
   return message ? `生图失败：${message}` : '生图失败，请稍后重试。'
 }
 
+function terminalImageTaskContent(error: AsyncImageTaskAPIError): string {
+  if (error.status === 404 || error.code === 'IMAGE_TASK_NOT_FOUND') {
+    return '生图任务已过期或不存在，请重新生成。'
+  }
+  if (error.status === 401 || error.status === 403) {
+    return '生图任务的查询权限已失效，请重新生成。'
+  }
+  return failedImageContent(error.message)
+}
+
+function stopTerminalImageTask(session: WebConsoleSession, message: WebConsoleMessage, error: AsyncImageTaskAPIError): void {
+  message.status = 'failed'
+  message.content = terminalImageTaskContent(error)
+  message.imageTaskId = undefined
+  message.imageTaskApiKeyId = undefined
+  message.imageTaskEndpoint = undefined
+  touchSession(session)
+}
+
+function waitForNextImageTaskPoll(delayMs = 2000): Promise<boolean> {
+  const signal = imageTaskPollingController.signal
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      window.clearTimeout(timeoutID)
+      resolve(false)
+    }
+    const timeoutID = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, delayMs)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 function isImageGenerationInProgress(message: WebConsoleMessage): boolean {
   return Boolean(message.imageRequest && (message.status === 'pending' || message.status === 'running' || message.status === 'processing'))
 }
@@ -1156,22 +1193,34 @@ async function createImageTaskForMessage(session: WebConsoleSession, message: We
 
 async function pollImageTask(session: WebConsoleSession, message: WebConsoleMessage): Promise<void> {
   if (!message.imageTaskId) return
+  const signal = imageTaskPollingController.signal
+  if (signal.aborted) return
   const taskID = String(message.imageTaskId)
   if (pollingImageTaskIds.has(taskID)) return
   pollingImageTaskIds.add(taskID)
   try {
     for (let attempt = 0; attempt < 900; attempt++) {
-      if (deletingSessionIds.has(session.id)) return
+      if (signal.aborted || deletingSessionIds.has(session.id)) return
       let task
       try {
         const taskKey = compatibleApiKeys.value.find((key) => key.id === message.imageTaskApiKeyId) || selectedKey.value
         if (!taskKey) return
-        task = await asyncImageTasksAPI.get(requestEndpoint(message.imageTaskEndpoint || selectedEndpoint.value), taskKey.key, taskID)
-      } catch {
-        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        task = await asyncImageTasksAPI.get(
+          requestEndpoint(message.imageTaskEndpoint || selectedEndpoint.value),
+          taskKey.key,
+          taskID,
+          signal,
+        )
+      } catch (error) {
+        if (signal.aborted || deletingSessionIds.has(session.id)) return
+        if (isTerminalAsyncImageTaskError(error)) {
+          stopTerminalImageTask(session, message, error)
+          return
+        }
+        if (!await waitForNextImageTaskPoll()) return
         continue
       }
-      if (deletingSessionIds.has(session.id)) return
+      if (signal.aborted || deletingSessionIds.has(session.id)) return
       if (!task) return
       message.status = task.status
       if (task.status === 'completed') {
@@ -1189,7 +1238,7 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
         return
       }
       touchSession(session)
-      await new Promise((resolve) => window.setTimeout(resolve, 2000))
+      if (!await waitForNextImageTaskPoll()) return
     }
   } finally {
     pollingImageTaskIds.delete(taskID)
@@ -1465,6 +1514,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  imageTaskPollingController.abort()
   revokeRuntimeImageObjectURLs()
 })
 </script>
