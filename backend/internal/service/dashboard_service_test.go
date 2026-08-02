@@ -16,15 +16,26 @@ import (
 
 type usageRepoStub struct {
 	UsageLogRepository
-	stats      *usagestats.DashboardStats
-	rangeStats *usagestats.DashboardStats
-	err        error
-	rangeErr   error
-	calls      int32
-	rangeCalls int32
-	rangeStart time.Time
-	rangeEnd   time.Time
-	onCall     chan struct{}
+	stats       *usagestats.DashboardStats
+	rangeStats  *usagestats.DashboardStats
+	costSummary *usagestats.DashboardCostSummary
+	err         error
+	rangeErr    error
+	costErr     error
+	calls       int32
+	rangeCalls  int32
+	costCalls   int32
+	rangeStart  time.Time
+	rangeEnd    time.Time
+	onCall      chan struct{}
+}
+
+func (s *usageRepoStub) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
+	atomic.AddInt32(&s.costCalls, 1)
+	if s.costErr != nil {
+		return nil, s.costErr
+	}
+	return s.costSummary, nil
 }
 
 func (s *usageRepoStub) GetDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
@@ -55,14 +66,20 @@ func (s *usageRepoStub) GetDashboardStatsWithRange(ctx context.Context, start, e
 }
 
 type dashboardCacheStub struct {
-	get       func(ctx context.Context) (string, error)
-	set       func(ctx context.Context, data string, ttl time.Duration) error
-	del       func(ctx context.Context) error
-	getCalls  int32
-	setCalls  int32
-	delCalls  int32
-	lastSetMu sync.Mutex
-	lastSet   string
+	get          func(ctx context.Context) (string, error)
+	set          func(ctx context.Context, data string, ttl time.Duration) error
+	del          func(ctx context.Context) error
+	getCost      func(ctx context.Context) (string, error)
+	setCost      func(ctx context.Context, data string, ttl time.Duration) error
+	delCost      func(ctx context.Context) error
+	getCalls     int32
+	setCalls     int32
+	delCalls     int32
+	getCostCalls int32
+	setCostCalls int32
+	delCostCalls int32
+	lastSetMu    sync.Mutex
+	lastSet      string
 }
 
 func (c *dashboardCacheStub) GetDashboardStats(ctx context.Context) (string, error) {
@@ -92,6 +109,30 @@ func (c *dashboardCacheStub) DeleteDashboardStats(ctx context.Context) error {
 	return nil
 }
 
+func (c *dashboardCacheStub) GetDashboardCostSummary(ctx context.Context) (string, error) {
+	atomic.AddInt32(&c.getCostCalls, 1)
+	if c.getCost != nil {
+		return c.getCost(ctx)
+	}
+	return "", ErrDashboardStatsCacheMiss
+}
+
+func (c *dashboardCacheStub) SetDashboardCostSummary(ctx context.Context, data string, ttl time.Duration) error {
+	atomic.AddInt32(&c.setCostCalls, 1)
+	if c.setCost != nil {
+		return c.setCost(ctx, data, ttl)
+	}
+	return nil
+}
+
+func (c *dashboardCacheStub) DeleteDashboardCostSummary(ctx context.Context) error {
+	atomic.AddInt32(&c.delCostCalls, 1)
+	if c.delCost != nil {
+		return c.delCost(ctx)
+	}
+	return nil
+}
+
 type dashboardAggregationRepoStub struct {
 	watermark time.Time
 	err       error
@@ -103,6 +144,10 @@ func (s *dashboardAggregationRepoStub) AggregateRange(ctx context.Context, start
 
 func (s *dashboardAggregationRepoStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
 	return nil
+}
+
+func (s *dashboardAggregationRepoStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
+	return true, nil
 }
 
 func (s *dashboardAggregationRepoStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
@@ -249,6 +294,65 @@ func TestDashboardService_CacheDisabled_SkipsCache(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&repo.calls))
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.getCalls))
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.setCalls))
+}
+
+func TestDashboardService_GetDashboardCostSummary_UsesFreshSharedCache(t *testing.T) {
+	summary := &usagestats.DashboardCostSummary{
+		TodayRealCostCNY:    12.5,
+		AsOf:                time.Now().UTC().Format(time.RFC3339),
+		AggregationComplete: true,
+	}
+	payload, err := json.Marshal(summary)
+	require.NoError(t, err)
+	cache := &dashboardCacheStub{
+		getCost: func(context.Context) (string, error) { return string(payload), nil },
+	}
+	repo := &usageRepoStub{costSummary: &usagestats.DashboardCostSummary{TodayRealCostCNY: 99}}
+	svc := NewDashboardService(repo, nil, cache, &config.Config{Dashboard: config.DashboardCacheConfig{Enabled: true}})
+
+	got, err := svc.GetDashboardCostSummary(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 12.5, got.TodayRealCostCNY)
+	require.False(t, got.Stale)
+	require.Equal(t, int32(0), repo.costCalls)
+}
+
+func TestDashboardService_GetDashboardCostSummary_FallsBackToRecentStaleCache(t *testing.T) {
+	summary := &usagestats.DashboardCostSummary{
+		TodayRealCostCNY:    8.5,
+		AsOf:                time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339),
+		AggregationComplete: true,
+	}
+	payload, err := json.Marshal(summary)
+	require.NoError(t, err)
+	cache := &dashboardCacheStub{
+		getCost: func(context.Context) (string, error) { return string(payload), nil },
+	}
+	repo := &usageRepoStub{costErr: errors.New("aggregation unavailable")}
+	svc := NewDashboardService(repo, nil, cache, &config.Config{Dashboard: config.DashboardCacheConfig{Enabled: true}})
+
+	got, err := svc.GetDashboardCostSummary(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 8.5, got.TodayRealCostCNY)
+	require.True(t, got.Stale)
+}
+
+func TestDashboardService_GetDashboardCostSummary_RejectsCacheOlderThanThirtyMinutes(t *testing.T) {
+	summary := &usagestats.DashboardCostSummary{
+		TodayRealCostCNY:    8.5,
+		AsOf:                time.Now().UTC().Add(-31 * time.Minute).Format(time.RFC3339),
+		AggregationComplete: true,
+	}
+	payload, err := json.Marshal(summary)
+	require.NoError(t, err)
+	cache := &dashboardCacheStub{
+		getCost: func(context.Context) (string, error) { return string(payload), nil },
+	}
+	repo := &usageRepoStub{costErr: errors.New("aggregation unavailable")}
+	svc := NewDashboardService(repo, nil, cache, &config.Config{Dashboard: config.DashboardCacheConfig{Enabled: true}})
+
+	_, err = svc.GetDashboardCostSummary(context.Background())
+	require.Error(t, err)
 }
 
 func TestDashboardService_CacheHitStale_TriggersAsyncRefresh(t *testing.T) {

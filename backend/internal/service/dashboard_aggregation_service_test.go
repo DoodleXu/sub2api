@@ -28,6 +28,7 @@ type dashboardAggregationRepoTestStub struct {
 	accountCostRanges    [][2]time.Time
 	accountCoverageStart time.Time
 	accountCoverageEnd   time.Time
+	refreshSnapshotCalls int
 }
 
 func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, start, end time.Time) error {
@@ -40,6 +41,11 @@ func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, s
 func (s *dashboardAggregationRepoTestStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
 	s.accountCostRanges = append(s.accountCostRanges, [2]time.Time{start, end})
 	return nil
+}
+
+func (s *dashboardAggregationRepoTestStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
+	s.refreshSnapshotCalls++
+	return true, nil
 }
 
 func (s *dashboardAggregationRepoTestStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
@@ -122,6 +128,7 @@ func TestDashboardAggregationService_BackfillsAccountCostInDailyChunksWithoutGlo
 
 	require.NotEmpty(t, repo.accountCostRanges)
 	require.Equal(t, 0, repo.aggregateCalls)
+	require.Equal(t, time.Now().UTC().Truncate(time.Hour), repo.accountCostRanges[0][1])
 	for _, window := range repo.accountCostRanges {
 		require.True(t, window[1].After(window[0]))
 		require.LessOrEqual(t, window[1].Sub(window[0]), 24*time.Hour)

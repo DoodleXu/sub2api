@@ -977,11 +977,11 @@ func TestLoadDefaultDashboardCacheConfig(t *testing.T) {
 	if cfg.Dashboard.KeyPrefix != "sub2api:" {
 		t.Fatalf("Dashboard.KeyPrefix = %q, want %q", cfg.Dashboard.KeyPrefix, "sub2api:")
 	}
-	if cfg.Dashboard.StatsFreshTTLSeconds != 15 {
-		t.Fatalf("Dashboard.StatsFreshTTLSeconds = %d, want 15", cfg.Dashboard.StatsFreshTTLSeconds)
+	if cfg.Dashboard.StatsFreshTTLSeconds != 120 {
+		t.Fatalf("Dashboard.StatsFreshTTLSeconds = %d, want 120", cfg.Dashboard.StatsFreshTTLSeconds)
 	}
-	if cfg.Dashboard.StatsTTLSeconds != 30 {
-		t.Fatalf("Dashboard.StatsTTLSeconds = %d, want 30", cfg.Dashboard.StatsTTLSeconds)
+	if cfg.Dashboard.StatsTTLSeconds != 1800 {
+		t.Fatalf("Dashboard.StatsTTLSeconds = %d, want 1800", cfg.Dashboard.StatsTTLSeconds)
 	}
 	if cfg.Dashboard.StatsRefreshTimeoutSeconds != 30 {
 		t.Fatalf("Dashboard.StatsRefreshTimeoutSeconds = %d, want 30", cfg.Dashboard.StatsRefreshTimeoutSeconds)

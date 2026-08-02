@@ -5,18 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	defaultDashboardStatsFreshTTL       = 15 * time.Second
-	defaultDashboardStatsCacheTTL       = 30 * time.Second
+	defaultDashboardStatsFreshTTL       = 2 * time.Minute
+	defaultDashboardStatsCacheTTL       = 30 * time.Minute
 	defaultDashboardStatsRefreshTimeout = 30 * time.Second
+	defaultDashboardCostFreshTTL        = 2 * time.Minute
+	defaultDashboardCostCacheTTL        = 30 * time.Minute
+	defaultDashboardCostMaxStale        = 30 * time.Minute
 )
 
 // ErrDashboardStatsCacheMiss 标记仪表盘缓存未命中。
@@ -27,6 +32,9 @@ type DashboardStatsCache interface {
 	GetDashboardStats(ctx context.Context) (string, error)
 	SetDashboardStats(ctx context.Context, data string, ttl time.Duration) error
 	DeleteDashboardStats(ctx context.Context) error
+	GetDashboardCostSummary(ctx context.Context) (string, error)
+	SetDashboardCostSummary(ctx context.Context, data string, ttl time.Duration) error
+	DeleteDashboardCostSummary(ctx context.Context) error
 }
 
 type dashboardStatsRangeFetcher interface {
@@ -47,6 +55,7 @@ type DashboardService struct {
 	cacheTTL       time.Duration
 	refreshTimeout time.Duration
 	refreshing     int32
+	costFlight     singleflight.Group
 	aggEnabled     bool
 	aggInterval    time.Duration
 	aggLookback    time.Duration
@@ -122,6 +131,104 @@ func (s *DashboardService) GetDashboardStats(ctx context.Context) (*usagestats.D
 		return nil, fmt.Errorf("get dashboard stats: %w", err)
 	}
 	return stats, nil
+}
+
+type dashboardCostSummaryReader interface {
+	GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error)
+}
+
+func (s *DashboardService) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
+	var cached *usagestats.DashboardCostSummary
+	if s.cache != nil {
+		if data, err := s.cache.GetDashboardCostSummary(ctx); err == nil {
+			var decoded usagestats.DashboardCostSummary
+			if jsonErr := json.Unmarshal([]byte(data), &decoded); jsonErr == nil {
+				cached = &decoded
+				if dashboardCostSummaryAge(&decoded, time.Now().UTC()) <= defaultDashboardCostFreshTTL {
+					decoded.Stale = !decoded.AggregationComplete
+					return &decoded, nil
+				}
+			}
+		} else if !errors.Is(err, ErrDashboardStatsCacheMiss) {
+			logger.LegacyPrintf("service.dashboard", "[Dashboard] 成本快照缓存读取失败: %v", err)
+		}
+	}
+
+	resultCh := s.costFlight.DoChan("dashboard-cost-summary", func() (any, error) {
+		loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return s.loadDashboardCostSummary(loadCtx)
+	})
+	var summary *usagestats.DashboardCostSummary
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case result := <-resultCh:
+		err = result.Err
+		if result.Val != nil {
+			if loaded, ok := result.Val.(*usagestats.DashboardCostSummary); ok && loaded != nil {
+				copyOfSummary := *loaded
+				summary = &copyOfSummary
+			}
+		}
+	}
+	if err != nil {
+		if dashboardCostSummaryCanFallback(cached, time.Now().UTC()) {
+			cached.Stale = true
+			return cached, nil
+		}
+		return nil, fmt.Errorf("get dashboard cost summary: %w", err)
+	}
+	if summary == nil {
+		if dashboardCostSummaryCanFallback(cached, time.Now().UTC()) {
+			cached.Stale = true
+			return cached, nil
+		}
+		return &usagestats.DashboardCostSummary{Stale: true, AggregationComplete: false}, nil
+	}
+	age := dashboardCostSummaryAge(summary, time.Now().UTC())
+	summary.Stale = !summary.AggregationComplete || age > defaultDashboardCostFreshTTL
+	if age > defaultDashboardCostMaxStale {
+		summary.AggregationComplete = false
+	}
+	return summary, nil
+}
+
+func (s *DashboardService) loadDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
+	reader, ok := s.usageRepo.(dashboardCostSummaryReader)
+	if !ok {
+		return nil, nil
+	}
+	summary, err := reader.GetDashboardCostSummary(ctx)
+	if err != nil || summary == nil {
+		return summary, err
+	}
+	if s.cache != nil {
+		if data, marshalErr := json.Marshal(summary); marshalErr == nil {
+			cacheCtx, cancel := s.cacheOperationContext()
+			defer cancel()
+			if cacheErr := s.cache.SetDashboardCostSummary(cacheCtx, string(data), defaultDashboardCostCacheTTL); cacheErr != nil {
+				logger.LegacyPrintf("service.dashboard", "[Dashboard] 成本快照缓存写入失败: %v", cacheErr)
+			}
+		}
+	}
+	return summary, nil
+}
+
+func dashboardCostSummaryCanFallback(summary *usagestats.DashboardCostSummary, now time.Time) bool {
+	return summary != nil && dashboardCostSummaryAge(summary, now) <= defaultDashboardCostMaxStale
+}
+
+func dashboardCostSummaryAge(summary *usagestats.DashboardCostSummary, now time.Time) time.Duration {
+	if summary == nil || strings.TrimSpace(summary.AsOf) == "" {
+		return time.Duration(1<<63 - 1)
+	}
+	asOf, err := time.Parse(time.RFC3339, summary.AsOf)
+	if err != nil || now.Before(asOf) {
+		return time.Duration(1<<63 - 1)
+	}
+	return now.Sub(asOf)
 }
 
 func (s *DashboardService) GetUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) ([]usagestats.TrendDataPoint, error) {

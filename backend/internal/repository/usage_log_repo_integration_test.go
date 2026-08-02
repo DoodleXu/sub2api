@@ -861,7 +861,11 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	}
 
 	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
-	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, now.Add(24*time.Hour)))
+	coverageEnd := now.Add(24 * time.Hour)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, coverageEnd))
+	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, coverageEnd)
+	s.Require().NoError(err)
+	s.Require().True(complete)
 
 	stats, err := s.repo.GetDashboardStats(s.ctx)
 	s.Require().NoError(err)
@@ -919,7 +923,11 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts(
 	s.Require().NoError(err)
 
 	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
-	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, now.Add(24*time.Hour)))
+	coverageEnd := now.Add(24 * time.Hour)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, coverageEnd))
+	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, coverageEnd)
+	s.Require().NoError(err)
+	s.Require().True(complete)
 
 	stats, err := s.repo.GetDashboardStats(s.ctx)
 	s.Require().NoError(err)
@@ -928,7 +936,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts(
 	s.Require().Equal(0.0, stats.AverageCostCNYPerUSD)
 }
 
-func (s *UsageLogRepoSuite) TestDashboardCostCNYCombinesAggregatesAndRawTail() {
+func (s *UsageLogRepoSuite) TestDashboardCostCNYSnapshotWaitsForCompleteCoverageWithoutRawFallback() {
 	todayStart := timezone.Today()
 	aggregateEnd := todayStart.Add(2*time.Hour + 15*time.Minute)
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-tail@example.com"})
@@ -971,7 +979,20 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYCombinesAggregatesAndRawTail() {
 	s.Require().True(coverageStart.Equal(todayStart))
 	s.Require().True(coverageEnd.Equal(aggregateEnd))
 
+	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, aggregateEnd.Add(time.Hour))
+	s.Require().NoError(err)
+	s.Require().False(complete)
 	stats := &DashboardStats{}
+	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
+	s.Require().Zero(stats.TotalCostCNY)
+	s.Require().Zero(stats.AverageCostCNYPerUSD)
+	s.Require().Zero(stats.TodayRealCostCNY)
+
+	completeEnd := aggregateEnd.Truncate(time.Hour).Add(time.Hour)
+	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, aggregateEnd, completeEnd))
+	complete, err = aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, completeEnd)
+	s.Require().NoError(err)
+	s.Require().True(complete)
 	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
 	s.Require().InEpsilon(12.0, stats.TotalCostCNY, 0.0001)
 	s.Require().InEpsilon(4.0, stats.AverageCostCNYPerUSD, 0.0001)
@@ -979,7 +1000,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYCombinesAggregatesAndRawTail() {
 	s.Require().InEpsilon(12.0, stats.TodayRealCostCNY, 0.0001)
 }
 
-func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupKeepsPartialHourInRawPrefix() {
+func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupRequiresReaggregationBeforePublishing() {
 	todayStart := timezone.Today()
 	cutoff := todayStart.Add(12*time.Hour + 34*time.Minute)
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-cleanup@example.com"})
@@ -1021,6 +1042,15 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupKeepsPartialHourInRawPref
 	)
 
 	stats := &DashboardStats{}
+	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
+	s.Require().Zero(stats.TotalCostCNY)
+	s.Require().Zero(stats.AverageCostCNYPerUSD)
+	s.Require().Zero(stats.TodayRealCostCNY)
+
+	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, cutoff.Truncate(time.Hour), accountCostCutoff))
+	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, cutoff.Truncate(time.Hour), accountCostCutoff)
+	s.Require().NoError(err)
+	s.Require().True(complete)
 	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
 	s.Require().InEpsilon(6.0, stats.TotalCostCNY, 0.0001)
 	s.Require().InEpsilon(6.0, stats.AverageCostCNYPerUSD, 0.0001)

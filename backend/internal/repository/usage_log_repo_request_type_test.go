@@ -606,7 +606,10 @@ func TestUsageLogRepositoryGetModelStatsAccountCostColumn(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
-	mock.ExpectQuery("FROM usage_logs").
+	mock.ExpectQuery("SELECT model_hourly_aggregated_from, model_hourly_last_aggregated_at").
+		WillReturnRows(sqlmock.NewRows([]string{"model_hourly_aggregated_from", "model_hourly_last_aggregated_at"}).
+			AddRow(start, end))
+	mock.ExpectQuery("FROM usage_dashboard_model_daily").
 		WithArgs(start, end).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
@@ -625,6 +628,54 @@ func TestUsageLogRepositoryGetModelStatsAccountCostColumn(t *testing.T) {
 	require.Equal(t, 1.8, results[0].AccountCost)
 	require.Equal(t, "claude-sonnet-4-6", results[1].Model)
 	require.Equal(t, 0.7, results[1].AccountCost)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryGetModelStatsUsesCoveredHourlyPrefixForCurrentDate(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	coveredEnd := start.Add(36 * time.Hour)
+	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT model_hourly_aggregated_from, model_hourly_last_aggregated_at").
+		WillReturnRows(sqlmock.NewRows([]string{"model_hourly_aggregated_from", "model_hourly_last_aggregated_at"}).
+			AddRow(start, coveredEnd))
+	mock.ExpectQuery("FROM usage_dashboard_model_hourly").
+		WithArgs(start, coveredEnd).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"model", "requests", "input_tokens", "output_tokens",
+			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
+			"cost", "actual_cost", "account_cost",
+		}).AddRow("gpt-image-1", int64(2), int64(10), int64(20), int64(0), int64(0), int64(30), 0.2, 0.15, 0.1))
+
+	results, err := repo.GetModelStatsWithFilters(context.Background(), start, requestedEnd, 0, 0, 0, 0, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "gpt-image-1", results[0].Model)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryGetDashboardCostSummaryReadsSnapshotOnly(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	computedAt := time.Now().UTC().Truncate(time.Second)
+	coverageStart := computedAt.AddDate(0, 0, -90)
+	coverageEnd := computedAt
+
+	mock.ExpectQuery("FROM usage_dashboard_cost_snapshot").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"today_real_cost_cny", "total_cost_cny", "total_account_cost", "today_account_cost",
+			"average_cost_cny_per_usd", "anthropic_cost_cny_per_usd", "openai_cost_cny_per_usd",
+			"coverage_start", "coverage_end", "aggregation_complete", "computed_at",
+		}).AddRow(1.2, 100.0, 20.0, 3.0, 5.0, 6.0, 4.0, coverageStart, coverageEnd, true, computedAt))
+
+	got, err := repo.GetDashboardCostSummary(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1.2, got.TodayRealCostCNY)
+	require.True(t, got.AggregationComplete)
+	require.Equal(t, computedAt.Format(time.RFC3339), got.AsOf)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -742,15 +793,10 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 		AddRow(int64(1), "alpha@example.com", 12.5, int64(8), int64(800), 40.0, int64(30), int64(2600)).
 		AddRow(int64(3), "gamma@example.com", 4.25, int64(5), int64(300), 40.0, int64(30), int64(2600))
 
-	if isWholeDashboardDayRange(start, end) {
-		mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
-			WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
-				AddRow(time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC()))
-	}
-	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
-		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
-			AddRow(time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC()))
-	mock.ExpectQuery("WITH user_spend AS \\(").
+	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
+			AddRow(start, end))
+	mock.ExpectQuery("FROM usage_dashboard_daily_user_stats").
 		WithArgs(start, end, 12).
 		WillReturnRows(rows)
 
@@ -766,6 +812,61 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 		TotalRequests:   30,
 		TotalTokens:     2600,
 	}, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryGetUserSpendingRankingUsesCoveredHourlyPrefixForCurrentDate(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	coveredEnd := start.Add(36 * time.Hour)
+	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
+	rows := sqlmock.NewRows([]string{"user_id", "email", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
+		AddRow(int64(7), "current@example.com", 3.5, int64(4), int64(500), 3.5, int64(4), int64(500))
+
+	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
+			AddRow(start, start.Add(24*time.Hour)))
+	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
+			AddRow(start, coveredEnd))
+	mock.ExpectQuery("FROM usage_dashboard_hourly_user_stats").
+		WithArgs(start, coveredEnd, 12).
+		WillReturnRows(rows)
+
+	got, err := repo.GetUserSpendingRanking(context.Background(), start, requestedEnd, 12)
+	require.NoError(t, err)
+	require.Len(t, got.Ranking, 1)
+	require.Equal(t, int64(7), got.Ranking[0].UserID)
+	require.Equal(t, 3.5, got.TotalActualCost)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryGetUserUsageTrendGroupsCoveredHourlyPrefixByDay(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	coveredEnd := start.Add(36 * time.Hour)
+	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
+			AddRow(start, start.Add(24*time.Hour)))
+	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
+		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
+			AddRow(start, coveredEnd))
+	mock.ExpectQuery("FROM usage_dashboard_hourly_user_stats").
+		WithArgs(start, coveredEnd, 12, start, coveredEnd).
+		WillReturnRows(sqlmock.NewRows([]string{"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost"}).
+			AddRow("2026-08-01", int64(7), "current@example.com", "current", int64(4), int64(500), 4.0, 3.5))
+
+	got, err := repo.GetUserUsageTrend(context.Background(), start, requestedEnd, "day", 12)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "2026-08-01", got[0].Date)
+	require.Equal(t, int64(7), got[0].UserID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

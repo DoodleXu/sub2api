@@ -69,6 +69,10 @@ func (s *dashboardRepoStub) AggregateAccountCostRange(ctx context.Context, start
 	return nil
 }
 
+func (s *dashboardRepoStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
+	return true, nil
+}
+
 func (s *dashboardRepoStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
 	s.recomputeCalls.Add(1)
 	return s.recomputeErr

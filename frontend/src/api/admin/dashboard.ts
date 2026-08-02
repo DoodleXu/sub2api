@@ -127,6 +127,23 @@ export interface DashboardSnapshotV2Response {
   models?: ModelStat[]
   groups?: GroupStat[]
   users_trend?: UserUsageTrendPoint[]
+  partial_errors?: Record<string, string>
+  section_durations_ms?: Record<string, number>
+}
+
+export interface DashboardCostSummary {
+  today_real_cost_cny: number
+  total_cost_cny: number
+  total_account_cost: number
+  today_account_cost: number
+  average_cost_cny_per_usd: number
+  anthropic_cost_cny_per_usd: number
+  openai_cost_cny_per_usd: number
+  as_of: string
+  stale: boolean
+  aggregation_complete: boolean
+  coverage_start?: string
+  coverage_end?: string
 }
 
 /**
@@ -178,6 +195,13 @@ export async function getUserBreakdown(params: UserBreakdownParams): Promise<Use
 export async function getSnapshotV2(params?: DashboardSnapshotV2Params): Promise<DashboardSnapshotV2Response> {
   const { data } = await apiClient.get<DashboardSnapshotV2Response>('/admin/dashboard/snapshot-v2', {
     params
+  })
+  return data
+}
+
+export async function getCostSummary(): Promise<DashboardCostSummary> {
+  const { data } = await apiClient.get<DashboardCostSummary>('/admin/dashboard/cost-summary', {
+    timeout: 3000
   })
   return data
 }
@@ -311,6 +335,7 @@ export const dashboardAPI = {
   getModelStats,
   getGroupStats,
   getSnapshotV2,
+  getCostSummary,
   getApiKeyUsageTrend,
   getUserUsageTrend,
   getUserSpendingRanking,

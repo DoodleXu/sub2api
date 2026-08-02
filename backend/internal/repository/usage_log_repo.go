@@ -1816,57 +1816,17 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 }
 
 func (r *usageLogRepository) fillDashboardAggregatedAccountCostFromUsageLogs(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
-	if err := r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) && !isUndefinedColumnError(err) {
-		return err
-	}
-
-	tzName := timezone.Name()
-	query := `
-		WITH bounds AS (
-			SELECT
-				MIN(bucket_date)::timestamp AT TIME ZONE $2 AS start_time,
-				(MAX(bucket_date) + INTERVAL '1 day')::timestamp AT TIME ZONE $2 AS end_time
-			FROM usage_dashboard_daily
-		)
-		SELECT
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
-				WHERE ul.created_at >= bounds.start_time AND ul.created_at < bounds.end_time
-			), 0) AS total_account_cost,
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
-				WHERE ul.created_at >= $1::timestamptz AND ul.created_at < $1::timestamptz + INTERVAL '1 day'
-			), 0) AS today_account_cost
-		FROM bounds
-		LEFT JOIN usage_logs ul
-			ON bounds.start_time IS NOT NULL
-			AND ul.created_at >= LEAST(bounds.start_time, $1::timestamptz)
-			AND ul.created_at < GREATEST(bounds.end_time, $1::timestamptz + INTERVAL '1 day')
-	`
-	return scanSingleRow(ctx, r.sql, query, []any{todayUTC, tzName}, &stats.TotalAccountCost, &stats.TodayAccountCost)
+	return r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC)
 }
 
 func (r *usageLogRepository) fillDashboardAccountCostFromAggregates(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
-	var totalAccountCost, todayAccountCost float64
-	var missingAccountCostRows int64
 	query := `
 		SELECT
 			COALESCE(SUM(account_cost), 0) AS total_account_cost,
-			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_account_cost,
-			COUNT(*) FILTER (WHERE actual_cost > 0 AND account_cost = 0) AS missing_account_cost_rows
+			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_account_cost
 		FROM usage_dashboard_daily
 	`
-	if err := scanSingleRow(ctx, r.sql, query, []any{todayUTC}, &totalAccountCost, &todayAccountCost, &missingAccountCostRows); err != nil {
-		return err
-	}
-	// Newly added aggregate columns default to 0 for historical rows until a backfill runs.
-	// Preserve correctness by falling back to usage_logs when non-empty aggregates have no account cost.
-	if missingAccountCostRows > 0 {
-		return sql.ErrNoRows
-	}
-	stats.TotalAccountCost = totalAccountCost
-	stats.TodayAccountCost = todayAccountCost
-	return nil
+	return scanSingleRow(ctx, r.sql, query, []any{todayUTC}, &stats.TotalAccountCost, &stats.TodayAccountCost)
 }
 
 func isUndefinedColumnError(err error) bool {
@@ -1981,118 +1941,66 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 }
 
 func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats, todayStart time.Time) error {
-	todayEnd := todayStart.Add(24 * time.Hour)
-	args := []any{service.PlatformAnthropic, service.PlatformOpenAI, todayStart, todayEnd}
+	_ = todayStart
+	summary, err := r.GetDashboardCostSummary(ctx)
+	if err != nil || summary == nil {
+		return err
+	}
+	stats.TodayRealCostCNY = summary.TodayRealCostCNY
+	stats.TotalCostCNY = summary.TotalCostCNY
+	stats.TotalAccountCost = summary.TotalAccountCost
+	stats.TodayAccountCost = summary.TodayAccountCost
+	stats.AverageCostCNYPerUSD = summary.AverageCostCNYPerUSD
+	stats.AnthropicCostCNYPerUSD = summary.AnthropicCostCNYPerUSD
+	stats.OpenAICostCNYPerUSD = summary.OpenAICostCNYPerUSD
+	return nil
+}
 
+func (r *usageLogRepository) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
 	query := `
-		WITH coverage AS (
-			SELECT
-				account_cost_hourly_aggregated_from AS start_time,
-				account_cost_hourly_last_aggregated_at AS end_time
-			FROM usage_dashboard_aggregation_watermark
-			WHERE id = 1
-		),
-		cny_by_platform AS (
-			SELECT
-				a.platform,
-				SUM(a.total_cost_cny) AS total_cost_cny
-			FROM accounts a
-			WHERE a.deleted_at IS NULL
-				AND a.total_cost_cny > 0
-			GROUP BY a.platform
-		),
-		aggregated_cost_by_account AS (
-			SELECT
-				h.account_id,
-				COALESCE(SUM(h.account_cost), 0) AS total_account_cost,
-				COALESCE(SUM(h.account_cost) FILTER (
-					WHERE h.bucket_start >= $3::timestamptz AND h.bucket_start < $4::timestamptz
-				), 0) AS today_account_cost
-			FROM usage_dashboard_account_cost_hourly h
-			CROSS JOIN coverage
-			WHERE h.bucket_start >= coverage.start_time
-				AND h.bucket_start < coverage.end_time
-			GROUP BY h.account_id
-		),
-		raw_cost_by_account AS (
-			SELECT
-				ul.account_id,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS total_account_cost,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (
-					WHERE ul.created_at >= $3::timestamptz AND ul.created_at < $4::timestamptz
-				), 0) AS today_account_cost
-			FROM usage_logs ul
-			CROSS JOIN coverage
-			WHERE ul.created_at < coverage.start_time
-				OR ul.created_at >= coverage.end_time
-			GROUP BY ul.account_id
-		),
-		combined_cost_by_account AS (
-			SELECT
-				account_id,
-				SUM(total_account_cost) AS total_account_cost,
-				SUM(today_account_cost) AS today_account_cost
-			FROM (
-				SELECT * FROM aggregated_cost_by_account
-				UNION ALL
-				SELECT * FROM raw_cost_by_account
-			) costs
-			GROUP BY account_id
-		),
-		account_cost_by_account AS (
 		SELECT
-			a.id,
-			a.platform,
-			a.total_cost_cny,
-			COALESCE(cost.total_account_cost, 0) AS total_account_cost,
-			COALESCE(cost.today_account_cost, 0) AS today_account_cost
-		FROM accounts a
-		LEFT JOIN combined_cost_by_account cost ON cost.account_id = a.id
-		WHERE a.deleted_at IS NULL
-			AND a.total_cost_cny > 0
-	),
-	account_cost_costed_by_platform AS (
-		SELECT
-			platform,
-			COALESCE(SUM(total_account_cost), 0) AS total_account_cost
-		FROM account_cost_by_account
-		GROUP BY platform
-	),
-	today_real_cost AS (
-		SELECT COALESCE(SUM(today_account_cost * total_cost_cny / NULLIF(total_account_cost, 0)), 0) AS today_real_cost_cny
-		FROM account_cost_by_account
-		WHERE total_account_cost > 0
-	)
-	SELECT
-		COALESCE(SUM(cny.total_cost_cny), 0) AS total_cost_cny,
-		COALESCE(SUM(cost.total_account_cost), 0) AS costed_total_account_cost,
-		COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $1), 0) AS anthropic_total_cost_cny,
-		COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $1), 0) AS anthropic_total_account_cost,
-		COALESCE(SUM(cny.total_cost_cny) FILTER (WHERE cny.platform = $2), 0) AS openai_total_cost_cny,
-		COALESCE(SUM(cost.total_account_cost) FILTER (WHERE cost.platform = $2), 0) AS openai_total_account_cost,
-		(SELECT today_real_cost_cny FROM today_real_cost) AS today_real_cost_cny
-	FROM (SELECT 1) base
-	LEFT JOIN cny_by_platform cny ON TRUE
-	LEFT JOIN account_cost_costed_by_platform cost ON cost.platform = cny.platform
+			today_real_cost_cny,
+			total_cost_cny,
+			total_account_cost,
+			today_account_cost,
+			average_cost_cny_per_usd,
+			anthropic_cost_cny_per_usd,
+			openai_cost_cny_per_usd,
+			coverage_start,
+			coverage_end,
+			aggregation_complete,
+			computed_at
+		FROM usage_dashboard_cost_snapshot
+		WHERE id = 1
 	`
-	var totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY float64
+	result := &usagestats.DashboardCostSummary{}
+	var coverageStart, coverageEnd, computedAt time.Time
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		args,
-		&totalCostCNY,
-		&costedTotalAccountCost,
-		&anthropicCostCNY,
-		&anthropicAccountCost,
-		&openAICostCNY,
-		&openAIAccountCost,
-		&todayRealCostCNY,
+		nil,
+		&result.TodayRealCostCNY,
+		&result.TotalCostCNY,
+		&result.TotalAccountCost,
+		&result.TodayAccountCost,
+		&result.AverageCostCNYPerUSD,
+		&result.AnthropicCostCNYPerUSD,
+		&result.OpenAICostCNYPerUSD,
+		&coverageStart,
+		&coverageEnd,
+		&result.AggregationComplete,
+		&computedAt,
 	); err != nil {
-		return err
+		if err == sql.ErrNoRows || isUndefinedTableError(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	applyDashboardCostCNYStats(stats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY)
-	return nil
+	result.AsOf = computedAt.UTC().Format(time.RFC3339)
+	result.CoverageStart = coverageStart.UTC().Format(time.RFC3339)
+	result.CoverageEnd = coverageEnd.UTC().Format(time.RFC3339)
+	return result, nil
 }
 
 func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY float64) {
@@ -2643,76 +2551,40 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
 	coverageKind, canCheckCoverage := dashboardUserUsageTrendCoverageKind(startTime, endTime, granularity)
 	if canCheckCoverage {
-		if canUseAggregates, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, coverageKind); coverageErr != nil {
+		if aggregateEnd, canUseAggregates, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, coverageKind); coverageErr != nil {
 			return nil, coverageErr
 		} else if canUseAggregates {
-			if aggregated, hit, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, endTime, granularity, limit); aggregatedErr != nil {
+			if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, coverageKind); aggregatedErr != nil {
 				if !isUndefinedTableError(aggregatedErr) {
 					return nil, aggregatedErr
 				}
-			} else if hit {
+			} else {
 				return aggregated, nil
 			}
 		}
-	}
-
-	dateFormat := safeDateFormat(granularity)
-
-	query := fmt.Sprintf(`
-		WITH top_users AS (
-			SELECT user_id
-			FROM usage_logs
-			WHERE created_at >= $1 AND created_at < $2
-			GROUP BY user_id
-			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
-			LIMIT $3
-		)
-		SELECT
-			TO_CHAR(u.created_at, '%s') as date,
-			u.user_id,
-			COALESCE(us.email, '') as email,
-			COALESCE(us.username, '') as username,
-			COUNT(*) as requests,
-			COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(u.total_cost), 0) as cost,
-			COALESCE(SUM(u.actual_cost), 0) as actual_cost
-		FROM usage_logs u
-		LEFT JOIN users us ON u.user_id = us.id
-		WHERE u.user_id IN (SELECT user_id FROM top_users)
-		  AND u.created_at >= $4 AND u.created_at < $5
-		GROUP BY date, u.user_id, us.email, us.username
-		ORDER BY date ASC, tokens DESC
-	`, dateFormat)
-
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit, startTime, endTime)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		// 保持主错误优先；仅在无错误时回传 Close 失败。
-		// 同时清空返回值，避免误用不完整结果。
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = closeErr
-			results = nil
+		// Daily tables intentionally cover complete days only. When a day-level
+		// request includes the current unfinished day, group the covered hourly
+		// buckets by day instead of returning an empty section or reading raw logs.
+		if coverageKind == dashboardUserAggregateCoverageDaily {
+			if aggregateEnd, canUseHourly, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, dashboardUserAggregateCoverageHourly); coverageErr != nil {
+				return nil, coverageErr
+			} else if canUseHourly {
+				if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, dashboardUserAggregateCoverageHourly); aggregatedErr != nil {
+					if !isUndefinedTableError(aggregatedErr) {
+						return nil, aggregatedErr
+					}
+				} else {
+					return aggregated, nil
+				}
+			}
 		}
-	}()
-
-	results = make([]UserUsageTrendPoint, 0)
-	for rows.Next() {
-		var row UserUsageTrendPoint
-		if err = rows.Scan(&row.Date, &row.UserID, &row.Email, &row.Username, &row.Requests, &row.Tokens, &row.Cost, &row.ActualCost); err != nil {
-			return nil, err
-		}
-		results = append(results, row)
 	}
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return results, nil
+	// Dashboard widgets must never fall back to grouping raw usage_logs. Missing
+	// aggregate coverage is represented as an empty optional section instead.
+	return []UserUsageTrendPoint{}, nil
 }
 
-func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) ([]UserUsageTrendPoint, bool, error) {
+func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, sourceKind dashboardUserAggregateCoverageKind) ([]UserUsageTrendPoint, bool, error) {
 	if limit <= 0 {
 		limit = 12
 	}
@@ -2720,8 +2592,8 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 	dateFormat := safeDateFormat(granularity)
 	query := ""
 	args := []any{startTime, endTime, limit, startTime, endTime}
-	switch granularity {
-	case "hour":
+	switch sourceKind {
+	case dashboardUserAggregateCoverageHourly:
 		query = fmt.Sprintf(`
 			WITH top_users AS (
 				SELECT user_id
@@ -2747,7 +2619,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 			GROUP BY date, s.user_id, u.email, u.username
 			ORDER BY date ASC, tokens DESC
 		`, dateFormat)
-	case "day":
+	case dashboardUserAggregateCoverageDaily:
 		query = fmt.Sprintf(`
 			WITH top_users AS (
 				SELECT user_id
@@ -2807,92 +2679,30 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 		limit = 12
 	}
 	if isWholeDashboardDayRange(startTime, endTime) {
-		if canUseDaily, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, dashboardUserAggregateCoverageDaily); coverageErr != nil {
+		if aggregateEnd, canUseDaily, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, dashboardUserAggregateCoverageDaily); coverageErr != nil {
 			return nil, coverageErr
 		} else if canUseDaily {
-			if aggregated, hit, aggregatedErr := r.getUserSpendingRankingFromAggregates(ctx, startTime, endTime, limit); aggregatedErr != nil {
+			if aggregated, _, aggregatedErr := r.getUserSpendingRankingFromAggregates(ctx, startTime, aggregateEnd, limit); aggregatedErr != nil {
 				if !isUndefinedTableError(aggregatedErr) {
 					return nil, aggregatedErr
 				}
-			} else if hit {
+			} else {
 				return aggregated, nil
 			}
 		}
 	}
-	if canUseHourly, coverageErr := r.dashboardUserAggregatesCoverRange(ctx, startTime, endTime, dashboardUserAggregateCoverageHourly); coverageErr != nil {
+	if aggregateEnd, canUseHourly, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, dashboardUserAggregateCoverageHourly); coverageErr != nil {
 		return nil, coverageErr
 	} else if canUseHourly {
-		if aggregated, hit, aggregatedErr := r.getUserSpendingRankingFromHourlyAggregates(ctx, startTime, endTime, limit); aggregatedErr != nil {
+		if aggregated, _, aggregatedErr := r.getUserSpendingRankingFromHourlyAggregates(ctx, startTime, aggregateEnd, limit); aggregatedErr != nil {
 			if !isUndefinedTableError(aggregatedErr) {
 				return nil, aggregatedErr
 			}
-		} else if hit {
+		} else {
 			return aggregated, nil
 		}
 	}
-
-	query := `
-		WITH user_spend AS (
-			SELECT
-				u.user_id,
-				COALESCE(us.email, '') as email,
-				COALESCE(SUM(u.actual_cost), 0) as actual_cost,
-				COUNT(*) as requests,
-				COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
-			FROM usage_logs u
-			LEFT JOIN users us ON u.user_id = us.id
-			WHERE u.created_at >= $1 AND u.created_at < $2
-			GROUP BY u.user_id, us.email
-		),
-		ranked AS (
-			SELECT
-				user_id,
-				email,
-				actual_cost,
-				requests,
-				tokens,
-				COALESCE(SUM(actual_cost) OVER (), 0) as total_actual_cost,
-				COALESCE(SUM(requests) OVER (), 0) as total_requests,
-				COALESCE(SUM(tokens) OVER (), 0) as total_tokens
-			FROM user_spend
-			ORDER BY actual_cost DESC, tokens DESC, user_id ASC
-			LIMIT $3
-		)
-		SELECT
-			user_id,
-			email,
-			actual_cost,
-			requests,
-			tokens,
-			total_actual_cost,
-			total_requests,
-			total_tokens
-		FROM ranked
-		ORDER BY actual_cost DESC, tokens DESC, user_id ASC
-	`
-
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = closeErr
-			result = nil
-		}
-	}()
-
-	ranking, totalActualCost, totalRequests, totalTokens, err := scanUserSpendingRankingRows(rows)
-	if err != nil {
-		return nil, err
-	}
-
-	return &UserSpendingRankingResponse{
-		Ranking:         ranking,
-		TotalActualCost: totalActualCost,
-		TotalRequests:   totalRequests,
-		TotalTokens:     totalTokens,
-	}, nil
+	return &UserSpendingRankingResponse{Ranking: []UserSpendingRankingItem{}}, nil
 }
 
 func (r *usageLogRepository) getUserSpendingRankingFromAggregates(ctx context.Context, startTime, endTime time.Time, limit int) (*UserSpendingRankingResponse, bool, error) {
@@ -3059,9 +2869,9 @@ func dashboardUserUsageTrendCoverageKind(startTime, endTime time.Time, granulari
 	}
 }
 
-func (r *usageLogRepository) dashboardUserAggregatesCoverRange(ctx context.Context, startTime, endTime time.Time, kind dashboardUserAggregateCoverageKind) (bool, error) {
+func (r *usageLogRepository) dashboardUserAggregateCoveredEnd(ctx context.Context, startTime, endTime time.Time, kind dashboardUserAggregateCoverageKind) (time.Time, bool, error) {
 	if !endTime.After(time.Unix(0, 0).UTC()) {
-		return false, nil
+		return time.Time{}, false, nil
 	}
 	fromColumn := "user_hourly_aggregated_from"
 	toColumn := "user_hourly_last_aggregated_at"
@@ -3073,16 +2883,13 @@ func (r *usageLogRepository) dashboardUserAggregatesCoverRange(ctx context.Conte
 	query := fmt.Sprintf("SELECT %s, %s FROM usage_dashboard_aggregation_watermark WHERE id = 1", fromColumn, toColumn)
 	if err := scanSingleRow(ctx, r.sql, query, nil, &coveredFrom, &coveredTo); err != nil {
 		if err == sql.ErrNoRows || isUndefinedTableError(err) || isUndefinedColumnError(err) {
-			return false, nil
+			return time.Time{}, false, nil
 		}
-		return false, err
+		return time.Time{}, false, err
 	}
-	epoch := time.Unix(0, 0).UTC()
-	coveredFrom = coveredFrom.UTC()
-	coveredTo = coveredTo.UTC()
-	startUTC := startTime.UTC()
-	endUTC := endTime.UTC()
-	return coveredTo.After(epoch) && !startUTC.Before(coveredFrom) && !endUTC.After(coveredTo), nil
+	allowFutureTail := kind == dashboardUserAggregateCoverageHourly
+	aggregateEnd, covered := dashboardAggregateCoveredEnd(startTime, endTime, coveredFrom, coveredTo, allowFutureTail)
+	return aggregateEnd, covered, nil
 }
 
 func scanUserSpendingRankingRows(rows *sql.Rows) ([]UserSpendingRankingItem, float64, int64, int64, error) {
@@ -3870,6 +3677,9 @@ func (r *usageLogRepository) GetModelStatsWithFiltersBySource(ctx context.Contex
 }
 
 func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8, source string) (results []ModelStat, err error) {
+	if userID == 0 && apiKeyID == 0 && accountID == 0 && groupID == 0 && requestType == nil && stream == nil && billingType == nil && usagestats.NormalizeModelSource(source) == usagestats.ModelSourceRequested {
+		return r.getModelStatsFromDashboardAggregates(ctx, startTime, endTime)
+	}
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	// 当仅按 account_id 聚合时，实际费用使用账号倍率（total_cost * account_rate_multiplier）。
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
@@ -3936,6 +3746,92 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 		return nil, err
 	}
 	return results, nil
+}
+
+func (r *usageLogRepository) getModelStatsFromDashboardAggregates(ctx context.Context, startTime, endTime time.Time) (results []ModelStat, err error) {
+	aggregateEnd, covered, coverageErr := r.dashboardModelAggregateCoveredEnd(ctx, startTime, endTime)
+	if coverageErr != nil {
+		return nil, coverageErr
+	}
+	if !covered {
+		return []ModelStat{}, nil
+	}
+	tableName := "usage_dashboard_model_hourly"
+	where := "bucket_start >= $1 AND bucket_start < $2"
+	if isWholeDashboardDayRange(startTime, aggregateEnd) {
+		tableName = "usage_dashboard_model_daily"
+		where = "bucket_date >= $1::date AND bucket_date < $2::date"
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			model,
+			COALESCE(SUM(total_requests), 0) AS requests,
+			COALESCE(SUM(input_tokens), 0) AS input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
+			COALESCE(SUM(total_cost), 0) AS cost,
+			COALESCE(SUM(actual_cost), 0) AS actual_cost,
+			COALESCE(SUM(account_cost), 0) AS account_cost
+		FROM %s
+		WHERE %s
+		GROUP BY model
+		ORDER BY total_tokens DESC
+	`, tableName, where)
+	rows, err := r.sql.QueryContext(ctx, query, startTime, aggregateEnd)
+	if err != nil {
+		if isUndefinedTableError(err) {
+			return []ModelStat{}, nil
+		}
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			results = nil
+		}
+	}()
+	return scanModelStatsRows(rows)
+}
+
+func (r *usageLogRepository) dashboardModelAggregateCoveredEnd(ctx context.Context, startTime, endTime time.Time) (time.Time, bool, error) {
+	var coveredFrom, coveredTo time.Time
+	query := `
+		SELECT model_hourly_aggregated_from, model_hourly_last_aggregated_at
+		FROM usage_dashboard_aggregation_watermark
+		WHERE id = 1
+	`
+	if err := scanSingleRow(ctx, r.sql, query, nil, &coveredFrom, &coveredTo); err != nil {
+		if err == sql.ErrNoRows || isUndefinedTableError(err) || isUndefinedColumnError(err) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	aggregateEnd, covered := dashboardAggregateCoveredEnd(startTime, endTime, coveredFrom, coveredTo, true)
+	return aggregateEnd, covered, nil
+}
+
+// dashboardAggregateCoveredEnd validates the immutable start boundary and
+// returns the safe aggregate query end. Historical gaps remain unavailable. A
+// request whose end is still in the future (the dashboard's inclusive current
+// date shape) may use the covered realtime prefix without querying raw logs.
+func dashboardAggregateCoveredEnd(startTime, endTime, coveredFrom, coveredTo time.Time, allowFutureTail bool) (time.Time, bool) {
+	epoch := time.Unix(0, 0).UTC()
+	startUTC := startTime.UTC()
+	endUTC := endTime.UTC()
+	coveredFromUTC := coveredFrom.UTC()
+	coveredToUTC := coveredTo.UTC()
+	if !endUTC.After(startUTC) || !coveredToUTC.After(epoch) || startUTC.Before(coveredFromUTC) {
+		return time.Time{}, false
+	}
+	if !endUTC.After(coveredToUTC) {
+		return endTime, true
+	}
+	if !allowFutureTail || !endUTC.After(time.Now().UTC()) || !coveredToUTC.After(startUTC) {
+		return time.Time{}, false
+	}
+	return coveredTo, true
 }
 
 func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, source string) (results []ModelStat, err error) {

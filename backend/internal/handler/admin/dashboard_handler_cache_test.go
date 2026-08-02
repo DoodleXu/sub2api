@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -19,6 +20,7 @@ type dashboardUsageRepoCacheProbe struct {
 	trendCalls      atomic.Int32
 	usersTrendCalls atomic.Int32
 	rankingCalls    atomic.Int32
+	usersTrendErr   error
 }
 
 func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithFilters(
@@ -48,6 +50,9 @@ func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 	limit int,
 ) ([]usagestats.UserUsageTrendPoint, error) {
 	r.usersTrendCalls.Add(1)
+	if r.usersTrendErr != nil {
+		return nil, r.usersTrendErr
+	}
 	return []usagestats.UserUsageTrendPoint{{
 		Date:       "2026-03-11",
 		UserID:     1,
@@ -161,4 +166,42 @@ func TestDashboardHandler_GetSnapshotV2_IncludesUsersTrendAndRanking(t *testing.
 	require.Contains(t, rec.Body.String(), `"users_trend"`)
 	require.Contains(t, rec.Body.String(), `"ranking"`)
 	require.Contains(t, rec.Body.String(), `"ranking_total_actual_cost"`)
+}
+
+func TestDashboardHandler_GetSnapshotV2_ReturnsPartialSuccessWhenOptionalSectionFails(t *testing.T) {
+	t.Cleanup(resetDashboardReadCachesForTest)
+	resetDashboardReadCachesForTest()
+
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{usersTrendErr: errors.New("users trend unavailable")}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/dashboard/snapshot-v2?start_date=2026-03-01&end_date=2026-03-07&granularity=day&include_stats=false&include_trend=false&include_model_stats=false&include_users_trend=true&include_user_ranking=true", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"partial_errors"`)
+	require.Contains(t, rec.Body.String(), `"users_trend"`)
+	require.Contains(t, rec.Body.String(), `"ranking"`)
+	require.Contains(t, rec.Body.String(), `"section_durations_ms"`)
+}
+
+func TestDashboardHandler_GetGroupStats_RejectsRawDetailRangeOverThirtyOneDays(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/groups", handler.GetGroupStats)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/dashboard/groups?start_date=2026-01-01&end_date=2026-03-01", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "cannot exceed 31 days")
 }

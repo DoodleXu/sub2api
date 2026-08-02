@@ -10,7 +10,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const dashboardStatsCacheKey = "dashboard:stats:v1"
+const (
+	dashboardStatsCacheKey       = "dashboard:stats:v1"
+	dashboardCostSummaryCacheKey = "dashboard:cost-summary:v1"
+)
 
 type dashboardCache struct {
 	rdb       *redis.Client
@@ -51,6 +54,32 @@ func (c *dashboardCache) buildKey() string {
 		return dashboardStatsCacheKey
 	}
 	return c.keyPrefix + dashboardStatsCacheKey
+}
+
+func (c *dashboardCache) GetDashboardCostSummary(ctx context.Context) (string, error) {
+	val, err := c.rdb.Get(ctx, c.buildCostSummaryKey()).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "", service.ErrDashboardStatsCacheMiss
+		}
+		return "", err
+	}
+	return val, nil
+}
+
+func (c *dashboardCache) SetDashboardCostSummary(ctx context.Context, data string, ttl time.Duration) error {
+	return c.rdb.Set(ctx, c.buildCostSummaryKey(), data, ttl).Err()
+}
+
+func (c *dashboardCache) buildCostSummaryKey() string {
+	if c.keyPrefix == "" {
+		return dashboardCostSummaryCacheKey
+	}
+	return c.keyPrefix + dashboardCostSummaryCacheKey
+}
+
+func (c *dashboardCache) DeleteDashboardCostSummary(ctx context.Context) error {
+	return c.rdb.Del(ctx, c.buildCostSummaryKey()).Err()
 }
 
 func (c *dashboardCache) DeleteDashboardStats(ctx context.Context) error {

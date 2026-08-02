@@ -42,6 +42,7 @@ var (
 type DashboardAggregationRepository interface {
 	AggregateRange(ctx context.Context, start, end time.Time) error
 	AggregateAccountCostRange(ctx context.Context, start, end time.Time) error
+	RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error)
 	// RecomputeRange 重新计算指定时间范围内的聚合数据（包含活跃用户等派生表）。
 	// 设计目的：当 usage_logs 被批量删除/回滚后，确保聚合表可恢复一致性。
 	RecomputeRange(ctx context.Context, start, end time.Time) error
@@ -142,7 +143,10 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillRunBudget)
 	defer cancel()
 
-	now := time.Now().UTC()
+	// Historical chunks must align to complete hours. Using a minute/second
+	// boundary would split one hour across adjacent descending chunks and let the
+	// later upsert overwrite part of that hour.
+	now := time.Now().UTC().Truncate(time.Hour)
 	retentionDays := s.cfg.Retention.UsageLogsDays
 	if retentionDays <= 0 {
 		retentionDays = 1
@@ -159,6 +163,7 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 	deadline := runStartedAt.Add(accountCostBackfillRunBudget)
 	processedChunks := 0
 	defer func() {
+		s.refreshDashboardCostSnapshot(targetStart, now)
 		s.logAccountCostBackfillProgress(targetStart, now, processedChunks, runStartedAt)
 	}()
 	aggregateChunk := func(start, end time.Time) bool {
@@ -175,21 +180,35 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 		return true
 	}
 	if !coverageEnd.After(epoch) || !coverageEnd.After(coverageStart) {
-		cursor := targetStart
-		for cursor.Before(now) {
-			windowEnd := cursor.Add(24 * time.Hour)
-			if windowEnd.After(now) {
-				windowEnd = now
+		cursor := now
+		for cursor.After(targetStart) {
+			windowStart := cursor.Add(-24 * time.Hour)
+			if windowStart.Before(targetStart) {
+				windowStart = targetStart
 			}
-			if !aggregateChunk(cursor, windowEnd) {
+			if !aggregateChunk(windowStart, cursor) {
 				return
 			}
-			cursor = windowEnd
+			cursor = windowStart
 		}
 		return
 	}
 
-	cursor := coverageStart
+	// Always close the realtime tail first. Historical backfill must never leave
+	// the hottest recent range on the request-time fallback path.
+	cursor := coverageEnd
+	for cursor.Before(now) {
+		windowEnd := cursor.Add(24 * time.Hour)
+		if windowEnd.After(now) {
+			windowEnd = now
+		}
+		if !aggregateChunk(cursor, windowEnd) {
+			return
+		}
+		cursor = windowEnd
+	}
+
+	cursor = coverageStart
 	for cursor.After(targetStart) {
 		windowStart := cursor.Add(-24 * time.Hour)
 		if windowStart.Before(targetStart) {
@@ -200,17 +219,21 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 		}
 		cursor = windowStart
 	}
+}
 
-	cursor = coverageEnd
-	for cursor.Before(now) {
-		windowEnd := cursor.Add(24 * time.Hour)
-		if windowEnd.After(now) {
-			windowEnd = now
-		}
-		if !aggregateChunk(cursor, windowEnd) {
-			return
-		}
-		cursor = windowEnd
+func (s *DashboardAggregationService) refreshDashboardCostSnapshot(targetStart, targetEnd time.Time) {
+	if s == nil || s.repo == nil || !targetEnd.After(targetStart) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
+	defer cancel()
+	complete, err := s.repo.RefreshDashboardCostSnapshot(ctx, targetStart, targetEnd)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 刷新成本快照失败: %v", err)
+		return
+	}
+	if !complete {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 成本快照等待完整覆盖 (target_start=%s target_end=%s)", targetStart.UTC().Format(time.RFC3339), targetEnd.UTC().Format(time.RFC3339))
 	}
 }
 
@@ -429,6 +452,11 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		"duration", time.Since(jobStart).String(),
 		"watermark_updated", updateErr == nil,
 	)
+	retentionDays := s.cfg.Retention.UsageLogsDays
+	if retentionDays <= 0 {
+		retentionDays = 1
+	}
+	s.refreshDashboardCostSnapshot(truncateToDayUTC(now.AddDate(0, 0, -retentionDays)), now)
 
 	s.maybeCleanupRetention(ctx, now)
 }

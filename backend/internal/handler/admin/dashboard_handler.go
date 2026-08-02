@@ -1,18 +1,25 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	dashboardDetailQueryTimeout = 3 * time.Second
+	dashboardDetailMaxRangeDays = 31
 )
 
 // DashboardHandler handles admin dashboard statistics
@@ -62,6 +69,34 @@ func parseTimeRange(c *gin.Context) (time.Time, time.Time) {
 	}
 
 	return startTime, endTime
+}
+
+func validateDashboardDetailRange(c *gin.Context, startTime, endTime time.Time) bool {
+	if endTime.Sub(startTime) <= dashboardDetailMaxRangeDays*24*time.Hour {
+		return true
+	}
+	response.BadRequest(c, "Dashboard detail query range cannot exceed 31 days")
+	return false
+}
+
+func dashboardDetailContext(c *gin.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request.Context(), dashboardDetailQueryTimeout)
+}
+
+func finishDashboardDetailQuery(c *gin.Context, section string, startedAt time.Time) {
+	duration := time.Since(startedAt)
+	c.Header("X-Dashboard-Query-Duration-Ms", strconv.FormatInt(duration.Milliseconds(), 10))
+	if duration >= time.Second {
+		logger.LegacyPrintf("handler.admin.dashboard", "[Dashboard] slow detail query (section=%s duration=%s)", section, duration)
+	}
+}
+
+func respondDashboardDetailError(c *gin.Context, err error, message string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		response.Error(c, 504, "Dashboard detail query timed out")
+		return
+	}
+	response.Error(c, 500, message)
 }
 
 // GetStats handles getting dashboard statistics
@@ -135,6 +170,20 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 	})
 }
 
+// GetCostSummary returns the materialized dashboard cost snapshot. The query is
+// deliberately isolated from the core dashboard so a cost refresh failure can
+// never make token/request statistics unavailable.
+func (h *DashboardHandler) GetCostSummary(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
+	defer cancel()
+	summary, err := h.dashboardService.GetDashboardCostSummary(ctx)
+	if err != nil {
+		response.Error(c, 500, "Failed to get dashboard cost summary")
+		return
+	}
+	response.Success(c, summary)
+}
+
 type DashboardAggregationBackfillRequest struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
@@ -192,6 +241,8 @@ func (h *DashboardHandler) GetRealtimeMetrics(c *gin.Context) {
 // GET /api/v1/admin/dashboard/trend
 // Query params: start_date, end_date (YYYY-MM-DD), granularity (day/hour), user_id, api_key_id, model, account_id, group_id, request_type, stream, billing_type
 func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
+	startedAt := time.Now()
+	defer finishDashboardDetailQuery(c, "trend", startedAt)
 	startTime, endTime := parseTimeRange(c)
 	granularity := c.DefaultQuery("granularity", "day")
 
@@ -250,10 +301,16 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 			return
 		}
 	}
+	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || strings.TrimSpace(model) != "" || requestType != nil || stream != nil || billingType != nil
+	if usesRawLogs && !validateDashboardDetailRange(c, startTime, endTime) {
+		return
+	}
 
-	trend, hit, err := h.getUsageTrendCached(c.Request.Context(), startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	queryCtx, cancel := dashboardDetailContext(c)
+	defer cancel()
+	trend, hit, err := h.getUsageTrendCached(queryCtx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
 	if err != nil {
-		response.Error(c, 500, "Failed to get usage trend")
+		respondDashboardDetailError(c, err, "Failed to get usage trend")
 		return
 	}
 	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
@@ -270,6 +327,8 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 // GET /api/v1/admin/dashboard/models
 // Query params: start_date, end_date (YYYY-MM-DD), user_id, api_key_id, account_id, group_id, request_type, stream, billing_type
 func (h *DashboardHandler) GetModelStats(c *gin.Context) {
+	startedAt := time.Now()
+	defer finishDashboardDetailQuery(c, "models", startedAt)
 	startTime, endTime := parseTimeRange(c)
 
 	// Parse optional filter params
@@ -331,10 +390,16 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 			return
 		}
 	}
+	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || requestType != nil || stream != nil || billingType != nil || usagestats.NormalizeModelSource(modelSource) != usagestats.ModelSourceRequested
+	if usesRawLogs && !validateDashboardDetailRange(c, startTime, endTime) {
+		return
+	}
 
-	stats, hit, err := h.getModelStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, billingType)
+	queryCtx, cancel := dashboardDetailContext(c)
+	defer cancel()
+	stats, hit, err := h.getModelStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, billingType)
 	if err != nil {
-		response.Error(c, 500, "Failed to get model statistics")
+		respondDashboardDetailError(c, err, "Failed to get model statistics")
 		return
 	}
 	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
@@ -350,7 +415,12 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 // GET /api/v1/admin/dashboard/groups
 // Query params: start_date, end_date (YYYY-MM-DD), user_id, api_key_id, account_id, group_id, request_type, stream, billing_type
 func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
+	startedAt := time.Now()
+	defer finishDashboardDetailQuery(c, "groups", startedAt)
 	startTime, endTime := parseTimeRange(c)
+	if !validateDashboardDetailRange(c, startTime, endTime) {
+		return
+	}
 
 	var userID, apiKeyID, accountID, groupID int64
 	var requestType *int16
@@ -403,9 +473,11 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 		}
 	}
 
-	stats, hit, err := h.getGroupStatsCached(c.Request.Context(), startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType)
+	queryCtx, cancel := dashboardDetailContext(c)
+	defer cancel()
+	stats, hit, err := h.getGroupStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType)
 	if err != nil {
-		response.Error(c, 500, "Failed to get group statistics")
+		respondDashboardDetailError(c, err, "Failed to get group statistics")
 		return
 	}
 	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
@@ -624,7 +696,12 @@ func (h *DashboardHandler) GetBatchAPIKeysUsage(c *gin.Context) {
 // GET /api/v1/admin/dashboard/user-breakdown
 // Query params: start_date, end_date, group_id, model, endpoint, endpoint_type, limit
 func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
+	startedAt := time.Now()
+	defer finishDashboardDetailQuery(c, "user_breakdown", startedAt)
 	startTime, endTime := parseTimeRange(c)
+	if !validateDashboardDetailRange(c, startTime, endTime) {
+		return
+	}
 
 	dim := usagestats.UserBreakdownDimension{}
 	if v := c.Query("group_id"); v != "" {
@@ -689,11 +766,13 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 		}
 	}
 
+	queryCtx, cancel := dashboardDetailContext(c)
+	defer cancel()
 	stats, err := h.dashboardService.GetUserBreakdownStats(
-		c.Request.Context(), startTime, endTime, dim, limit,
+		queryCtx, startTime, endTime, dim, limit,
 	)
 	if err != nil {
-		response.Error(c, 500, "Failed to get user breakdown stats")
+		respondDashboardDetailError(c, err, "Failed to get user breakdown stats")
 		return
 	}
 

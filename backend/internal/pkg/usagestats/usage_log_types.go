@@ -84,6 +84,24 @@ type DashboardStats struct {
 	Tpm int64 `json:"tpm"` // 近5分钟平均每分钟Token数
 }
 
+// DashboardCostSummary is the materialized CNY/account-cost snapshot used by
+// the admin dashboard. It is intentionally independent from DashboardStats so
+// cost aggregation failures never block the core dashboard response.
+type DashboardCostSummary struct {
+	TodayRealCostCNY       float64 `json:"today_real_cost_cny"`
+	TotalCostCNY           float64 `json:"total_cost_cny"`
+	TotalAccountCost       float64 `json:"total_account_cost"`
+	TodayAccountCost       float64 `json:"today_account_cost"`
+	AverageCostCNYPerUSD   float64 `json:"average_cost_cny_per_usd"`
+	AnthropicCostCNYPerUSD float64 `json:"anthropic_cost_cny_per_usd"`
+	OpenAICostCNYPerUSD    float64 `json:"openai_cost_cny_per_usd"`
+	AsOf                   string  `json:"as_of"`
+	Stale                  bool    `json:"stale"`
+	AggregationComplete    bool    `json:"aggregation_complete"`
+	CoverageStart          string  `json:"coverage_start,omitempty"`
+	CoverageEnd            string  `json:"coverage_end,omitempty"`
+}
+
 // TrendDataPoint represents a single point in trend data
 type TrendDataPoint struct {
 	Date                string  `json:"date"`

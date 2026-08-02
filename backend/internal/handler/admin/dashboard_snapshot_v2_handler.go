@@ -40,6 +40,8 @@ type dashboardSnapshotV2Response struct {
 	RankingTotalActualCost float64                              `json:"ranking_total_actual_cost,omitempty"`
 	RankingTotalRequests   int64                                `json:"ranking_total_requests,omitempty"`
 	RankingTotalTokens     int64                                `json:"ranking_total_tokens,omitempty"`
+	PartialErrors          map[string]string                    `json:"partial_errors,omitempty"`
+	SectionDurationsMS     map[string]int64                     `json:"section_durations_ms,omitempty"`
 }
 
 type dashboardSnapshotV2Filters struct {
@@ -180,20 +182,35 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	errCh := make(chan error, 6)
-	run := func(load func() error) {
+	criticalErrCh := make(chan error, 1)
+	partialErrors := make(map[string]string)
+	sectionDurations := make(map[string]int64)
+	run := func(section string, timeout time.Duration, critical bool, load func(context.Context) error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := load(); err != nil {
-				errCh <- err
+			startedAt := time.Now()
+			sectionCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			err := load(sectionCtx)
+			mu.Lock()
+			sectionDurations[section] = time.Since(startedAt).Milliseconds()
+			if err != nil && !critical {
+				partialErrors[section] = err.Error()
+			}
+			mu.Unlock()
+			if err != nil && critical {
+				select {
+				case criticalErrCh <- err:
+				default:
+				}
 			}
 		}()
 	}
 
 	if includeStats {
-		run(func() error {
-			stats, err := h.dashboardService.GetDashboardStats(ctx)
+		run("stats", time.Second, true, func(sectionCtx context.Context) error {
+			stats, err := h.dashboardService.GetDashboardStats(sectionCtx)
 			if err != nil {
 				return errors.New("failed to get dashboard statistics")
 			}
@@ -208,9 +225,9 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	if includeTrend {
-		run(func() error {
+		run("trend", 3*time.Second, false, func(sectionCtx context.Context) error {
 			trend, _, err := h.getUsageTrendCached(
-				ctx,
+				sectionCtx,
 				startTime,
 				endTime,
 				granularity,
@@ -234,9 +251,9 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	if includeModels {
-		run(func() error {
+		run("models", 3*time.Second, false, func(sectionCtx context.Context) error {
 			models, _, err := h.getModelStatsCached(
-				ctx,
+				sectionCtx,
 				startTime,
 				endTime,
 				filters.UserID,
@@ -259,9 +276,9 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	if includeGroups {
-		run(func() error {
+		run("groups", 3*time.Second, false, func(sectionCtx context.Context) error {
 			groups, _, err := h.getGroupStatsCached(
-				ctx,
+				sectionCtx,
 				startTime,
 				endTime,
 				filters.UserID,
@@ -283,8 +300,8 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	if includeUsersTrend {
-		run(func() error {
-			usersTrend, _, err := h.getUserUsageTrendCached(ctx, startTime, endTime, granularity, usersTrendLimit)
+		run("users_trend", 3*time.Second, false, func(sectionCtx context.Context) error {
+			usersTrend, _, err := h.getUserUsageTrendCached(sectionCtx, startTime, endTime, granularity, usersTrendLimit)
 			if err != nil {
 				return errors.New("failed to get user usage trend")
 			}
@@ -296,8 +313,8 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	if includeRanking {
-		run(func() error {
-			ranking, err := h.dashboardService.GetUserSpendingRanking(ctx, startTime, endTime, rankingLimit)
+		run("ranking", 3*time.Second, false, func(sectionCtx context.Context) error {
+			ranking, err := h.dashboardService.GetUserSpendingRanking(sectionCtx, startTime, endTime, rankingLimit)
 			if err != nil {
 				return errors.New("failed to get user spending ranking")
 			}
@@ -312,10 +329,14 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	}
 
 	wg.Wait()
-	close(errCh)
-	if err := <-errCh; err != nil {
+	close(criticalErrCh)
+	if err := <-criticalErrCh; err != nil {
 		return nil, err
 	}
+	if len(partialErrors) > 0 {
+		resp.PartialErrors = partialErrors
+	}
+	resp.SectionDurationsMS = sectionDurations
 
 	return resp, nil
 }
