@@ -2003,20 +2003,6 @@ func (r *usageLogRepository) GetDashboardCostSummary(ctx context.Context) (*usag
 	return result, nil
 }
 
-func applyDashboardCostCNYStats(stats *DashboardStats, totalCostCNY, costedTotalAccountCost, anthropicCostCNY, anthropicAccountCost, openAICostCNY, openAIAccountCost, todayRealCostCNY float64) {
-	stats.TotalCostCNY = totalCostCNY
-	stats.TodayRealCostCNY = todayRealCostCNY
-	if costedTotalAccountCost > 0 {
-		stats.AverageCostCNYPerUSD = totalCostCNY / costedTotalAccountCost
-	}
-	if anthropicAccountCost > 0 {
-		stats.AnthropicCostCNYPerUSD = anthropicCostCNY / anthropicAccountCost
-	}
-	if openAIAccountCost > 0 {
-		stats.OpenAICostCNYPerUSD = openAICostCNY / openAIAccountCost
-	}
-}
-
 func (r *usageLogRepository) ListByAccount(ctx context.Context, accountID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	return r.listUsageLogsWithPagination(ctx, "WHERE account_id = $1", []any{accountID}, params)
 }

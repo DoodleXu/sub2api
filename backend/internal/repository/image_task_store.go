@@ -474,7 +474,7 @@ LIMIT `+limitArg, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	tasks := make([]*service.ImageTaskRecord, 0, query.Limit+1)
 	for rows.Next() {
 		var task service.ImageTaskRecord

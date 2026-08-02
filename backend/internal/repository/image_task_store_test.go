@@ -57,7 +57,9 @@ func TestImageTaskStoreListsPersistentHistoryWithDateRange(t *testing.T) {
 		WithArgs(int64(100), int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"processing", "completed", "failed"}).AddRow(0, 1, 0))
 
-	page, err := store.(service.ImageTaskAdminStore).ListAdmin(context.Background(), service.ImageTaskAdminQuery{
+	adminStore, ok := store.(service.ImageTaskAdminStore)
+	require.True(t, ok)
+	page, err := adminStore.ListAdmin(context.Background(), service.ImageTaskAdminQuery{
 		Status: service.ImageTaskStatusCompleted, StartAt: 100, EndAt: 200, Limit: 10,
 	})
 	require.NoError(t, err)
