@@ -22,6 +22,25 @@ func (s *PaymentService) GetDashboardStats(ctx context.Context, days int) (*Dash
 	}
 	now := time.Now()
 	since := now.AddDate(0, 0, -days)
+	return s.getDashboardStatsBetween(ctx, since, now, days, since)
+}
+
+// GetDashboardStatsRange returns payment statistics for an exact reporting
+// range. The end time is exclusive so it can share the operations-center date
+// semantics without double-counting the following day.
+func (s *PaymentService) GetDashboardStatsRange(ctx context.Context, start, end time.Time) (*DashboardStats, error) {
+	if !start.Before(end) {
+		return &DashboardStats{}, nil
+	}
+	days := 0
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		days++
+	}
+	return s.getDashboardStatsBetween(ctx, start, end, days, start.AddDate(0, 0, -1))
+}
+
+func (s *PaymentService) getDashboardStatsBetween(ctx context.Context, since, until time.Time, days int, seriesSince time.Time) (*DashboardStats, error) {
+	now := time.Now().In(since.Location())
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	paidStatuses := []string{OrderStatusCompleted, OrderStatusPaid, OrderStatusRecharging}
@@ -30,6 +49,7 @@ func (s *PaymentService) GetDashboardStats(ctx context.Context, days int) (*Dash
 		Where(
 			paymentorder.StatusIn(paidStatuses...),
 			paymentorder.PaidAtGTE(since),
+			paymentorder.PaidAtLT(until),
 		).
 		All(ctx)
 	if err != nil {
@@ -46,7 +66,7 @@ func (s *PaymentService) GetDashboardStats(ctx context.Context, days int) (*Dash
 		return nil, err
 	}
 
-	st.DailySeries = buildDailySeries(orders, since, days)
+	st.DailySeries = buildDailySeriesInLocation(orders, seriesSince, days, since.Location())
 	st.PaymentMethods = buildMethodDistribution(orders)
 	st.TopUsers = buildTopUsers(orders)
 
@@ -77,13 +97,16 @@ func computeBasicStats(st *DashboardStats, orders []*dbent.PaymentOrder, todaySt
 	roundCurrencyAmounts(st.TodayAmount)
 }
 
-func buildDailySeries(orders []*dbent.PaymentOrder, since time.Time, days int) []DailyStats {
+func buildDailySeriesInLocation(orders []*dbent.PaymentOrder, since time.Time, days int, loc *time.Location) []DailyStats {
+	if loc == nil {
+		loc = time.Local
+	}
 	dailyMap := make(map[string]*DailyStats)
 	for _, o := range orders {
 		if o.PaidAt == nil {
 			continue
 		}
-		date := o.PaidAt.Format("2006-01-02")
+		date := o.PaidAt.In(loc).Format("2006-01-02")
 		ds, ok := dailyMap[date]
 		if !ok {
 			ds = &DailyStats{Date: date, Amount: make(CurrencyAmounts)}

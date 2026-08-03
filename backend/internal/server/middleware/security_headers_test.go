@@ -131,6 +131,32 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Contains(t, csp, CloudflareInsightsDomain)
 	})
 
+	t.Run("clarity_sources_are_dynamic_and_deduplicated", func(t *testing.T) {
+		cfg := config.CSPConfig{
+			Enabled: true,
+			Policy:  "default-src 'self'; script-src 'self' __CSP_NONCE__; script-src-elem 'self'; connect-src 'self'; img-src 'self'",
+		}
+		enabled := true
+		middleware := SecurityHeaders(cfg, nil, func() bool { return enabled })
+
+		serve := func() string {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+			middleware(c)
+			return w.Header().Get("Content-Security-Policy")
+		}
+
+		csp := serve()
+		for _, directive := range []string{"script-src", "script-src-elem", "connect-src", "img-src"} {
+			assert.Equal(t, 1, countDirectiveValue(csp, directive, ClarityDomain), directive)
+		}
+
+		enabled = false
+		csp = serve()
+		assert.NotContains(t, csp, ClarityDomain)
+	})
+
 	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {
 		cfg := config.CSPConfig{
 			Enabled: true,

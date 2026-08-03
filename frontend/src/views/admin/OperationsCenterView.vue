@@ -1,28 +1,48 @@
 <template>
   <AppLayout>
     <div class="space-y-6 pb-12">
-      <div class="flex flex-wrap items-center justify-end gap-2">
-        <button
-          v-for="option in rangeOptions"
-          :key="option.days"
-          type="button"
-          class="btn btn-secondary btn-sm"
-          :class="rangeDays === option.days ? 'border-blue-500 text-blue-600 dark:text-blue-400' : ''"
-          @click="setRange(option.days)"
-        >
-          {{ option.label }}
-        </button>
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
-          <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
-          {{ t('admin.operations.refresh') }}
-        </button>
+      <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ t('admin.operations.title') }}</h1>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.operations.description') }}</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            v-for="option in rangeOptions"
+            :key="option.days"
+            type="button"
+            class="btn btn-secondary btn-sm"
+            :class="rangeDays === option.days ? 'border-blue-500 text-blue-600 dark:text-blue-400' : ''"
+            @click="setRange(option.days)"
+          >
+            {{ option.label }}
+          </button>
+          <input v-model="customStartDate" class="input h-9 w-36 text-xs" type="date" :aria-label="t('admin.operations.customDateFrom')" />
+          <input v-model="customEndDate" class="input h-9 w-36 text-xs" type="date" :aria-label="t('admin.operations.customDateTo')" />
+          <button type="button" class="btn btn-secondary btn-sm" @click="applyCustomRange">{{ t('admin.operations.applyRange') }}</button>
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="refreshAll">
+            <Icon name="refresh" size="xs" :class="loading ? 'animate-spin' : ''" />
+            {{ t('admin.operations.refresh') }}
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="overview?.meta"
+        class="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border px-4 py-2 text-xs"
+        :class="overview.meta.data_quality === 'complete' ? 'border-gray-100 bg-white text-gray-500 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-400' : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300'"
+      >
+        <span>{{ t('admin.operations.dataAsOf') }}: {{ formatDateTime(overview.meta.as_of) }}</span>
+        <span>{{ t('admin.operations.reportingTimezone') }}: {{ overview.meta.timezone }}</span>
+        <span v-if="overview.meta.coverage_start">{{ t('admin.operations.dataCoverage') }}: {{ overview.meta.coverage_start }} ~ {{ overview.meta.coverage_end }}</span>
+        <span v-if="overview.meta.data_quality !== 'complete'">{{ t(`admin.operations.dataQuality.${overview.meta.data_quality}`) }}</span>
       </div>
 
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <div v-for="metric in metrics" :key="metric.label" class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ metric.label }}</p>
           <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ metric.value }}</p>
-          <p v-if="metric.hint" class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ metric.hint }}</p>
+          <p v-if="metric.hint" class="mt-1 text-xs" :class="metric.tone === 'positive' ? 'text-emerald-500' : metric.tone === 'negative' ? 'text-red-500' : 'text-gray-400 dark:text-gray-500'">{{ metric.hint }}</p>
         </div>
       </div>
 
@@ -34,7 +54,7 @@
             type="button"
             class="border-b-2 px-1 py-3 text-sm font-medium"
             :class="activeTab === tab.key ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white'"
-            @click="activeTab = tab.key"
+            @click="selectTab(tab.key)"
           >
             {{ tab.label }}
           </button>
@@ -42,6 +62,9 @@
       </div>
 
       <section v-if="activeTab === 'overview'" class="space-y-4">
+        <div v-if="overviewError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          {{ t('admin.operations.overviewLoadFailed') }}
+        </div>
         <OperationsOverviewTrendChart :points="overview?.points || []" :loading="loadingOverview" />
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div class="rounded-lg border border-gray-100 bg-white p-5 dark:border-dark-700 dark:bg-dark-900">
@@ -69,7 +92,30 @@
         </div>
       </section>
 
+      <section v-else-if="activeTab === 'business'">
+        <OperationsBusinessInsights
+          :loading="loadingBusiness"
+          :error="businessError"
+          :stats="businessStats"
+          :payment="paymentStats"
+          :ranking="businessRanking"
+          :models="businessModels"
+          :groups="businessGroups"
+          :data-available="businessDataAvailable"
+          :aggregation-complete="businessAggregationComplete"
+          :group-details-available="businessGroupDetailsAvailable"
+          :reward-cost="businessRewardCost"
+          :retention="businessRetention"
+          :period-request-users="overview?.summary.period_request_users || 0"
+          :range-start="dateRangeQuery().start_date"
+          :range-end="dateRangeQuery().end_date"
+        />
+      </section>
+
       <section v-else-if="activeTab === 'checkin'" class="space-y-4">
+        <div v-if="analyticsError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          {{ t('admin.operations.analyticsLoadFailed') }}
+        </div>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
             <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.qualifiedUsers') }}</p>
@@ -81,7 +127,7 @@
           </div>
           <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
             <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.checkinRate') }}</p>
-            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.checkin_rate) }}</p>
+            <p class="mt-2 text-xl font-semibold text-gray-900 dark:text-white">{{ formatPercent(checkinAnalytics?.summary.checkin_opportunity_rate) }}</p>
           </div>
           <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
             <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.operations.projectedBudgetDays') }}</p>
@@ -113,6 +159,8 @@
               <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatRewardPerCheckinUser(stats?.today_reward_usd, stats?.today_checkins) }}</div>
               <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.dailyRemaining') }}</div>
               <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBudget(stats?.daily_budget_usd, stats?.daily_remaining_usd) }}</div>
+              <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.estimatedRemainingCheckins') }}</div>
+              <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatEstimatedCheckins(checkinAnalytics?.summary.estimated_remaining_checkins) }}</div>
               <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthReward') }}</div>
               <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(stats?.month_reward_usd) }}</div>
               <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.monthlyRemaining') }}</div>
@@ -152,6 +200,9 @@
       </section>
 
       <section v-else-if="activeTab === 'records'" class="space-y-4">
+        <div v-if="recordsError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          {{ t('admin.operations.recordsLoadFailed') }}
+        </div>
         <div class="rounded-lg border border-gray-100 bg-white p-4 dark:border-dark-700 dark:bg-dark-900">
           <div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-7">
             <input v-model="recordFilters.user" class="input" :placeholder="t('admin.operations.userSearch')" />
@@ -208,8 +259,8 @@
           <div class="flex items-center justify-between border-t border-gray-100 px-4 py-3 text-sm dark:border-dark-700">
             <span class="text-gray-500">{{ t('admin.operations.totalRecords', { count: totalRecords }) }}</span>
             <div class="flex gap-2">
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage <= 1" @click="recordPage--; loadRecords()">{{ t('admin.operations.prevPage') }}</button>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage * recordPageSize >= totalRecords" @click="recordPage++; loadRecords()">{{ t('admin.operations.nextPage') }}</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage <= 1 || loadingRecords" @click="changeRecordPage(-1)">{{ t('admin.operations.prevPage') }}</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="recordPage * recordPageSize >= totalRecords || loadingRecords" @click="changeRecordPage(1)">{{ t('admin.operations.nextPage') }}</button>
             </div>
           </div>
         </div>
@@ -354,20 +405,26 @@ import Icon from '@/components/icons/Icon.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import { useAppStore } from '@/stores'
-import settingsAPI, { type DailyCheckinAdminStats, type DailyCheckinRewardTier, type DailyCheckinStreakMultiplier } from '@/api/admin/settings'
+import settingsAPI, { type DailyCheckinRewardTier, type DailyCheckinStreakMultiplier } from '@/api/admin/settings'
 import operationsAPI, {
   type DailyCheckinAdminRecord,
   type DailyCheckinAnalyticsResponse,
   type DailyCheckinSettingsUpdateRequest,
   type OperationsExportDataset,
   type OperationsOverviewResponse,
+  type OperationsRetentionResponse,
 } from '@/api/admin/operations'
+import dashboardAPI from '@/api/admin/dashboard'
+import { adminPaymentAPI } from '@/api/admin/payment'
+import type { DashboardStats, GroupStat, ModelStat, UserSpendingRankingResponse } from '@/types'
+import type { DashboardStats as PaymentDashboardStats } from '@/types/payment'
 import OperationsOverviewTrendChart from './operations/OperationsOverviewTrendChart.vue'
 import DailyCheckinTrendChart from './operations/DailyCheckinTrendChart.vue'
+import OperationsBusinessInsights from './operations/OperationsBusinessInsights.vue'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
-type TabKey = 'overview' | 'checkin' | 'records' | 'rules'
+type TabKey = 'overview' | 'business' | 'checkin' | 'records' | 'rules'
 
 interface CheckinRuleForm {
   daily_checkin_enabled: boolean
@@ -398,13 +455,36 @@ const activeTab = ref<TabKey>('overview')
 const loading = ref(false)
 const loadingOverview = ref(false)
 const loadingAnalytics = ref(false)
+const loadingRecords = ref(false)
+const loadingBusiness = ref(false)
 const exporting = ref(false)
 const saving = ref(false)
 const rangeDays = ref(30)
+const customStartDate = ref('')
+const customEndDate = ref('')
 const overview = ref<OperationsOverviewResponse | null>(null)
+const previousOverview = ref<OperationsOverviewResponse | null>(null)
 const checkinAnalytics = ref<DailyCheckinAnalyticsResponse | null>(null)
-const stats = ref<DailyCheckinAdminStats | null>(null)
+const businessStats = ref<DashboardStats | null>(null)
+const paymentStats = ref<PaymentDashboardStats | null>(null)
+const businessRanking = ref<UserSpendingRankingResponse | null>(null)
+const businessModels = ref<ModelStat[]>([])
+const businessGroups = ref<GroupStat[]>([])
+const businessDataAvailable = ref(true)
+const businessAggregationComplete = ref(true)
+const businessGroupDetailsAvailable = ref(true)
+const businessRewardCost = ref(0)
+const businessRetention = ref<OperationsRetentionResponse | null>(null)
+const stats = ref<Awaited<ReturnType<typeof operationsAPI.getDailyCheckinStats>> | null>(null)
 const records = ref<DailyCheckinAdminRecord[]>([])
+const overviewError = ref(false)
+const analyticsError = ref(false)
+const recordsError = ref(false)
+const businessError = ref(false)
+const settingsLoaded = ref(false)
+const analyticsLoaded = ref(false)
+const recordsLoaded = ref(false)
+const businessLoaded = ref(false)
 const totalRecords = ref(0)
 const recordPage = ref(1)
 const recordPageSize = 20
@@ -442,6 +522,7 @@ const recordFilters = reactive({
 
 const tabs = computed(() => [
   { key: 'overview' as const, label: t('admin.operations.overview') },
+  { key: 'business' as const, label: t('admin.operations.businessInsights') },
   { key: 'checkin' as const, label: t('admin.operations.checkinAnalysis') },
   { key: 'records' as const, label: t('admin.operations.records') },
   { key: 'rules' as const, label: t('admin.operations.rules') },
@@ -451,6 +532,7 @@ const rangeOptions = computed(() => [
   { days: 7, label: t('admin.operations.last7Days') },
   { days: 30, label: t('admin.operations.last30Days') },
   { days: 90, label: t('admin.operations.last90Days') },
+  { days: 370, label: t('admin.operations.last370Days') },
 ])
 
 const usageScopeOptions = computed(() => [
@@ -470,11 +552,11 @@ const critFilterOptions = computed(() => [
 ])
 
 const metrics = computed(() => [
-  { label: t('admin.operations.apiDau'), value: formatCount(overview.value?.summary.dau), hint: t('admin.operations.apiDauHint') },
-  { label: t('admin.operations.newUsers'), value: formatCount(overview.value?.summary.new_users) },
-  { label: t('admin.operations.checkinRate'), value: formatPercent(checkinAnalytics.value?.summary.checkin_rate) },
-  { label: t('admin.operations.monthReward'), value: formatUSD(stats.value?.month_reward_usd) },
-  { label: t('admin.operations.dailyRemaining'), value: formatBudget(stats.value?.daily_budget_usd, stats.value?.daily_remaining_usd) },
+  comparisonMetric(t('admin.operations.apiDau'), overview.value?.summary.last_day_dau, previousOverview.value?.summary.last_day_dau, formatCount, t('admin.operations.apiDauHint')),
+  comparisonMetric(t('admin.operations.newUsers'), overview.value?.summary.new_users, previousOverview.value?.summary.new_users, formatCount),
+  comparisonMetric(t('admin.operations.requestUsers'), overview.value?.summary.period_request_users, previousOverview.value?.summary.period_request_users, formatCount),
+  comparisonMetric(t('admin.operations.requests'), overview.value?.summary.requests, previousOverview.value?.summary.requests, formatCount),
+  comparisonMetric(t('admin.operations.actualCost'), overview.value?.summary.actual_cost, previousOverview.value?.summary.actual_cost, formatUSD),
 ])
 
 const funnelItems = computed(() => {
@@ -507,7 +589,40 @@ function formatPercent(value: number | undefined | null): string {
 }
 
 function formatDays(value: number | undefined | null): string {
-  return value && value > 0 ? t('admin.operations.daysValue', { count: value }) : '-'
+  return value !== undefined && value !== null && value >= 0 ? t('admin.operations.daysValue', { count: value }) : '-'
+}
+
+function formatEstimatedCheckins(value: number | undefined | null): string {
+  return value === undefined || value === null ? '-' : t('admin.operations.checkinsValue', { count: value })
+}
+
+function comparisonMetric(
+  label: string,
+  current: number | undefined,
+  previous: number | undefined,
+  formatter: (value: number | undefined | null) => string,
+  baseHint = '',
+) {
+  const hint = comparisonHint(current, previous)
+  return {
+    label,
+    value: formatter(current),
+    hint: [baseHint, hint].filter(Boolean).join(' · '),
+    tone: comparisonTone(current, previous),
+  }
+}
+
+function comparisonHint(current: number | undefined, previous: number | undefined): string {
+  if (current === undefined || previous === undefined) return ''
+  if (previous === 0) return current === 0 ? t('admin.operations.noChange') : t('admin.operations.newFromZero')
+  const delta = ((current - previous) / Math.abs(previous)) * 100
+  const prefix = delta > 0 ? '+' : ''
+  return t('admin.operations.vsPreviousPeriod', { value: `${prefix}${delta.toFixed(1)}%` })
+}
+
+function comparisonTone(current: number | undefined, previous: number | undefined): 'positive' | 'negative' | 'neutral' {
+  if (current === undefined || previous === undefined || current === previous) return 'neutral'
+  return current > previous ? 'positive' : 'negative'
 }
 
 function formatMultiplier(value: number | undefined | null): string {
@@ -529,14 +644,46 @@ function formatDateTime(value: string): string {
 }
 
 function dateRangeQuery() {
+  if (rangeDays.value === 0 && customStartDate.value && customEndDate.value) {
+    return {
+      start_date: customStartDate.value,
+      end_date: customEndDate.value,
+      timezone: reportingTimezone(),
+    }
+  }
   const end = new Date()
   const start = new Date()
   start.setDate(end.getDate() - rangeDays.value + 1)
   return {
     start_date: formatDateInput(start),
     end_date: formatDateInput(end),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezone: reportingTimezone(),
   }
+}
+
+function previousDateRangeQuery() {
+  const current = dateRangeQuery()
+  const currentStart = parseDateInput(current.start_date)
+  const currentEnd = parseDateInput(current.end_date)
+  const durationDays = Math.round((currentEnd.getTime() - currentStart.getTime()) / 86400000) + 1
+  const previousEnd = new Date(currentStart)
+  previousEnd.setDate(previousEnd.getDate() - 1)
+  const previousStart = new Date(previousEnd)
+  previousStart.setDate(previousStart.getDate() - durationDays + 1)
+  return {
+    start_date: formatDateInput(previousStart),
+    end_date: formatDateInput(previousEnd),
+    timezone: current.timezone,
+  }
+}
+
+function reportingTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+}
+
+function parseDateInput(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
 }
 
 function dailyCheckinRecordQuery() {
@@ -595,12 +742,7 @@ function assignSettings(settings: Awaited<ReturnType<typeof settingsAPI.getSetti
 async function refreshAll() {
   loading.value = true
   try {
-    await Promise.all([
-      loadSettingsAndStats(),
-      loadOverview(),
-      loadAnalytics(),
-      loadRecords(),
-    ])
+    await Promise.all([loadOverview(), loadActiveTab(true)])
   } catch (error) {
     console.error('Failed to load operations center:', error)
     appStore.showError(t('admin.operations.loadFailed'))
@@ -612,16 +754,26 @@ async function refreshAll() {
 async function loadSettingsAndStats() {
   const [settings, nextStats] = await Promise.all([
     settingsAPI.getSettings(),
-    operationsAPI.getDailyCheckinStats(),
+    operationsAPI.getDailyCheckinStats({ timezone: reportingTimezone() }),
   ])
   assignSettings(settings)
   stats.value = nextStats
+  settingsLoaded.value = true
 }
 
 async function loadOverview() {
   loadingOverview.value = true
+  overviewError.value = false
   try {
-    overview.value = await operationsAPI.getOperationsOverview(dateRangeQuery())
+    const [current, previous] = await Promise.all([
+      operationsAPI.getOperationsOverview(dateRangeQuery()),
+      operationsAPI.getOperationsOverview(previousDateRangeQuery()),
+    ])
+    overview.value = current
+    previousOverview.value = previous
+  } catch (error) {
+    overviewError.value = true
+    throw error
   } finally {
     loadingOverview.value = false
   }
@@ -629,32 +781,168 @@ async function loadOverview() {
 
 async function loadAnalytics() {
   loadingAnalytics.value = true
+  analyticsError.value = false
   try {
     checkinAnalytics.value = await operationsAPI.getDailyCheckinAnalytics(dateRangeQuery())
+    analyticsLoaded.value = true
+  } catch (error) {
+    analyticsError.value = true
+    throw error
   } finally {
     loadingAnalytics.value = false
   }
 }
 
+async function loadBusinessInsights() {
+  loadingBusiness.value = true
+  businessError.value = false
+  try {
+    const query = dateRangeQuery()
+    const groupDetailsAvailable = calendarRangeDays(query.start_date, query.end_date) <= 31
+    const [nextStats, modelResult, groupResult, rankingResult, paymentResult, analyticsResult, retentionResult] = await Promise.all([
+      dashboardAPI.getStats(),
+      dashboardAPI.getModelStats(query),
+      groupDetailsAvailable ? dashboardAPI.getGroupStats(query) : Promise.resolve(null),
+      dashboardAPI.getUserSpendingRanking({ ...query, limit: 10 }),
+      adminPaymentAPI.getDashboard(query),
+      operationsAPI.getDailyCheckinAnalytics(query),
+      operationsAPI.getOperationsRetention(query),
+    ])
+    businessStats.value = nextStats
+    businessModels.value = modelResult.models
+    businessGroups.value = groupResult?.groups || []
+    businessDataAvailable.value = modelResult.data_available !== false && rankingResult.data_available !== false
+    businessAggregationComplete.value = modelResult.aggregation_complete !== false && rankingResult.aggregation_complete !== false
+    businessGroupDetailsAvailable.value = groupDetailsAvailable
+    businessRanking.value = rankingResult
+    paymentStats.value = paymentResult.data
+    businessRewardCost.value = analyticsResult.summary.reward_usd
+    businessRetention.value = retentionResult
+    checkinAnalytics.value = analyticsResult
+    analyticsLoaded.value = true
+    businessLoaded.value = true
+  } catch (error) {
+    businessError.value = true
+    throw error
+  } finally {
+    loadingBusiness.value = false
+  }
+}
+
+function calendarRangeDays(startDate: string, endDate: string): number {
+  const [startYear, startMonth, startDay] = startDate.split('-').map(Number)
+  const [endYear, endMonth, endDay] = endDate.split('-').map(Number)
+  const start = Date.UTC(startYear, startMonth - 1, startDay)
+  const end = Date.UTC(endYear, endMonth - 1, endDay)
+  return Math.floor((end - start) / 86400000) + 1
+}
+
 async function loadRecords() {
-  const result = await operationsAPI.listDailyCheckinRecords({
-    page: recordPage.value,
-    page_size: recordPageSize,
-    ...dailyCheckinRecordQuery(),
-  })
-  records.value = result.items
-  totalRecords.value = result.total
+  loadingRecords.value = true
+  recordsError.value = false
+  try {
+    const result = await operationsAPI.listDailyCheckinRecords({
+      page: recordPage.value,
+      page_size: recordPageSize,
+      ...dailyCheckinRecordQuery(),
+    })
+    records.value = result.items
+    totalRecords.value = result.total
+    recordsLoaded.value = true
+  } catch (error) {
+    recordsError.value = true
+    throw error
+  } finally {
+    loadingRecords.value = false
+  }
 }
 
 async function setRange(days: number) {
   rangeDays.value = days
+  customStartDate.value = ''
+  customEndDate.value = ''
   recordPage.value = 1
-  await Promise.all([loadOverview(), loadAnalytics(), loadRecords()])
+  analyticsLoaded.value = false
+  recordsLoaded.value = false
+  businessLoaded.value = false
+  await reloadForRangeChange()
+}
+
+async function applyCustomRange() {
+  if (!customStartDate.value || !customEndDate.value || customStartDate.value > customEndDate.value) {
+    appStore.showError(t('admin.operations.invalidDateRange'))
+    return
+  }
+  rangeDays.value = 0
+  recordPage.value = 1
+  analyticsLoaded.value = false
+  recordsLoaded.value = false
+  businessLoaded.value = false
+  await reloadForRangeChange()
+}
+
+async function reloadForRangeChange() {
+  loading.value = true
+  try {
+    await Promise.all([loadOverview(), loadActiveTab(true)])
+  } catch (error) {
+    console.error('Failed to reload operations range:', error)
+    appStore.showError(t('admin.operations.loadFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
+async function selectTab(tab: TabKey) {
+  activeTab.value = tab
+  try {
+    await loadActiveTab(false)
+  } catch (error) {
+    console.error(`Failed to load operations tab ${tab}:`, error)
+    appStore.showError(t('admin.operations.loadFailed'))
+  }
+}
+
+async function loadActiveTab(force: boolean) {
+  switch (activeTab.value) {
+    case 'business':
+      if (force || !businessLoaded.value) await loadBusinessInsights()
+      break
+    case 'checkin':
+      await Promise.all([
+        force || !settingsLoaded.value ? loadSettingsAndStats() : Promise.resolve(),
+        force || !analyticsLoaded.value ? loadAnalytics() : Promise.resolve(),
+      ])
+      break
+    case 'records':
+      if (force || !recordsLoaded.value) await loadRecords()
+      break
+    case 'rules':
+      if (force || !settingsLoaded.value) await loadSettingsAndStats()
+      break
+  }
 }
 
 async function applyRecordFilters() {
   recordPage.value = 1
-  await loadRecords()
+  try {
+    await loadRecords()
+  } catch (error) {
+    console.error('Failed to filter daily check-in records:', error)
+    appStore.showError(t('admin.operations.recordsLoadFailed'))
+  }
+}
+
+async function changeRecordPage(delta: number) {
+  const previous = recordPage.value
+  recordPage.value = Math.max(1, recordPage.value + delta)
+  try {
+    await loadRecords()
+  } catch (error) {
+    recordPage.value = previous
+    console.error('Failed to paginate daily check-in records:', error)
+    appStore.showError(t('admin.operations.recordsLoadFailed'))
+  }
 }
 
 async function exportDataset(dataset: OperationsExportDataset) {

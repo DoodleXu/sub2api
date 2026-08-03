@@ -16,6 +16,7 @@ const (
 	CSPNonceKey = "csp_nonce"
 	// NonceTemplate is the placeholder in CSP policy for nonce
 	NonceTemplate = "__CSP_NONCE__"
+	ClarityDomain = "https://*.clarity.ms"
 	// CloudflareInsightsDomain is the domain for Cloudflare Web Analytics
 	CloudflareInsightsDomain = "https://static.cloudflareinsights.com"
 	// StripeDomain is the domain for Stripe.js SDK
@@ -75,7 +76,7 @@ func GetNonceFromContext(c *gin.Context) string {
 // SecurityHeaders sets baseline security headers for all responses.
 // getFrameSrcOrigins is an optional function that returns extra origins to inject into frame-src;
 // pass nil to disable dynamic frame-src injection.
-func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) gin.HandlerFunc {
+func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string, getClarityEnabled ...func() bool) gin.HandlerFunc {
 	policy := strings.TrimSpace(cfg.Policy)
 	if policy == "" {
 		policy = config.DefaultCSPPolicy
@@ -92,6 +93,14 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 					finalPolicy = addToDirective(finalPolicy, "frame-src", origin)
 				}
 			}
+		}
+		if len(getClarityEnabled) > 0 && getClarityEnabled[0] != nil && getClarityEnabled[0]() {
+			finalPolicy = addToDirective(finalPolicy, "script-src", ClarityDomain)
+			if hasDirective(finalPolicy, "script-src-elem") {
+				finalPolicy = addToDirective(finalPolicy, "script-src-elem", ClarityDomain)
+			}
+			finalPolicy = addToDirective(finalPolicy, "connect-src", ClarityDomain)
+			finalPolicy = addToDirective(finalPolicy, "img-src", ClarityDomain)
 		}
 
 		c.Header("X-Content-Type-Options", "nosniff")
@@ -116,6 +125,16 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 		}
 		c.Next()
 	}
+}
+
+func hasDirective(policy, directive string) bool {
+	for _, rawDirective := range strings.Split(policy, ";") {
+		fields := strings.Fields(strings.TrimSpace(rawDirective))
+		if len(fields) > 0 && fields[0] == directive {
+			return true
+		}
+	}
+	return false
 }
 
 func isAPIRoutePath(c *gin.Context) bool {

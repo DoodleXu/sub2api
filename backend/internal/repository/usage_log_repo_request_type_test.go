@@ -11,6 +11,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -420,8 +421,8 @@ func TestUsageLogRepositoryGetUsageTrendWithFiltersRequestTypePriority(t *testin
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := start.Add(24 * time.Hour)
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, timezone.Location())
+	end := start.AddDate(0, 0, 1)
 	requestType := int16(service.RequestTypeStream)
 	stream := true
 
@@ -458,8 +459,8 @@ func TestUsageLogRepositoryGetUsageTrendWithUsageFiltersRequestedModelSource(t *
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := start.Add(24 * time.Hour)
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, timezone.Location())
+	end := start.AddDate(0, 0, 1)
 	filters := usagestats.UsageLogFilters{
 		Model:             "gpt-5",
 		ModelFilterSource: usagestats.ModelSourceRequested,
@@ -603,8 +604,8 @@ func TestUsageLogRepositoryGetModelStatsAccountCostColumn(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := start.Add(24 * time.Hour)
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, timezone.Location())
+	end := start.AddDate(0, 0, 1)
 
 	mock.ExpectQuery("SELECT model_hourly_aggregated_from, model_hourly_last_aggregated_at").
 		WillReturnRows(sqlmock.NewRows([]string{"model_hourly_aggregated_from", "model_hourly_last_aggregated_at"}).
@@ -654,6 +655,25 @@ func TestUsageLogRepositoryGetModelStatsUsesCoveredHourlyPrefixForCurrentDate(t 
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "gpt-image-1", results[0].Model)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryReportsModelAggregateCoverage(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 2)
+
+	mock.ExpectQuery("SELECT model_hourly_aggregated_from, model_hourly_last_aggregated_at").
+		WillReturnRows(sqlmock.NewRows([]string{"model_hourly_aggregated_from", "model_hourly_last_aggregated_at"}).
+			AddRow(start, end))
+
+	coverage, err := repo.GetDashboardModelAggregateCoverage(context.Background(), start, end)
+	require.NoError(t, err)
+	require.True(t, coverage.DataAvailable)
+	require.True(t, coverage.AggregationComplete)
+	require.Equal(t, start.Format(time.RFC3339), coverage.CoverageStart)
+	require.Equal(t, end.Format(time.RFC3339), coverage.CoverageEnd)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -785,8 +805,8 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := start.Add(24 * time.Hour)
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, timezone.Location())
+	end := start.AddDate(0, 0, 1)
 
 	rows := sqlmock.NewRows([]string{"user_id", "email", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
 		AddRow(int64(2), "beta@example.com", 12.5, int64(9), int64(900), 40.0, int64(30), int64(2600)).
@@ -811,6 +831,12 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 		TotalActualCost: 40.0,
 		TotalRequests:   30,
 		TotalTokens:     2600,
+		DashboardAggregateCoverage: usagestats.DashboardAggregateCoverage{
+			DataAvailable:       true,
+			AggregationComplete: true,
+			CoverageStart:       start.UTC().Format(time.RFC3339),
+			CoverageEnd:         end.UTC().Format(time.RFC3339),
+		},
 	}, got)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -819,9 +845,9 @@ func TestUsageLogRepositoryGetUserSpendingRankingUsesCoveredHourlyPrefixForCurre
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, timezone.Location())
 	coveredEnd := start.Add(36 * time.Hour)
-	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
+	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, timezone.Location())
 	rows := sqlmock.NewRows([]string{"user_id", "email", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
 		AddRow(int64(7), "current@example.com", 3.5, int64(4), int64(500), 3.5, int64(4), int64(500))
 
@@ -840,6 +866,9 @@ func TestUsageLogRepositoryGetUserSpendingRankingUsesCoveredHourlyPrefixForCurre
 	require.Len(t, got.Ranking, 1)
 	require.Equal(t, int64(7), got.Ranking[0].UserID)
 	require.Equal(t, 3.5, got.TotalActualCost)
+	require.True(t, got.DataAvailable)
+	require.False(t, got.AggregationComplete)
+	require.Equal(t, coveredEnd.UTC().Format(time.RFC3339), got.CoverageEnd)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -851,14 +880,11 @@ func TestUsageLogRepositoryGetUserUsageTrendGroupsCoveredHourlyPrefixByDay(t *te
 	coveredEnd := start.Add(36 * time.Hour)
 	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
-		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
-			AddRow(start, start.Add(24*time.Hour)))
 	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
 		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
 			AddRow(start, coveredEnd))
 	mock.ExpectQuery("FROM usage_dashboard_hourly_user_stats").
-		WithArgs(start, coveredEnd, 12, start, coveredEnd).
+		WithArgs(start, coveredEnd, 12, start, coveredEnd, "UTC").
 		WillReturnRows(sqlmock.NewRows([]string{"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost"}).
 			AddRow("2026-08-01", int64(7), "current@example.com", "current", int64(4), int64(500), 4.0, 3.5))
 

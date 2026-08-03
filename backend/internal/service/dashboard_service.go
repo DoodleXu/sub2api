@@ -41,6 +41,10 @@ type dashboardStatsRangeFetcher interface {
 	GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*usagestats.DashboardStats, error)
 }
 
+type dashboardModelAggregateCoverageProvider interface {
+	GetDashboardModelAggregateCoverage(ctx context.Context, startTime, endTime time.Time) (usagestats.DashboardAggregateCoverage, error)
+}
+
 type dashboardStatsCacheEntry struct {
 	Stats     *usagestats.DashboardStats `json:"stats"`
 	UpdatedAt int64                      `json:"updated_at"`
@@ -245,6 +249,32 @@ func (s *DashboardService) GetModelStatsWithFilters(ctx context.Context, startTi
 		return nil, fmt.Errorf("get model stats with filters: %w", err)
 	}
 	return stats, nil
+}
+
+func (s *DashboardService) GetModelAggregateCoverage(ctx context.Context, startTime, endTime time.Time, usesRawLogs bool) (usagestats.DashboardAggregateCoverage, error) {
+	if usesRawLogs {
+		return completeDashboardAggregateCoverage(startTime, endTime), nil
+	}
+	provider, ok := s.usageRepo.(dashboardModelAggregateCoverageProvider)
+	if !ok {
+		// Test doubles and alternate repositories that do not expose aggregate
+		// watermarks return their model data directly.
+		return completeDashboardAggregateCoverage(startTime, endTime), nil
+	}
+	coverage, err := provider.GetDashboardModelAggregateCoverage(ctx, startTime, endTime)
+	if err != nil {
+		return usagestats.DashboardAggregateCoverage{}, fmt.Errorf("get model aggregate coverage: %w", err)
+	}
+	return coverage, nil
+}
+
+func completeDashboardAggregateCoverage(startTime, endTime time.Time) usagestats.DashboardAggregateCoverage {
+	return usagestats.DashboardAggregateCoverage{
+		DataAvailable:       true,
+		AggregationComplete: true,
+		CoverageStart:       startTime.UTC().Format(time.RFC3339),
+		CoverageEnd:         endTime.UTC().Format(time.RFC3339),
+	}
 }
 
 func (s *DashboardService) GetModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, requestType *int16, stream *bool, billingType *int8, modelSource string) ([]usagestats.ModelStat, error) {

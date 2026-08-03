@@ -168,6 +168,10 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 			_ = tx.Rollback()
 			return err
 		}
+		if err := txRepo.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 		if err := txRepo.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
 			_ = tx.Rollback()
 			return err
@@ -179,6 +183,9 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 		return err
 	}
 	if err := r.advanceAccountCostAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
+		return err
+	}
+	if err := r.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
 		return err
 	}
 	return r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd)

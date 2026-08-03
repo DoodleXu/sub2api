@@ -2580,6 +2580,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 	args := []any{startTime, endTime, limit, startTime, endTime}
 	switch sourceKind {
 	case dashboardUserAggregateCoverageHourly:
+		args = append(args, startTime.Location().String())
 		query = fmt.Sprintf(`
 			WITH top_users AS (
 				SELECT user_id
@@ -2590,7 +2591,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 				LIMIT $3
 			)
 			SELECT
-				TO_CHAR(s.bucket_start, '%s') as date,
+				TO_CHAR(s.bucket_start AT TIME ZONE $6, '%s') as date,
 				s.user_id,
 				COALESCE(u.email, '') as email,
 				COALESCE(u.username, '') as username,
@@ -2673,6 +2674,7 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 					return nil, aggregatedErr
 				}
 			} else {
+				aggregated.DashboardAggregateCoverage = dashboardAggregateCoverage(startTime, endTime, aggregateEnd, true)
 				return aggregated, nil
 			}
 		}
@@ -2685,10 +2687,14 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 				return nil, aggregatedErr
 			}
 		} else {
+			aggregated.DashboardAggregateCoverage = dashboardAggregateCoverage(startTime, endTime, aggregateEnd, true)
 			return aggregated, nil
 		}
 	}
-	return &UserSpendingRankingResponse{Ranking: []UserSpendingRankingItem{}}, nil
+	return &UserSpendingRankingResponse{
+		Ranking:                    []UserSpendingRankingItem{},
+		DashboardAggregateCoverage: dashboardAggregateCoverage(startTime, endTime, time.Time{}, false),
+	}, nil
 }
 
 func (r *usageLogRepository) getUserSpendingRankingFromAggregates(ctx context.Context, startTime, endTime time.Time, limit int) (*UserSpendingRankingResponse, bool, error) {
@@ -2849,7 +2855,10 @@ func dashboardUserUsageTrendCoverageKind(startTime, endTime time.Time, granulari
 		if isWholeDashboardDayRange(startTime, endTime) {
 			return dashboardUserAggregateCoverageDaily, true
 		}
-		return dashboardUserAggregateCoverageHourly, false
+		// A day-level report in a timezone different from the server is not aligned
+		// to the server's daily buckets. The hourly aggregate is still safe and can
+		// be grouped by the requested calendar day without falling back to raw logs.
+		return dashboardUserAggregateCoverageHourly, true
 	default:
 		return dashboardUserAggregateCoverageHourly, false
 	}
@@ -3796,6 +3805,27 @@ func (r *usageLogRepository) dashboardModelAggregateCoveredEnd(ctx context.Conte
 	}
 	aggregateEnd, covered := dashboardAggregateCoveredEnd(startTime, endTime, coveredFrom, coveredTo, true)
 	return aggregateEnd, covered, nil
+}
+
+// GetDashboardModelAggregateCoverage exposes model aggregate readiness without
+// changing the model-stat repository method used by other services.
+func (r *usageLogRepository) GetDashboardModelAggregateCoverage(ctx context.Context, startTime, endTime time.Time) (usagestats.DashboardAggregateCoverage, error) {
+	aggregateEnd, covered, err := r.dashboardModelAggregateCoveredEnd(ctx, startTime, endTime)
+	if err != nil {
+		return usagestats.DashboardAggregateCoverage{}, err
+	}
+	return dashboardAggregateCoverage(startTime, endTime, aggregateEnd, covered), nil
+}
+
+func dashboardAggregateCoverage(startTime, endTime, aggregateEnd time.Time, available bool) usagestats.DashboardAggregateCoverage {
+	coverage := usagestats.DashboardAggregateCoverage{DataAvailable: available}
+	if !available {
+		return coverage
+	}
+	coverage.AggregationComplete = !aggregateEnd.Before(endTime)
+	coverage.CoverageStart = startTime.UTC().Format(time.RFC3339)
+	coverage.CoverageEnd = aggregateEnd.UTC().Format(time.RFC3339)
+	return coverage
 }
 
 // dashboardAggregateCoveredEnd validates the immutable start boundary and

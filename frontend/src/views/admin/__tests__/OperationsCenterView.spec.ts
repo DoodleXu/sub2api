@@ -9,9 +9,15 @@ const {
   getOperationsOverview,
   getDailyCheckinAnalytics,
   getDailyCheckinStats,
+  getOperationsRetention,
   listDailyCheckinRecords,
   updateDailyCheckinSettings,
   exportOperationsData,
+  getDashboardStats,
+  getModelStats,
+  getGroupStats,
+  getUserSpendingRanking,
+  getPaymentDashboard,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -19,9 +25,15 @@ const {
   getOperationsOverview: vi.fn(),
   getDailyCheckinAnalytics: vi.fn(),
   getDailyCheckinStats: vi.fn(),
+  getOperationsRetention: vi.fn(),
   listDailyCheckinRecords: vi.fn(),
   updateDailyCheckinSettings: vi.fn(),
   exportOperationsData: vi.fn(),
+  getDashboardStats: vi.fn(),
+  getModelStats: vi.fn(),
+  getGroupStats: vi.fn(),
+  getUserSpendingRanking: vi.fn(),
+  getPaymentDashboard: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -37,9 +49,28 @@ vi.mock('@/api/admin/operations', () => ({
     getOperationsOverview,
     getDailyCheckinAnalytics,
     getDailyCheckinStats,
+    getOperationsRetention,
     listDailyCheckinRecords,
     updateDailyCheckinSettings,
     exportOperationsData,
+  },
+}))
+
+vi.mock('@/api/admin/dashboard', () => ({
+  default: {
+    getStats: getDashboardStats,
+    getModelStats,
+    getGroupStats,
+    getUserSpendingRanking,
+  },
+}))
+
+vi.mock('@/api/admin/payment', () => ({
+  adminPaymentAPI: {
+    getDashboard: getPaymentDashboard,
+  },
+  default: {
+    getDashboard: getPaymentDashboard,
   },
 }))
 
@@ -139,11 +170,25 @@ const baseStatsResponse = {
   monthly_budget_usd: 0,
   monthly_remaining_usd: 0,
   user_monthly_limit_usd: 0,
+  meta: {
+    timezone: 'UTC',
+    as_of: '2026-06-15T12:00:00Z',
+    requested_start: '2026-06-15',
+    requested_end: '2026-06-15',
+    coverage_start: '2026-06-15',
+    coverage_end: '2026-06-15',
+    stale: false,
+    data_quality: 'complete',
+    source: 'usage_logs',
+    warnings: [],
+  },
 }
 
 const baseOverviewResponse = {
   summary: {
     dau: 2,
+    last_day_dau: 2,
+    period_request_users: 2,
     new_users: 1,
     request_users: 2,
     requests: 8,
@@ -152,6 +197,7 @@ const baseOverviewResponse = {
   points: [
     { date: '2026-06-15', dau: 2, new_users: 1, request_users: 2, requests: 8, actual_cost: 3.5 },
   ],
+  meta: baseStatsResponse.meta,
 }
 
 const baseAnalyticsResponse = {
@@ -160,6 +206,9 @@ const baseAnalyticsResponse = {
     checkin_users: 1,
     streak_users: 0,
     checkin_rate: 0.5,
+    qualified_user_days: 2,
+    checkin_user_days: 1,
+    checkin_opportunity_rate: 0.5,
     reward_usd: 1,
     avg_reward_usd: 1,
     fallback_rate: 0,
@@ -183,6 +232,7 @@ const baseAnalyticsResponse = {
     },
   ],
   reward_distribution: [],
+  meta: baseStatsResponse.meta,
 }
 
 function mountView() {
@@ -195,6 +245,7 @@ function mountView() {
         Icon: true,
         OperationsOverviewTrendChart: true,
         DailyCheckinTrendChart: true,
+        OperationsBusinessInsights: true,
       },
     },
   })
@@ -210,6 +261,15 @@ describe('OperationsCenterView', () => {
     listDailyCheckinRecords.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
     updateDailyCheckinSettings.mockResolvedValue({ ...baseSettingsResponse })
     exportOperationsData.mockResolvedValue(new Blob(['date,dau\n2026-06-15,2\n'], { type: 'text/csv' }))
+    getDashboardStats.mockResolvedValue({ total_users: 10, today_new_users: 1, active_users: 2 })
+    getModelStats.mockResolvedValue({ models: [], start_date: '2026-06-01', end_date: '2026-06-15' })
+    getGroupStats.mockResolvedValue({ groups: [], start_date: '2026-06-01', end_date: '2026-06-15' })
+    getUserSpendingRanking.mockResolvedValue({ ranking: [], total_actual_cost: 0, total_requests: 0, total_tokens: 0, start_date: '2026-06-01', end_date: '2026-06-15' })
+    getPaymentDashboard.mockResolvedValue({ data: { total_amount: {}, total_count: 0 } })
+    getOperationsRetention.mockResolvedValue({
+      summary: { cohort_users: 0, d1_eligible_users: 0, d7_eligible_users: 0, d30_eligible_users: 0, d1_users: 0, d7_users: 0, d30_users: 0, d1_rate: 0, d7_rate: 0, d30_rate: 0, average_active_days: 0 },
+      meta: baseStatsResponse.meta,
+    })
   })
 
   it('preserves decimal reward tier amounts when saving', async () => {
@@ -234,18 +294,65 @@ describe('OperationsCenterView', () => {
     )
   })
 
-  it('reloads overview, analytics, and records when the date range changes', async () => {
+  it('reloads only the active tab and lazily loads the remaining sections', async () => {
     const wrapper = mountView()
 
     await flushPromises()
     await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last7Days')?.trigger('click')
     await flushPromises()
 
-    expect(getOperationsOverview).toHaveBeenCalledTimes(2)
-    expect(getDailyCheckinAnalytics).toHaveBeenCalledTimes(2)
-    expect(listDailyCheckinRecords).toHaveBeenCalledTimes(2)
+    expect(getOperationsOverview).toHaveBeenCalledTimes(4)
+    expect(getDailyCheckinAnalytics).not.toHaveBeenCalled()
+    expect(listDailyCheckinRecords).not.toHaveBeenCalled()
     expect(getOperationsOverview).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: expect.any(String), end_date: expect.any(String), timezone: expect.any(String) }))
+
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.checkinAnalysis')?.trigger('click')
+    await flushPromises()
+    expect(getDailyCheckinAnalytics).toHaveBeenCalledTimes(1)
+
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.records')?.trigger('click')
+    await flushPromises()
+    expect(listDailyCheckinRecords).toHaveBeenCalledTimes(1)
     expect(listDailyCheckinRecords).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: expect.any(String), end_date: expect.any(String), timezone: expect.any(String) }))
+  })
+
+  it('loads business insights only after opening the business tab', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(getDashboardStats).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.businessInsights')?.trigger('click')
+    await flushPromises()
+
+    expect(getDashboardStats).toHaveBeenCalledTimes(1)
+    expect(getOperationsRetention).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledWith(expect.objectContaining({
+      start_date: expect.any(String),
+      end_date: expect.any(String),
+      timezone: expect.any(String),
+      limit: 10,
+    }))
+    expect(getPaymentDashboard).toHaveBeenCalledWith(expect.objectContaining({
+      start_date: expect.any(String),
+      end_date: expect.any(String),
+      timezone: expect.any(String),
+    }))
+  })
+
+  it('keeps long-range business insights available without requesting capped group details', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last90Days')?.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.businessInsights')?.trigger('click')
+    await flushPromises()
+
+    expect(getModelStats).toHaveBeenCalledTimes(1)
+    expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
+    expect(getPaymentDashboard).toHaveBeenCalledTimes(1)
+    expect(getGroupStats).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
   })
 
   it('shows the daily reward total alongside today check-in users', async () => {

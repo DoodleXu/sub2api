@@ -367,6 +367,32 @@ func TestFrontendServer_InjectSettings(t *testing.T) {
 
 		assert.Contains(t, string(result), `window.__APP_CONFIG__={"nested":{"array":[1,2,3]},"special":"<>&"};`)
 	})
+
+	t.Run("injects_clarity_bootstrap_with_nonce", func(t *testing.T) {
+		server, err := NewFrontendServer(&mockSettingsProvider{})
+		require.NoError(t, err)
+
+		result := string(server.injectSettings([]byte(`{"clarity_enabled":true,"clarity_project_id":"xwiilcm4jb"}`)))
+		assert.Contains(t, result, `<script type="text/javascript" nonce="__CSP_NONCE_VALUE__">`)
+		assert.Contains(t, result, `https://www.clarity.ms/tag/`)
+		assert.Contains(t, result, `"script","xwiilcm4jb"`)
+		assert.Equal(t, 1, strings.Count(result, `https://www.clarity.ms/tag/`))
+		assert.Less(t, strings.Index(result, `https://www.clarity.ms/tag/`), strings.Index(result, `</head>`))
+	})
+
+	t.Run("does_not_inject_clarity_when_disabled_or_invalid", func(t *testing.T) {
+		server, err := NewFrontendServer(&mockSettingsProvider{})
+		require.NoError(t, err)
+
+		for _, settingsJSON := range []string{
+			`{"clarity_enabled":false,"clarity_project_id":"xwiilcm4jb"}`,
+			`{"clarity_enabled":true,"clarity_project_id":""}`,
+			`{"clarity_enabled":true,"clarity_project_id":"bad</script>"}`,
+		} {
+			result := string(server.injectSettings([]byte(settingsJSON)))
+			assert.NotContains(t, result, `https://www.clarity.ms/tag/`, settingsJSON)
+		}
+	})
 }
 
 func TestFrontendServer_ServeIndexHTML(t *testing.T) {
@@ -780,11 +806,11 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		// Request for existing static file
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
@@ -925,11 +951,11 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {

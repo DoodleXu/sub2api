@@ -501,6 +501,12 @@ export default {
         backendMode: 'Backend Mode',
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
+        clarityTitle: 'Microsoft Clarity',
+        clarityDescription: 'When enabled, the official Clarity tracking script is securely loaded in the <head> of every page.',
+        clarityProjectId: 'Clarity Project ID',
+        clarityProjectIdPlaceholder: 'e.g., xwiilcm4jb',
+        clarityProjectIdHint: 'Enter only the Clarity project ID, not the complete JavaScript snippet or a URL.',
+        clarityProjectIdError: 'A valid Project ID is required when Clarity is enabled. Use only letters, numbers, underscores, or hyphens.',
         siteName: 'Site Name',
         siteNamePlaceholder: 'Sub2API',
         siteNameHint: 'Displayed in emails and page titles',

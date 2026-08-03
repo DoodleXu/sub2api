@@ -48,7 +48,7 @@ func TestPaymentDashboardBreakdownsGroupAmountsAndRankingsByCurrency(t *testing.
 	orders[2].PaymentType = "stripe"
 	orders[3].PaymentType = "alipay"
 
-	daily := buildDailySeries(orders, firstDay.AddDate(0, 0, -1), 2)
+	daily := buildDailySeriesInLocation(orders, firstDay.AddDate(0, 0, -1), 2, firstDay.Location())
 	require.Equal(t, []DailyStats{
 		{Date: "2026-07-24", Amount: CurrencyAmounts{"CNY": 15.56}, Count: 2},
 		{Date: "2026-07-25", Amount: CurrencyAmounts{"USD": 30}, Count: 2},

@@ -5701,6 +5701,40 @@
 	                <Toggle v-model="form.backend_mode_enabled" />
 	              </div>
 
+	              <!-- Microsoft Clarity -->
+	              <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-700">
+	                <div class="flex items-center justify-between gap-4">
+	                  <div>
+	                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+	                      {{ t("admin.settings.site.clarityTitle") }}
+	                    </h3>
+	                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+	                      {{ t("admin.settings.site.clarityDescription") }}
+	                    </p>
+	                  </div>
+	                  <Toggle v-model="form.clarity_enabled" data-testid="clarity-enabled-toggle" />
+	                </div>
+	                <div class="mt-4">
+	                  <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+	                    {{ t("admin.settings.site.clarityProjectId") }}
+	                  </label>
+	                  <input
+	                    v-model="form.clarity_project_id"
+	                    type="text"
+	                    maxlength="64"
+	                    autocomplete="off"
+	                    spellcheck="false"
+	                    class="input font-mono text-sm"
+	                    data-testid="clarity-project-id-input"
+	                    :disabled="!form.clarity_enabled"
+	                    :placeholder="t('admin.settings.site.clarityProjectIdPlaceholder')"
+	                  />
+	                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+	                    {{ t("admin.settings.site.clarityProjectIdHint") }}
+	                  </p>
+	                </div>
+	              </div>
+
 	              <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
                 <div>
                   <label
@@ -9624,6 +9658,8 @@ const form = reactive<SettingsForm>({
     endpoint: string;
     description: string;
   }>,
+  clarity_enabled: false,
+  clarity_project_id: "",
   frontend_url: "",
   smtp_host: "",
   smtp_port: 587,
@@ -11141,6 +11177,14 @@ function findDuplicateDefaultSubscription(
 async function saveSettings() {
   saving.value = true;
   try {
+    form.clarity_project_id = form.clarity_project_id.trim();
+    if (
+      (form.clarity_enabled && !form.clarity_project_id) ||
+      (form.clarity_project_id && !/^[A-Za-z0-9_-]{1,64}$/.test(form.clarity_project_id))
+    ) {
+      appStore.showError(t("admin.settings.site.clarityProjectIdError"));
+      return;
+    }
     const normalizedTableDefaultPageSize = Math.floor(
       Number(form.table_default_page_size),
     );
@@ -11338,6 +11382,8 @@ async function saveSettings() {
       table_page_size_options: form.table_page_size_options,
       custom_menu_items: form.custom_menu_items,
       custom_endpoints: form.custom_endpoints,
+      clarity_enabled: form.clarity_enabled,
+      clarity_project_id: form.clarity_project_id,
       frontend_url: form.frontend_url,
       smtp_host: form.smtp_host,
       smtp_port: form.smtp_port,

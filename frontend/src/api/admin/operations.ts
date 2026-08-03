@@ -1,6 +1,8 @@
 import { apiClient } from '../client'
 import type { DailyCheckinAdminStats, SystemSettings, UpdateSettingsRequest } from './settings'
 
+export type OperationsAdminStats = Omit<DailyCheckinAdminStats, 'meta'> & { meta: OperationsDataMeta }
+
 export type DailyCheckinSettingsUpdateRequest = Pick<
   UpdateSettingsRequest,
   | 'daily_checkin_enabled'
@@ -37,6 +39,9 @@ export interface DailyCheckinRewardMetadata {
   crit_multiplier: number
   pre_crit_reward_amount: number
   final_reward_amount: number
+  required_usage_usd?: number
+  usage_scope?: 'actual_cost' | 'balance_only'
+  rule_effective_at?: string
   budget_fallback?: boolean
   budget_fallback_message?: string
 }
@@ -89,15 +94,50 @@ export interface OperationsOverviewPoint {
 
 export interface OperationsOverviewSummary {
   dau: number
+  last_day_dau: number
   new_users: number
   request_users: number
+  period_request_users: number
   requests: number
   actual_cost: number
+}
+
+export interface OperationsDataMeta {
+  timezone: string
+  as_of: string
+  requested_start?: string
+  requested_end?: string
+  coverage_start?: string
+  coverage_end?: string
+  data_quality: 'complete' | 'partial' | 'empty' | 'unknown'
+  source: string
+  stale: boolean
+  warnings?: string[]
 }
 
 export interface OperationsOverviewResponse {
   summary: OperationsOverviewSummary
   points: OperationsOverviewPoint[]
+  meta: OperationsDataMeta
+}
+
+export interface OperationsRetentionSummary {
+  cohort_users: number
+  d1_eligible_users: number
+  d7_eligible_users: number
+  d30_eligible_users: number
+  d1_users: number
+  d7_users: number
+  d30_users: number
+  d1_rate: number
+  d7_rate: number
+  d30_rate: number
+  average_active_days: number
+}
+
+export interface OperationsRetentionResponse {
+  summary: OperationsRetentionSummary
+  meta: OperationsDataMeta
 }
 
 export interface DailyCheckinAnalyticsPoint {
@@ -128,7 +168,12 @@ export interface DailyCheckinAnalyticsSummary {
   fallback_rate: number
   crit_rate: number
   streak_user_rate: number
+  qualified_user_days: number
+  checkin_user_days: number
+  checkin_opportunity_rate: number
   daily_remaining_usd: number
+  daily_remaining_rate?: number | null
+  estimated_remaining_checkins?: number | null
   monthly_remaining_usd: number
   projected_budget_days?: number | null
 }
@@ -137,6 +182,7 @@ export interface DailyCheckinAnalyticsResponse {
   summary: DailyCheckinAnalyticsSummary
   points: DailyCheckinAnalyticsPoint[]
   reward_distribution: DailyCheckinRewardDistributionItem[]
+  meta: OperationsDataMeta
 }
 
 export type OperationsExportDataset = 'overview_daily' | 'daily_checkin_summary' | 'daily_checkin_records'
@@ -150,14 +196,19 @@ export async function getOperationsOverview(query: OperationsDateRangeQuery = {}
   return data
 }
 
+export async function getOperationsRetention(query: OperationsDateRangeQuery = {}): Promise<OperationsRetentionResponse> {
+  const { data } = await apiClient.get<OperationsRetentionResponse>('/admin/operations/retention', { params: cleanParams(query) })
+  return data
+}
+
 export async function getDailyCheckinAnalytics(query: OperationsDateRangeQuery = {}): Promise<DailyCheckinAnalyticsResponse> {
   const { data } = await apiClient.get<DailyCheckinAnalyticsResponse>('/admin/operations/daily-checkin/analytics', { params: cleanParams(query) })
   return data
 }
 
-export async function getDailyCheckinStats(): Promise<DailyCheckinAdminStats> {
-  const { data } = await apiClient.get<DailyCheckinAdminStats>('/admin/operations/daily-checkin/stats')
-  return data
+export async function getDailyCheckinStats(query: Pick<OperationsDateRangeQuery, 'timezone'> = {}): Promise<OperationsAdminStats> {
+	const { data } = await apiClient.get<OperationsAdminStats>('/admin/operations/daily-checkin/stats', { params: cleanParams(query) })
+	return data
 }
 
 export async function updateDailyCheckinSettings(settings: DailyCheckinSettingsUpdateRequest): Promise<SystemSettings> {
@@ -186,6 +237,7 @@ function cleanParams(query: object): Record<string, unknown> {
 
 export default {
   getOperationsOverview,
+  getOperationsRetention,
   getDailyCheckinAnalytics,
   getDailyCheckinStats,
   updateDailyCheckinSettings,

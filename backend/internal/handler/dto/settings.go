@@ -151,6 +151,8 @@ type SystemSettings struct {
 	TablePageSizeOptions        []int            `json:"table_page_size_options"`
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
+	ClarityEnabled              bool             `json:"clarity_enabled"`
+	ClarityProjectID            string           `json:"clarity_project_id"`
 
 	DefaultConcurrency           int                          `json:"default_concurrency"`
 	DefaultBalance               float64                      `json:"default_balance"`
@@ -380,6 +382,8 @@ type PublicSettings struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  []CustomMenuItem         `json:"custom_menu_items"`
 	CustomEndpoints                  []CustomEndpoint         `json:"custom_endpoints"`
+	ClarityEnabled                   bool                     `json:"clarity_enabled"`
+	ClarityProjectID                 string                   `json:"clarity_project_id"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`

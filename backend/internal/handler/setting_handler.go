@@ -76,6 +76,8 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		TablePageSizeOptions:             settings.TablePageSizeOptions,
 		CustomMenuItems:                  dto.ParseUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  dto.ParseCustomEndpoints(settings.CustomEndpoints),
+		ClarityEnabled:                   settings.ClarityEnabled,
+		ClarityProjectID:                 settings.ClarityProjectID,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,

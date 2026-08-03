@@ -182,6 +182,101 @@ func TestOperationsOverviewAggregatesDailyActivity(t *testing.T) {
 	require.InDelta(t, 7.0, res.Summary.ActualCost, 0.0001)
 }
 
+func TestOperationsOverviewUsesDailyAggregatesForLongRanges(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	ctx := context.Background()
+	loc := timezone.Location()
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 0, 100)
+	aggregateEnd := end.AddDate(0, 0, -1)
+
+	_, err := db.Exec(`
+		CREATE TABLE usage_dashboard_aggregation_watermark (
+			id INTEGER PRIMARY KEY,
+			user_daily_aggregated_from TIMESTAMP NOT NULL,
+			user_daily_last_aggregated_at TIMESTAMP NOT NULL
+		);
+		CREATE TABLE usage_dashboard_daily_user_stats (
+			bucket_date TEXT NOT NULL,
+			user_id INTEGER NOT NULL,
+			total_requests INTEGER NOT NULL,
+			actual_cost REAL NOT NULL
+		);
+	`,
+	)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_dashboard_aggregation_watermark (id, user_daily_aggregated_from, user_daily_last_aggregated_at) VALUES (1, ?, ?)`, start, aggregateEnd)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_dashboard_daily_user_stats (bucket_date, user_id, total_requests, actual_cost) VALUES (?, 1, 4, 2.5)`, start.Format("2006-01-02"))
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (2, 1.25, ?)`, aggregateEnd.Add(time.Hour))
+	require.NoError(t, err)
+	_, _, buckets := newOperationsOverviewPoints(start, end)
+	require.True(t, operationsShouldUseDailyAggregates(buckets))
+	require.True(t, operationsShouldUseDailyAggregatesForRange(start, end))
+	_, _, covered, err := svc.operationsDailyAggregateCoverage(ctx)
+	require.NoError(t, err)
+	require.True(t, covered)
+	meta := svc.operationsDataMeta(ctx, start, end)
+	require.Equal(t, "usage_dashboard_daily_user_stats+usage_logs", meta.Source)
+
+	res, err := svc.GetOperationsOverview(ctx, start, end)
+	require.NoError(t, err)
+	require.Len(t, res.Points, 100)
+	require.Equal(t, int64(4), res.Points[0].Requests)
+	require.InDelta(t, 2.5, res.Points[0].ActualCost, 0.0001)
+	require.Equal(t, int64(1), res.Points[99].Requests)
+	require.InDelta(t, 1.25, res.Points[99].ActualCost, 0.0001)
+	require.Equal(t, int64(5), res.Summary.Requests)
+	require.Equal(t, "usage_dashboard_daily_user_stats+usage_logs", res.Meta.Source)
+	require.Equal(t, "complete", res.Meta.DataQuality)
+}
+
+func TestOperationsRetentionCalculatesRegistrationCohorts(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 1)
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, created_at) VALUES
+			(1, 'alpha', 'alpha@example.com', ?),
+			(2, 'beta', 'beta@example.com', ?)
+	`, start.Add(time.Hour), start.Add(2*time.Hour))
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES
+			(1, 1, ?), (1, 1, ?), (1, 1, ?),
+			(2, 1, ?)
+	`, start.AddDate(0, 0, 1).Add(time.Hour), start.AddDate(0, 0, 7).Add(time.Hour), start.AddDate(0, 0, 30).Add(time.Hour), start.AddDate(0, 0, 1).Add(2*time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetOperationsRetention(context.Background(), start, end)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), res.Summary.CohortUsers)
+	require.InDelta(t, 1, res.Summary.D1Rate, 0.0001)
+	require.InDelta(t, 0.5, res.Summary.D7Rate, 0.0001)
+	require.InDelta(t, 0.5, res.Summary.D30Rate, 0.0001)
+	require.InDelta(t, 2, res.Summary.AverageActiveDays, 0.0001)
+}
+
+func TestOperationsRetentionExcludesImmatureCohortsFromRateDenominator(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	today := startOfDayInLocation(time.Now().UTC())
+	cohortDay := today.AddDate(0, 0, -1)
+	_, err := db.Exec(`INSERT INTO users (id, username, email, created_at) VALUES (1, 'alpha', 'alpha@example.com', ?)`, cohortDay.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 1, ?)`, today.Add(time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetOperationsRetention(context.Background(), cohortDay, today)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), res.Summary.CohortUsers)
+	require.Equal(t, int64(0), res.Summary.D1EligibleUsers)
+	require.Equal(t, int64(0), res.Summary.D1Users)
+	require.Zero(t, res.Summary.D1Rate)
+	require.Equal(t, "partial", res.Meta.DataQuality)
+	require.Contains(t, res.Meta.Warnings, "retention_cohorts_not_fully_matured")
+}
+
 func TestDailyCheckinAnalyticsSummarizesQualityAndRules(t *testing.T) {
 	svc, db := newDailyCheckinTestService(t, map[string]string{
 		SettingKeyDailyCheckinRequiredUsageUSD:  "1",
@@ -240,6 +335,28 @@ func TestDailyCheckinAnalyticsSummarizesQualityAndRules(t *testing.T) {
 	require.NotEmpty(t, res.RewardDistribution)
 }
 
+func TestDailyCheckinAdminStatsKeepsServerCheckinCalendar(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	serverToday := timezone.StartOfDay(timezone.Now())
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, balance, total_recharged, created_at, updated_at)
+		VALUES (1, 'alpha', 'alpha@example.com', 0, 0, ?, ?)
+	`, serverToday, serverToday)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at)
+		VALUES (1, ?, 1.25, 2.00, ?)
+	`, serverToday.Format("2006-01-02"), serverToday.Add(time.Hour))
+	require.NoError(t, err)
+
+	stats, err := svc.GetAdminStats(context.Background(), "America/Los_Angeles")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), stats.TodayCheckins)
+	require.InDelta(t, 1.25, stats.TodayRewardUSD, 0.0001)
+	require.NotNil(t, stats.Meta)
+	require.Equal(t, timezone.Now().Location().String(), stats.Meta.Timezone)
+}
+
 func TestDailyCheckinAnalyticsIncludesCheckedInUsersInQualifiedDenominator(t *testing.T) {
 	svc, db := newDailyCheckinTestService(t, map[string]string{
 		SettingKeyDailyCheckinRequiredUsageUSD: "1",
@@ -279,6 +396,72 @@ func TestDailyCheckinAnalyticsIncludesCheckedInUsersInQualifiedDenominator(t *te
 	require.Equal(t, int64(2), res.Summary.QualifiedUsers)
 	require.Equal(t, int64(2), res.Summary.CheckinUsers)
 	require.InDelta(t, 1.0, res.Summary.CheckinRate, 0.0001)
+}
+
+func TestDailyCheckinAnalyticsUsesHistoricalRuleSnapshots(t *testing.T) {
+	start := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+	history, err := json.Marshal([]DailyCheckinRuleSnapshot{
+		{EffectiveAt: time.Unix(0, 0).UTC(), RequiredUsageUSD: 1, UsageScope: DailyCheckinUsageScopeActualCost},
+		{EffectiveAt: start.AddDate(0, 0, 1), RequiredUsageUSD: 2, UsageScope: DailyCheckinUsageScopeActualCost},
+	})
+	require.NoError(t, err)
+	svc, db := newDailyCheckinTestService(t, map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD: "2",
+		SettingKeyDailyCheckinRuleHistory:      string(history),
+	})
+	_, err = db.Exec(`
+		INSERT INTO users (id, username, email, created_at) VALUES (1, 'alpha', 'alpha@example.com', ?);
+		INSERT INTO usage_logs (user_id, actual_cost, created_at) VALUES (1, 1.5, ?), (1, 1.5, ?);
+	`, start, start.Add(time.Hour), start.AddDate(0, 0, 1).Add(time.Hour))
+	require.NoError(t, err)
+
+	res, err := svc.GetDailyCheckinAnalytics(context.Background(), start, start.AddDate(0, 0, 2))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), res.Points[0].QualifiedUsers)
+	require.Equal(t, int64(0), res.Points[1].QualifiedUsers)
+}
+
+func TestSettingServiceAppendsDailyCheckinRuleHistory(t *testing.T) {
+	repo := &dailyCheckinSettingRepo{values: map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD: "1",
+		SettingKeyDailyCheckinUsageScope:       DailyCheckinUsageScopeActualCost,
+	}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateDailyCheckinSettings(context.Background(), DailyCheckinSettings{
+		Enabled:          true,
+		RequiredUsageUSD: 2,
+		UsageScope:       DailyCheckinUsageScopeBalanceOnly,
+		RewardMinUSD:     1,
+		RewardMaxUSD:     3,
+	})
+	require.NoError(t, err)
+
+	history, err := svc.GetDailyCheckinRuleHistory(context.Background())
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	require.InDelta(t, 1, history[0].RequiredUsageUSD, 0.0001)
+	require.Equal(t, DailyCheckinUsageScopeActualCost, history[0].UsageScope)
+	require.InDelta(t, 2, history[1].RequiredUsageUSD, 0.0001)
+	require.Equal(t, DailyCheckinUsageScopeBalanceOnly, history[1].UsageScope)
+}
+
+func TestProjectedBudgetMetricsDistinguishDailyAndMonthlyBudgets(t *testing.T) {
+	points := []DailyCheckinAnalyticsPoint{{CheckinUsers: 2, RewardUSD: 4}}
+
+	dailyOnly := DailyCheckinAnalyticsSummary{DailyRemainingUSD: 6}
+	applyProjectedBudgetMetrics(&dailyOnly, points, &DailyCheckinSettings{DailyBudgetUSD: 10})
+	require.Nil(t, dailyOnly.ProjectedBudgetDays)
+	require.NotNil(t, dailyOnly.DailyRemainingRate)
+	require.InDelta(t, 0.6, *dailyOnly.DailyRemainingRate, 0.0001)
+	require.NotNil(t, dailyOnly.EstimatedCheckins)
+	require.InDelta(t, 3, *dailyOnly.EstimatedCheckins, 0.0001)
+
+	monthlyOnly := DailyCheckinAnalyticsSummary{MonthlyRemainingUSD: 12}
+	applyProjectedBudgetMetrics(&monthlyOnly, points, &DailyCheckinSettings{MonthlyBudgetUSD: 20})
+	require.NotNil(t, monthlyOnly.ProjectedBudgetDays)
+	require.InDelta(t, 3, *monthlyOnly.ProjectedBudgetDays, 0.0001)
+	require.Nil(t, monthlyOnly.EstimatedCheckins)
 }
 
 func TestDailyCheckinCanBeDisabled(t *testing.T) {
@@ -474,6 +657,30 @@ func TestDailyCheckinSupportsDecimalRewardTierAmounts(t *testing.T) {
 	require.InDelta(t, 1.25, storedReward, 0.0001)
 	require.Contains(t, metadataRaw, `"min_usd":1.25`)
 	require.Contains(t, metadataRaw, `"max_usd":1.25`)
+	require.Contains(t, metadataRaw, `"required_usage_usd":1`)
+	require.Contains(t, metadataRaw, `"usage_scope":"actual_cost"`)
+	require.Contains(t, metadataRaw, `"rule_effective_at":`)
+}
+
+func TestDailyCheckinAdminRecordsMaskEmailButExportKeepsOriginal(t *testing.T) {
+	svc, db := newDailyCheckinTestService(t, nil)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, created_at) VALUES (1, 'alpha', 'alice@example.com', ?);
+		INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at)
+		VALUES (1, '2026-07-01', 1, 2, ?);
+	`, now, now)
+	require.NoError(t, err)
+
+	listed, err := svc.ListAdminRecords(context.Background(), DailyCheckinAdminRecordFilter{Page: 1, PageSize: 20})
+	require.NoError(t, err)
+	require.Len(t, listed.Items, 1)
+	require.Equal(t, "a***e@example.com", listed.Items[0].Email)
+
+	exported, err := svc.ExportAdminRecords(context.Background(), DailyCheckinAdminRecordFilter{})
+	require.NoError(t, err)
+	require.Len(t, exported, 1)
+	require.Equal(t, "alice@example.com", exported[0].Email)
 }
 
 func TestDailyCheckinAppliesRewardTierStreakAndCrit(t *testing.T) {

@@ -261,6 +261,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TablePageSizeOptions:                                   settings.TablePageSizeOptions,
 		CustomMenuItems:                                        dto.ParseCustomMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                                        dto.ParseCustomEndpoints(settings.CustomEndpoints),
+		ClarityEnabled:                                         settings.ClarityEnabled,
+		ClarityProjectID:                                       settings.ClarityProjectID,
 		DefaultConcurrency:                                     settings.DefaultConcurrency,
 		DefaultBalance:                                         settings.DefaultBalance,
 		RiskControlEnabled:                                     settings.RiskControlEnabled,
@@ -426,10 +428,20 @@ func (h *SettingHandler) GetDailyCheckinStats(c *gin.Context) {
 		response.InternalError(c, "Daily check-in service is unavailable")
 		return
 	}
-	stats, err := h.dailyCheckinService.GetAdminStats(c.Request.Context())
+	userTZ, err := operationsTimezoneFromQuery(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	stats, err := h.dailyCheckinService.GetAdminStats(c.Request.Context(), userTZ)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	// Keep the legacy settings alias response stable; the operations route is
+	// the canonical endpoint that exposes reporting metadata.
+	if strings.Contains(c.Request.URL.Path, "/admin/settings/") {
+		stats.Meta = nil
 	}
 	response.Success(c, stats)
 }
@@ -447,6 +459,26 @@ func (h *SettingHandler) GetOperationsOverview(c *gin.Context) {
 		return
 	}
 	data, err := h.dailyCheckinService.GetOperationsOverview(c.Request.Context(), start, end)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, data)
+}
+
+// GetOperationsRetention returns registration-cohort API retention metrics.
+// GET /api/v1/admin/operations/retention
+func (h *SettingHandler) GetOperationsRetention(c *gin.Context) {
+	if h.dailyCheckinService == nil {
+		response.InternalError(c, "Operations service is unavailable")
+		return
+	}
+	start, end, err := parseOperationsDateRange(c, 30)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	data, err := h.dailyCheckinService.GetOperationsRetention(c.Request.Context(), start, end)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -697,12 +729,14 @@ func parseOperationsDateRange(c *gin.Context, defaultDays int) (time.Time, time.
 	if defaultDays <= 0 {
 		defaultDays = 30
 	}
-	userTZ := strings.TrimSpace(c.Query("timezone"))
+	userTZ, err := operationsTimezoneFromQuery(c)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
 	now := timezone.NowInUserLocation(userTZ)
 	startDate := strings.TrimSpace(c.Query("start_date"))
 	endDate := strings.TrimSpace(c.Query("end_date"))
 	var start, end time.Time
-	var err error
 	if startDate == "" {
 		start = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -defaultDays+1), userTZ)
 	} else {
@@ -723,10 +757,23 @@ func parseOperationsDateRange(c *gin.Context, defaultDays int) (time.Time, time.
 	if !start.Before(end) {
 		return time.Time{}, time.Time{}, fmt.Errorf("start_date must be before end_date")
 	}
-	if end.Sub(start) > 370*24*time.Hour {
+	startCalendar := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	endCalendar := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+	if endCalendar.Sub(startCalendar) > 370*24*time.Hour {
 		return time.Time{}, time.Time{}, fmt.Errorf("date range is too large")
 	}
 	return start, end, nil
+}
+
+func operationsTimezoneFromQuery(c *gin.Context) (string, error) {
+	userTZ := strings.TrimSpace(c.Query("timezone"))
+	if userTZ == "" {
+		return timezone.Name(), nil
+	}
+	if _, err := time.LoadLocation(userTZ); err != nil {
+		return "", fmt.Errorf("invalid timezone")
+	}
+	return userTZ, nil
 }
 
 func formatCSVFloat(value float64) string {
@@ -1103,6 +1150,8 @@ type UpdateSettingsRequest struct {
 	TablePageSizeOptions        []int                 `json:"table_page_size_options"`
 	CustomMenuItems             *[]dto.CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             *[]dto.CustomEndpoint `json:"custom_endpoints"`
+	ClarityEnabled              bool                  `json:"clarity_enabled"`
+	ClarityProjectID            string                `json:"clarity_project_id"`
 
 	// 默认配置
 	DefaultConcurrency                        int                               `json:"default_concurrency"`
@@ -2442,6 +2491,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TablePageSizeOptions:                   req.TablePageSizeOptions,
 		CustomMenuItems:                        customMenuJSON,
 		CustomEndpoints:                        customEndpointsJSON,
+		ClarityEnabled:                         req.ClarityEnabled,
+		ClarityProjectID:                       req.ClarityProjectID,
 		DefaultConcurrency:                     req.DefaultConcurrency,
 		DefaultBalance:                         req.DefaultBalance,
 		AffiliateRebateRate:                    affiliateRebateRate,
@@ -3148,6 +3199,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TablePageSizeOptions:                                   updatedSettings.TablePageSizeOptions,
 		CustomMenuItems:                                        dto.ParseCustomMenuItems(updatedSettings.CustomMenuItems),
 		CustomEndpoints:                                        dto.ParseCustomEndpoints(updatedSettings.CustomEndpoints),
+		ClarityEnabled:                                         updatedSettings.ClarityEnabled,
+		ClarityProjectID:                                       updatedSettings.ClarityProjectID,
 		DefaultConcurrency:                                     updatedSettings.DefaultConcurrency,
 		DefaultBalance:                                         updatedSettings.DefaultBalance,
 		AffiliateRebateRate:                                    updatedSettings.AffiliateRebateRate,
@@ -3703,6 +3756,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.CustomEndpoints != after.CustomEndpoints {
 		changed = append(changed, "custom_endpoints")
+	}
+	if before.ClarityEnabled != after.ClarityEnabled {
+		changed = append(changed, "clarity_enabled")
+	}
+	if before.ClarityProjectID != after.ClarityProjectID {
+		changed = append(changed, "clarity_project_id")
 	}
 	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
 		changed = append(changed, "enable_fingerprint_unification")

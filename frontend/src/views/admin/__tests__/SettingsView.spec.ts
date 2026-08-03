@@ -400,6 +400,8 @@ const baseSettingsResponse = {
   backend_mode_enabled: false,
   custom_menu_items: [],
   custom_endpoints: [],
+  clarity_enabled: false,
+  clarity_project_id: "",
   frontend_url: "",
   smtp_host: "",
   smtp_port: 587,
@@ -765,6 +767,39 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it("loads, validates, and saves the controlled Clarity fields", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      clarity_enabled: true,
+      clarity_project_id: "xwiilcm4jb",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    const toggle = wrapper.get('[data-testid="clarity-enabled-toggle"]');
+    const projectID = wrapper.get('[data-testid="clarity-project-id-input"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    expect((projectID.element as HTMLInputElement).value).toBe("xwiilcm4jb");
+
+    updateSettings.mockClear();
+    showError.mockClear();
+    await projectID.setValue('<script src="https://example.com/x.js"></script>');
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(showError).toHaveBeenCalledWith("admin.settings.site.clarityProjectIdError");
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    await projectID.setValue("project_123-test");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clarity_enabled: true,
+        clarity_project_id: "project_123-test",
+      }),
+    );
   });
 
   it("renders panel rate limit card and saves settings", async () => {

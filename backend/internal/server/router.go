@@ -41,6 +41,7 @@ func SetupRouter(
 	var cachedFrameOrigins atomic.Pointer[[]string]
 	emptyOrigins := []string{}
 	cachedFrameOrigins.Store(&emptyOrigins)
+	var cachedClarityEnabled atomic.Bool
 
 	refreshFrameOrigins := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
@@ -53,6 +54,18 @@ func SetupRouter(
 		cachedFrameOrigins.Store(&origins)
 	}
 	refreshFrameOrigins() // 启动时初始化
+
+	refreshClarityEnabled := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), frameSrcRefreshTimeout)
+		defer cancel()
+		enabled, err := settingService.IsClarityEnabled(ctx)
+		if err != nil {
+			// 获取失败时保留已有状态，避免短暂存储故障改变页面 CSP。
+			return
+		}
+		cachedClarityEnabled.Store(enabled)
+	}
+	refreshClarityEnabled()
 
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
@@ -67,6 +80,8 @@ func SetupRouter(
 			return *p
 		}
 		return nil
+	}, func() bool {
+		return cachedClarityEnabled.Load()
 	}))
 	r.Use(middleware2.ServerTiming(cfg.Server.EnableServerTiming))
 
@@ -76,17 +91,24 @@ func SetupRouter(
 		if err != nil {                                              //nolint:staticcheck // SA4023: see above
 			log.Printf("Warning: Failed to create frontend server with settings injection: %v, using legacy mode", err)
 			r.Use(web.ServeEmbeddedFrontend())
-			settingService.SetOnUpdateCallback(refreshFrameOrigins)
+			settingService.SetOnUpdateCallback(func() {
+				refreshFrameOrigins()
+				refreshClarityEnabled()
+			})
 		} else {
 			// Register combined callback: invalidate HTML cache + refresh frame origins
 			settingService.SetOnUpdateCallback(func() {
 				frontendServer.InvalidateCache()
 				refreshFrameOrigins()
+				refreshClarityEnabled()
 			})
 			r.Use(frontendServer.Middleware())
 		}
 	} else {
-		settingService.SetOnUpdateCallback(refreshFrameOrigins)
+		settingService.SetOnUpdateCallback(func() {
+			refreshFrameOrigins()
+			refreshClarityEnabled()
+		})
 	}
 
 	// 注册路由

@@ -494,6 +494,12 @@ export default {
         backendMode: 'Backend 模式',
         backendModeDescription:
           '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
+        clarityTitle: 'Microsoft Clarity',
+        clarityDescription: '启用后会在所有页面的 <head> 中安全加载 Clarity 官方追踪脚本。',
+        clarityProjectId: 'Clarity Project ID',
+        clarityProjectIdPlaceholder: '例如：xwiilcm4jb',
+        clarityProjectIdHint: '只填写 Clarity 项目 ID，不要粘贴完整 JavaScript 或 URL。',
+        clarityProjectIdError: '启用 Clarity 时必须填写有效的 Project ID，且只能包含字母、数字、下划线或连字符。',
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
         siteNamePlaceholder: 'Sub2API',

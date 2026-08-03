@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -18,6 +19,7 @@ import (
 
 type settingUpdateRepoStub struct {
 	updates        map[string]string
+	values         map[string]string
 	setMultipleErr error
 }
 
@@ -26,7 +28,10 @@ func (s *settingUpdateRepoStub) Get(ctx context.Context, key string) (*Setting, 
 }
 
 func (s *settingUpdateRepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	panic("unexpected GetValue call")
+	if value, ok := s.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
 }
 
 func (s *settingUpdateRepoStub) Set(ctx context.Context, key, value string) error {
@@ -34,13 +39,23 @@ func (s *settingUpdateRepoStub) Set(ctx context.Context, key, value string) erro
 }
 
 func (s *settingUpdateRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
-	panic("unexpected GetMultiple call")
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := s.values[key]; ok {
+			result[key] = value
+		}
+	}
+	return result, nil
 }
 
 func (s *settingUpdateRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
 	s.updates = make(map[string]string, len(settings))
 	for k, v := range settings {
 		s.updates[k] = v
+		if s.values == nil {
+			s.values = map[string]string{}
+		}
+		s.values[k] = v
 	}
 	return s.setMultipleErr
 }
@@ -181,7 +196,7 @@ func (s *settingAntigravityUARepoStub) Delete(ctx context.Context, key string) e
 }
 
 func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
+	repo := &settingUpdateRepoStub{values: map[string]string{}}
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.UpdateDailyCheckinSettings(context.Background(), DailyCheckinSettings{
@@ -211,6 +226,14 @@ func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *te
 	require.NotContains(t, repo.updates, SettingKeySiteName)
 	require.NotContains(t, repo.updates, SettingKeySiteLogo)
 	require.NotContains(t, repo.updates, SettingKeySiteSubtitle)
+	historyRaw := repo.updates[SettingKeyDailyCheckinRuleHistory]
+	delete(repo.updates, SettingKeyDailyCheckinRuleHistory)
+	var history []DailyCheckinRuleSnapshot
+	require.NoError(t, json.Unmarshal([]byte(historyRaw), &history))
+	require.Len(t, history, 2)
+	require.InDelta(t, DailyCheckinRequiredUsageDefault, history[0].RequiredUsageUSD, 0.0001)
+	require.InDelta(t, 1.5, history[1].RequiredUsageUSD, 0.0001)
+	require.Equal(t, DailyCheckinUsageScopeBalanceOnly, history[1].UsageScope)
 	require.Equal(t, map[string]string{
 		SettingKeyDailyCheckinEnabled:             "true",
 		SettingKeyDailyCheckinRequiredUsageUSD:    "1.50000000",
@@ -231,6 +254,26 @@ func TestSettingService_UpdateDailyCheckinSettings_OnlyPersistsCheckinKeys(t *te
 		SettingKeyDailyCheckinCritMultiplier:      "2.00000000",
 		SettingKeyDailyCheckinCritMaxRewardUSD:    "8.00000000",
 	}, repo.updates)
+}
+
+func TestSettingService_UpdateSettingsWithAuthSourceDefaults_AppendsDailyCheckinRuleHistory(t *testing.T) {
+	repo := &settingUpdateRepoStub{values: map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD: "1",
+		SettingKeyDailyCheckinUsageScope:       DailyCheckinUsageScopeActualCost,
+	}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettingsWithAuthSourceDefaults(context.Background(), &SystemSettings{
+		DailyCheckinRequiredUsageUSD: 2,
+		DailyCheckinUsageScope:       DailyCheckinUsageScopeBalanceOnly,
+	}, nil)
+	require.NoError(t, err)
+
+	var history []DailyCheckinRuleSnapshot
+	require.NoError(t, json.Unmarshal([]byte(repo.updates[SettingKeyDailyCheckinRuleHistory]), &history))
+	require.Len(t, history, 2)
+	require.InDelta(t, 2, history[1].RequiredUsageUSD, 0.0001)
+	require.Equal(t, DailyCheckinUsageScopeBalanceOnly, history[1].UsageScope)
 }
 
 type defaultSubGroupReaderStub struct {
@@ -418,6 +461,50 @@ func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Invalid(
 	})
 	require.Error(t, err)
 	require.Equal(t, "INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", infraerrors.Reason(err))
+}
+
+func TestSettingService_ClaritySettingsValidation(t *testing.T) {
+	t.Run("accepts_valid_project_id", func(t *testing.T) {
+		projectID, err := normalizeClarityProjectID(true, " xwiilcm4jb ")
+		require.NoError(t, err)
+		require.Equal(t, "xwiilcm4jb", projectID)
+	})
+
+	t.Run("requires_project_id_when_enabled", func(t *testing.T) {
+		_, err := normalizeClarityProjectID(true, " ")
+		require.Error(t, err)
+	})
+
+	t.Run("rejects_executable_input", func(t *testing.T) {
+		for _, value := range []string{
+			`https://www.clarity.ms/tag/xwiilcm4jb`,
+			`xwiilcm4jb</script>`,
+			strings.Repeat("a", clarityProjectIDMaxLength+1),
+		} {
+			_, err := normalizeClarityProjectID(false, value)
+			require.Error(t, err, value)
+		}
+	})
+
+	t.Run("builds_persisted_settings", func(t *testing.T) {
+		svc := &SettingService{cfg: &config.Config{}}
+		updates, err := svc.buildSystemSettingsUpdates(context.Background(), &SystemSettings{
+			ClarityEnabled:   true,
+			ClarityProjectID: "xwiilcm4jb",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "true", updates[SettingKeyClarityEnabled])
+		require.Equal(t, "xwiilcm4jb", updates[SettingKeyClarityProjectID])
+	})
+
+	t.Run("invalid_persisted_settings_fail_closed", func(t *testing.T) {
+		enabled, projectID := parseClaritySettings(map[string]string{
+			SettingKeyClarityEnabled:   "true",
+			SettingKeyClarityProjectID: `bad</script>`,
+		})
+		require.False(t, enabled)
+		require.Empty(t, projectID)
+	})
 }
 
 func TestParseDefaultSubscriptions_NormalizesValues(t *testing.T) {

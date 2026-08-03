@@ -77,9 +77,11 @@ export const adminPaymentAPI = {
   // ==================== Dashboard ====================
 
   /** Get payment dashboard statistics */
-  getDashboard(days?: number) {
+  getDashboard(daysOrRange?: number | { start_date: string; end_date: string; timezone?: string }) {
     return apiClient.get<DashboardStats>('/admin/payment/dashboard', {
-      params: days ? { days } : undefined
+      params: typeof daysOrRange === 'number'
+        ? { days: daysOrRange }
+        : daysOrRange
     })
   },
 

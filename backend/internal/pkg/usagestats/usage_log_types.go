@@ -177,12 +177,23 @@ type UserSpendingRankingItem struct {
 	Tokens     int64   `json:"tokens"`
 }
 
+// DashboardAggregateCoverage describes whether an aggregate-backed dashboard
+// section has usable data for the requested range. A current-day request can
+// be available but not complete while the latest hourly bucket is still open.
+type DashboardAggregateCoverage struct {
+	DataAvailable       bool   `json:"data_available"`
+	AggregationComplete bool   `json:"aggregation_complete"`
+	CoverageStart       string `json:"coverage_start,omitempty"`
+	CoverageEnd         string `json:"coverage_end,omitempty"`
+}
+
 // UserSpendingRankingResponse represents ranking rows plus total spend for the time range.
 type UserSpendingRankingResponse struct {
 	Ranking         []UserSpendingRankingItem `json:"ranking"`
 	TotalActualCost float64                   `json:"total_actual_cost"`
 	TotalRequests   int64                     `json:"total_requests"`
 	TotalTokens     int64                     `json:"total_tokens"`
+	DashboardAggregateCoverage
 }
 
 // UserBreakdownItem represents per-user usage breakdown within a dimension (group, model, endpoint).

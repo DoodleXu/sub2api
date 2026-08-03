@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,7 +44,11 @@ type injectedSiteSEO struct {
 	SiteSubtitle            string                   `json:"site_subtitle"`
 	CustomMenuItems         []injectedCustomMenuItem `json:"custom_menu_items"`
 	LoginAgreementDocuments []injectedLegalDocument  `json:"login_agreement_documents"`
+	ClarityEnabled          bool                     `json:"clarity_enabled"`
+	ClarityProjectID        string                   `json:"clarity_project_id"`
 }
+
+var clarityProjectIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type injectedCustomMenuItem struct {
 	ID         string `json:"id"`
@@ -236,17 +241,44 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
 	// Create the script tag to inject with nonce placeholder
 	// The placeholder will be replaced with actual nonce at request time
-	script := []byte(`<script nonce="` + NonceHTMLPlaceholder + `">window.__APP_CONFIG__=` + string(settingsJSON) + `;</script>`)
+	scripts := []byte(`<script nonce="` + NonceHTMLPlaceholder + `">window.__APP_CONFIG__=` + string(settingsJSON) + `;</script>`)
+	if clarityScript := buildClarityBootstrap(settingsJSON); len(clarityScript) > 0 {
+		scripts = append(scripts, '\n')
+		scripts = append(scripts, clarityScript...)
+	}
 
 	// Inject before </head>
 	headClose := []byte("</head>")
-	result := bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
+	result := bytes.Replace(s.baseHTML, headClose, append(scripts, headClose...), 1)
 
 	// Replace generic SEO tags with public site settings so crawlers and link previews
 	// see the configured brand before the SPA boots.
 	result = injectSiteSEO(result, settingsJSON)
 
 	return result
+}
+
+func buildClarityBootstrap(settingsJSON []byte) []byte {
+	var cfg injectedSiteSEO
+	if err := json.Unmarshal(settingsJSON, &cfg); err != nil || !cfg.ClarityEnabled {
+		return nil
+	}
+	projectID := strings.TrimSpace(cfg.ClarityProjectID)
+	if !clarityProjectIDPattern.MatchString(projectID) {
+		return nil
+	}
+	projectIDJSON, err := json.Marshal(projectID)
+	if err != nil {
+		return nil
+	}
+
+	var script bytes.Buffer
+	script.WriteString(`<script type="text/javascript" nonce="`)
+	script.WriteString(NonceHTMLPlaceholder)
+	script.WriteString(`">(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script",`)
+	script.Write(projectIDJSON)
+	script.WriteString(`);</script>`)
+	return script.Bytes()
 }
 
 // injectSiteTitle replaces the static <title> in HTML with the configured site name.

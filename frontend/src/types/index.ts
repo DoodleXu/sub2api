@@ -219,6 +219,8 @@ export interface PublicSettings {
   table_page_size_options: number[]
   custom_menu_items: CustomMenuItem[]
   custom_endpoints: CustomEndpoint[]
+  clarity_enabled: boolean
+  clarity_project_id: string
   linuxdo_oauth_enabled: boolean
   dingtalk_oauth_enabled?: boolean
   wechat_oauth_enabled: boolean
@@ -1894,6 +1896,10 @@ export interface UserSpendingRankingResponse {
   total_tokens: number
   start_date: string
   end_date: string
+  data_available: boolean
+  aggregation_complete: boolean
+  coverage_start?: string
+  coverage_end?: string
 }
 
 export interface ApiKeyUsageTrendPoint {

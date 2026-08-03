@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-02
+最后更新：2026-08-03
 
 ## 当前对比基线
 
@@ -31,7 +31,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 本次 `v0.1.170` 合并说明：
 
 - 分组新增按 token 请求生效的利润控制、最低利润率和安全缓冲；HTTP、WebSocket、旧调度器、负载感知、混合路由、粘性会话与 failover 统一携带同一 pricing 时刻和利润门，抢槽后会用最新账号快照终检。fork 的人民币定价、每美元成本、超频层、Responses Lite、生图意图隔离和完整调度语义继续保留，API Key 鉴权快照升至 v19。
-- API Key 上游计费探测扩展到多个平台，并可选择把上游声明倍率同步回账号；探测开关、同步开关和手工倍率采用原子更新与所有权冲突校验，普通编辑、批量更新、复制、CRS 同步和身份变更不会泄漏或覆盖服务受管状态。
+- API Key 上游计费探测扩展到多个平台，并可选择把上游声明倍率同步回账号；探测开关、同步开关和手工倍率采用原子更新与所有权冲突校验，普通编辑、批量更新、复制、CRS 同步和身份变更不会泄漏或覆盖服务受管状态。账号编辑弹窗将倍率同步开关放在成本字段下方的独立整行，避免说明文字挤压计费倍率字段列。
 - Anthropic 流式响应在缺失终态或读取中断时保留已观察到的 input/output/cache token，并继续交给 usage 记录链路，避免上游已计量而本地整次漏记；failover 错误仍保持无部分结果，防止成功重试后双重计费。
 - 新增简洁首页预设、按当前筛选条件全选账号和批量删除并发限制；管理端分组利润控制、账号倍率同步、内容审核代理和支付方式布局同步更新，同时保留 fork 的账号归档、生图历史/任务、运营中心和定制导航。
 - 内容审核支持指定代理出站；SMTP 正式发送与测试连接复用统一建连路径；OpenAI/Codex 同步流式 429 语义、陈旧 compaction 恢复、OAuth Responses namespace 工具保留、WebSocket relay 生命周期和工具输出图片桥接修复。
@@ -201,6 +201,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - merge-tree 与合并后检查确认签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理核心文件仍存在；账号 OAuth 更新继续拒绝归档账号，调度与批量操作仍过滤 `archived_at`。
 - 2026-07-14 fork 调整官方 Ops Monitoring 的请求时长分布：移除固定 `0-100ms` 至 `2000ms+` 桶，改为按当前所选时间窗口及平台/分组筛选结果的实际最小、最大请求时长动态生成最多 6 个对数桶；窄范围继续使用等宽桶，并为原始日志查询设置 5 秒上限，兼顾长尾辨识度和大窗口资源保护。后续同步上游若改动 `ops_repo_histograms.go` 或 `OpsLatencyChart.vue`，需保留动态量程行为。
 - 2026-07-14 Ops Monitoring 的 TTFT 卡新增“生图 Avg”：原 `first_token_ms` 继续保留全部流式请求的首 token 口径，另以 `usage_logs.image_first_output_ms` 记录流式首次 partial/final 图片或非流式完整图片响应的真实可用输出时间，并统一 API Key、OAuth、Responses、HTTP passthrough 与 WS v2 direct passthrough 入口，同时排除视频请求；WS direct relay 按成功写入的 `response.create` 为每个 turn 分配序号并登记起点，收到 `response_id` 后再绑定，因此首 token、首图和 duration 均包含 `response.created` 前的上游排队时间；适配层按同一序号保存 request/upstream/image billing model、size、service tier 与 reasoning effort 快照，终态不会串用其他轮次或退化为聊天模型/default size。每个 direct passthrough `response.create` 还会保留客户端 `event_id`，缺失时注入内部唯一值；若上游以可恢复 `error.error.event_id` 拒绝该轮但不生成 `response_id`，relay 会精确撤销对应 timing 与计费快照，避免下一轮错绑。首图与最终图片数按 turn 跟踪，重复出现于 `output_item.done`/`response.completed` 的同一图片不会重复计数。小时/日预聚合保存独立样本数和加权平均值。历史行无法从 lifecycle 事件到达时间还原真实首图时间，因此保持 NULL；已提交的 `175_ops_image_generation_ttft_average.sql` 保持 checksum 不变，新增 `177_add_usage_log_image_first_output_ms.sql` 负责清理早期草稿基于 `first_token_ms` 生成的不可信聚合值，后续仅统计新产生的可信样本。
+- 2026-08-03 Ops Monitoring 首行的“平均账号切换趋势”和“吞吐趋势”不再固定为 `360px`，三块面板统一保留 `360px` 最小高度，并在桌面四列网格中按“并发 / 排队”面板的实际高度拉伸；并发维度或数据项变化导致左侧增高时，右侧图表会同步填满同一行高度。
 
 历史 `v0.1.153` 合并说明：
 
@@ -272,6 +273,14 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 
 - 新增 `/admin/operations` 页面和后端 routes，承载运营概览、签到趋势、签到记录、数据导出等。
 - 与 dashboard 聚合、签到设置、用量统计、导出进度等模块联动。
+- 运营接口统一接受 IANA 时区与闭区间日期，响应携带 `as_of`、覆盖范围、数据质量和来源；长周期查询优先复用用户日聚合并仅从原始日志补齐实时尾部。
+- Dashboard 日期边界按请求时区的日历日计算，禁止用固定 24 小时推导 DST 日期；非服务端日界线的用户趋势改读小时聚合，并在 SQL 中按请求 IANA 时区归日。
+- 概览明确区分“区间最后一天 DAU”和“区间请求用户”，提供上一周期对比；页面按 Tab 懒加载，查询失败会保留分区错误状态并提示旧数据风险。
+- 签到资格规则以 append-only 快照保存，历史达标率按当时门槛和消费范围计算；在线明细默认脱敏邮箱，完整导出继续要求 step-up。
+- 签到日/月预算与 `user_checkins.checkin_date` 始终使用服务端签到时区；浏览器时区只用于独立的观察性运营区间，不能改变签到资格或预算口径。规则历史同时覆盖专用签到更新与管理后台系统设置写入入口，无关设置更新不读取或追加历史。
+- 经营分析聚合用户增长、D1/D7/D30 API 留存、支付收入、实际扣费、上游账号成本、签到奖励成本、模型与分组贡献，并明确贡献毛利口径。
+- 经营分析的模型统计和用户消费排行显式返回 `data_available`、`aggregation_complete` 与 coverage；未覆盖时禁止把空聚合显示成 `$0` 或计算贡献毛利。超过 31 天时只降级隐藏分组明细，其他长周期指标继续加载。
+- 日预算与月预算预测分开：日预算展示今日剩余比例和预计可发放人次，只有月预算才展示预计耗尽天数。
 - 导航中需要和官方 `/admin/ops` 区分：`ops` 更偏系统运维，`operations` 更偏业务运营。
 
 关键代码：
@@ -282,6 +291,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - `backend/internal/repository/dashboard_aggregation_repo.go`
 - `frontend/src/api/admin/operations.ts`
 - `frontend/src/views/admin/OperationsCenterView.vue`
+- `frontend/src/views/admin/operations/OperationsBusinessInsights.vue`
 - `frontend/src/views/admin/operations/DailyCheckinTrendChart.vue`
 - `frontend/src/views/admin/operations/OperationsOverviewTrendChart.vue`
 - `frontend/src/router/index.ts`
@@ -309,6 +319,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - usage/dashboard 聚合返回 `total_account_cost`、`total_cost_cny`、`average_cost_cny_per_usd`、`today_real_cost_cny` 等字段。
 - dashboard 成本链路为“账号小时聚合 → 账号日聚合 → 单行成本快照”，请求时只读取成本快照，禁止对 coverage 前缀/尾部同步回扫 `usage_logs`；`/admin/dashboard/cost-summary` 与核心 Token 快照独立，成本聚合故障只返回最近 30 分钟内旧值并标记 `stale`，不会拖垮首屏。
 - 历史账号成本与默认无筛选模型统计共用独立覆盖水位，启动后先处理当前小时和最近日期，再向历史倒序按日分块；每个分块独立获取并释放聚合锁，实时聚合优先。完整历史区间 coverage 不足时成本显示“聚合中”、用户趋势/排行/模型统计返回局部不可用，均不回扫大表；包含当前未结束日期的请求会把未来尾部截到实际小时聚合水位，完整历史日仍使用日表，当前日期使用小时表，避免默认首屏因次日零点尚未覆盖而错误返回空数据。
+- 手动范围重算在重建账号、用户和模型聚合后同步推进三类覆盖水位，避免模型表已重建但模型 coverage 仍停留在旧位置。
 - `snapshot-v2` 对趋势、模型、分组、用户趋势和排行实行 3 秒独立预算，允许部分成功并返回 `partial_errors` / `section_durations_ms`；核心统计使用 1 秒预算。Redis 统计缓存默认调整为 2 分钟新鲜、30 分钟兜底。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
 - 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。
@@ -483,9 +494,26 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 
 ## 其他 fork 差异
 
+### 公开首页支持模型展示
+
+- 默认公开首页的“已支持的 AI 模型”区域明确展示 Grok，并复用现有支持状态、深浅色主题和响应式换行样式；后续同步上游首页时需保留该入口。
+
+关键代码：
+
+- `frontend/src/views/HomeView.vue`
+- `frontend/src/i18n/locales/zh.ts`
+- `frontend/src/i18n/locales/en.ts`
+
+### Microsoft Clarity 全站分析
+
+- 系统设置新增受控的 `clarity_enabled` 与 `clarity_project_id`，只接受布尔开关和格式受限的 Project ID，不提供任意自定义 JavaScript 输入，避免后台设置成为持久化脚本执行入口。
+- 生产环境由嵌入式前端服务在 `index.html` 的 `<head>` 中生成固定 Clarity bootstrap，并复用逐请求 CSP nonce、公开设置注入、HTML 缓存失效和 ETag 机制；开发环境的 Vite HTML transform 保持等价行为。
+- Clarity 启用时才动态向 `script-src`、已有的 `script-src-elem`、`connect-src` 和 `img-src` 加入 `https://*.clarity.ms`；禁用或 Project ID 无效时脚本与 CSP 来源均失败关闭。
+- 该集成覆盖公开页、用户控制台和管理后台全部 SPA 路由，不包含 Cookie Consent、ConsentV2、路由排除或 DOM 遮罩逻辑。同步上游设置、CSP 或嵌入式前端改动时必须保留字段校验、nonce 注入、动态 CSP 和缓存刷新四条边界。
+
 ### 订阅与支付增强
 
-差异包括订阅升级抵扣、退款预览、支付手续费与限额、订阅绑定 API Key、周配额批量重置、高峰倍率、支付金额展示口径修正。
+差异包括订阅升级抵扣、退款预览、支付手续费与限额、订阅绑定 API Key、周配额批量重置、高峰倍率、支付金额展示口径修正，以及管理端订单列表独立展示用户 ID。
 
 关键代码：
 
@@ -494,6 +522,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - `backend/internal/service/subscription_service.go`
 - `backend/internal/handler/admin/subscription_handler.go`
 - `frontend/src/views/admin/orders/AdminPaymentPlansView.vue`
+- `frontend/src/components/payment/OrderTable.vue`
 - `frontend/src/components/payment/SubscriptionPlanCard.vue`
 - `docs/PAYMENT_CN.md`
 

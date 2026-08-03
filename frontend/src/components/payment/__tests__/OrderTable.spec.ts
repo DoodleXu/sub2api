@@ -65,6 +65,25 @@ function order(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
 }
 
 describe('OrderTable', () => {
+  it('renders a separate user ID column for admin orders', () => {
+    const wrapper = mount(OrderTable, {
+      props: {
+        orders: [order({ user_id: 42 })],
+        loading: false,
+        showUser: true,
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('payment.orders.userId')
+    expect(wrapper.text()).toContain('#42')
+  })
+
   it('renders subscription upgrade credit column for admin orders', () => {
     const wrapper = mount(OrderTable, {
       props: {

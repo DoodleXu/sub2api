@@ -85,26 +85,30 @@ type DailyCheckinRewardMetadata struct {
 	CritMultiplier      float64                 `json:"crit_multiplier"`
 	PreCritRewardAmount float64                 `json:"pre_crit_reward_amount"`
 	FinalRewardAmount   float64                 `json:"final_reward_amount"`
+	RequiredUsageUSD    float64                 `json:"required_usage_usd,omitempty"`
+	UsageScope          string                  `json:"usage_scope,omitempty"`
+	RuleEffectiveAt     string                  `json:"rule_effective_at,omitempty"`
 }
 
 type DailyCheckinAdminStats struct {
-	Enabled             bool    `json:"enabled"`
-	RequiredUsageUSD    float64 `json:"required_usage_usd"`
-	UsageScope          string  `json:"usage_scope"`
-	RewardMinUSD        float64 `json:"reward_min_usd"`
-	RewardMaxUSD        float64 `json:"reward_max_usd"`
-	TodayCheckins       int64   `json:"today_checkins"`
-	TodayUsers          int64   `json:"today_users"`
-	TodayRewardUSD      float64 `json:"today_reward_usd"`
-	MonthCheckins       int64   `json:"month_checkins"`
-	MonthUsers          int64   `json:"month_users"`
-	MonthRewardUSD      float64 `json:"month_reward_usd"`
-	AverageRewardUSD    float64 `json:"average_reward_usd"`
-	DailyBudgetUSD      float64 `json:"daily_budget_usd"`
-	DailyRemainingUSD   float64 `json:"daily_remaining_usd"`
-	MonthlyBudgetUSD    float64 `json:"monthly_budget_usd"`
-	MonthlyRemainingUSD float64 `json:"monthly_remaining_usd"`
-	UserMonthlyLimitUSD float64 `json:"user_monthly_limit_usd"`
+	Enabled             bool                `json:"enabled"`
+	RequiredUsageUSD    float64             `json:"required_usage_usd"`
+	UsageScope          string              `json:"usage_scope"`
+	RewardMinUSD        float64             `json:"reward_min_usd"`
+	RewardMaxUSD        float64             `json:"reward_max_usd"`
+	TodayCheckins       int64               `json:"today_checkins"`
+	TodayUsers          int64               `json:"today_users"`
+	TodayRewardUSD      float64             `json:"today_reward_usd"`
+	MonthCheckins       int64               `json:"month_checkins"`
+	MonthUsers          int64               `json:"month_users"`
+	MonthRewardUSD      float64             `json:"month_reward_usd"`
+	AverageRewardUSD    float64             `json:"average_reward_usd"`
+	DailyBudgetUSD      float64             `json:"daily_budget_usd"`
+	DailyRemainingUSD   float64             `json:"daily_remaining_usd"`
+	MonthlyBudgetUSD    float64             `json:"monthly_budget_usd"`
+	MonthlyRemainingUSD float64             `json:"monthly_remaining_usd"`
+	UserMonthlyLimitUSD float64             `json:"user_monthly_limit_usd"`
+	Meta                *OperationsDataMeta `json:"meta,omitempty"`
 }
 
 type DailyCheckinAdminRecord struct {
@@ -183,8 +187,10 @@ type OperationsOverviewPoint struct {
 
 type OperationsOverviewSummary struct {
 	DAU          int64   `json:"dau"`
+	LastDayDAU   int64   `json:"last_day_dau"`
 	NewUsers     int64   `json:"new_users"`
 	RequestUsers int64   `json:"request_users"`
+	PeriodUsers  int64   `json:"period_request_users"`
 	Requests     int64   `json:"requests"`
 	ActualCost   float64 `json:"actual_cost"`
 }
@@ -192,6 +198,39 @@ type OperationsOverviewSummary struct {
 type OperationsOverviewResponse struct {
 	Summary OperationsOverviewSummary `json:"summary"`
 	Points  []OperationsOverviewPoint `json:"points"`
+	Meta    OperationsDataMeta        `json:"meta"`
+}
+
+type OperationsRetentionSummary struct {
+	CohortUsers       int64   `json:"cohort_users"`
+	D1EligibleUsers   int64   `json:"d1_eligible_users"`
+	D7EligibleUsers   int64   `json:"d7_eligible_users"`
+	D30EligibleUsers  int64   `json:"d30_eligible_users"`
+	D1Users           int64   `json:"d1_users"`
+	D7Users           int64   `json:"d7_users"`
+	D30Users          int64   `json:"d30_users"`
+	D1Rate            float64 `json:"d1_rate"`
+	D7Rate            float64 `json:"d7_rate"`
+	D30Rate           float64 `json:"d30_rate"`
+	AverageActiveDays float64 `json:"average_active_days"`
+}
+
+type OperationsRetentionResponse struct {
+	Summary OperationsRetentionSummary `json:"summary"`
+	Meta    OperationsDataMeta         `json:"meta"`
+}
+
+type OperationsDataMeta struct {
+	Timezone       string   `json:"timezone"`
+	AsOf           string   `json:"as_of"`
+	RequestedStart string   `json:"requested_start,omitempty"`
+	RequestedEnd   string   `json:"requested_end,omitempty"`
+	CoverageStart  string   `json:"coverage_start,omitempty"`
+	CoverageEnd    string   `json:"coverage_end,omitempty"`
+	DataQuality    string   `json:"data_quality"`
+	Source         string   `json:"source"`
+	Stale          bool     `json:"stale"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 type DailyCheckinAnalyticsPoint struct {
@@ -222,7 +261,12 @@ type DailyCheckinAnalyticsSummary struct {
 	FallbackRate        float64  `json:"fallback_rate"`
 	CritRate            float64  `json:"crit_rate"`
 	StreakUserRate      float64  `json:"streak_user_rate"`
+	QualifiedUserDays   int64    `json:"qualified_user_days"`
+	CheckinUserDays     int64    `json:"checkin_user_days"`
+	OpportunityRate     float64  `json:"checkin_opportunity_rate"`
 	DailyRemainingUSD   float64  `json:"daily_remaining_usd"`
+	DailyRemainingRate  *float64 `json:"daily_remaining_rate"`
+	EstimatedCheckins   *float64 `json:"estimated_remaining_checkins"`
 	MonthlyRemainingUSD float64  `json:"monthly_remaining_usd"`
 	ProjectedBudgetDays *float64 `json:"projected_budget_days"`
 }
@@ -231,6 +275,7 @@ type DailyCheckinAnalyticsResponse struct {
 	Summary            DailyCheckinAnalyticsSummary         `json:"summary"`
 	Points             []DailyCheckinAnalyticsPoint         `json:"points"`
 	RewardDistribution []DailyCheckinRewardDistributionItem `json:"reward_distribution"`
+	Meta               OperationsDataMeta                   `json:"meta"`
 }
 
 type DailyCheckinService struct {
@@ -310,6 +355,9 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 		return nil, err
 	}
 	rewardAmount := reward.Metadata.FinalRewardAmount
+	reward.Metadata.RequiredUsageUSD = settings.RequiredUsageUSD
+	reward.Metadata.UsageScope = normalizeDailyCheckinUsageScope(settings.UsageScope)
+	reward.Metadata.RuleEffectiveAt = now.UTC().Format(time.RFC3339Nano)
 	metadataJSON, err := json.Marshal(reward.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal daily checkin reward metadata: %w", err)
@@ -376,7 +424,7 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 	}, nil
 }
 
-func (s *DailyCheckinService) GetAdminStats(ctx context.Context) (*DailyCheckinAdminStats, error) {
+func (s *DailyCheckinService) GetAdminStats(ctx context.Context, _ string) (*DailyCheckinAdminStats, error) {
 	if s == nil || s.db == nil {
 		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
 	}
@@ -384,6 +432,9 @@ func (s *DailyCheckinService) GetAdminStats(ctx context.Context) (*DailyCheckinA
 	if err != nil {
 		return nil, err
 	}
+	// Budget enforcement and user_checkins.checkin_date both use the configured
+	// server check-in timezone. Keep administrative budget figures on the same
+	// logical calendar even when the browser requests a different report zone.
 	now := timezone.Now()
 	todayStart := timezone.StartOfDay(now)
 	tomorrowStart := todayStart.AddDate(0, 0, 1)
@@ -420,6 +471,16 @@ func (s *DailyCheckinService) GetAdminStats(ctx context.Context) (*DailyCheckinA
 		MonthlyBudgetUSD:    settings.MonthlyBudgetUSD,
 		MonthlyRemainingUSD: remainingBudget(settings.MonthlyBudgetUSD, monthReward),
 		UserMonthlyLimitUSD: settings.UserMonthlyLimitUSD,
+		Meta: &OperationsDataMeta{
+			Timezone:       now.Location().String(),
+			AsOf:           now.UTC().Format(time.RFC3339Nano),
+			RequestedStart: monthStart.Format("2006-01-02"),
+			RequestedEnd:   todayStart.Format("2006-01-02"),
+			CoverageStart:  monthStart.Format("2006-01-02"),
+			CoverageEnd:    todayStart.Format("2006-01-02"),
+			DataQuality:    "complete",
+			Source:         "user_checkins",
+		},
 	}, nil
 }
 
@@ -467,6 +528,7 @@ func (s *DailyCheckinService) ListAdminRecords(ctx context.Context, filter Daily
 		if err := rows.Scan(&item.ID, &item.UserID, &item.Username, &item.Email, &item.Date, &item.RewardAmount, &item.QualifiedUsageUSD, newRewardMetadataScanner(&item.RewardMetadata), &item.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan daily checkin admin record: %w", err)
 		}
+		item.Email = maskOperationsEmail(item.Email)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -478,6 +540,18 @@ func (s *DailyCheckinService) ListAdminRecords(ctx context.Context, filter Daily
 		Page:     filter.Page,
 		PageSize: filter.PageSize,
 	}, nil
+}
+
+func maskOperationsEmail(email string) string {
+	parts := strings.SplitN(strings.TrimSpace(email), "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	local := []rune(parts[0])
+	if len(local) == 1 {
+		return string(local[0]) + "***@" + parts[1]
+	}
+	return string(local[0]) + "***" + string(local[len(local)-1]) + "@" + parts[1]
 }
 
 func (s *DailyCheckinService) ExportAdminRecords(ctx context.Context, filter DailyCheckinAdminRecordFilter) ([]DailyCheckinAdminRecord, error) {
@@ -587,7 +661,188 @@ func (s *DailyCheckinService) GetOperationsOverview(ctx context.Context, start, 
 	if len(points) > 0 {
 		summary.DAU = points[len(points)-1].DAU
 	}
-	return &OperationsOverviewResponse{Summary: summary, Points: points}, nil
+	summary.LastDayDAU = summary.DAU
+	summary.PeriodUsers = summary.RequestUsers
+	return &OperationsOverviewResponse{Summary: summary, Points: points, Meta: s.operationsDataMeta(ctx, start, end)}, nil
+}
+
+func (s *DailyCheckinService) GetOperationsRetention(ctx context.Context, start, end time.Time) (*OperationsRetentionResponse, error) {
+	if s == nil || s.db == nil {
+		return nil, infraerrors.InternalServer("DAILY_CHECKIN_UNAVAILABLE", "daily check-in service is unavailable")
+	}
+	cohortRows, err := s.db.QueryContext(ctx, `
+		SELECT id, created_at
+		FROM users
+		WHERE created_at >= $1 AND created_at < $2 AND deleted_at IS NULL
+	`, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("list retention cohort users: %w", err)
+	}
+	defer func() { _ = cohortRows.Close() }()
+	cohortDates := map[int64]time.Time{}
+	for cohortRows.Next() {
+		var userID int64
+		var createdAt time.Time
+		if err := cohortRows.Scan(&userID, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan retention cohort user: %w", err)
+		}
+		cohortDates[userID] = calendarDay(createdAt.In(start.Location()))
+	}
+	if err := cohortRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retention cohort users: %w", err)
+	}
+
+	activityEnd := end.AddDate(0, 0, 30)
+	activities, err := s.listOperationsRetentionActivity(ctx, start, activityEnd)
+	if err != nil {
+		return nil, err
+	}
+	activeDays := make(map[int64]map[string]struct{}, len(cohortDates))
+	d1 := map[int64]struct{}{}
+	d7 := map[int64]struct{}{}
+	d30 := map[int64]struct{}{}
+	for _, activity := range activities {
+		cohortDate, ok := cohortDates[activity.UserID]
+		if !ok {
+			continue
+		}
+		activityDate := calendarDay(activity.Date.In(start.Location()))
+		offset := int(activityDate.Sub(cohortDate).Hours() / 24)
+		if offset < 0 {
+			continue
+		}
+		if activeDays[activity.UserID] == nil {
+			activeDays[activity.UserID] = map[string]struct{}{}
+		}
+		activeDays[activity.UserID][activityDate.Format("2006-01-02")] = struct{}{}
+		switch offset {
+		case 1:
+			d1[activity.UserID] = struct{}{}
+		case 7:
+			d7[activity.UserID] = struct{}{}
+		case 30:
+			d30[activity.UserID] = struct{}{}
+		}
+	}
+
+	summary := OperationsRetentionSummary{
+		CohortUsers: int64(len(cohortDates)),
+	}
+	today := calendarDay(time.Now().In(start.Location()))
+	for userID, cohortDate := range cohortDates {
+		if !cohortDate.AddDate(0, 0, 2).After(today) {
+			summary.D1EligibleUsers++
+			if _, ok := d1[userID]; ok {
+				summary.D1Users++
+			}
+		}
+		if !cohortDate.AddDate(0, 0, 8).After(today) {
+			summary.D7EligibleUsers++
+			if _, ok := d7[userID]; ok {
+				summary.D7Users++
+			}
+		}
+		if !cohortDate.AddDate(0, 0, 31).After(today) {
+			summary.D30EligibleUsers++
+			if _, ok := d30[userID]; ok {
+				summary.D30Users++
+			}
+		}
+	}
+	if summary.CohortUsers > 0 {
+		var totalActiveDays int
+		for userID := range cohortDates {
+			totalActiveDays += len(activeDays[userID])
+		}
+		summary.AverageActiveDays = float64(totalActiveDays) / float64(summary.CohortUsers)
+	}
+	if summary.D1EligibleUsers > 0 {
+		summary.D1Rate = float64(summary.D1Users) / float64(summary.D1EligibleUsers)
+	}
+	if summary.D7EligibleUsers > 0 {
+		summary.D7Rate = float64(summary.D7Users) / float64(summary.D7EligibleUsers)
+	}
+	if summary.D30EligibleUsers > 0 {
+		summary.D30Rate = float64(summary.D30Users) / float64(summary.D30EligibleUsers)
+	}
+	meta := s.operationsDataMeta(ctx, start, activityEnd)
+	meta.RequestedEnd = end.AddDate(0, 0, -1).Format("2006-01-02")
+	if summary.D1EligibleUsers < summary.CohortUsers || summary.D7EligibleUsers < summary.CohortUsers || summary.D30EligibleUsers < summary.CohortUsers {
+		meta.DataQuality = "partial"
+		meta.Warnings = append(meta.Warnings, "retention_cohorts_not_fully_matured")
+	}
+	return &OperationsRetentionResponse{Summary: summary, Meta: meta}, nil
+}
+
+func calendarDay(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+type operationsRetentionActivity struct {
+	UserID int64
+	Date   time.Time
+}
+
+func (s *DailyCheckinService) listOperationsRetentionActivity(ctx context.Context, start, end time.Time) ([]operationsRetentionActivity, error) {
+	if operationsShouldUseDailyAggregatesForRange(start, end) {
+		coveredFrom, coveredTo, ok, err := s.operationsDailyAggregateCoverage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ok && !start.Before(coveredFrom) && !end.After(coveredTo) {
+			rows, err := s.db.QueryContext(ctx, `
+				SELECT user_id, CAST(bucket_date AS TEXT)
+				FROM usage_dashboard_daily_user_stats
+				WHERE bucket_date >= $1 AND bucket_date < $2
+				GROUP BY user_id, bucket_date
+			`, start.Format("2006-01-02"), end.Format("2006-01-02"))
+			if err == nil {
+				defer func() { _ = rows.Close() }()
+				activities := make([]operationsRetentionActivity, 0)
+				for rows.Next() {
+					var activity operationsRetentionActivity
+					var date string
+					if err := rows.Scan(&activity.UserID, &date); err != nil {
+						return nil, fmt.Errorf("scan retention daily aggregate: %w", err)
+					}
+					activity.Date, err = time.ParseInLocation("2006-01-02", date, start.Location())
+					if err != nil {
+						return nil, fmt.Errorf("parse retention daily aggregate date: %w", err)
+					}
+					activities = append(activities, activity)
+				}
+				if err := rows.Err(); err != nil {
+					return nil, fmt.Errorf("iterate retention daily aggregates: %w", err)
+				}
+				return activities, nil
+			}
+			if !isOperationsAggregateUnavailable(err) {
+				return nil, fmt.Errorf("list retention daily aggregates: %w", err)
+			}
+		}
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT user_id, created_at
+		FROM usage_logs
+		WHERE created_at >= $1 AND created_at < $2
+	`, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("list retention activity: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	activities := make([]operationsRetentionActivity, 0)
+	for rows.Next() {
+		var activity operationsRetentionActivity
+		if err := rows.Scan(&activity.UserID, &activity.Date); err != nil {
+			return nil, fmt.Errorf("scan retention activity: %w", err)
+		}
+		activities = append(activities, activity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate retention activity: %w", err)
+	}
+	return activities, nil
 }
 
 type operationsUsageAggregate struct {
@@ -597,6 +852,19 @@ type operationsUsageAggregate struct {
 }
 
 func (s *DailyCheckinService) operationsOverviewUsageByDate(ctx context.Context, buckets []operationsDateBucket) (map[string]operationsUsageAggregate, error) {
+	if operationsShouldUseDailyAggregates(buckets) {
+		aggregates, covered, err := s.operationsOverviewUsageByDateFromDailyAggregates(ctx, buckets)
+		if err != nil {
+			return nil, err
+		}
+		if covered {
+			return aggregates, nil
+		}
+	}
+	return s.operationsOverviewUsageByDateFromUsageLogs(ctx, buckets)
+}
+
+func (s *DailyCheckinService) operationsOverviewUsageByDateFromUsageLogs(ctx context.Context, buckets []operationsDateBucket) (map[string]operationsUsageAggregate, error) {
 	query, args := buildUsageBucketAggregateQuery(buckets, "")
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -626,6 +894,63 @@ func (s *DailyCheckinService) operationsOverviewUsageByDate(ctx context.Context,
 		return nil, fmt.Errorf("iterate operations overview usage aggregate: %w", err)
 	}
 	return aggregates, nil
+}
+
+func (s *DailyCheckinService) operationsOverviewUsageByDateFromDailyAggregates(ctx context.Context, buckets []operationsDateBucket) (map[string]operationsUsageAggregate, bool, error) {
+	coveredFrom, coveredTo, ok, err := s.operationsDailyAggregateCoverage(ctx)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	aggregateBuckets, rawTailBuckets := splitOperationsAggregateBuckets(buckets, coveredFrom, coveredTo, nil)
+	if len(aggregateBuckets) == 0 {
+		return nil, false, nil
+	}
+
+	aggregates := make(map[string]operationsUsageAggregate, len(buckets))
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT CAST(bucket_date AS TEXT), user_id, COALESCE(total_requests, 0), COALESCE(actual_cost, 0)
+		FROM usage_dashboard_daily_user_stats
+		WHERE bucket_date >= $1 AND bucket_date < $2
+		ORDER BY bucket_date ASC, user_id ASC
+	`, aggregateBuckets[0].Date, aggregateBuckets[len(aggregateBuckets)-1].End.Format("2006-01-02"))
+	if err != nil {
+		if isOperationsAggregateUnavailable(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("aggregate operations overview from daily stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var date string
+		var userID int64
+		var requests int64
+		var actualCost float64
+		if err := rows.Scan(&date, &userID, &requests, &actualCost); err != nil {
+			return nil, false, fmt.Errorf("scan operations daily aggregate: %w", err)
+		}
+		aggregate := aggregates[date]
+		if aggregate.Users == nil {
+			aggregate.Users = map[int64]struct{}{}
+		}
+		aggregate.Users[userID] = struct{}{}
+		aggregate.Requests += requests
+		aggregate.ActualCost += actualCost
+		aggregates[date] = aggregate
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate operations daily aggregates: %w", err)
+	}
+
+	if len(rawTailBuckets) > 0 {
+		tail, err := s.operationsOverviewUsageByDateFromUsageLogs(ctx, rawTailBuckets)
+		if err != nil {
+			return nil, false, err
+		}
+		for date, aggregate := range tail {
+			aggregates[date] = aggregate
+		}
+	}
+	return aggregates, true, nil
 }
 
 func (s *DailyCheckinService) operationsOverviewNewUsersByDate(ctx context.Context, buckets []operationsDateBucket) (map[string]map[int64]struct{}, error) {
@@ -734,7 +1059,11 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	if err != nil {
 		return nil, err
 	}
-	qualifiedByDate, err := s.qualifiedUsersByDate(ctx, start, end, settings)
+	ruleHistory, err := s.dailyCheckinRuleHistory(ctx, settings)
+	if err != nil {
+		return nil, err
+	}
+	qualifiedByDate, err := s.qualifiedUsersByDate(ctx, start, end, ruleHistory)
 	if err != nil {
 		return nil, err
 	}
@@ -815,10 +1144,10 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 		points = append(points, point)
 	}
 
-	now := timezone.Now()
-	todayStart := timezone.StartOfDay(now)
+	now := time.Now().In(start.Location())
+	todayStart := startOfDayInLocation(now)
 	tomorrowStart := todayStart.AddDate(0, 0, 1)
-	monthStart := timezone.StartOfMonth(now)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	nextMonthStart := monthStart.AddDate(0, 1, 0)
 	_, _, todayReward, err := aggregateCheckinStats(ctx, s.db, todayStart.Format("2006-01-02"), tomorrowStart.Format("2006-01-02"))
 	if err != nil {
@@ -848,16 +1177,21 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	if summary.CheckinUsers > 0 {
 		summary.StreakUserRate = float64(summary.StreakUsers) / float64(summary.CheckinUsers)
 	}
-	if projected := projectedBudgetDays(points, summary.DailyRemainingUSD, summary.MonthlyRemainingUSD); projected != nil {
-		summary.ProjectedBudgetDays = projected
+	for _, point := range points {
+		summary.QualifiedUserDays += point.QualifiedUsers
+		summary.CheckinUserDays += point.CheckinUsers
 	}
+	if summary.QualifiedUserDays > 0 {
+		summary.OpportunityRate = float64(summary.CheckinUserDays) / float64(summary.QualifiedUserDays)
+	}
+	applyProjectedBudgetMetrics(&summary, points, settings)
 
 	dist := make([]DailyCheckinRewardDistributionItem, 0, len(distribution))
 	for _, item := range distribution {
 		dist = append(dist, *item)
 	}
 	sortRewardDistribution(dist)
-	return &DailyCheckinAnalyticsResponse{Summary: summary, Points: points, RewardDistribution: dist}, nil
+	return &DailyCheckinAnalyticsResponse{Summary: summary, Points: points, RewardDistribution: dist, Meta: s.operationsDataMeta(ctx, start, end)}, nil
 }
 
 func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQuerier, userID int64) (*DailyCheckinStatus, error) {
@@ -1339,38 +1673,81 @@ func aggregateCheckinStats(ctx context.Context, q dailyCheckinQuerier, startDate
 	return count, users, reward, nil
 }
 
-func (s *DailyCheckinService) qualifiedUsersByDate(ctx context.Context, start, end time.Time, settings *DailyCheckinSettings) (map[string]map[int64]struct{}, error) {
-	required := DailyCheckinRequiredUsageDefault
-	usageScope := DailyCheckinUsageScopeActualCost
-	if settings != nil {
-		required = settings.RequiredUsageUSD
-		usageScope = settings.UsageScope
-	}
+func (s *DailyCheckinService) qualifiedUsersByDate(ctx context.Context, start, end time.Time, history []DailyCheckinRuleSnapshot) (map[string]map[int64]struct{}, error) {
 	_, _, buckets := newOperationsOverviewPoints(start, end)
-	extraWhere := ""
-	if normalizeDailyCheckinUsageScope(usageScope) == DailyCheckinUsageScopeBalanceOnly {
-		extraWhere = " AND subscription_id IS NULL"
-	}
-	query, args := buildUsageBucketAggregateQuery(buckets, extraWhere)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("aggregate qualified daily checkin users: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
+	requiredByDate := make(map[string]float64, len(buckets))
 	qualified := make(map[string]map[int64]struct{}, len(buckets))
 	for _, bucket := range buckets {
+		rule := dailyCheckinRuleAt(history, bucket.End.Add(-time.Nanosecond))
+		requiredByDate[bucket.Date] = rule.RequiredUsageUSD
 		qualified[bucket.Date] = map[int64]struct{}{}
 	}
+
+	rawBuckets := buckets
+	if operationsShouldUseDailyAggregates(buckets) {
+		coveredFrom, coveredTo, ok, err := s.operationsDailyAggregateCoverage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			aggregateBuckets, uncoveredBuckets := splitOperationsAggregateBuckets(buckets, coveredFrom, coveredTo, func(bucket operationsDateBucket) bool {
+				return normalizeDailyCheckinUsageScope(dailyCheckinRuleAt(history, bucket.End.Add(-time.Nanosecond)).UsageScope) == DailyCheckinUsageScopeActualCost
+			})
+			if len(aggregateBuckets) > 0 {
+				used, err := s.addQualifiedUsersFromDailyAggregates(ctx, aggregateBuckets, requiredByDate, qualified)
+				if err != nil {
+					return nil, err
+				}
+				if used {
+					rawBuckets = uncoveredBuckets
+				}
+			}
+		}
+	}
+	if err := s.addQualifiedUsersFromUsageLogs(ctx, rawBuckets, history, requiredByDate, qualified); err != nil {
+		return nil, err
+	}
+	return qualified, nil
+}
+
+func (s *DailyCheckinService) addQualifiedUsersFromUsageLogs(ctx context.Context, buckets []operationsDateBucket, history []DailyCheckinRuleSnapshot, requiredByDate map[string]float64, qualified map[string]map[int64]struct{}) error {
+	parts := make([]string, 0, len(buckets))
+	args := make([]any, 0, len(buckets)*3)
+	for _, bucket := range buckets {
+		rule := dailyCheckinRuleAt(history, bucket.End.Add(-time.Nanosecond))
+		dateArg := len(args) + 1
+		startArg := dateArg + 1
+		endArg := dateArg + 2
+		extraWhere := ""
+		if normalizeDailyCheckinUsageScope(rule.UsageScope) == DailyCheckinUsageScopeBalanceOnly {
+			extraWhere = " AND subscription_id IS NULL"
+		}
+		parts = append(parts, fmt.Sprintf(`
+			SELECT CAST($%d AS TEXT) AS bucket_date, user_id, COUNT(*), COALESCE(SUM(actual_cost), 0)
+			FROM usage_logs
+			WHERE created_at >= $%d AND created_at < $%d%s
+			GROUP BY user_id
+		`, dateArg, startArg, endArg, extraWhere))
+		args = append(args, bucket.Date, bucket.Start, bucket.End)
+	}
+	query := strings.Join(parts, "\nUNION ALL\n")
+	if query == "" {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("aggregate qualified daily checkin users: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var date string
 		var userID int64
 		var requestCount int64
 		var actualCost float64
 		if err := rows.Scan(&date, &userID, &requestCount, &actualCost); err != nil {
-			return nil, fmt.Errorf("scan qualified daily checkin users: %w", err)
+			return fmt.Errorf("scan qualified daily checkin users: %w", err)
 		}
-		if actualCost >= required {
+		if actualCost >= requiredByDate[date] {
 			if qualified[date] == nil {
 				qualified[date] = map[int64]struct{}{}
 			}
@@ -1378,9 +1755,83 @@ func (s *DailyCheckinService) qualifiedUsersByDate(ctx context.Context, start, e
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate qualified daily checkin users: %w", err)
+		return fmt.Errorf("iterate qualified daily checkin users: %w", err)
 	}
-	return qualified, nil
+	return nil
+}
+
+func (s *DailyCheckinService) addQualifiedUsersFromDailyAggregates(ctx context.Context, buckets []operationsDateBucket, requiredByDate map[string]float64, qualified map[string]map[int64]struct{}) (bool, error) {
+	if len(buckets) == 0 {
+		return false, nil
+	}
+	allowedDates := make(map[string]struct{}, len(buckets))
+	for _, bucket := range buckets {
+		allowedDates[bucket.Date] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT CAST(bucket_date AS TEXT), user_id, COALESCE(actual_cost, 0)
+		FROM usage_dashboard_daily_user_stats
+		WHERE bucket_date >= $1 AND bucket_date < $2
+		ORDER BY bucket_date ASC, user_id ASC
+	`, buckets[0].Date, buckets[len(buckets)-1].End.Format("2006-01-02"))
+	if err != nil {
+		if isOperationsAggregateUnavailable(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("aggregate qualified users from daily stats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var date string
+		var userID int64
+		var actualCost float64
+		if err := rows.Scan(&date, &userID, &actualCost); err != nil {
+			return false, fmt.Errorf("scan qualified daily aggregate: %w", err)
+		}
+		if _, ok := allowedDates[date]; !ok {
+			continue
+		}
+		if actualCost >= requiredByDate[date] {
+			qualified[date][userID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate qualified daily aggregates: %w", err)
+	}
+	return true, nil
+}
+
+func (s *DailyCheckinService) dailyCheckinRuleHistory(ctx context.Context, current *DailyCheckinSettings) ([]DailyCheckinRuleSnapshot, error) {
+	if s != nil && s.settingService != nil {
+		return s.settingService.GetDailyCheckinRuleHistory(ctx)
+	}
+	rule := DailyCheckinRuleSnapshot{
+		EffectiveAt:      time.Unix(0, 0).UTC(),
+		RequiredUsageUSD: DailyCheckinRequiredUsageDefault,
+		UsageScope:       DailyCheckinUsageScopeActualCost,
+	}
+	if current != nil {
+		rule.RequiredUsageUSD = current.RequiredUsageUSD
+		rule.UsageScope = normalizeDailyCheckinUsageScope(current.UsageScope)
+	}
+	return []DailyCheckinRuleSnapshot{rule}, nil
+}
+
+func dailyCheckinRuleAt(history []DailyCheckinRuleSnapshot, at time.Time) DailyCheckinRuleSnapshot {
+	selected := DailyCheckinRuleSnapshot{
+		EffectiveAt:      time.Unix(0, 0).UTC(),
+		RequiredUsageUSD: DailyCheckinRequiredUsageDefault,
+		UsageScope:       DailyCheckinUsageScopeActualCost,
+	}
+	for _, item := range history {
+		if item.EffectiveAt.After(at) {
+			break
+		}
+		selected = item
+	}
+	selected.RequiredUsageUSD = normalizeDailyCheckinNonNegativeFloat(selected.RequiredUsageUSD, DailyCheckinRequiredUsageDefault)
+	selected.UsageScope = normalizeDailyCheckinUsageScope(selected.UsageScope)
+	return selected
 }
 
 func (s *DailyCheckinService) listCheckinsForAnalytics(ctx context.Context, startDate, endDate string) ([]DailyCheckinAdminRecord, error) {
@@ -1424,33 +1875,186 @@ func rewardDistributionLabel(amount float64) string {
 	}
 }
 
-func projectedBudgetDays(points []DailyCheckinAnalyticsPoint, dailyRemaining, monthlyRemaining float64) *float64 {
-	if monthlyRemaining <= 0 && dailyRemaining <= 0 {
-		return nil
+func applyProjectedBudgetMetrics(summary *DailyCheckinAnalyticsSummary, points []DailyCheckinAnalyticsPoint, settings *DailyCheckinSettings) {
+	if summary == nil || settings == nil {
+		return
+	}
+	if settings.DailyBudgetUSD > 0 {
+		rate := math.Max(0, math.Min(1, summary.DailyRemainingUSD/settings.DailyBudgetUSD))
+		summary.DailyRemainingRate = &rate
 	}
 	start := len(points) - 7
 	if start < 0 {
 		start = 0
 	}
-	var total float64
+	var rewardTotal float64
+	var checkins int64
 	var days int
 	for _, point := range points[start:] {
-		total += point.RewardUSD
+		rewardTotal += point.RewardUSD
+		checkins += point.CheckinUsers
 		days++
 	}
-	if days == 0 || total <= 0 {
-		return nil
+	if checkins > 0 && settings.DailyBudgetUSD > 0 {
+		avgReward := rewardTotal / float64(checkins)
+		if avgReward > 0 {
+			value := math.Floor(summary.DailyRemainingUSD/avgReward*10) / 10
+			summary.EstimatedCheckins = &value
+		}
 	}
-	avgDaily := total / float64(days)
-	remaining := monthlyRemaining
-	if remaining <= 0 {
-		remaining = dailyRemaining
+	if settings.MonthlyBudgetUSD <= 0 || days == 0 || rewardTotal <= 0 {
+		return
 	}
-	if remaining <= 0 {
-		return nil
+	avgDaily := rewardTotal / float64(days)
+	value := 0.0
+	if summary.MonthlyRemainingUSD > 0 {
+		value = math.Round((summary.MonthlyRemainingUSD/avgDaily)*10) / 10
 	}
-	value := math.Round((remaining/avgDaily)*10) / 10
-	return &value
+	summary.ProjectedBudgetDays = &value
+}
+
+func startOfDayInLocation(t time.Time) time.Time {
+	loc := t.Location()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+}
+
+func operationsShouldUseDailyAggregates(buckets []operationsDateBucket) bool {
+	return len(buckets) > 90 && len(buckets) > 0 && buckets[0].Start.Location().String() == timezone.Name()
+}
+
+func splitOperationsAggregateBuckets(buckets []operationsDateBucket, coveredFrom, coveredTo time.Time, predicate func(operationsDateBucket) bool) ([]operationsDateBucket, []operationsDateBucket) {
+	aggregateBuckets := make([]operationsDateBucket, 0, len(buckets))
+	rawBuckets := make([]operationsDateBucket, 0, 2)
+	for _, bucket := range buckets {
+		fullyCovered := !bucket.Start.Before(coveredFrom) && !bucket.End.After(coveredTo)
+		if fullyCovered && (predicate == nil || predicate(bucket)) {
+			aggregateBuckets = append(aggregateBuckets, bucket)
+			continue
+		}
+		// Old data before aggregate coverage is intentionally left empty. Querying
+		// raw logs there would recreate the long-range scan that aggregates avoid.
+		if bucket.End.After(coveredTo) || (fullyCovered && predicate != nil) {
+			rawBuckets = append(rawBuckets, bucket)
+		}
+	}
+	return aggregateBuckets, rawBuckets
+}
+
+func (s *DailyCheckinService) operationsDailyAggregateCoverage(ctx context.Context) (time.Time, time.Time, bool, error) {
+	var coveredFrom, coveredTo time.Time
+	err := s.db.QueryRowContext(ctx, `
+		SELECT user_daily_aggregated_from, user_daily_last_aggregated_at
+		FROM usage_dashboard_aggregation_watermark
+		WHERE id = 1
+	`).Scan(&coveredFrom, &coveredTo)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || isOperationsAggregateUnavailable(err) {
+			return time.Time{}, time.Time{}, false, nil
+		}
+		return time.Time{}, time.Time{}, false, fmt.Errorf("read operations daily aggregate coverage: %w", err)
+	}
+	if !coveredTo.After(coveredFrom) || !coveredTo.After(time.Unix(0, 0)) {
+		return time.Time{}, time.Time{}, false, nil
+	}
+	return coveredFrom, coveredTo, true, nil
+}
+
+func isOperationsAggregateUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "does not exist") ||
+		strings.Contains(message, "undefined table") ||
+		strings.Contains(message, "undefined column") ||
+		strings.Contains(message, "no such table") ||
+		strings.Contains(message, "no such column")
+}
+
+func (s *DailyCheckinService) operationsDataMeta(ctx context.Context, start, end time.Time) OperationsDataMeta {
+	meta := OperationsDataMeta{
+		Timezone:       start.Location().String(),
+		AsOf:           time.Now().UTC().Format(time.RFC3339Nano),
+		RequestedStart: start.Format("2006-01-02"),
+		RequestedEnd:   end.AddDate(0, 0, -1).Format("2006-01-02"),
+		DataQuality:    "complete",
+		Source:         "usage_logs",
+	}
+	if s == nil || s.db == nil {
+		meta.DataQuality = "unknown"
+		meta.Warnings = []string{"usage_coverage_unavailable"}
+		return meta
+	}
+	var minCreatedAtValue, maxCreatedAtValue any
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(created_at), MAX(created_at) FROM usage_logs`).Scan(&minCreatedAtValue, &maxCreatedAtValue); err != nil {
+		meta.DataQuality = "unknown"
+		meta.Warnings = []string{"usage_coverage_query_failed"}
+		return meta
+	}
+	coverageStart := time.Time{}
+	coverageEnd := time.Time{}
+	if value, ok := operationsDatabaseTime(minCreatedAtValue); ok {
+		coverageStart = value
+	}
+	if value, ok := operationsDatabaseTime(maxCreatedAtValue); ok {
+		coverageEnd = value
+	}
+	if operationsShouldUseDailyAggregatesForRange(start, end) {
+		aggregatedFrom, aggregatedTo, ok, err := s.operationsDailyAggregateCoverage(ctx)
+		if err != nil {
+			meta.Warnings = append(meta.Warnings, "daily_aggregate_coverage_query_failed")
+		} else if ok {
+			meta.Source = "usage_dashboard_daily_user_stats+usage_logs"
+			if coverageStart.IsZero() || aggregatedFrom.Before(coverageStart) {
+				coverageStart = aggregatedFrom
+			}
+			if aggregatedTo.After(coverageEnd) {
+				coverageEnd = aggregatedTo
+			}
+		}
+	}
+	if coverageStart.IsZero() || coverageEnd.IsZero() {
+		meta.DataQuality = "empty"
+		return meta
+	}
+	coverageStart = coverageStart.In(start.Location())
+	coverageEnd = coverageEnd.In(start.Location())
+	meta.CoverageStart = coverageStart.Format("2006-01-02")
+	meta.CoverageEnd = coverageEnd.Format("2006-01-02")
+	if coverageStart.After(start) {
+		meta.DataQuality = "partial"
+		meta.Warnings = append(meta.Warnings, "requested_range_precedes_usage_coverage")
+	}
+	return meta
+}
+
+func operationsShouldUseDailyAggregatesForRange(start, end time.Time) bool {
+	_, _, buckets := newOperationsOverviewPoints(start, end)
+	return operationsShouldUseDailyAggregates(buckets)
+}
+
+func operationsDatabaseTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed, true
+	case string:
+		return parseOperationsDatabaseTime(typed)
+	case []byte:
+		return parseOperationsDatabaseTime(string(typed))
+	default:
+		return time.Time{}, false
+	}
+}
+
+func parseOperationsDatabaseTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999 -0700 MST", "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func sortRewardDistribution(items []DailyCheckinRewardDistributionItem) {

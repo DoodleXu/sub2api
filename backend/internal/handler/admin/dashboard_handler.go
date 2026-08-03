@@ -40,39 +40,51 @@ func NewDashboardHandler(dashboardService *service.DashboardService, aggregation
 
 // parseTimeRange parses start_date, end_date query parameters
 // Uses user's timezone if provided, otherwise falls back to server timezone
-func parseTimeRange(c *gin.Context) (time.Time, time.Time) {
-	userTZ := c.Query("timezone") // Get user's timezone from request
+func parseTimeRange(c *gin.Context) (time.Time, time.Time, error) {
+	userTZ, err := operationsTimezoneFromQuery(c)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
 	now := timezone.NowInUserLocation(userTZ)
-	startDate := c.Query("start_date")
-	endDate := c.Query("end_date")
+	startDate := strings.TrimSpace(c.Query("start_date"))
+	endDate := strings.TrimSpace(c.Query("end_date"))
 
-	var startTime, endTime time.Time
-
+	startTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
 	if startDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", startDate, userTZ); err == nil {
-			startTime = t
-		} else {
-			startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
+		startTime, err = timezone.ParseInUserLocation("2006-01-02", startDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, errors.New("invalid start_date")
 		}
-	} else {
-		startTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, -7), userTZ)
 	}
 
+	endTime := timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
 	if endDate != "" {
-		if t, err := timezone.ParseInUserLocation("2006-01-02", endDate, userTZ); err == nil {
-			endTime = t.Add(24 * time.Hour) // Include the end date
-		} else {
-			endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+		var parsed time.Time
+		parsed, err = timezone.ParseInUserLocation("2006-01-02", endDate, userTZ)
+		if err != nil {
+			return time.Time{}, time.Time{}, errors.New("invalid end_date")
 		}
-	} else {
-		endTime = timezone.StartOfDayInUserLocation(now.AddDate(0, 0, 1), userTZ)
+		endTime = parsed.AddDate(0, 0, 1)
 	}
+	if !startTime.Before(endTime) {
+		return time.Time{}, time.Time{}, errors.New("start_date must be before end_date")
+	}
+	return startTime, endTime, nil
+}
 
-	return startTime, endTime
+func dashboardTimeRange(c *gin.Context) (time.Time, time.Time, bool) {
+	startTime, endTime, err := parseTimeRange(c)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return time.Time{}, time.Time{}, false
+	}
+	return startTime, endTime, true
 }
 
 func validateDashboardDetailRange(c *gin.Context, startTime, endTime time.Time) bool {
-	if endTime.Sub(startTime) <= dashboardDetailMaxRangeDays*24*time.Hour {
+	startCalendar := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, time.UTC)
+	endCalendar := time.Date(endTime.Year(), endTime.Month(), endTime.Day(), 0, 0, 0, 0, time.UTC)
+	if endCalendar.Sub(startCalendar) <= dashboardDetailMaxRangeDays*24*time.Hour {
 		return true
 	}
 	response.BadRequest(c, "Dashboard detail query range cannot exceed 31 days")
@@ -243,7 +255,10 @@ func (h *DashboardHandler) GetRealtimeMetrics(c *gin.Context) {
 func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	startedAt := time.Now()
 	defer finishDashboardDetailQuery(c, "trend", startedAt)
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	granularity := c.DefaultQuery("granularity", "day")
 
 	// Parse optional filter params
@@ -318,7 +333,7 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -329,7 +344,10 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 	startedAt := time.Now()
 	defer finishDashboardDetailQuery(c, "models", startedAt)
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 
 	// Parse optional filter params
 	var userID, apiKeyID, accountID, groupID int64
@@ -402,12 +420,21 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 		respondDashboardDetailError(c, err, "Failed to get model statistics")
 		return
 	}
+	coverage, err := h.dashboardService.GetModelAggregateCoverage(queryCtx, startTime, endTime, usesRawLogs)
+	if err != nil {
+		respondDashboardDetailError(c, err, "Failed to get model aggregate coverage")
+		return
+	}
 	c.Header("X-Snapshot-Cache", cacheStatusValue(hit))
 
 	response.Success(c, gin.H{
-		"models":     stats,
-		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"models":               stats,
+		"start_date":           startTime.Format("2006-01-02"),
+		"end_date":             endTime.AddDate(0, 0, -1).Format("2006-01-02"),
+		"data_available":       coverage.DataAvailable,
+		"aggregation_complete": coverage.AggregationComplete,
+		"coverage_start":       coverage.CoverageStart,
+		"coverage_end":         coverage.CoverageEnd,
 	})
 }
 
@@ -417,7 +444,10 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	startedAt := time.Now()
 	defer finishDashboardDetailQuery(c, "groups", startedAt)
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	if !validateDashboardDetailRange(c, startTime, endTime) {
 		return
 	}
@@ -485,7 +515,7 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 	response.Success(c, gin.H{
 		"groups":     stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 	})
 }
 
@@ -493,7 +523,10 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 // GET /api/v1/admin/dashboard/api-keys-trend
 // Query params: start_date, end_date (YYYY-MM-DD), granularity (day/hour), limit (default 5)
 func (h *DashboardHandler) GetAPIKeyUsageTrend(c *gin.Context) {
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	granularity := c.DefaultQuery("granularity", "day")
 	limitStr := c.DefaultQuery("limit", "5")
 	limit, err := strconv.Atoi(limitStr)
@@ -511,7 +544,7 @@ func (h *DashboardHandler) GetAPIKeyUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -520,7 +553,10 @@ func (h *DashboardHandler) GetAPIKeyUsageTrend(c *gin.Context) {
 // GET /api/v1/admin/dashboard/users-trend
 // Query params: start_date, end_date (YYYY-MM-DD), granularity (day/hour), limit (default 12)
 func (h *DashboardHandler) GetUserUsageTrend(c *gin.Context) {
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	granularity := c.DefaultQuery("granularity", "day")
 	limitStr := c.DefaultQuery("limit", "12")
 	limit, err := strconv.Atoi(limitStr)
@@ -538,7 +574,7 @@ func (h *DashboardHandler) GetUserUsageTrend(c *gin.Context) {
 	response.Success(c, gin.H{
 		"trend":       trend,
 		"start_date":  startTime.Format("2006-01-02"),
-		"end_date":    endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":    endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 		"granularity": granularity,
 	})
 }
@@ -566,7 +602,10 @@ func parseRankingLimit(raw string) int {
 // GetUserSpendingRanking handles getting user spending ranking data.
 // GET /api/v1/admin/dashboard/users-ranking
 func (h *DashboardHandler) GetUserSpendingRanking(c *gin.Context) {
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	limit := parseRankingLimit(c.DefaultQuery("limit", "12"))
 
 	keyRaw, _ := json.Marshal(struct {
@@ -592,12 +631,16 @@ func (h *DashboardHandler) GetUserSpendingRanking(c *gin.Context) {
 	}
 
 	payload := gin.H{
-		"ranking":           ranking.Ranking,
-		"total_actual_cost": ranking.TotalActualCost,
-		"total_requests":    ranking.TotalRequests,
-		"total_tokens":      ranking.TotalTokens,
-		"start_date":        startTime.Format("2006-01-02"),
-		"end_date":          endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"ranking":              ranking.Ranking,
+		"total_actual_cost":    ranking.TotalActualCost,
+		"total_requests":       ranking.TotalRequests,
+		"total_tokens":         ranking.TotalTokens,
+		"start_date":           startTime.Format("2006-01-02"),
+		"end_date":             endTime.AddDate(0, 0, -1).Format("2006-01-02"),
+		"data_available":       ranking.DataAvailable,
+		"aggregation_complete": ranking.AggregationComplete,
+		"coverage_start":       ranking.CoverageStart,
+		"coverage_end":         ranking.CoverageEnd,
 	}
 	dashboardUsersRankingCache.Set(cacheKey, payload)
 	c.Header("X-Snapshot-Cache", "miss")
@@ -698,7 +741,10 @@ func (h *DashboardHandler) GetBatchAPIKeysUsage(c *gin.Context) {
 func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	startedAt := time.Now()
 	defer finishDashboardDetailQuery(c, "user_breakdown", startedAt)
-	startTime, endTime := parseTimeRange(c)
+	startTime, endTime, ok := dashboardTimeRange(c)
+	if !ok {
+		return
+	}
 	if !validateDashboardDetailRange(c, startTime, endTime) {
 		return
 	}
@@ -779,6 +825,6 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 	response.Success(c, gin.H{
 		"users":      stats,
 		"start_date": startTime.Format("2006-01-02"),
-		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
+		"end_date":   endTime.AddDate(0, 0, -1).Format("2006-01-02"),
 	})
 }

@@ -21,15 +21,34 @@ func TestParseTimeRange(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/?start_date=2024-01-01&end_date=2024-01-02&timezone=UTC", nil)
 	c.Request = req
 
-	start, end := parseTimeRange(c)
+	start, end, err := parseTimeRange(c)
+	require.NoError(t, err)
 	require.Equal(t, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), start)
 	require.Equal(t, time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC), end)
 
 	req = httptest.NewRequest(http.MethodGet, "/?start_date=bad&timezone=UTC", nil)
+	c, _ = gin.CreateTestContext(w)
 	c.Request = req
-	start, end = parseTimeRange(c)
-	require.False(t, start.IsZero())
-	require.False(t, end.IsZero())
+	_, _, err = parseTimeRange(c)
+	require.EqualError(t, err, "invalid start_date")
+
+	req = httptest.NewRequest(http.MethodGet, "/?start_date=2026-10-31&end_date=2026-11-01&timezone=America%2FLos_Angeles", nil)
+	c, _ = gin.CreateTestContext(w)
+	c.Request = req
+	start, end, err = parseTimeRange(c)
+	require.NoError(t, err)
+	require.Equal(t, "2026-10-31T00:00:00-07:00", start.Format(time.RFC3339))
+	require.Equal(t, "2026-11-02T00:00:00-08:00", end.Format(time.RFC3339))
+}
+
+func TestValidateDashboardDetailRangeUsesCalendarDaysAcrossDST(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/?start_date=2026-10-03&end_date=2026-11-02&timezone=America%2FLos_Angeles", nil)
+
+	start, end, err := parseTimeRange(c)
+	require.NoError(t, err)
+	require.True(t, validateDashboardDetailRange(c, start, end))
 }
 
 func TestParseOpsViewParam(t *testing.T) {

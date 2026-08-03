@@ -2042,6 +2042,8 @@ func (s *UsageLogRepoSuite) TestGetUserSpendingRankingReturnsEmptyWhenDashboardU
 	s.Require().Zero(ranking.TotalActualCost)
 	s.Require().Zero(ranking.TotalRequests)
 	s.Require().Zero(ranking.TotalTokens)
+	s.Require().False(ranking.DataAvailable)
+	s.Require().False(ranking.AggregationComplete)
 }
 
 // --- GetAPIKeyUsageTrend ---

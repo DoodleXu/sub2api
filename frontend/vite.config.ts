@@ -46,6 +46,13 @@ function injectBranding(html: string, config: { site_name?: string; site_logo?: 
   return brandedHtml
 }
 
+function buildClarityBootstrap(config: { clarity_enabled?: boolean; clarity_project_id?: string }): string {
+  if (!config.clarity_enabled) return ''
+  const projectId = config.clarity_project_id?.trim() || ''
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(projectId)) return ''
+  return `<script type="text/javascript">(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script",${JSON.stringify(projectId)});</script>`
+}
+
 /**
  * Vite 插件：开发模式下注入公开配置到 index.html
  * 与生产模式的后端注入行为保持一致，消除闪烁
@@ -64,8 +71,11 @@ function injectPublicSettings(backendUrl: string): Plugin {
           if (response.ok) {
             const data = await response.json()
             if (data.code === 0 && data.data) {
-              const script = `<script>window.__APP_CONFIG__=${JSON.stringify(data.data)};</script>`
-              return injectBranding(html, data.data).replace('</head>', `${script}\n</head>`)
+              const scripts = [
+                `<script>window.__APP_CONFIG__=${JSON.stringify(data.data)};</script>`,
+                buildClarityBootstrap(data.data),
+              ].filter(Boolean).join('\n')
+              return injectBranding(html, data.data).replace('</head>', `${scripts}\n</head>`)
             }
           }
         } catch (e) {

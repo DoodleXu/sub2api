@@ -283,6 +283,8 @@ const (
 	SettingKeyTablePageSizeOptions        = "table_page_size_options"       // 表格可选每页条数（JSON 数组）
 	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
 	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
+	SettingKeyClarityEnabled              = "clarity_enabled"               // 是否启用 Microsoft Clarity
+	SettingKeyClarityProjectID            = "clarity_project_id"            // Microsoft Clarity Project ID
 
 	// 默认配置
 	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量
@@ -438,6 +440,7 @@ const (
 	SettingKeyDailyCheckinCritProbability     = "daily_checkin_crit_probability_percent"
 	SettingKeyDailyCheckinCritMultiplier      = "daily_checkin_crit_multiplier"
 	SettingKeyDailyCheckinCritMaxRewardUSD    = "daily_checkin_crit_max_reward_usd"
+	SettingKeyDailyCheckinRuleHistory         = "daily_checkin_rule_history"
 
 	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"

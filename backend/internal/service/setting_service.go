@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,34 @@ var (
 		"default subscription group cannot be duplicated",
 	)
 )
+
+const clarityProjectIDMaxLength = 64
+
+var clarityProjectIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func normalizeClarityProjectID(enabled bool, value string) (string, error) {
+	projectID := strings.TrimSpace(value)
+	if projectID == "" {
+		if enabled {
+			return "", infraerrors.BadRequest("INVALID_CLARITY_PROJECT_ID", "clarity_project_id is required when Clarity is enabled")
+		}
+		return "", nil
+	}
+	if len(projectID) > clarityProjectIDMaxLength || !clarityProjectIDPattern.MatchString(projectID) {
+		return "", infraerrors.BadRequest("INVALID_CLARITY_PROJECT_ID", "clarity_project_id must contain only letters, numbers, underscores, or hyphens and be at most 64 characters")
+	}
+	return projectID, nil
+}
+
+func parseClaritySettings(settings map[string]string) (bool, string) {
+	enabled := settings[SettingKeyClarityEnabled] == "true"
+	projectID, err := normalizeClarityProjectID(enabled, settings[SettingKeyClarityProjectID])
+	if err != nil {
+		slog.Warn("invalid persisted Microsoft Clarity settings; integration disabled", "error", err)
+		return false, ""
+	}
+	return enabled, projectID
+}
 
 type SettingRepository interface {
 	Get(ctx context.Context, key string) (*Setting, error)
@@ -991,6 +1020,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyTablePageSizeOptions,
 		SettingKeyCustomMenuItems,
 		SettingKeyCustomEndpoints,
+		SettingKeyClarityEnabled,
+		SettingKeyClarityProjectID,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyDingTalkConnectEnabled,
 		SettingKeyWeChatConnectEnabled,
@@ -1084,6 +1115,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	if loginAgreementUpdatedAt == "" {
 		loginAgreementUpdatedAt = defaultLoginAgreementDate
 	}
+	clarityEnabled, clarityProjectID := parseClaritySettings(settings)
 
 	var balanceLowNotifyThreshold float64
 	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
@@ -1123,6 +1155,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TablePageSizeOptions:             tablePageSizeOptions,
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		ClarityEnabled:                   clarityEnabled,
+		ClarityProjectID:                 clarityProjectID,
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
@@ -1898,6 +1932,8 @@ type PublicSettingsInjectionPayload struct {
 	TablePageSizeOptions             []int                    `json:"table_page_size_options"`
 	CustomMenuItems                  json.RawMessage          `json:"custom_menu_items"`
 	CustomEndpoints                  json.RawMessage          `json:"custom_endpoints"`
+	ClarityEnabled                   bool                     `json:"clarity_enabled"`
+	ClarityProjectID                 string                   `json:"clarity_project_id"`
 	LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 	DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 	WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
@@ -1974,6 +2010,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TablePageSizeOptions:             settings.TablePageSizeOptions,
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
+		ClarityEnabled:                   settings.ClarityEnabled,
+		ClarityProjectID:                 settings.ClarityProjectID,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
@@ -2241,6 +2279,21 @@ func (s *SettingService) GetFrameSrcOrigins(ctx context.Context) ([]string, erro
 	return origins, nil
 }
 
+// IsClarityEnabled returns whether a valid Microsoft Clarity configuration
+// should be active. Invalid persisted values fail closed through
+// parseClaritySettings and therefore never broaden CSP.
+func (s *SettingService) IsClarityEnabled(ctx context.Context) (bool, error) {
+	settings, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyClarityEnabled,
+		SettingKeyClarityProjectID,
+	})
+	if err != nil {
+		return false, err
+	}
+	enabled, _ := parseClaritySettings(settings)
+	return enabled, nil
+}
+
 // extractOriginFromURL returns the scheme+host origin from rawURL.
 // Only http and https schemes are accepted.
 func extractOriginFromURL(rawURL string) string {
@@ -2338,6 +2391,9 @@ func (s *SettingService) UpdateDailyCheckinSettings(ctx context.Context, setting
 	if err != nil {
 		return err
 	}
+	if err := s.appendDailyCheckinRuleHistoryUpdate(ctx, updates); err != nil {
+		return err
+	}
 	return s.settingRepo.SetMultiple(ctx, updates)
 }
 
@@ -2383,6 +2439,9 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx contex
 		updates[key] = value
 	}
 	omitted.dropFrom(updates)
+	if err := s.appendDailyCheckinRuleHistoryUpdate(ctx, updates); err != nil {
+		return err
+	}
 
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return err
@@ -2421,6 +2480,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, infraerrors.BadRequest("INVALID_FORWARDED_CLIENT_IP_HEADERS", err.Error())
 	}
 	settings.ForwardedClientIPHeaders = normalizedForwardedClientIPHeaders
+	clarityProjectID, err := normalizeClarityProjectID(settings.ClarityEnabled, settings.ClarityProjectID)
+	if err != nil {
+		return nil, err
+	}
+	settings.ClarityProjectID = clarityProjectID
 	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
 	if err != nil {
 		return nil, err
@@ -2640,6 +2704,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyTablePageSizeOptions] = string(tablePageSizeOptionsJSON)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
+	updates[SettingKeyClarityEnabled] = strconv.FormatBool(settings.ClarityEnabled)
+	updates[SettingKeyClarityProjectID] = settings.ClarityProjectID
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -3724,6 +3790,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyTablePageSizeOptions:                      "[10,20,50,100]",
 		SettingKeyCustomMenuItems:                           "[]",
 		SettingKeyCustomEndpoints:                           "[]",
+		SettingKeyClarityEnabled:                            "false",
+		SettingKeyClarityProjectID:                          "",
 		SettingKeyWeChatConnectEnabled:                      "false",
 		SettingKeyWeChatConnectAppID:                        "",
 		SettingKeyWeChatConnectAppSecret:                    "",
@@ -3971,6 +4039,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			forwardedClientIPHeaders = parsed
 		}
 	}
+	clarityEnabled, clarityProjectID := parseClaritySettings(settings)
 	result := &SystemSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
@@ -4010,6 +4079,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		ClarityEnabled:                   clarityEnabled,
+		ClarityProjectID:                 clarityProjectID,
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
@@ -4978,6 +5049,91 @@ type DailyCheckinSettings struct {
 	CritProbability     float64
 	CritMultiplier      float64
 	CritMaxRewardUSD    float64
+}
+
+// DailyCheckinRuleSnapshot keeps the eligibility rule that was effective at a
+// point in time. It is stored in settings as append-only JSON so historical
+// operations analytics do not silently adopt the latest rule.
+type DailyCheckinRuleSnapshot struct {
+	EffectiveAt      time.Time `json:"effective_at"`
+	RequiredUsageUSD float64   `json:"required_usage_usd"`
+	UsageScope       string    `json:"usage_scope"`
+}
+
+func (s *SettingService) GetDailyCheckinRuleHistory(ctx context.Context) ([]DailyCheckinRuleSnapshot, error) {
+	current, err := s.GetDailyCheckinSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	baseline := DailyCheckinRuleSnapshot{
+		EffectiveAt:      time.Unix(0, 0).UTC(),
+		RequiredUsageUSD: current.RequiredUsageUSD,
+		UsageScope:       normalizeDailyCheckinUsageScope(current.UsageScope),
+	}
+	if s == nil || s.settingRepo == nil {
+		return []DailyCheckinRuleSnapshot{baseline}, nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyDailyCheckinRuleHistory)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return []DailyCheckinRuleSnapshot{baseline}, nil
+		}
+		return nil, fmt.Errorf("get daily checkin rule history: %w", err)
+	}
+	var history []DailyCheckinRuleSnapshot
+	if err := json.Unmarshal([]byte(raw), &history); err != nil || len(history) == 0 {
+		return []DailyCheckinRuleSnapshot{baseline}, nil
+	}
+	for i := range history {
+		history[i].RequiredUsageUSD = normalizeDailyCheckinNonNegativeFloat(history[i].RequiredUsageUSD, DailyCheckinRequiredUsageDefault)
+		history[i].UsageScope = normalizeDailyCheckinUsageScope(history[i].UsageScope)
+	}
+	sort.Slice(history, func(i, j int) bool { return history[i].EffectiveAt.Before(history[j].EffectiveAt) })
+	return history, nil
+}
+
+func (s *SettingService) appendDailyCheckinRuleHistoryUpdate(ctx context.Context, updates map[string]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	_, hasRequiredUsage := updates[SettingKeyDailyCheckinRequiredUsageUSD]
+	_, hasUsageScope := updates[SettingKeyDailyCheckinUsageScope]
+	if !hasRequiredUsage && !hasUsageScope {
+		return nil
+	}
+	current, err := s.GetDailyCheckinSettings(ctx)
+	if err != nil {
+		return err
+	}
+	nextRequired := current.RequiredUsageUSD
+	if raw, ok := updates[SettingKeyDailyCheckinRequiredUsageUSD]; ok {
+		nextRequired = parseDailyCheckinPositiveFloat(raw, DailyCheckinRequiredUsageDefault)
+	}
+	nextScope := normalizeDailyCheckinUsageScope(current.UsageScope)
+	if raw, ok := updates[SettingKeyDailyCheckinUsageScope]; ok {
+		nextScope = normalizeDailyCheckinUsageScope(raw)
+	}
+	if math.Abs(nextRequired-current.RequiredUsageUSD) < 0.00000001 && nextScope == normalizeDailyCheckinUsageScope(current.UsageScope) {
+		return nil
+	}
+	history, err := s.GetDailyCheckinRuleHistory(ctx)
+	if err != nil {
+		return err
+	}
+	history = append(history, DailyCheckinRuleSnapshot{
+		EffectiveAt:      timezone.Now().UTC(),
+		RequiredUsageUSD: nextRequired,
+		UsageScope:       nextScope,
+	})
+	if len(history) > 1024 {
+		history = history[len(history)-1024:]
+	}
+	raw, err := json.Marshal(history)
+	if err != nil {
+		return fmt.Errorf("marshal daily checkin rule history: %w", err)
+	}
+	updates[SettingKeyDailyCheckinRuleHistory] = string(raw)
+	return nil
 }
 
 func buildDailyCheckinSettingsUpdates(settings DailyCheckinSettings) (map[string]string, error) {
