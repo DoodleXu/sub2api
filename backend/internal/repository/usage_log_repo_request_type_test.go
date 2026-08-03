@@ -876,15 +876,26 @@ func TestUsageLogRepositoryGetUserUsageTrendGroupsCoveredHourlyPrefixByDay(t *te
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
 
-	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	// Use a request timezone whose midnight cannot coincide with the configured
+	// server timezone. CI commonly runs with UTC, so hard-coding time.UTC here
+	// accidentally exercises the daily aggregate path instead of the intended
+	// cross-timezone hourly fallback.
+	probe := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	_, serverOffset := probe.In(timezone.Location()).Zone()
+	requestOffset := 30 * 60
+	if serverOffset == requestOffset {
+		requestOffset = 45 * 60
+	}
+	requestLocation := time.FixedZone("test-user-timezone", requestOffset)
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, requestLocation)
 	coveredEnd := start.Add(36 * time.Hour)
-	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, time.UTC)
+	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, requestLocation)
 
 	mock.ExpectQuery("SELECT user_hourly_aggregated_from, user_hourly_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
 		WillReturnRows(sqlmock.NewRows([]string{"user_hourly_aggregated_from", "user_hourly_last_aggregated_at"}).
 			AddRow(start, coveredEnd))
 	mock.ExpectQuery("FROM usage_dashboard_hourly_user_stats").
-		WithArgs(start, coveredEnd, 12, start, coveredEnd, "UTC").
+		WithArgs(start, coveredEnd, 12, start, coveredEnd, requestLocation.String()).
 		WillReturnRows(sqlmock.NewRows([]string{"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost"}).
 			AddRow("2026-08-01", int64(7), "current@example.com", "current", int64(4), int64(500), 4.0, 3.5))
 
