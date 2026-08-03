@@ -713,6 +713,19 @@ describe('EditAccountModal', () => {
     expect(payload).not.toHaveProperty('rate_multiplier')
   })
 
+  it('renders rate sync as a full-width row below the cost fields', () => {
+    const wrapper = mountModal(buildAccount())
+    const costFields = wrapper.get('[data-testid="account-cost-fields"]')
+    const syncRow = wrapper.get('[data-testid="upstream-billing-rate-sync-row"]')
+
+    expect(costFields.element.nextElementSibling).toBe(syncRow.element)
+    expect(syncRow.classes()).toEqual(expect.arrayContaining(['border-t', 'pt-4']))
+    expect(syncRow.get('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(true)
+    expect(
+      wrapper.get('[data-testid="account-capacity-fields"]').find('[data-testid="upstream-billing-rate-sync"]').exists()
+    ).toBe(false)
+  })
+
   it('disabling probing also disables rate sync and restores manual rate editing', async () => {
     const account = buildAccount()
     account.extra = {

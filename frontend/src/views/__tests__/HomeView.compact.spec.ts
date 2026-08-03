@@ -100,6 +100,13 @@ describe('HomeView compact mode', () => {
     expect(wrapper.find('.terminal-container').exists()).toBe(true)
   })
 
+  it('shows Grok as a supported provider on the default home', () => {
+    const wrapper = mountHome()
+
+    expect(wrapper.get('[data-testid="provider-grok"]').text()).toContain('home.providers.grok')
+    expect(wrapper.get('[data-testid="provider-grok"]').text()).toContain('home.providers.supported')
+  })
+
   it('links unauthenticated visitors to login', () => {
     expect(compactDestination(mountHome({ compact_home_enabled: true }))).toBe('/login')
   })

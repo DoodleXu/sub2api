@@ -1415,7 +1415,7 @@
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div data-testid="account-capacity-fields" class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
           <input v-model.number="form.concurrency" type="number" min="1" class="input"
@@ -1459,26 +1459,10 @@
               )
             }}
           </p>
-          <div
-            v-if="account?.type === 'apikey'"
-            class="mt-3 flex items-center justify-between gap-3"
-          >
-            <div class="min-w-0">
-              <p class="text-xs font-medium text-gray-700 dark:text-gray-200">
-                {{ t('admin.accounts.upstreamBilling.syncRate') }}
-              </p>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.upstreamBilling.syncRateHint') }}
-              </p>
-            </div>
-            <Toggle
-              :model-value="upstreamBillingRateSyncEnabled"
-              data-testid="upstream-billing-rate-sync"
-              :aria-label="t('admin.accounts.upstreamBilling.syncRate')"
-              @update:model-value="handleUpstreamBillingRateSyncChange"
-            />
-          </div>
         </div>
+      </div>
+
+      <div data-testid="account-cost-fields" class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.totalCostCny') }}</label>
           <input v-model.number="form.total_cost_cny" type="number" min="0" step="0.0001" class="input" />
@@ -1490,6 +1474,29 @@
           <p class="input-hint">{{ t('admin.accounts.addCostCnyHint') }}</p>
         </div>
       </div>
+
+      <div
+        v-if="account?.type === 'apikey'"
+        data-testid="upstream-billing-rate-sync-row"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.upstreamBilling.syncRate') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamBilling.syncRateHint') }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="upstreamBillingRateSyncEnabled"
+            data-testid="upstream-billing-rate-sync"
+            class="shrink-0"
+            :aria-label="t('admin.accounts.upstreamBilling.syncRate')"
+            @update:model-value="handleUpstreamBillingRateSyncChange"
+          />
+        </div>
+      </div>
+
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
