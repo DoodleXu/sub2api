@@ -35,6 +35,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - Codex 出站身份改为按客户端家族保留指纹、自动同步官方客户端版本，并由后台定时任务刷新版本缓存；上游 `server_is_overloaded` / `slow_down` 降载事件可在同一账号重试，同时不会把账号错误地临时封禁。OpenAI 与通用网关在计费失败时落一条 `ActualCost=0` 的用量记录，避免请求成功但计费失败时完全丢失审计记录。
 - OAuth token refresh 改用共享协调器，减少并发 401 触发的重复刷新；用量排名查询补齐用户名字段。上游新增的拆分实现继续迁回 fork 的聚合 handler/service 文件，避免与 fork 既有结构重复。
 - fork 的签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、OpenAI 高级调度、图片/WS 计费、内容审核代理及发布约束均保留；`backend/cmd/server/VERSION` 不跟随上游 release 降级。
+- 合并后全面审核修复：pending 二次部分退款在确认成功时按“历史已确认金额 + 本次 pending 金额”累计，并在 `REFUND_PENDING`/`REFUND_SUCCESS` 审计详情记录前序与累计金额；阿里云验证码脚本加载失败会移除失败脚本并允许重试；前端 OAuth token refresh 的同页共享 promise 改为按用户与 refresh token 会话隔离。
 
 ### v0.1.171 合并验证
 
@@ -42,6 +43,7 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 - 后端 `go test ./...`、`TZ=UTC go test -tags=unit ./...`、`go vet ./internal/... ./cmd/server` 和 `go test ./cmd/server` 通过；验证码 SDK 依赖下载曾受默认 proxy 超时影响，切换到可用 Go proxy 后完成验证。
 - 前端 `pnpm typecheck`、`pnpm lint:check`、`pnpm test:run`（229 个测试文件、1616 个用例）和 `pnpm build` 通过。
 - `git diff --check` 和冲突标记检查在提交前再次执行；fork 版本源保持 `0.1.239`，没有合入 v0.1.171 标签之后的上游 main 提交。
+- 合并后修复复核：后端 `go test ./...`、`go test -tags=unit ./internal/service`、`go vet ./...` 通过；前端 `pnpm run lint:check`、`pnpm run typecheck`、`pnpm run test:run`（229 个测试文件、1618 个用例）和 `pnpm run build` 通过；`git diff --check` 通过。
 
 本次 `v0.1.170` 合并说明：
 
