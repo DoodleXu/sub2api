@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-03
+最后更新：2026-08-05
 
 ## 当前对比基线
 
@@ -10,11 +10,11 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `f2c42a818 feat: 增加生图历史记录与日期筛选` | 本次合并 v0.1.170 前的 fork 基线；同步在隔离 worktree 中执行，未覆盖主工作树 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.170` -> `c043c2477` | v0.1.170 已合入本 fork；fork 发布版本保持 `0.1.237` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.170` -> `c043c2477` | 2026-08-02 发布的官方最新非草稿 release |
-| 上游 main HEAD | `7e2e9ba05` | 本次同步时比 v0.1.170 release 多 1 个 VERSION 同步提交；未越过 release 标签合并 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 54 个冲突路径（含 17 个 modify/delete）；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入分组利润控制、上游倍率同步、流式部分用量、紧凑首页和内容审核代理等能力 |
+| Fork 同步前 HEAD | `b9c86b905 test: 修复跨时区聚合测试环境依赖` | 本次合并 v0.1.171 前的 fork 基线；fork 发布版本保持 `0.1.239` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.171` -> `f0e7a9c7a23a` | 本次将 v0.1.171 合入本 fork；版本源继续保持 `0.1.239` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.171` -> `f0e7a9c7a23a` | 2026-08-04 发布的官方最新非草稿 release |
+| 上游 main HEAD | `00b859617` | 比 v0.1.171 release 多 sponsor 同步提交；本次只合入 release 标签，没有越过标签合并 main |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 29 个冲突路径；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游退款确认、验证码/CSP、Codex 身份同步、降载重试和前端刷新协调能力 |
 
 更新本文时建议先刷新引用：
 
@@ -26,7 +26,22 @@ git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.170^{}...HE
 git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 ```
 
-如上游 release tag 更新，先把 `v0.1.170` 替换为新的官方 release tag，再更新本节。
+如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.171` 合并说明：
+
+- 管理端退款接口发生破坏性变更：余额不足等需要管理员确认的场景不再自动按可用余额部分扣减，改为返回 `require_force`，管理端必须在明确确认后带 `force=true` 重试；订单页保持 fork 的 TOTP step-up、订阅天数抵扣和退款预览流程，并将该响应呈现为可继续操作的警告。
+- 新增腾讯验证码与阿里云验证码配置、服务端校验和前端挑战组件；设置页以单选方式保证 Turnstile、腾讯、阿里云至多一家启用，示例 CSP 放行对应脚本/样式/资源域名。已有 Turnstile 和 OIDC 配置保持兼容。
+- Codex 出站身份改为按客户端家族保留指纹、自动同步官方客户端版本，并由后台定时任务刷新版本缓存；上游 `server_is_overloaded` / `slow_down` 降载事件可在同一账号重试，同时不会把账号错误地临时封禁。OpenAI 与通用网关在计费失败时落一条 `ActualCost=0` 的用量记录，避免请求成功但计费失败时完全丢失审计记录。
+- OAuth token refresh 改用共享协调器，减少并发 401 触发的重复刷新；用量排名查询补齐用户名字段。上游新增的拆分实现继续迁回 fork 的聚合 handler/service 文件，避免与 fork 既有结构重复。
+- fork 的签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、OpenAI 高级调度、图片/WS 计费、内容审核代理及发布约束均保留；`backend/cmd/server/VERSION` 不跟随上游 release 降级。
+
+### v0.1.171 合并验证
+
+- 合并前使用 `git merge-tree --write-tree` 预检，实际处理 29 个冲突路径；其中上游拆分文件继续保持删除，行为已移植到 fork 聚合模块。Wire 已使用 `GOPROXY=https://goproxy.cn,direct go generate ./cmd/server` 重新生成。
+- 后端 `go test ./...`、`TZ=UTC go test -tags=unit ./...`、`go vet ./internal/... ./cmd/server` 和 `go test ./cmd/server` 通过；验证码 SDK 依赖下载曾受默认 proxy 超时影响，切换到可用 Go proxy 后完成验证。
+- 前端 `pnpm typecheck`、`pnpm lint:check`、`pnpm test:run`（229 个测试文件、1616 个用例）和 `pnpm build` 通过。
+- `git diff --check` 和冲突标记检查在提交前再次执行；fork 版本源保持 `0.1.239`，没有合入 v0.1.171 标签之后的上游 main 提交。
 
 本次 `v0.1.170` 合并说明：
 

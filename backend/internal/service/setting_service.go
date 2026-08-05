@@ -287,14 +287,26 @@ const antigravityUserAgentVersionCacheTTL = 60 * time.Second
 const antigravityUserAgentVersionErrorTTL = 5 * time.Second
 const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
-// DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）
-const DefaultOpenAICodexUserAgent = "codex-tui/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.144.1)"
+// DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）。
+// 默认身份和 codexCLIVersion 保持同源，避免陈旧版本被上游优先降载。
+const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {
 	value     string
 	expiresAt int64 // unix nano
 }
+
+// cachedOpenAICodexClientVersion 缓存出站 Codex 客户端版本号（进程内缓存，60s TTL）。
+type cachedOpenAICodexClientVersion struct {
+	version   string
+	expiresAt int64 // unix nano
+}
+
+const openAICodexClientVersionCacheTTL = 60 * time.Second
+const openAICodexClientVersionErrorTTL = 5 * time.Second
+const openAICodexClientVersionDBTimeout = 5 * time.Second
+const openAICodexClientVersionSFKey = "openai_codex_client_version"
 
 type cachedOpenAIQuotaAutoPauseSettings struct {
 	settings  OpsOpenAIAccountQuotaAutoPauseSettings
@@ -358,6 +370,8 @@ type SettingService struct {
 	openAICodexUASF               singleflight.Group
 	codexRestrictionPolicyCache   atomic.Value // *cachedCodexRestrictionPolicy
 	codexRestrictionPolicySF      singleflight.Group
+	openAICodexVersionCache       atomic.Value // *cachedOpenAICodexClientVersion
+	openAICodexVersionSF          singleflight.Group
 
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
@@ -1003,6 +1017,12 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyLoginAgreementDocuments,
 		SettingKeyTurnstileEnabled,
 		SettingKeyTurnstileSiteKey,
+		SettingKeyTencentCaptchaEnabled,
+		SettingKeyTencentCaptchaAppID,
+		SettingKeyAliyunCaptchaEnabled,
+		SettingKeyAliyunCaptchaSceneID,
+		SettingKeyAliyunCaptchaPrefix,
+		SettingKeyAliyunCaptchaRegion,
 		SettingKeyAPIKeyACLTrustForwardedIP,
 		SettingKeySiteName,
 		SettingKeySiteLogo,
@@ -1139,6 +1159,12 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		LoginAgreementDocuments:          loginAgreementDocuments,
 		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
+		TencentCaptchaEnabled:            settings[SettingKeyTencentCaptchaEnabled] == "true",
+		TencentCaptchaAppID:              settings[SettingKeyTencentCaptchaAppID],
+		AliyunCaptchaEnabled:             settings[SettingKeyAliyunCaptchaEnabled] == "true",
+		AliyunCaptchaSceneID:             settings[SettingKeyAliyunCaptchaSceneID],
+		AliyunCaptchaPrefix:              settings[SettingKeyAliyunCaptchaPrefix],
+		AliyunCaptchaRegion:              normalizeAliyunCaptchaRegion(settings[SettingKeyAliyunCaptchaRegion]),
 		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
 		SiteLogo:                         settings[SettingKeySiteLogo],
 		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
@@ -1610,6 +1636,87 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 	return fallback
 }
 
+// GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
+// 优先级：管理员覆写版本 -> 自动同步版本 -> 内置版本。
+func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
+	fallback := codexCLIVersion
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.version
+		}
+	}
+
+	result, _, _ := s.openAICodexVersionSF.Do(openAICodexClientVersionSFKey, func() (any, error) {
+		if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.version, nil
+			}
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexClientVersionDBTimeout)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyOpenAICodexClientVersion,
+			SettingKeyOpenAICodexClientVersionSynced,
+		})
+		if err != nil {
+			slog.Warn("failed to get openai codex client version setting", "error", err)
+			s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
+				version:   fallback,
+				expiresAt: time.Now().Add(openAICodexClientVersionErrorTTL).UnixNano(),
+			})
+			return fallback, nil
+		}
+		version := NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
+		if version == "" {
+			version = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
+		}
+		if version == "" {
+			version = fallback
+		}
+		s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
+			version:   version,
+			expiresAt: time.Now().Add(openAICodexClientVersionCacheTTL).UnixNano(),
+		})
+		return version, nil
+	})
+	if version, ok := result.(string); ok && version != "" {
+		return version
+	}
+	return fallback
+}
+
+// InvalidateOpenAICodexClientVersionCache 丢弃版本号缓存，下次读取回源。
+func (s *SettingService) InvalidateOpenAICodexClientVersionCache() {
+	if s == nil {
+		return
+	}
+	s.openAICodexVersionSF.Forget(openAICodexClientVersionSFKey)
+	s.openAICodexVersionCache.Store((*cachedOpenAICodexClientVersion)(nil))
+}
+
+// GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
+// 面板 UA 只提供客户端与环境指纹，版本段统一重建为当前生效版本。
+func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) string {
+	if s == nil {
+		return codexCLIUserAgent
+	}
+	version := s.GetOpenAICodexClientVersion(ctx)
+	ua := strings.TrimSpace(s.GetOpenAICodexUserAgent(ctx))
+	if ua == "" {
+		return buildCodexCLIUserAgent(version)
+	}
+	if rebuilt := openai.SetCodexUserAgentVersion(ua, version); rebuilt != "" {
+		return rebuilt
+	}
+	return ua
+}
+
 var legacyClaudeCodeCodexWhitelistEntry = openai.AllowedClientEntry{
 	Originator: "Claude Code",
 	UAContains: []string{"Claude Code/"},
@@ -1916,6 +2023,12 @@ type PublicSettingsInjectionPayload struct {
 	LoginAgreementDocuments          []LoginAgreementDocument `json:"login_agreement_documents"`
 	TurnstileEnabled                 bool                     `json:"turnstile_enabled"`
 	TurnstileSiteKey                 string                   `json:"turnstile_site_key"`
+	TencentCaptchaEnabled            bool                     `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID              string                   `json:"tencent_captcha_app_id"`
+	AliyunCaptchaEnabled             bool                     `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaSceneID             string                   `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix              string                   `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion              string                   `json:"aliyun_captcha_region"`
 	SiteName                         string                   `json:"site_name"`
 	SiteLogo                         string                   `json:"site_logo"`
 	SiteSubtitle                     string                   `json:"site_subtitle"`
@@ -1994,6 +2107,12 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		LoginAgreementDocuments:          settings.LoginAgreementDocuments,
 		TurnstileEnabled:                 settings.TurnstileEnabled,
 		TurnstileSiteKey:                 settings.TurnstileSiteKey,
+		TencentCaptchaEnabled:            settings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:              settings.TencentCaptchaAppID,
+		AliyunCaptchaEnabled:             settings.AliyunCaptchaEnabled,
+		AliyunCaptchaSceneID:             settings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:              settings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:              settings.AliyunCaptchaRegion,
 		SiteName:                         settings.SiteName,
 		SiteLogo:                         settings.SiteLogo,
 		SiteSubtitle:                     settings.SiteSubtitle,
@@ -2576,6 +2695,25 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if settings.TurnstileSecretKey != "" {
 		updates[SettingKeyTurnstileSecretKey] = settings.TurnstileSecretKey
 	}
+	updates[SettingKeyTencentCaptchaEnabled] = strconv.FormatBool(settings.TencentCaptchaEnabled)
+	updates[SettingKeyTencentCaptchaAppID] = settings.TencentCaptchaAppID
+	if settings.TencentCaptchaAppSecretKey != "" {
+		updates[SettingKeyTencentCaptchaAppSecretKey] = settings.TencentCaptchaAppSecretKey
+	}
+	if settings.TencentCaptchaCloudSecretID != "" {
+		updates[SettingKeyTencentCaptchaCloudSecretID] = settings.TencentCaptchaCloudSecretID
+	}
+	if settings.TencentCaptchaCloudSecretKey != "" {
+		updates[SettingKeyTencentCaptchaCloudSecretKey] = settings.TencentCaptchaCloudSecretKey
+	}
+	updates[SettingKeyAliyunCaptchaEnabled] = strconv.FormatBool(settings.AliyunCaptchaEnabled)
+	updates[SettingKeyAliyunCaptchaAccessKeyID] = settings.AliyunCaptchaAccessKeyID
+	if settings.AliyunCaptchaAccessKeySecret != "" {
+		updates[SettingKeyAliyunCaptchaAccessKeySecret] = settings.AliyunCaptchaAccessKeySecret
+	}
+	updates[SettingKeyAliyunCaptchaSceneID] = settings.AliyunCaptchaSceneID
+	updates[SettingKeyAliyunCaptchaPrefix] = settings.AliyunCaptchaPrefix
+	updates[SettingKeyAliyunCaptchaRegion] = normalizeAliyunCaptchaRegion(settings.AliyunCaptchaRegion)
 	updates[SettingKeyAPIKeyACLTrustForwardedIP] = strconv.FormatBool(settings.APIKeyACLTrustForwardedIP)
 	forwardedClientIPHeadersJSON, err := json.Marshal(settings.ForwardedClientIPHeaders)
 	if err != nil {
@@ -2837,6 +2975,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
+	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
+	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
+	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖。
 	// codex_cli_only 加固
 	updates[SettingKeyMinCodexVersion] = strings.TrimSpace(settings.MinCodexVersion)
 	updates[SettingKeyMaxCodexVersion] = strings.TrimSpace(settings.MaxCodexVersion)
@@ -3019,6 +3160,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		value:     codexUA,
 		expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
 	})
+	s.InvalidateOpenAICodexClientVersionCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
@@ -3971,6 +4113,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyEnableClientDatelineNormalization:                  "true",
 		SettingKeyAntigravityUserAgentVersion:                        "",
 		SettingKeyOpenAICodexUserAgent:                               "",
+		SettingKeyOpenAICodexClientVersion:                           "",
+		SettingKeyOpenAICodexClientVersionSynced:                     "",
+		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -4041,47 +4186,58 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	clarityEnabled, clarityProjectID := parseClaritySettings(settings)
 	result := &SystemSettings{
-		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
-		EmailVerifyEnabled:               emailVerifyEnabled,
-		RegistrationEmailSuffixWhitelist: ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
-		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
-		PasswordResetEnabled:             emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
-		FrontendURL:                      settings[SettingKeyFrontendURL],
-		InvitationCodeEnabled:            settings[SettingKeyInvitationCodeEnabled] == "true",
-		TotpEnabled:                      settings[SettingKeyTotpEnabled] == "true",
-		PasskeyEnabled:                   s.passkeySettingEnabled(settings),
-		LoginAgreementEnabled:            settings[SettingKeyLoginAgreementEnabled] == "true",
-		LoginAgreementMode:               normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
-		LoginAgreementUpdatedAt:          loginAgreementUpdatedAt,
-		LoginAgreementDocuments:          loginAgreementDocuments,
-		SMTPHost:                         settings[SettingKeySMTPHost],
-		SMTPUsername:                     settings[SettingKeySMTPUsername],
-		SMTPFrom:                         settings[SettingKeySMTPFrom],
-		SMTPFromName:                     settings[SettingKeySMTPFromName],
-		SMTPUseTLS:                       settings[SettingKeySMTPUseTLS] == "true",
-		SMTPPasswordConfigured:           settings[SettingKeySMTPPassword] != "",
-		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
-		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
-		TurnstileSecretKeyConfigured:     settings[SettingKeyTurnstileSecretKey] != "",
-		APIKeyACLTrustForwardedIP:        apiKeyACLTrustForwardedIP,
-		ForwardedClientIPHeaders:         forwardedClientIPHeaders,
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
-		SiteLogo:                         settings[SettingKeySiteLogo],
-		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
-		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
-		ContactInfo:                      settings[SettingKeyContactInfo],
-		DocURL:                           settings[SettingKeyDocURL],
-		HomeContent:                      settings[SettingKeyHomeContent],
-		CompactHomeEnabled:               settings[SettingKeyCompactHomeEnabled] == "true",
-		SiteLaunchAt:                     strings.TrimSpace(settings[SettingKeySiteLaunchAt]),
-		HideCcsImportButton:              settings[SettingKeyHideCcsImportButton] == "true",
-		PurchaseSubscriptionEnabled:      settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
-		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
-		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
-		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
-		ClarityEnabled:                   clarityEnabled,
-		ClarityProjectID:                 clarityProjectID,
-		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
+		RegistrationEnabled:                    settings[SettingKeyRegistrationEnabled] == "true",
+		EmailVerifyEnabled:                     emailVerifyEnabled,
+		RegistrationEmailSuffixWhitelist:       ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		PromoCodeEnabled:                       settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
+		PasswordResetEnabled:                   emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
+		FrontendURL:                            settings[SettingKeyFrontendURL],
+		InvitationCodeEnabled:                  settings[SettingKeyInvitationCodeEnabled] == "true",
+		TotpEnabled:                            settings[SettingKeyTotpEnabled] == "true",
+		PasskeyEnabled:                         s.passkeySettingEnabled(settings),
+		LoginAgreementEnabled:                  settings[SettingKeyLoginAgreementEnabled] == "true",
+		LoginAgreementMode:                     normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
+		LoginAgreementUpdatedAt:                loginAgreementUpdatedAt,
+		LoginAgreementDocuments:                loginAgreementDocuments,
+		SMTPHost:                               settings[SettingKeySMTPHost],
+		SMTPUsername:                           settings[SettingKeySMTPUsername],
+		SMTPFrom:                               settings[SettingKeySMTPFrom],
+		SMTPFromName:                           settings[SettingKeySMTPFromName],
+		SMTPUseTLS:                             settings[SettingKeySMTPUseTLS] == "true",
+		SMTPPasswordConfigured:                 settings[SettingKeySMTPPassword] != "",
+		TurnstileEnabled:                       settings[SettingKeyTurnstileEnabled] == "true",
+		TurnstileSiteKey:                       settings[SettingKeyTurnstileSiteKey],
+		TurnstileSecretKeyConfigured:           settings[SettingKeyTurnstileSecretKey] != "",
+		TencentCaptchaEnabled:                  settings[SettingKeyTencentCaptchaEnabled] == "true",
+		TencentCaptchaAppID:                    settings[SettingKeyTencentCaptchaAppID],
+		TencentCaptchaAppSecretKeyConfigured:   settings[SettingKeyTencentCaptchaAppSecretKey] != "",
+		TencentCaptchaCloudSecretIDConfigured:  settings[SettingKeyTencentCaptchaCloudSecretID] != "",
+		TencentCaptchaCloudSecretKeyConfigured: settings[SettingKeyTencentCaptchaCloudSecretKey] != "",
+		AliyunCaptchaEnabled:                   settings[SettingKeyAliyunCaptchaEnabled] == "true",
+		AliyunCaptchaAccessKeyID:               settings[SettingKeyAliyunCaptchaAccessKeyID],
+		AliyunCaptchaAccessKeySecretConfigured: settings[SettingKeyAliyunCaptchaAccessKeySecret] != "",
+		AliyunCaptchaSceneID:                   settings[SettingKeyAliyunCaptchaSceneID],
+		AliyunCaptchaPrefix:                    settings[SettingKeyAliyunCaptchaPrefix],
+		AliyunCaptchaRegion:                    normalizeAliyunCaptchaRegion(settings[SettingKeyAliyunCaptchaRegion]),
+		APIKeyACLTrustForwardedIP:              apiKeyACLTrustForwardedIP,
+		ForwardedClientIPHeaders:               forwardedClientIPHeaders,
+		SiteName:                               s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
+		SiteLogo:                               settings[SettingKeySiteLogo],
+		SiteSubtitle:                           s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
+		APIBaseURL:                             settings[SettingKeyAPIBaseURL],
+		ContactInfo:                            settings[SettingKeyContactInfo],
+		DocURL:                                 settings[SettingKeyDocURL],
+		HomeContent:                            settings[SettingKeyHomeContent],
+		CompactHomeEnabled:                     settings[SettingKeyCompactHomeEnabled] == "true",
+		SiteLaunchAt:                           strings.TrimSpace(settings[SettingKeySiteLaunchAt]),
+		HideCcsImportButton:                    settings[SettingKeyHideCcsImportButton] == "true",
+		PurchaseSubscriptionEnabled:            settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
+		PurchaseSubscriptionURL:                strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
+		CustomMenuItems:                        settings[SettingKeyCustomMenuItems],
+		CustomEndpoints:                        settings[SettingKeyCustomEndpoints],
+		ClarityEnabled:                         clarityEnabled,
+		ClarityProjectID:                       clarityProjectID,
+		BackendModeEnabled:                     settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
@@ -4137,6 +4293,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// 敏感信息直接返回，方便测试连接时使用
 	result.SMTPPassword = settings[SettingKeySMTPPassword]
 	result.TurnstileSecretKey = settings[SettingKeyTurnstileSecretKey]
+	result.TencentCaptchaAppSecretKey = settings[SettingKeyTencentCaptchaAppSecretKey]
+	result.TencentCaptchaCloudSecretID = settings[SettingKeyTencentCaptchaCloudSecretID]
+	result.TencentCaptchaCloudSecretKey = settings[SettingKeyTencentCaptchaCloudSecretKey]
+	result.AliyunCaptchaAccessKeySecret = settings[SettingKeyAliyunCaptchaAccessKeySecret]
 
 	// LinuxDo Connect 设置：
 	// - 兼容 config.yaml/env（避免老部署因为未迁移到数据库设置而被意外关闭）
@@ -4611,6 +4771,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
 	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
+	result.OpenAICodexClientVersion = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersion])
+	result.OpenAICodexClientVersionSynced = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersionSynced])
+	if value, ok := settings[SettingKeyOpenAICodexVersionAutoSyncEnabled]; ok && value != "" {
+		result.OpenAICodexVersionAutoSyncEnabled = value == "true"
+	} else {
+		result.OpenAICodexVersionAutoSyncEnabled = true
+	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]
@@ -5252,6 +5419,84 @@ func (s *SettingService) GetTurnstileSecretKey(ctx context.Context) string {
 		return ""
 	}
 	return value
+}
+
+// TencentCaptchaConfig contains the credentials required by Tencent Cloud's
+// ticket verification API. It must never be returned by a public handler.
+type TencentCaptchaConfig struct {
+	Enabled        bool
+	AppID          string
+	AppSecretKey   string
+	CloudSecretID  string
+	CloudSecretKey string
+}
+
+// AliyunCaptchaConfig contains the credentials required by Aliyun Captcha 2.0's
+// server-side verification API. It must never be returned by a public handler.
+type AliyunCaptchaConfig struct {
+	Enabled         bool
+	AccessKeyID     string
+	AccessKeySecret string
+	SceneID         string
+	Region          string
+}
+
+type CaptchaProviderConfig struct {
+	TurnstileEnabled   bool
+	TurnstileSecretKey string
+	Tencent            TencentCaptchaConfig
+	Aliyun             AliyunCaptchaConfig
+}
+
+func (s *SettingService) GetCaptchaProviderConfig(ctx context.Context) (CaptchaProviderConfig, error) {
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyTurnstileEnabled,
+		SettingKeyTurnstileSecretKey,
+		SettingKeyTencentCaptchaEnabled,
+		SettingKeyTencentCaptchaAppID,
+		SettingKeyTencentCaptchaAppSecretKey,
+		SettingKeyTencentCaptchaCloudSecretID,
+		SettingKeyTencentCaptchaCloudSecretKey,
+		SettingKeyAliyunCaptchaEnabled,
+		SettingKeyAliyunCaptchaAccessKeyID,
+		SettingKeyAliyunCaptchaAccessKeySecret,
+		SettingKeyAliyunCaptchaSceneID,
+		SettingKeyAliyunCaptchaRegion,
+	})
+	if err != nil {
+		return CaptchaProviderConfig{}, fmt.Errorf("read captcha provider settings: %w", err)
+	}
+	return CaptchaProviderConfig{
+		TurnstileEnabled:   values[SettingKeyTurnstileEnabled] == "true",
+		TurnstileSecretKey: values[SettingKeyTurnstileSecretKey],
+		Tencent: TencentCaptchaConfig{
+			Enabled:        values[SettingKeyTencentCaptchaEnabled] == "true",
+			AppID:          values[SettingKeyTencentCaptchaAppID],
+			AppSecretKey:   values[SettingKeyTencentCaptchaAppSecretKey],
+			CloudSecretID:  values[SettingKeyTencentCaptchaCloudSecretID],
+			CloudSecretKey: values[SettingKeyTencentCaptchaCloudSecretKey],
+		},
+		Aliyun: AliyunCaptchaConfig{
+			Enabled:         values[SettingKeyAliyunCaptchaEnabled] == "true",
+			AccessKeyID:     values[SettingKeyAliyunCaptchaAccessKeyID],
+			AccessKeySecret: values[SettingKeyAliyunCaptchaAccessKeySecret],
+			SceneID:         values[SettingKeyAliyunCaptchaSceneID],
+			Region:          normalizeAliyunCaptchaRegion(values[SettingKeyAliyunCaptchaRegion]),
+		},
+	}, nil
+}
+
+func (s *SettingService) IsTencentCaptchaEnabled(ctx context.Context) bool {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyTencentCaptchaEnabled)
+	return err == nil && value == "true"
+}
+
+func (s *SettingService) GetTencentCaptchaConfig(ctx context.Context) TencentCaptchaConfig {
+	config, err := s.GetCaptchaProviderConfig(ctx)
+	if err != nil {
+		return TencentCaptchaConfig{}
+	}
+	return config.Tencent
 }
 
 // IsIdentityPatchEnabled 检查是否启用身份补丁（Claude -> Gemini systemInstruction 注入）

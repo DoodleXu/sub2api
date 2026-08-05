@@ -31,6 +31,9 @@ func (r *bulkResetUserSubRepoStub) Create(context.Context, *service.UserSubscrip
 func (r *bulkResetUserSubRepoStub) GetByID(context.Context, int64) (*service.UserSubscription, error) {
 	panic("unexpected GetByID call")
 }
+func (r *bulkResetUserSubRepoStub) GetByIDForUpdate(context.Context, int64) (*service.UserSubscription, error) {
+	panic("unexpected GetByIDForUpdate call")
+}
 func (r *bulkResetUserSubRepoStub) GetByIDIncludeDeleted(context.Context, int64) (*service.UserSubscription, error) {
 	panic("unexpected GetByIDIncludeDeleted call")
 }

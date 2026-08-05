@@ -66,6 +66,7 @@ type SettingHandler struct {
 	settingService           *service.SettingService
 	emailService             *service.EmailService
 	turnstileService         *service.TurnstileService
+	aliyunCaptchaService     *service.AliyunCaptchaService
 	opsService               *service.OpsService
 	paymentConfigService     *service.PaymentConfigService
 	paymentService           *service.PaymentService
@@ -106,6 +107,16 @@ func (h *SettingHandler) SetNotificationService(notificationService *service.Not
 	h.notificationService = notificationService
 }
 
+// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
+// changing the constructor signature used by existing unit tests.
+func (h *SettingHandler) SetAliyunCaptchaService(aliyunCaptchaService *service.AliyunCaptchaService) {
+	h.aliyunCaptchaService = aliyunCaptchaService
+}
+
+// SetStepUpDeps attaches the services backing the step-up switch preconditions
+// (enable requires the acting admin to have TOTP enabled; disable is itself a
+// step-up gated operation), without changing the constructor signature used by
+// existing unit tests.
 func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userService *service.UserService) {
 	h.totpService = totpService
 	h.userService = userService
@@ -176,6 +187,17 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TurnstileEnabled:                                       settings.TurnstileEnabled,
 		TurnstileSiteKey:                                       settings.TurnstileSiteKey,
 		TurnstileSecretKeyConfigured:                           settings.TurnstileSecretKeyConfigured,
+		TencentCaptchaEnabled:                                  settings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:                                    settings.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKeyConfigured:                   settings.TencentCaptchaAppSecretKeyConfigured,
+		TencentCaptchaCloudSecretIDConfigured:                  settings.TencentCaptchaCloudSecretIDConfigured,
+		TencentCaptchaCloudSecretKeyConfigured:                 settings.TencentCaptchaCloudSecretKeyConfigured,
+		AliyunCaptchaEnabled:                                   settings.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:                               settings.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecretConfigured:                 settings.AliyunCaptchaAccessKeySecretConfigured,
+		AliyunCaptchaSceneID:                                   settings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:                                    settings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:                                    settings.AliyunCaptchaRegion,
 		APIKeyACLTrustForwardedIP:                              settings.APIKeyACLTrustForwardedIP,
 		ForwardedClientIPHeaders:                               settings.ForwardedClientIPHeaders,
 		LinuxDoConnectEnabled:                                  settings.LinuxDoConnectEnabled,
@@ -301,6 +323,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      settings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            settings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   settings.OpenAICodexUserAgent,
+		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,
@@ -1053,6 +1078,21 @@ type UpdateSettingsRequest struct {
 	TurnstileSiteKey   string `json:"turnstile_site_key"`
 	TurnstileSecretKey string `json:"turnstile_secret_key"`
 
+	// 腾讯天御验证码设置
+	TencentCaptchaEnabled        bool   `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID          string `json:"tencent_captcha_app_id"`
+	TencentCaptchaAppSecretKey   string `json:"tencent_captcha_app_secret_key"`
+	TencentCaptchaCloudSecretID  string `json:"tencent_captcha_cloud_secret_id"`
+	TencentCaptchaCloudSecretKey string `json:"tencent_captcha_cloud_secret_key"`
+
+	// 阿里云验证码 2.0 设置
+	AliyunCaptchaEnabled         bool   `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaAccessKeyID     string `json:"aliyun_captcha_access_key_id"`
+	AliyunCaptchaAccessKeySecret string `json:"aliyun_captcha_access_key_secret"`
+	AliyunCaptchaSceneID         string `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix          string `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion          string `json:"aliyun_captcha_region"`
+
 	// API Key IP 访问控制设置
 	APIKeyACLTrustForwardedIP *bool     `json:"api_key_acl_trust_forwarded_ip"`
 	ForwardedClientIPHeaders  *[]string `json:"forwarded_client_ip_headers"`
@@ -1237,6 +1277,8 @@ type UpdateSettingsRequest struct {
 	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion            *string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
+	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
+	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      *string `json:"min_codex_version"`
@@ -1479,6 +1521,14 @@ func hydrateOmittedSettingsRequest(
 	}
 }
 
+func settingsAuditRequest(req UpdateSettingsRequest) UpdateSettingsRequest {
+	req.TencentCaptchaAppSecretKey = strings.TrimSpace(req.TencentCaptchaAppSecretKey)
+	req.TencentCaptchaCloudSecretID = strings.TrimSpace(req.TencentCaptchaCloudSecretID)
+	req.TencentCaptchaCloudSecretKey = strings.TrimSpace(req.TencentCaptchaCloudSecretKey)
+	req.AliyunCaptchaAccessKeySecret = strings.TrimSpace(req.AliyunCaptchaAccessKeySecret)
+	return req
+}
+
 // UpdateSettings 更新系统设置
 // PUT /api/v1/admin/settings
 func (h *SettingHandler) UpdateSettings(c *gin.Context) {
@@ -1499,7 +1549,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	auditRequest := req
+	auditRequest := settingsAuditRequest(req)
 	hydrateOmittedSettingsRequest(&req, previousSettings, sentFields)
 	previousAuthSourceDefaults, err := h.settingService.GetAuthSourceDefaultSettings(c.Request.Context())
 	if err != nil {
@@ -1597,6 +1647,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	req.SMTPPassword = strings.TrimSpace(req.SMTPPassword)
 	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
 	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
+	req.TencentCaptchaAppID = strings.TrimSpace(req.TencentCaptchaAppID)
+	req.TencentCaptchaAppSecretKey = strings.TrimSpace(req.TencentCaptchaAppSecretKey)
+	req.TencentCaptchaCloudSecretID = strings.TrimSpace(req.TencentCaptchaCloudSecretID)
+	req.TencentCaptchaCloudSecretKey = strings.TrimSpace(req.TencentCaptchaCloudSecretKey)
 	if req.SMTPPort <= 0 {
 		req.SMTPPort = 587
 	}
@@ -1639,6 +1693,82 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		secretKeyChanged := previousSettings.TurnstileSecretKey != req.TurnstileSecretKey
 		if siteKeyChanged || secretKeyChanged {
 			if err := h.turnstileService.ValidateSecretKey(c.Request.Context(), req.TurnstileSecretKey); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+		}
+	}
+
+	// CAPTCHA provider settings are mutually exclusive. Check effective values after
+	// hydrating omitted fields so partial updates cannot accidentally enable two providers.
+	enabledCaptchaProviders := 0
+	for _, enabled := range []bool{req.TurnstileEnabled, req.TencentCaptchaEnabled, req.AliyunCaptchaEnabled} {
+		if enabled {
+			enabledCaptchaProviders++
+		}
+	}
+	if enabledCaptchaProviders > 1 {
+		response.BadRequest(c, "Multiple captcha providers (Cloudflare Turnstile / Tencent Captcha / Aliyun Captcha) cannot be enabled at the same time")
+		return
+	}
+	if req.AliyunCaptchaRegion != service.AliyunCaptchaRegionSGP {
+		req.AliyunCaptchaRegion = service.AliyunCaptchaRegionCN
+	}
+	if req.TencentCaptchaEnabled {
+		appID, err := strconv.ParseUint(req.TencentCaptchaAppID, 10, 64)
+		if err != nil || appID == 0 {
+			response.BadRequest(c, "Tencent Captcha CaptchaAppId must be a positive integer when enabled")
+			return
+		}
+		if req.TencentCaptchaAppSecretKey == "" {
+			req.TencentCaptchaAppSecretKey = previousSettings.TencentCaptchaAppSecretKey
+		}
+		if req.TencentCaptchaCloudSecretID == "" {
+			req.TencentCaptchaCloudSecretID = previousSettings.TencentCaptchaCloudSecretID
+		}
+		if req.TencentCaptchaCloudSecretKey == "" {
+			req.TencentCaptchaCloudSecretKey = previousSettings.TencentCaptchaCloudSecretKey
+		}
+		if req.TencentCaptchaAppSecretKey == "" {
+			response.BadRequest(c, "Tencent Captcha AppSecretKey is required when enabled")
+			return
+		}
+		if req.TencentCaptchaCloudSecretID == "" {
+			response.BadRequest(c, "Tencent Cloud SecretId is required when Tencent Captcha is enabled")
+			return
+		}
+		if req.TencentCaptchaCloudSecretKey == "" {
+			response.BadRequest(c, "Tencent Cloud SecretKey is required when Tencent Captcha is enabled")
+			return
+		}
+	}
+	if req.AliyunCaptchaEnabled {
+		if req.AliyunCaptchaSceneID == "" {
+			req.AliyunCaptchaSceneID = previousSettings.AliyunCaptchaSceneID
+		}
+		if req.AliyunCaptchaPrefix == "" {
+			req.AliyunCaptchaPrefix = previousSettings.AliyunCaptchaPrefix
+		}
+		if req.AliyunCaptchaAccessKeyID == "" {
+			req.AliyunCaptchaAccessKeyID = previousSettings.AliyunCaptchaAccessKeyID
+		}
+		if req.AliyunCaptchaSceneID == "" || req.AliyunCaptchaPrefix == "" || req.AliyunCaptchaAccessKeyID == "" {
+			response.BadRequest(c, "Aliyun Captcha Scene ID, Prefix, and AccessKey ID are required when enabled")
+			return
+		}
+		if req.AliyunCaptchaAccessKeySecret == "" {
+			req.AliyunCaptchaAccessKeySecret = previousSettings.AliyunCaptchaAccessKeySecret
+		}
+		if req.AliyunCaptchaAccessKeySecret == "" {
+			response.BadRequest(c, "Aliyun Captcha AccessKey Secret is required when enabled")
+			return
+		}
+		credentialsChanged := previousSettings.AliyunCaptchaAccessKeyID != req.AliyunCaptchaAccessKeyID ||
+			previousSettings.AliyunCaptchaAccessKeySecret != req.AliyunCaptchaAccessKeySecret ||
+			previousSettings.AliyunCaptchaSceneID != req.AliyunCaptchaSceneID ||
+			previousSettings.AliyunCaptchaRegion != req.AliyunCaptchaRegion
+		if credentialsChanged && h.aliyunCaptchaService != nil {
+			if err := h.aliyunCaptchaService.ValidateCredentials(c.Request.Context(), req.AliyunCaptchaAccessKeyID, req.AliyunCaptchaAccessKeySecret, req.AliyunCaptchaSceneID, req.AliyunCaptchaRegion); err != nil {
 				response.ErrorFrom(c, err)
 				return
 			}
@@ -2310,6 +2440,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.OpenAICodexClientVersion != nil {
+		normalized := strings.TrimSpace(*req.OpenAICodexClientVersion)
+		if normalized != "" && service.NormalizeCodexClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a valid version (e.g. 0.146.0)")
+			return
+		}
+		req.OpenAICodexClientVersion = &normalized
+	}
 	if req.MinCodexVersion != nil {
 		normalized := strings.TrimSpace(*req.MinCodexVersion)
 		req.MinCodexVersion = &normalized
@@ -2401,6 +2539,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TurnstileEnabled:                 req.TurnstileEnabled,
 		TurnstileSiteKey:                 req.TurnstileSiteKey,
 		TurnstileSecretKey:               req.TurnstileSecretKey,
+		TencentCaptchaEnabled:            req.TencentCaptchaEnabled,
+		TencentCaptchaAppID:              req.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKey:       req.TencentCaptchaAppSecretKey,
+		TencentCaptchaCloudSecretID:      req.TencentCaptchaCloudSecretID,
+		TencentCaptchaCloudSecretKey:     req.TencentCaptchaCloudSecretKey,
+		AliyunCaptchaEnabled:             req.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:         req.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecret:     req.AliyunCaptchaAccessKeySecret,
+		AliyunCaptchaSceneID:             req.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:              req.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:              req.AliyunCaptchaRegion,
 		APIKeyACLTrustForwardedIP: func() bool {
 			if req.APIKeyACLTrustForwardedIP != nil {
 				return *req.APIKeyACLTrustForwardedIP
@@ -2607,6 +2756,19 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAICodexUserAgent
 			}
 			return previousSettings.OpenAICodexUserAgent
+		}(),
+		OpenAICodexClientVersion: func() string {
+			if req.OpenAICodexClientVersion != nil {
+				return *req.OpenAICodexClientVersion
+			}
+			return previousSettings.OpenAICodexClientVersion
+		}(),
+		OpenAICodexClientVersionSynced: previousSettings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled: func() bool {
+			if req.OpenAICodexVersionAutoSyncEnabled != nil {
+				return *req.OpenAICodexVersionAutoSyncEnabled
+			}
+			return previousSettings.OpenAICodexVersionAutoSyncEnabled
 		}(),
 		MinCodexVersion: func() string {
 			if req.MinCodexVersion != nil {
@@ -3115,6 +3277,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TurnstileEnabled:                                       updatedSettings.TurnstileEnabled,
 		TurnstileSiteKey:                                       updatedSettings.TurnstileSiteKey,
 		TurnstileSecretKeyConfigured:                           updatedSettings.TurnstileSecretKeyConfigured,
+		TencentCaptchaEnabled:                                  updatedSettings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:                                    updatedSettings.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKeyConfigured:                   updatedSettings.TencentCaptchaAppSecretKeyConfigured,
+		TencentCaptchaCloudSecretIDConfigured:                  updatedSettings.TencentCaptchaCloudSecretIDConfigured,
+		TencentCaptchaCloudSecretKeyConfigured:                 updatedSettings.TencentCaptchaCloudSecretKeyConfigured,
+		AliyunCaptchaEnabled:                                   updatedSettings.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:                               updatedSettings.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecretConfigured:                 updatedSettings.AliyunCaptchaAccessKeySecretConfigured,
+		AliyunCaptchaSceneID:                                   updatedSettings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:                                    updatedSettings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:                                    updatedSettings.AliyunCaptchaRegion,
 		APIKeyACLTrustForwardedIP:                              updatedSettings.APIKeyACLTrustForwardedIP,
 		ForwardedClientIPHeaders:                               updatedSettings.ForwardedClientIPHeaders,
 		LinuxDoConnectEnabled:                                  updatedSettings.LinuxDoConnectEnabled,
@@ -3235,6 +3408,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            updatedSettings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   updatedSettings.OpenAICodexUserAgent,
+		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,
@@ -3474,6 +3650,39 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if req.TurnstileSecretKey != "" {
 		changed = append(changed, "turnstile_secret_key")
+	}
+	if before.TencentCaptchaEnabled != after.TencentCaptchaEnabled {
+		changed = append(changed, "tencent_captcha_enabled")
+	}
+	if before.TencentCaptchaAppID != after.TencentCaptchaAppID {
+		changed = append(changed, "tencent_captcha_app_id")
+	}
+	if req.TencentCaptchaAppSecretKey != "" {
+		changed = append(changed, "tencent_captcha_app_secret_key")
+	}
+	if req.TencentCaptchaCloudSecretID != "" {
+		changed = append(changed, "tencent_captcha_cloud_secret_id")
+	}
+	if req.TencentCaptchaCloudSecretKey != "" {
+		changed = append(changed, "tencent_captcha_cloud_secret_key")
+	}
+	if before.AliyunCaptchaEnabled != after.AliyunCaptchaEnabled {
+		changed = append(changed, "aliyun_captcha_enabled")
+	}
+	if before.AliyunCaptchaAccessKeyID != after.AliyunCaptchaAccessKeyID {
+		changed = append(changed, "aliyun_captcha_access_key_id")
+	}
+	if req.AliyunCaptchaAccessKeySecret != "" {
+		changed = append(changed, "aliyun_captcha_access_key_secret")
+	}
+	if before.AliyunCaptchaSceneID != after.AliyunCaptchaSceneID {
+		changed = append(changed, "aliyun_captcha_scene_id")
+	}
+	if before.AliyunCaptchaPrefix != after.AliyunCaptchaPrefix {
+		changed = append(changed, "aliyun_captcha_prefix")
+	}
+	if before.AliyunCaptchaRegion != after.AliyunCaptchaRegion {
+		changed = append(changed, "aliyun_captcha_region")
 	}
 	if before.APIKeyACLTrustForwardedIP != after.APIKeyACLTrustForwardedIP {
 		changed = append(changed, "api_key_acl_trust_forwarded_ip")
@@ -3795,6 +4004,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")
+	}
+	if before.OpenAICodexClientVersion != after.OpenAICodexClientVersion {
+		changed = append(changed, "openai_codex_client_version")
+	}
+	if before.OpenAICodexVersionAutoSyncEnabled != after.OpenAICodexVersionAutoSyncEnabled {
+		changed = append(changed, "openai_codex_version_auto_sync_enabled")
 	}
 	if before.MinCodexVersion != after.MinCodexVersion {
 		changed = append(changed, "min_codex_version")

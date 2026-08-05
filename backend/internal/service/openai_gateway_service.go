@@ -48,8 +48,13 @@ const (
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
 	// 与真实 Codex CLI 的 User-Agent 结构对齐：
 	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
-	// 旧值 "codex_cli_rs/0.125.0" 缺少 OS/架构/终端后缀，易被上游指纹识别为非官方客户端。
-	codexCLIUserAgent = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color"
+	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
+	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
+	codexCLIUserAgentSuffix = " (Ubuntu 22.4.0; x86_64) xterm-256color"
+	// codexCLIUserAgent 是编译期兜底 UA；运行时优先使用由后台版本号拼出的规范 UA。
+	// 版本段必须来自 codexCLIVersion：UA 与 version 头是同一个版本声明的两个出口，
+	// 各自硬编码会漂移成互相矛盾的身份。
+	codexCLIUserAgent = "codex_cli_rs/" + codexCLIVersion + codexCLIUserAgentSuffix
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -64,7 +69,12 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	codexCLIVersion                    = "0.144.1"
+	// codexCLIVersion 是网关对上游声明的 Codex 客户端版本，同时供 codexCLIUserAgent
+	// 与 version 头使用。上游 /backend-api/codex 在容量紧张时按客户端身份分优先级降载，
+	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
+	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
+	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
+	codexCLIVersion = "0.146.0"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 配额自动暂停时，超过该时长仍未刷新的 used% 快照视为陈旧，不再据此暂停账号。
@@ -481,6 +491,11 @@ func NewOpenAIGatewayService(
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *OpenAIGatewayService {
+	// enforceCodexIdentityHeaders 是 HTTP / 透传 / WS / 探针 等出站路径共用的纯函数收口点，
+	// 拿不到配置，故在此发布进程级开关快照。配置取反义，零值即「强制统一出口开启」。
+	if cfg != nil {
+		SetCodexIdentityEnforcementEnabled(!cfg.Gateway.DisableCodexIdentityEnforcement)
+	}
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
 		usageLogRepo:        usageLogRepo,
@@ -4400,11 +4415,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// 浏览器型 UA 兜底：仅 OAuth（ChatGPT 内部接口）账号生效，若最终 user-agent 仍为浏览器
-	// （Chrome/Firefox/Safari/Edge 等），替换为后台配置的 Codex UA，避免 Cloudflare 触发 JS 质询。
-	s.overrideBrowserUserAgent(ctx, account, req)
 	if account.Type == AccountTypeOAuth {
-		enforceCodexIdentityHeaders(req.Header)
+		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}
 
 	if req.Header.Get("content-type") == "" {
@@ -4607,6 +4619,23 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	return !openAIStreamEventIsPreamble(eventType)
 }
 
+func openAIStreamFailedEventErrorCode(payload []byte) string {
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+	}
+	return code
+}
+
+func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
+	switch openAIStreamFailedEventErrorCode(payload) {
+	case "server_is_overloaded", "slow_down":
+		return true
+	default:
+		return false
+	}
+}
+
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
 	if isOpenAIContextWindowError(message, payload) {
 		return false
@@ -4617,10 +4646,7 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
 		return true
 	}
-	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
-	if code == "" {
-		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
-	}
+	code := openAIStreamFailedEventErrorCode(payload)
 	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
 	if errType == "" {
 		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
@@ -4726,6 +4752,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 		ResponseBody:           body,
 		ResponseHeaders:        headers,
 		RetryableOnSameAccount: openAIStreamFailedEventRetryableOnSameAccount(account, payload, message),
+		RequestScopedTransient: isOpenAIUpstreamCapacityShedEvent(payload),
 	}
 }
 
@@ -4740,7 +4767,13 @@ func openAIStreamFailureStatus(payload []byte, message string) int {
 }
 
 func openAIStreamFailedEventRetryableOnSameAccount(account *Account, payload []byte, message string) bool {
-	if account == nil || !account.IsPoolMode() {
+	if account == nil {
+		return false
+	}
+	if isOpenAIUpstreamCapacityShedEvent(payload) {
+		return true
+	}
+	if !account.IsPoolMode() {
 		return false
 	}
 	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
@@ -5085,11 +5118,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 
-	// 浏览器型 UA 兜底：仅 OAuth（ChatGPT 内部接口）账号生效，若最终 user-agent 仍为浏览器
-	// （Chrome/Firefox/Safari/Edge 等），替换为后台配置的 Codex UA，避免 Cloudflare 触发 JS 质询。
-	s.overrideBrowserUserAgent(ctx, account, req)
 	if account.Type == AccountTypeOAuth {
-		enforceCodexIdentityHeaders(req.Header)
+		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}
 
 	// Ensure required headers exist
@@ -5103,28 +5133,16 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	return req, nil
 }
 
-// overrideBrowserUserAgent 检查请求的最终 user-agent，若为浏览器 UA 则替换为后台配置的 Codex UA。
-// 用于规避 Cloudflare 对浏览器型 UA 在 ChatGPT 内部接口上的访问质询。
-// 影响范围严格限定：仅 OAuth（Codex/ChatGPT 内部接口）账号生效；API Key 等其他账号原样透传。
-// 仅在识别为浏览器（Mozilla/...）时改写，其他 CLI/工具 UA 不动。
-func (s *OpenAIGatewayService) overrideBrowserUserAgent(ctx context.Context, account *Account, req *http.Request) {
-	if req == nil || account == nil {
-		return
+// codexIdentityOverrideUA 返回账号级显式配置的出站 User-Agent。
+// ForceCodexCLI 开启时返回空串，交给规范身份收口使用默认 CLI UA。
+func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		return ""
 	}
-	if account.Type != AccountTypeOAuth {
-		return
+	if account == nil {
+		return ""
 	}
-	currentUA := req.Header.Get("user-agent")
-	if !openai.IsBrowserUserAgent(currentUA) {
-		return
-	}
-	codexUA := DefaultOpenAICodexUserAgent
-	if s != nil && s.settingService != nil {
-		if v := strings.TrimSpace(s.settingService.GetOpenAICodexUserAgent(ctx)); v != "" {
-			codexUA = v
-		}
-	}
-	req.Header.Set("user-agent", codexUA)
+	return account.GetOpenAIUserAgent()
 }
 
 func (s *OpenAIGatewayService) handleErrorResponse(
@@ -7026,6 +7044,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}()
 
 	if billingErr != nil {
+		usageLog.ActualCost = 0
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		return billingErr
 	}
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")

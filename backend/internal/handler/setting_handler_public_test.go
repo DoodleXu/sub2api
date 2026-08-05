@@ -82,13 +82,15 @@ func TestSettingHandler_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t 
 	require.True(t, resp.Data.ForceEmailOnThirdPartySignup)
 }
 
-func TestSettingHandler_GetPublicSettings_ExposesWebConsoleSettings(t *testing.T) {
+func TestSettingHandler_GetPublicSettings_ExposesWebConsoleAndTencentCaptchaSettings(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &settingHandlerPublicRepoStub{
 		values: map[string]string{
 			service.SettingKeyWebConsoleEnabled:         "true",
 			service.SettingKeyWebConsoleDefaultEndpoint: "https://api.example.com",
+			service.SettingKeyTencentCaptchaEnabled:     "true",
+			service.SettingKeyTencentCaptchaAppID:       "123456789",
 		},
 	}
 	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
@@ -106,12 +108,16 @@ func TestSettingHandler_GetPublicSettings_ExposesWebConsoleSettings(t *testing.T
 		Data struct {
 			WebConsoleEnabled         bool   `json:"web_console_enabled"`
 			WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
+			TencentCaptchaEnabled     bool   `json:"tencent_captcha_enabled"`
+			TencentCaptchaAppID       string `json:"tencent_captcha_app_id"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.True(t, resp.Data.WebConsoleEnabled)
 	require.Equal(t, "https://api.example.com", resp.Data.WebConsoleDefaultEndpoint)
+	require.True(t, resp.Data.TencentCaptchaEnabled)
+	require.Equal(t, "123456789", resp.Data.TencentCaptchaAppID)
 }
 
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {

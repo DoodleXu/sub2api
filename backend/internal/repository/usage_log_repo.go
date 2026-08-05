@@ -2710,18 +2710,20 @@ func (r *usageLogRepository) getUserSpendingRankingFromAggregates(ctx context.Co
 			SELECT
 				s.user_id,
 				COALESCE(u.email, '') as email,
+				COALESCE(u.username, '') as username,
 				COALESCE(SUM(s.actual_cost), 0) as actual_cost,
 				COALESCE(SUM(s.total_requests), 0) as requests,
 				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens
 			FROM %s s
 			LEFT JOIN users u ON u.id = s.user_id
 			WHERE %s
-			GROUP BY s.user_id, u.email
+			GROUP BY s.user_id, u.email, u.username
 		),
 		ranked AS (
 			SELECT
 				user_id,
 				email,
+				username,
 				actual_cost,
 				requests,
 				tokens,
@@ -2735,6 +2737,7 @@ func (r *usageLogRepository) getUserSpendingRankingFromAggregates(ctx context.Co
 		SELECT
 			user_id,
 			email,
+			username,
 			actual_cost,
 			requests,
 			tokens,
@@ -2773,18 +2776,20 @@ func (r *usageLogRepository) getUserSpendingRankingFromHourlyAggregates(ctx cont
 			SELECT
 				s.user_id,
 				COALESCE(u.email, '') as email,
+				COALESCE(u.username, '') as username,
 				COALESCE(SUM(s.actual_cost), 0) as actual_cost,
 				COALESCE(SUM(s.total_requests), 0) as requests,
 				COALESCE(SUM(s.input_tokens + s.output_tokens + s.cache_creation_tokens + s.cache_read_tokens), 0) as tokens
 			FROM usage_dashboard_hourly_user_stats s
 			LEFT JOIN users u ON u.id = s.user_id
 			WHERE s.bucket_start >= $1 AND s.bucket_start < $2
-			GROUP BY s.user_id, u.email
+			GROUP BY s.user_id, u.email, u.username
 		),
 		ranked AS (
 			SELECT
 				user_id,
 				email,
+				username,
 				actual_cost,
 				requests,
 				tokens,
@@ -2798,6 +2803,7 @@ func (r *usageLogRepository) getUserSpendingRankingFromHourlyAggregates(ctx cont
 		SELECT
 			user_id,
 			email,
+			username,
 			actual_cost,
 			requests,
 			tokens,
@@ -2894,7 +2900,7 @@ func scanUserSpendingRankingRows(rows *sql.Rows) ([]UserSpendingRankingItem, flo
 	totalTokens := int64(0)
 	for rows.Next() {
 		var row UserSpendingRankingItem
-		if err := rows.Scan(&row.UserID, &row.Email, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
+		if err := rows.Scan(&row.UserID, &row.Email, &row.Username, &row.ActualCost, &row.Requests, &row.Tokens, &totalActualCost, &totalRequests, &totalTokens); err != nil {
 			return nil, 0, 0, 0, err
 		}
 		ranking = append(ranking, row)

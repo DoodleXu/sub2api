@@ -808,10 +808,10 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, timezone.Location())
 	end := start.AddDate(0, 0, 1)
 
-	rows := sqlmock.NewRows([]string{"user_id", "email", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
-		AddRow(int64(2), "beta@example.com", 12.5, int64(9), int64(900), 40.0, int64(30), int64(2600)).
-		AddRow(int64(1), "alpha@example.com", 12.5, int64(8), int64(800), 40.0, int64(30), int64(2600)).
-		AddRow(int64(3), "gamma@example.com", 4.25, int64(5), int64(300), 40.0, int64(30), int64(2600))
+	rows := sqlmock.NewRows([]string{"user_id", "email", "username", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
+		AddRow(int64(2), "beta@example.com", "beta", 12.5, int64(9), int64(900), 40.0, int64(30), int64(2600)).
+		AddRow(int64(1), "alpha@example.com", "alpha", 12.5, int64(8), int64(800), 40.0, int64(30), int64(2600)).
+		AddRow(int64(3), "gamma@example.com", "", 4.25, int64(5), int64(300), 40.0, int64(30), int64(2600))
 
 	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
 		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
@@ -824,8 +824,8 @@ func TestUsageLogRepositoryGetUserSpendingRanking(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, &usagestats.UserSpendingRankingResponse{
 		Ranking: []usagestats.UserSpendingRankingItem{
-			{UserID: 2, Email: "beta@example.com", ActualCost: 12.5, Requests: 9, Tokens: 900},
-			{UserID: 1, Email: "alpha@example.com", ActualCost: 12.5, Requests: 8, Tokens: 800},
+			{UserID: 2, Email: "beta@example.com", Username: "beta", ActualCost: 12.5, Requests: 9, Tokens: 900},
+			{UserID: 1, Email: "alpha@example.com", Username: "alpha", ActualCost: 12.5, Requests: 8, Tokens: 800},
 			{UserID: 3, Email: "gamma@example.com", ActualCost: 4.25, Requests: 5, Tokens: 300},
 		},
 		TotalActualCost: 40.0,
@@ -848,8 +848,8 @@ func TestUsageLogRepositoryGetUserSpendingRankingUsesCoveredHourlyPrefixForCurre
 	start := time.Date(2026, 8, 1, 0, 0, 0, 0, timezone.Location())
 	coveredEnd := start.Add(36 * time.Hour)
 	requestedEnd := time.Date(2099, 8, 3, 0, 0, 0, 0, timezone.Location())
-	rows := sqlmock.NewRows([]string{"user_id", "email", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
-		AddRow(int64(7), "current@example.com", 3.5, int64(4), int64(500), 3.5, int64(4), int64(500))
+	rows := sqlmock.NewRows([]string{"user_id", "email", "username", "actual_cost", "requests", "tokens", "total_actual_cost", "total_requests", "total_tokens"}).
+		AddRow(int64(7), "current@example.com", "current", 3.5, int64(4), int64(500), 3.5, int64(4), int64(500))
 
 	mock.ExpectQuery("SELECT user_daily_aggregated_from, user_daily_last_aggregated_at FROM usage_dashboard_aggregation_watermark").
 		WillReturnRows(sqlmock.NewRows([]string{"user_daily_aggregated_from", "user_daily_last_aggregated_at"}).
