@@ -34,10 +34,14 @@ describe('AliyunCaptchaWidget', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     delete window.initAliyunCaptcha
     delete window.AliyunCaptchaConfig
     document.getElementById('aliyunCaptcha-window-popup')?.remove()
     document.getElementById('aliyunCaptcha-mask')?.remove()
+    document
+      .querySelectorAll('script[src*="aliyunCaptcha/AliyunCaptcha"]')
+      .forEach((script) => script.remove())
   })
 
   function mountWidget() {
@@ -56,6 +60,10 @@ describe('AliyunCaptchaWidget', () => {
     return popup
   }
 
+  function flushAsync(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 0))
+  }
+
   it('渲染可见验证按钮并以 popup 模式初始化，全局配置就位', async () => {
     const wrapper = mountWidget()
     await Promise.resolve()
@@ -68,6 +76,43 @@ describe('AliyunCaptchaWidget', () => {
     expect(initOptions!.mode).toBe('popup')
     expect(initOptions!.SceneId).toBe('scene-1')
     expect(initOptions!.language).toBe('cn')
+
+    wrapper.unmount()
+  })
+
+  it('脚本加载失败后再次 verify() 会重建 script 并完成验证', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    delete window.initAliyunCaptcha
+    const wrapper = mountWidget()
+    await Promise.resolve()
+
+    const firstScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="aliyunCaptcha/AliyunCaptcha"]'
+    )
+    expect(firstScript).not.toBeNull()
+    firstScript!.dispatchEvent(new Event('error'))
+    await flushAsync()
+
+    expect(document.querySelector('script[src*="aliyunCaptcha/AliyunCaptcha"]')).toBeNull()
+
+    const vm = wrapper.vm as unknown as { verify: () => Promise<string | null> }
+    const verification = vm.verify()
+    await Promise.resolve()
+
+    const secondScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="aliyunCaptcha/AliyunCaptcha"]'
+    )
+    expect(secondScript).not.toBeNull()
+    expect(secondScript).not.toBe(firstScript)
+    window.initAliyunCaptcha = vi.fn((options: CapturedInitOptions) => {
+      initOptions = options
+    }) as unknown as typeof window.initAliyunCaptcha
+    secondScript!.dispatchEvent(new Event('load'))
+    await flushAsync()
+    expect(wrapper.get('button').text()).toContain('auth.captchaVerifying')
+
+    initOptions!.captchaVerifyCallback('captcha-param-retry')
+    await expect(verification).resolves.toBe('captcha-param-retry')
 
     wrapper.unmount()
   })

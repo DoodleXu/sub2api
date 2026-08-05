@@ -112,12 +112,84 @@ const POPUP_ID = 'aliyunCaptcha-window-popup'
 const MASK_ID = 'aliyunCaptcha-mask'
 const POPUP_OPEN_TIMEOUT_MS = 8000
 const POPUP_WATCH_INTERVAL_MS = 300
+const SCRIPT_LOAD_TIMEOUT_MS = 15000
+const SCRIPT_STATUS_ATTR = 'data-sub2api-load-status'
+
+type AliyunCaptchaScriptStatus = 'loading' | 'loaded' | 'error'
 
 // captchaVerifyParam 是一次性参数：verified 后缓存于此，提交失败需 reset 后重新验证
 let cachedParam: string | null = null
 let pending: { resolve: (value: string | null) => void } | null = null
 let popupWatchTimer: number | null = null
 let readyPromise: Promise<void> | null = null
+
+function getExistingScript(): HTMLScriptElement | null {
+  return document.querySelector<HTMLScriptElement>('script[src*="aliyunCaptcha/AliyunCaptcha"]')
+}
+
+function getScriptStatus(script: HTMLScriptElement): AliyunCaptchaScriptStatus | null {
+  const status = script.getAttribute(SCRIPT_STATUS_ATTR)
+  return status === 'loading' || status === 'loaded' || status === 'error' ? status : null
+}
+
+function setScriptStatus(script: HTMLScriptElement, status: AliyunCaptchaScriptStatus): void {
+  script.setAttribute(SCRIPT_STATUS_ATTR, status)
+}
+
+function waitForScript(script: HTMLScriptElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.initAliyunCaptcha) {
+      setScriptStatus(script, 'loaded')
+      resolve()
+      return
+    }
+
+    const status = getScriptStatus(script)
+    if (status === 'loaded') {
+      reject(new Error('Aliyun captcha script not ready'))
+      return
+    }
+    if (status === 'error') {
+      script.remove()
+      reject(new Error('Failed to load Aliyun captcha script'))
+      return
+    }
+
+    let timeout: number | null = null
+    const cleanup = () => {
+      script.removeEventListener('load', handleLoad)
+      script.removeEventListener('error', handleError)
+      if (timeout !== null) {
+        window.clearTimeout(timeout)
+        timeout = null
+      }
+    }
+    const fail = (error: Error) => {
+      cleanup()
+      setScriptStatus(script, 'error')
+      script.remove()
+      reject(error)
+    }
+    const handleLoad = () => {
+      cleanup()
+      setScriptStatus(script, 'loaded')
+      if (window.initAliyunCaptcha) {
+        resolve()
+        return
+      }
+      reject(new Error('Aliyun captcha script not ready'))
+    }
+    const handleError = () => {
+      fail(new Error('Failed to load Aliyun captcha script'))
+    }
+
+    timeout = window.setTimeout(() => {
+      fail(new Error('Timed out loading Aliyun captcha script'))
+    }, SCRIPT_LOAD_TIMEOUT_MS)
+    script.addEventListener('load', handleLoad)
+    script.addEventListener('error', handleError)
+  })
+}
 
 const loadScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
@@ -129,22 +201,27 @@ const loadScript = (): Promise<void> => {
       return
     }
 
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      'script[src*="aliyunCaptcha/AliyunCaptcha"]'
-    )
+    const existingScript = getExistingScript()
     if (existingScript) {
-      existingScript.addEventListener('load', () => resolve())
-      existingScript.addEventListener('error', () =>
-        reject(new Error('Failed to load Aliyun captcha script'))
-      )
+      if (getScriptStatus(existingScript) === 'error') {
+        existingScript.remove()
+      } else {
+        waitForScript(existingScript).then(resolve, reject)
+        return
+      }
+    }
+
+    const freshScript = getExistingScript()
+    if (freshScript) {
+      waitForScript(freshScript).then(resolve, reject)
       return
     }
 
     const script = document.createElement('script')
     script.src = SCRIPT_SRC
     script.async = true
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Failed to load Aliyun captcha script'))
+    setScriptStatus(script, 'loading')
+    waitForScript(script).then(resolve, reject)
     document.head.appendChild(script)
   })
 }
