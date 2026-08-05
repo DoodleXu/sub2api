@@ -13,17 +13,20 @@ function seedSession(overrides: Partial<Record<string, string>> = {}): void {
   localStorage.setItem('auth_token', overrides.auth_token || 'old-access')
   localStorage.setItem('refresh_token', overrides.refresh_token || 'old-refresh')
   localStorage.setItem('token_expires_at', overrides.token_expires_at || String(Date.now() - 1))
-  localStorage.setItem('auth_user', JSON.stringify({ id: 7, email: 'admin@example.com' }))
+  localStorage.setItem(
+    'auth_user',
+    overrides.auth_user || JSON.stringify({ id: 7, email: 'admin@example.com' })
+  )
 }
 
-function refreshedResponse() {
+function refreshedResponse(overrides: Partial<Record<'access_token' | 'refresh_token', string>> = {}) {
   return {
     data: {
       code: 0,
       message: 'ok',
       data: {
-        access_token: 'new-access',
-        refresh_token: 'new-refresh',
+        access_token: overrides.access_token || 'new-access',
+        refresh_token: overrides.refresh_token || 'new-refresh',
         expires_in: 3600,
         token_type: 'Bearer'
       }
@@ -65,6 +68,56 @@ describe('refreshAuthTokens', () => {
     await expect(first).resolves.toMatchObject({ access_token: 'new-access' })
     await expect(second).resolves.toMatchObject({ refresh_token: 'new-refresh' })
     expect(localStorage.getItem('refresh_token')).toBe('new-refresh')
+  })
+
+  it('does not share an in-flight refresh across replaced sessions', async () => {
+    vi.useFakeTimers()
+    seedSession({
+      auth_token: 'user-a-access',
+      refresh_token: 'user-a-refresh',
+      auth_user: JSON.stringify({ id: 7, email: 'user-a@example.com' })
+    })
+    let rejectA!: (error: Error) => void
+    mockedPost.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectA = reject
+        })
+    )
+    const { refreshAuthTokens } = await import('@/api/tokenRefresh')
+
+    const first = refreshAuthTokens({ failedAccessToken: 'user-a-access' })
+    seedSession({
+      auth_token: 'user-b-access',
+      refresh_token: 'user-b-refresh',
+      token_expires_at: String(Date.now() - 1),
+      auth_user: JSON.stringify({ id: 8, email: 'user-b@example.com' })
+    })
+    let resolveB!: (value: ReturnType<typeof refreshedResponse>) => void
+    mockedPost.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveB = resolve
+        })
+    )
+
+    const second = refreshAuthTokens({ failedAccessToken: 'user-b-access' })
+
+    expect(mockedPost).toHaveBeenCalledTimes(2)
+    expect(mockedPost.mock.calls[0][1]).toEqual({ refresh_token: 'user-a-refresh' })
+    expect(mockedPost.mock.calls[1][1]).toEqual({ refresh_token: 'user-b-refresh' })
+    rejectA(new Error('user A refresh failed'))
+    resolveB(refreshedResponse({ access_token: 'user-b-new-access', refresh_token: 'user-b-new-refresh' }))
+    await vi.advanceTimersByTimeAsync(1_100)
+
+    await expect(first).rejects.toThrow('user A refresh failed')
+    await expect(second).resolves.toMatchObject({
+      access_token: 'user-b-new-access',
+      refresh_token: 'user-b-new-refresh'
+    })
+    expect(localStorage.getItem('auth_token')).toBe('user-b-new-access')
+    expect(localStorage.getItem('refresh_token')).toBe('user-b-new-refresh')
+    expect(localStorage.getItem('auth_user')).toBe(JSON.stringify({ id: 8, email: 'user-b@example.com' }))
   })
 
   it('adopts tokens refreshed by another tab after acquiring the Web Lock', async () => {

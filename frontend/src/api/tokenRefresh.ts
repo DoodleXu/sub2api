@@ -32,7 +32,7 @@ interface AuthSnapshot {
   userID: number | null
 }
 
-let inFlightRefresh: Promise<RefreshTokenResponse> | null = null
+const inFlightRefreshes = new Map<string, Promise<RefreshTokenResponse>>()
 
 function getStoredUserID(): number | null {
   const rawUser = localStorage.getItem(AUTH_USER_KEY)
@@ -60,6 +60,10 @@ function readAuthSnapshot(): AuthSnapshot {
     expiresAt: Number(localStorage.getItem(TOKEN_EXPIRES_AT_KEY)),
     userID: getStoredUserID()
   }
+}
+
+function authSnapshotKey(snapshot: AuthSnapshot): string {
+  return `${snapshot.userID ?? 'anonymous'}:${snapshot.refreshToken}`
 }
 
 function readStoredTokenPair(snapshot: AuthSnapshot): RefreshTokenResponse | null {
@@ -199,8 +203,10 @@ async function requestTokenPair(
   }
 }
 
-async function runRefresh(options: RefreshAuthTokensOptions): Promise<RefreshTokenResponse> {
-  const snapshot = readAuthSnapshot()
+async function runRefresh(
+  options: RefreshAuthTokensOptions,
+  snapshot: AuthSnapshot
+): Promise<RefreshTokenResponse> {
   const refresh = async (mayHaveUncoordinatedPeer = false): Promise<RefreshTokenResponse> => {
     const peerResult = readPeerRefreshResult(snapshot, options.failedAccessToken)
     if (peerResult) {
@@ -219,21 +225,25 @@ async function runRefresh(options: RefreshAuthTokensOptions): Promise<RefreshTok
 /**
  * Refresh and persist the browser session.
  *
- * Calls in the same document share one promise. Web Locks serialize refreshes across tabs, while
- * the token snapshot check adopts a peer's newly rotated token instead of logging the user out.
+ * Calls in the same document share one promise per session. Web Locks serialize refreshes across
+ * tabs, while the token snapshot check adopts a peer's newly rotated token instead of logging the
+ * user out.
  */
 export function refreshAuthTokens(
   options: RefreshAuthTokensOptions = {}
 ): Promise<RefreshTokenResponse> {
-  if (inFlightRefresh) {
-    return inFlightRefresh
+  const snapshot = readAuthSnapshot()
+  const key = authSnapshotKey(snapshot)
+  const existingRefresh = inFlightRefreshes.get(key)
+  if (existingRefresh) {
+    return existingRefresh
   }
 
-  const pending = runRefresh(options)
-  inFlightRefresh = pending
+  const pending = runRefresh(options, snapshot)
+  inFlightRefreshes.set(key, pending)
   const clearPending = (): void => {
-    if (inFlightRefresh === pending) {
-      inFlightRefresh = null
+    if (inFlightRefreshes.get(key) === pending) {
+      inFlightRefreshes.delete(key)
     }
   }
   void pending.then(clearPending, clearPending)
