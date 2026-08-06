@@ -146,6 +146,7 @@ function waitForScript(script: HTMLScriptElement): Promise<void> {
 
     const status = getScriptStatus(script)
     if (status === 'loaded') {
+      script.remove()
       reject(new Error('Aliyun captcha script not ready'))
       return
     }
@@ -171,13 +172,13 @@ function waitForScript(script: HTMLScriptElement): Promise<void> {
       reject(error)
     }
     const handleLoad = () => {
-      cleanup()
-      setScriptStatus(script, 'loaded')
       if (window.initAliyunCaptcha) {
+        cleanup()
+        setScriptStatus(script, 'loaded')
         resolve()
         return
       }
-      reject(new Error('Aliyun captcha script not ready'))
+      fail(new Error('Aliyun captcha script not ready'))
     }
     const handleError = () => {
       fail(new Error('Failed to load Aliyun captcha script'))

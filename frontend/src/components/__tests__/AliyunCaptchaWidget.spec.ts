@@ -117,6 +117,42 @@ describe('AliyunCaptchaWidget', () => {
     wrapper.unmount()
   })
 
+  it('脚本 load 后初始化函数尚未就绪时会清理并允许再次验证', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    delete window.initAliyunCaptcha
+    const wrapper = mountWidget()
+    await Promise.resolve()
+
+    const firstScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="aliyunCaptcha/AliyunCaptcha"]'
+    )
+    expect(firstScript).not.toBeNull()
+    firstScript!.dispatchEvent(new Event('load'))
+    await flushAsync()
+
+    expect(document.querySelector('script[src*="aliyunCaptcha/AliyunCaptcha"]')).toBeNull()
+
+    const vm = wrapper.vm as unknown as { verify: () => Promise<string | null> }
+    const verification = vm.verify()
+    await Promise.resolve()
+
+    const secondScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="aliyunCaptcha/AliyunCaptcha"]'
+    )
+    expect(secondScript).not.toBeNull()
+    expect(secondScript).not.toBe(firstScript)
+    window.initAliyunCaptcha = vi.fn((options: CapturedInitOptions) => {
+      initOptions = options
+    }) as unknown as typeof window.initAliyunCaptcha
+    secondScript!.dispatchEvent(new Event('load'))
+    await flushAsync()
+
+    initOptions!.captchaVerifyCallback('captcha-param-loaded-retry')
+    await expect(verification).resolves.toBe('captcha-param-loaded-retry')
+
+    wrapper.unmount()
+  })
+
   it('用户点击按钮进入验证中，验证完成后 emit verify 并置已通过', async () => {
     const wrapper = mountWidget()
     await Promise.resolve()
