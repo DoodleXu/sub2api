@@ -1712,11 +1712,10 @@ const handleBulkProbeUpstreamBilling = async () => {
   accountIDs.forEach(id => probingUpstreamBilling.add(id))
   try {
     const results = await adminAPI.accounts.probeUpstreamBillingBatch(accountIDs)
-    const patched = results.some(result => Boolean(result.snapshot))
     results.forEach(result => {
       if (result.snapshot) patchUpstreamBillingSnapshot(result.account_id, result.snapshot)
     })
-    if (patched) await refreshAccountsAfterUpstreamBillingProbe()
+    if (results.some(result => Boolean(result.snapshot))) markLocalAccountMutation()
     const failed = results.filter(result => result.error).length
     if (failed > 0) {
       appStore.showError(t('admin.accounts.upstreamBilling.batchPartial', { success: results.length - failed, failed }))
@@ -2050,17 +2049,14 @@ const patchAccountInList = (updatedAccount: Account) => {
 const patchUpstreamBillingSnapshot = (accountID: number, snapshot: UpstreamBillingProbeSnapshot) => {
   const account = accounts.value.find(item => item.id === accountID)
   if (!account) return
+  const syncedRate = snapshot.synced_rate_multiplier
   patchAccountInList({
     ...account,
+    ...(typeof syncedRate === 'number' && Number.isFinite(syncedRate)
+      ? { rate_multiplier: syncedRate }
+      : {}),
     extra: { ...account.extra, upstream_billing_probe: snapshot }
   })
-}
-const refreshAccountsAfterUpstreamBillingProbe = async () => {
-  try {
-    await load()
-  } catch (error) {
-    console.error('Failed to refresh accounts after upstream billing probe:', error)
-  }
 }
 const handleProbeUpstreamBilling = async (account: Account) => {
   if (probingUpstreamBilling.has(account.id)) return
@@ -2069,7 +2065,7 @@ const handleProbeUpstreamBilling = async (account: Account) => {
     const result = await adminAPI.accounts.probeUpstreamBilling(account.id)
     if (result.snapshot) {
       patchUpstreamBillingSnapshot(account.id, result.snapshot)
-      await refreshAccountsAfterUpstreamBillingProbe()
+      markLocalAccountMutation()
     }
   } catch (error) {
     console.error('Failed to probe upstream billing:', error)

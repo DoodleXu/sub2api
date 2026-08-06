@@ -8,13 +8,15 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getAllProxies,
-  getAllGroups
+  getAllGroups,
+  probeUpstreamBilling
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getAllProxies: vi.fn(),
-  getAllGroups: vi.fn()
+  getAllGroups: vi.fn(),
+  probeUpstreamBilling: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -23,6 +25,7 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
+      probeUpstreamBilling,
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       delete: vi.fn(),
       batchClearError: vi.fn(),
@@ -137,6 +140,7 @@ describe('admin AccountsView usage windows hint', () => {
     getBatchTodayStats.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
+    probeUpstreamBilling.mockReset()
 
     listAccounts.mockResolvedValue({
       items: [],
@@ -153,6 +157,7 @@ describe('admin AccountsView usage windows hint', () => {
     getBatchTodayStats.mockResolvedValue({ stats: {} })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
+    probeUpstreamBilling.mockResolvedValue({})
   })
 
   it('renders an explanatory tooltip next to the usage windows column header', async () => {
@@ -222,5 +227,50 @@ describe('admin AccountsView usage windows hint', () => {
     expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.065x')
     const indicator = wrapper.get('[data-testid="account-rate-sync-indicator"]')
     expect(indicator.attributes('title')).toBe('admin.accounts.upstreamBilling.syncedRateTooltip')
+  })
+
+  it('patches a synced multiplier in place without reloading the account list', async () => {
+    const account = {
+      id: 7,
+      name: 'sync-account',
+      platform: 'openai',
+      type: 'apikey',
+      status: 'active',
+      schedulable: true,
+      rate_multiplier: 0.1,
+      extra: {
+        upstream_billing_probe_enabled: true,
+        upstream_billing_rate_sync_enabled: true
+      },
+      created_at: '2026-07-13T00:00:00Z',
+      updated_at: '2026-07-13T00:00:00Z'
+    }
+    listAccounts.mockResolvedValueOnce({
+      items: [account],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    probeUpstreamBilling.mockResolvedValueOnce({
+      account_id: account.id,
+      snapshot: {
+        status: 'ok',
+        last_attempt_at: '2026-07-13T00:30:00Z',
+        next_probe_at: '2026-07-13T01:00:00Z',
+        synced_rate_multiplier: 0.06
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.10x')
+
+    await (wrapper.vm as any).handleProbeUpstreamBilling(account)
+    await flushPromises()
+
+    expect(probeUpstreamBilling).toHaveBeenCalledWith(account.id)
+    expect(listAccounts).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="account-rate"]').text()).toBe('0.06x')
   })
 })
