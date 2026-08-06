@@ -28,6 +28,30 @@ git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
 
+## 2026-08-05 Fork 定制：个人设置绑定 GitHub/Google OAuth
+
+- 个人设置的登录方式绑定新增 GitHub、Google 两项；仅在对应 OAuth 配置启用时展示绑定操作，并复用现有身份摘要、解绑资格判断、品牌图标和 OAuth 绑定入口。
+- 后端为 GitHub/Google 增加 `/auth/oauth/{provider}/bind/start` 入口，沿用现有 state、pending browser session、签名绑定目标 cookie 和 pending OAuth exchange；OAuth 回调只创建绑定当前用户的 pending session，不把 OAuth token 覆盖当前登录会话。
+- 用户绑定成功后，pending exchange 将第三方身份写入当前用户的 `auth_identity`，前端提示绑定成功并返回原个人设置路径；绑定流程不会采纳第三方头像或昵称覆盖现有资料。
+- OAuth 回调在 Provider 拒绝、参数缺失或其它失败重定向前清理 Email OAuth、pending session 和 browser session Cookie；登出流程也统一清理 Email OAuth 状态，避免旧绑定上下文残留。
+- 个人资料 API 补充 GitHub/Google 的 `auth_bindings`、`identity_bindings` 和 bound 字段；中英文 Profile 文案与回归测试同步更新。该能力属于 fork 定制，后续同步上游时需保留绑定入口及当前会话不切换语义。
+
+### 本次验证
+
+- 后端 `go test ./internal/service ./internal/handler ./internal/server/routes -count=1` 通过。
+- 前端 `pnpm typecheck`、OAuth/Profile 定向 Vitest（4 个文件、26 个用例）和 `pnpm build` 通过；`git diff --check` 通过。
+
+## 2026-08-05 Fork 定制：账号倍率探测局部更新
+
+- 管理端账号列表点击上游倍率探测后，沿用后端返回的 `synced_rate_multiplier` 直接更新当前账号行的倍率和探测快照，不再重新加载整个账号列表；批量探测同样逐行合并，避免列表闪烁并保留当前分页、筛选和滚动位置。
+- 前端回归覆盖探测成功后的倍率局部更新与列表接口调用次数；后续同步上游时需保留该局部更新行为。
+
+## 2026-08-05 全面审核修复
+
+- `REFUND_PENDING` 订单不再允许通过普通退款接口或并发陈旧计划再次发起网关退款，必须走 pending 状态查询确认；新增 pending 重入回归测试，保留当前 pending 金额展示与确认后的累计落账语义。
+- 阿里云验证码脚本在 load 事件后初始化函数未就绪时会清理失败脚本并允许下一次验证重建；OAuth token 校验失败时保留当前标签页的 pending 注册会话，跨标签页失效通知仍正常发送。
+- API contract fixture 同步 GitHub/Google 身份绑定字段，后端普通测试、`unit` 全量测试和前端全量门禁覆盖本次修复。
+
 本次 `v0.1.171` 合并说明：
 
 - 管理端退款接口发生破坏性变更：余额不足等需要管理员确认的场景不再自动按可用余额部分扣减，改为返回 `require_force`，管理端必须在明确确认后带 `force=true` 重试；订单页保持 fork 的 TOTP step-up、订阅天数抵扣和退款预览流程，并将该响应呈现为可继续操作的警告。
