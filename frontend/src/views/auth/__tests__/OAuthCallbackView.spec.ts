@@ -155,6 +155,21 @@ describe('OAuthCallbackView', () => {
     expect(exchangePendingOAuthCompletionMock).not.toHaveBeenCalled()
   })
 
+  it('finishes email oauth binding without replacing the current session', async () => {
+    routeState.path = '/auth/oauth/callback'
+    exchangePendingOAuthCompletionMock.mockResolvedValue({
+      auth_result: 'bind',
+      redirect: '/profile',
+    })
+
+    mount(OAuthCallbackView)
+    await vi.dynamicImportSettled()
+
+    expect(showSuccessMock).toHaveBeenCalledWith('profile.authBindings.bindSuccess')
+    expect(routerReplaceMock).toHaveBeenCalledWith('/profile')
+    expect(setTokenMock).not.toHaveBeenCalled()
+  })
+
   it('submits stored affiliate code when completing invited email oauth registration', async () => {
     routeState.path = '/auth/oauth/callback'
     exchangePendingOAuthCompletionMock.mockResolvedValue({

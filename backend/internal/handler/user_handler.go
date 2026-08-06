@@ -95,6 +95,8 @@ type userProfileResponse struct {
 	AuthBindings      map[string]service.UserIdentitySummary `json:"auth_bindings"`
 	IdentityBindings  map[string]service.UserIdentitySummary `json:"identity_bindings"`
 	EmailBound        bool                                   `json:"email_bound"`
+	GitHubBound       bool                                   `json:"github_bound"`
+	GoogleBound       bool                                   `json:"google_bound"`
 	LinuxDoBound      bool                                   `json:"linuxdo_bound"`
 	OIDCBound         bool                                   `json:"oidc_bound"`
 	WeChatBound       bool                                   `json:"wechat_bound"`
@@ -557,6 +559,8 @@ func userProfileResponseFromService(user *service.User, identities service.UserI
 		AuthBindings:      bindings,
 		IdentityBindings:  bindings,
 		EmailBound:        identities.Email.Bound,
+		GitHubBound:       identities.GitHub.Bound,
+		GoogleBound:       identities.Google.Bound,
 		LinuxDoBound:      identities.LinuxDo.Bound,
 		OIDCBound:         identities.OIDC.Bound,
 		WeChatBound:       identities.WeChat.Bound,
@@ -567,6 +571,8 @@ func userProfileResponseFromService(user *service.User, identities service.UserI
 func userProfileBindingMap(identities service.UserIdentitySummarySet) map[string]service.UserIdentitySummary {
 	return map[string]service.UserIdentitySummary{
 		"email":    identities.Email,
+		"github":   identities.GitHub,
+		"google":   identities.Google,
 		"linuxdo":  identities.LinuxDo,
 		"oidc":     identities.OIDC,
 		"wechat":   identities.WeChat,
@@ -618,8 +624,8 @@ func inferUserProfileSources(user *service.User, identities service.UserIdentity
 }
 
 func thirdPartyIdentityProviders(identities service.UserIdentitySummarySet) []service.UserIdentitySummary {
-	out := make([]service.UserIdentitySummary, 0, 3)
-	for _, summary := range []service.UserIdentitySummary{identities.LinuxDo, identities.OIDC, identities.WeChat, identities.DingTalk} {
+	out := make([]service.UserIdentitySummary, 0, 6)
+	for _, summary := range []service.UserIdentitySummary{identities.GitHub, identities.Google, identities.LinuxDo, identities.OIDC, identities.WeChat, identities.DingTalk} {
 		if summary.Bound {
 			out = append(out, summary)
 		}

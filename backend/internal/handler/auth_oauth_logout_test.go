@@ -34,6 +34,12 @@ func TestLogoutClearsOAuthStateCookiesAndConsumesPendingSession(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
 	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("logout-browser-session-key")})
 	req.AddCookie(&http.Cookie{Name: oauthBindAccessTokenCookieName, Value: "bind-access-token"})
+	req.AddCookie(&http.Cookie{Name: emailOAuthStateCookieName, Value: encodeCookieValue("email-state")})
+	req.AddCookie(&http.Cookie{Name: emailOAuthRedirectCookie, Value: encodeCookieValue("/profile")})
+	req.AddCookie(&http.Cookie{Name: emailOAuthProviderCookie, Value: encodeCookieValue("github")})
+	req.AddCookie(&http.Cookie{Name: emailOAuthIntentCookieName, Value: encodeCookieValue(oauthIntentBindCurrentUser)})
+	req.AddCookie(&http.Cookie{Name: emailOAuthBindUserCookieName, Value: encodeCookieValue("signed-bind-user")})
+	req.AddCookie(&http.Cookie{Name: emailOAuthAffiliateCookie, Value: encodeCookieValue("AFF123")})
 	req.AddCookie(&http.Cookie{Name: linuxDoOAuthStateCookieName, Value: encodeCookieValue("linuxdo-state")})
 	req.AddCookie(&http.Cookie{Name: oidcOAuthStateCookieName, Value: encodeCookieValue("oidc-state")})
 	req.AddCookie(&http.Cookie{Name: wechatOAuthStateCookieName, Value: encodeCookieValue("wechat-state")})
@@ -49,6 +55,12 @@ func TestLogoutClearsOAuthStateCookiesAndConsumesPendingSession(t *testing.T) {
 		oauthPendingSessionCookieName,
 		oauthPendingBrowserCookieName,
 		oauthBindAccessTokenCookieName,
+		emailOAuthStateCookieName,
+		emailOAuthRedirectCookie,
+		emailOAuthProviderCookie,
+		emailOAuthIntentCookieName,
+		emailOAuthBindUserCookieName,
+		emailOAuthAffiliateCookie,
 		linuxDoOAuthStateCookieName,
 		oidcOAuthStateCookieName,
 		wechatOAuthStateCookieName,

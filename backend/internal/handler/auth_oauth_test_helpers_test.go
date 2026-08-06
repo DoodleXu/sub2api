@@ -36,8 +36,8 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 func requireCookieCleared(t *testing.T, recorder *httptest.ResponseRecorder, name string) {
 	t.Helper()
 	cookie := findCookie(recorder.Result().Cookies(), name)
-	require.NotNil(t, cookie)
-	require.Equal(t, -1, cookie.MaxAge)
+	require.NotNil(t, cookie, name)
+	require.Equal(t, -1, cookie.MaxAge, name)
 }
 
 func decodeCookieValueForTest(t *testing.T, value string) string {

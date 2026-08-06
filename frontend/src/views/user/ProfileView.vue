@@ -8,6 +8,8 @@
         :user="user"
         :linuxdo-enabled="linuxdoOAuthEnabled"
         :dingtalk-enabled="dingtalkOAuthEnabled"
+        :github-enabled="githubOAuthEnabled"
+        :google-enabled="googleOAuthEnabled"
         :oidc-enabled="oidcOAuthEnabled"
         :oidc-provider-name="oidcOAuthProviderName"
         :wechat-enabled="wechatOAuthEnabled"
@@ -76,6 +78,8 @@ const balanceLowNotifyEnabled = ref(false)
 const systemDefaultThreshold = ref(0)
 const linuxdoOAuthEnabled = ref(false)
 const dingtalkOAuthEnabled = ref(false)
+const githubOAuthEnabled = ref(false)
+const googleOAuthEnabled = ref(false)
 const wechatOAuthEnabled = ref(false)
 const wechatOAuthOpenEnabled = ref<boolean | undefined>(undefined)
 const wechatOAuthMPEnabled = ref<boolean | undefined>(undefined)
@@ -98,6 +102,8 @@ onMounted(async () => {
       systemDefaultThreshold.value = settings.balance_low_notify_threshold ?? 0
       linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled ?? false
       dingtalkOAuthEnabled.value = settings.dingtalk_oauth_enabled ?? false
+      githubOAuthEnabled.value = settings.github_oauth_enabled ?? false
+      googleOAuthEnabled.value = settings.google_oauth_enabled ?? false
       wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
       wechatOAuthOpenEnabled.value = typeof settings.wechat_oauth_open_enabled === 'boolean'
         ? settings.wechat_oauth_open_enabled

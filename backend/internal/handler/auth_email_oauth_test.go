@@ -133,6 +133,155 @@ func TestEmailOAuthCallbackExistingEmailLogsInWhenInvitationEnabled(t *testing.T
 	_ = user
 }
 
+func TestEmailOAuthCallbackBindingBindsCurrentUserDuringPendingExchange(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandler(t, false)
+	handler.cfg = &config.Config{JWT: config.JWTConfig{Secret: "test-secret"}}
+	ctx := context.Background()
+
+	user, err := client.User.Create().
+		SetEmail("binding@example.com").
+		SetUsername("binding-user").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	bindCookieValue, err := buildOAuthBindUserCookieValue(user.ID, "test-secret")
+	require.NoError(t, err)
+
+	callbackRecorder := httptest.NewRecorder()
+	callbackCtx, _ := gin.CreateTestContext(callbackRecorder)
+	callbackReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/callback", nil)
+	callbackReq.AddCookie(&http.Cookie{Name: emailOAuthIntentCookieName, Value: encodeCookieValue(oauthIntentBindCurrentUser)})
+	callbackReq.AddCookie(&http.Cookie{Name: emailOAuthBindUserCookieName, Value: encodeCookieValue(bindCookieValue)})
+	callbackReq.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("binding-browser-key")})
+	callbackCtx.Request = callbackReq
+
+	handler.emailOAuthCallbackWithProfile(callbackCtx, "github", config.EmailOAuthProviderConfig{
+		FrontendRedirectURL: "/auth/oauth/callback",
+	}, "/auth/oauth/callback", "/profile", &emailOAuthProfile{
+		Subject:       "github-binding-user",
+		Email:         "binding@example.com",
+		EmailVerified: true,
+		Username:      "binding-user",
+		DisplayName:   "Binding User",
+	})
+
+	require.Equal(t, http.StatusFound, callbackRecorder.Code)
+	sessionCookie := findSetCookieValue(callbackRecorder.Result().Cookies(), oauthPendingSessionCookieName)
+	require.NotEmpty(t, sessionCookie)
+
+	exchangeRecorder := httptest.NewRecorder()
+	exchangeCtx, _ := gin.CreateTestContext(exchangeRecorder)
+	exchangeReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/pending/exchange", nil)
+	exchangeReq.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: sessionCookie})
+	exchangeReq.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("binding-browser-key")})
+	exchangeCtx.Request = exchangeReq
+
+	handler.ExchangePendingOAuthCompletion(exchangeCtx)
+
+	require.Equal(t, http.StatusOK, exchangeRecorder.Code)
+	data := decodeJSONResponseData(t, exchangeRecorder)
+	require.Equal(t, "bind", data["auth_result"])
+	require.Equal(t, "/profile", data["redirect"])
+
+	identity, err := client.AuthIdentity.Query().
+		Where(
+			authidentity.ProviderTypeEQ("github"),
+			authidentity.ProviderSubjectEQ("github-binding-user"),
+		).Only(ctx)
+	require.NoError(t, err)
+	require.Equal(t, user.ID, identity.UserID)
+}
+
+func TestEmailOAuthCallbackProviderErrorClearsOAuthFlowCookies(t *testing.T) {
+	handler, _ := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		settingValues: map[string]string{
+			service.SettingKeyGitHubOAuthEnabled:             "true",
+			service.SettingKeyGitHubOAuthClientID:            "github-client",
+			service.SettingKeyGitHubOAuthClientSecret:        "github-secret",
+			service.SettingKeyGitHubOAuthRedirectURL:         "https://app.example/api/v1/auth/oauth/github/callback",
+			service.SettingKeyGitHubOAuthFrontendRedirectURL: "/auth/oauth/callback",
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/callback?error=access_denied&error_description=cancelled", nil)
+	for _, cookie := range []*http.Cookie{
+		{Name: emailOAuthStateCookieName, Value: encodeCookieValue("state")},
+		{Name: emailOAuthRedirectCookie, Value: encodeCookieValue("/profile")},
+		{Name: emailOAuthProviderCookie, Value: encodeCookieValue("github")},
+		{Name: emailOAuthIntentCookieName, Value: encodeCookieValue(oauthIntentBindCurrentUser)},
+		{Name: emailOAuthBindUserCookieName, Value: encodeCookieValue("signed-bind-user")},
+		{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("browser-key")},
+	} {
+		req.AddCookie(cookie)
+	}
+	ctx.Request = req
+
+	handler.GitHubOAuthCallback(ctx)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "provider_error", "access_denied")
+	for _, name := range []string{
+		emailOAuthStateCookieName,
+		emailOAuthRedirectCookie,
+		emailOAuthProviderCookie,
+		emailOAuthIntentCookieName,
+		emailOAuthBindUserCookieName,
+		oauthPendingSessionCookieName,
+		oauthPendingBrowserCookieName,
+	} {
+		requireCookieCleared(t, recorder, name)
+	}
+}
+
+func TestEmailOAuthCallbackMissingParamsClearsOAuthFlowCookies(t *testing.T) {
+	handler, _ := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		settingValues: map[string]string{
+			service.SettingKeyGoogleOAuthEnabled:             "true",
+			service.SettingKeyGoogleOAuthClientID:            "google-client",
+			service.SettingKeyGoogleOAuthClientSecret:        "google-secret",
+			service.SettingKeyGoogleOAuthRedirectURL:         "https://app.example/api/v1/auth/oauth/google/callback",
+			service.SettingKeyGoogleOAuthFrontendRedirectURL: "/auth/oauth/callback",
+		},
+	})
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/google/callback", nil)
+	for _, cookie := range []*http.Cookie{
+		{Name: emailOAuthStateCookieName, Value: encodeCookieValue("state")},
+		{Name: emailOAuthRedirectCookie, Value: encodeCookieValue("/profile")},
+		{Name: emailOAuthProviderCookie, Value: encodeCookieValue("google")},
+		{Name: emailOAuthIntentCookieName, Value: encodeCookieValue(oauthIntentBindCurrentUser)},
+		{Name: emailOAuthBindUserCookieName, Value: encodeCookieValue("signed-bind-user")},
+		{Name: oauthPendingSessionCookieName, Value: encodeCookieValue("pending-session")},
+		{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue("browser-key")},
+	} {
+		req.AddCookie(cookie)
+	}
+	ctx.Request = req
+
+	handler.GoogleOAuthCallback(ctx)
+
+	require.Equal(t, http.StatusFound, recorder.Code)
+	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "missing_params", "missing code/state")
+	for _, name := range []string{
+		emailOAuthStateCookieName,
+		emailOAuthRedirectCookie,
+		emailOAuthProviderCookie,
+		emailOAuthIntentCookieName,
+		emailOAuthBindUserCookieName,
+		oauthPendingSessionCookieName,
+		oauthPendingBrowserCookieName,
+	} {
+		requireCookieCleared(t, recorder, name)
+	}
+}
+
 func TestEmailOAuthCallbackCreatesPasswordRegistrationSessionForNewEmail(t *testing.T) {
 	affiliateRepo := newOAuthEmailAffiliateRepoStub(map[string]int64{"AFF123": 1001})
 	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{

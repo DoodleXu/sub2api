@@ -1,6 +1,8 @@
 <template>
   <ProfileIdentityBindingsSection
     :user="user"
+    :github-enabled="githubEnabled"
+    :google-enabled="googleEnabled"
     :linuxdo-enabled="linuxdoEnabled"
     :dingtalk-enabled="dingtalkEnabled"
     :oidc-enabled="oidcEnabled"
@@ -18,6 +20,8 @@ import type { User } from '@/types'
 withDefaults(
   defineProps<{
     user: User | null
+    githubEnabled?: boolean
+    googleEnabled?: boolean
     linuxdoEnabled?: boolean
     dingtalkEnabled?: boolean
     oidcEnabled?: boolean
@@ -31,6 +35,8 @@ withDefaults(
     dingtalkEnabled: false,
     oidcEnabled: false,
     oidcProviderName: 'OIDC',
+    githubEnabled: false,
+    googleEnabled: false,
     wechatEnabled: false,
     wechatOpenEnabled: undefined,
     wechatMpEnabled: undefined

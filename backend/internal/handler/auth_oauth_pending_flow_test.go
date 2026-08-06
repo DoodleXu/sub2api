@@ -64,6 +64,25 @@ func TestApplySuggestedProfileToCompletionResponseKeepsExistingPayloadValues(t *
 	require.Equal(t, true, payload["adoption_required"])
 }
 
+func TestApplySuggestedProfileToCompletionResponseRespectsDisabledAdoption(t *testing.T) {
+	payload := map[string]any{
+		"auth_result":       "bind",
+		"adoption_required": false,
+	}
+	upstream := map[string]any{
+		"suggested_display_name": "Alice",
+		"suggested_avatar_url":   "https://cdn.example/alice.png",
+	}
+
+	applySuggestedProfileToCompletionResponse(payload, upstream)
+
+	require.Equal(t, false, payload["adoption_required"])
+	_, hasDisplayName := payload["suggested_display_name"]
+	_, hasAvatar := payload["suggested_avatar_url"]
+	require.False(t, hasDisplayName)
+	require.False(t, hasAvatar)
+}
+
 func TestSetOAuthPendingSessionCookieUsesProviderCompletionPathPrefix(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)

@@ -94,6 +94,12 @@ func RegisterAuthRoutes(
 			}),
 			h.Auth.CompleteGitHubOAuthRegistration,
 		)
+		auth.GET("/oauth/github/bind/start", func(c *gin.Context) {
+			query := c.Request.URL.Query()
+			query.Set("intent", "bind_current_user")
+			c.Request.URL.RawQuery = query.Encode()
+			h.Auth.GitHubOAuthStart(c)
+		})
 		auth.GET("/oauth/google/start", h.Auth.GoogleOAuthStart)
 		auth.GET("/oauth/google/callback", oauthCallbackGlobalRateLimit, oauthCallbackRateLimit, h.Auth.GoogleOAuthCallback)
 		auth.POST("/oauth/google/start", rateLimiter.LimitWithOptions("oauth-google-start", 20, time.Minute, middleware.RateLimitOptions{
@@ -105,6 +111,12 @@ func RegisterAuthRoutes(
 			}),
 			h.Auth.CompleteGoogleOAuthRegistration,
 		)
+		auth.GET("/oauth/google/bind/start", func(c *gin.Context) {
+			query := c.Request.URL.Query()
+			query.Set("intent", "bind_current_user")
+			c.Request.URL.RawQuery = query.Encode()
+			h.Auth.GoogleOAuthStart(c)
+		})
 		auth.GET("/oauth/linuxdo/bind/start", func(c *gin.Context) {
 			query := c.Request.URL.Query()
 			query.Set("intent", "bind_current_user")

@@ -21,13 +21,15 @@ import (
 )
 
 const (
-	emailOAuthCookiePath      = "/api/v1/auth/oauth"
-	emailOAuthStateCookieName = "email_oauth_state"
-	emailOAuthRedirectCookie  = "email_oauth_redirect"
-	emailOAuthProviderCookie  = "email_oauth_provider"
-	emailOAuthAffiliateCookie = "email_oauth_affiliate"
-	emailOAuthCookieMaxAgeSec = 10 * 60
-	emailOAuthDefaultRedirect = "/dashboard"
+	emailOAuthCookiePath         = "/api/v1/auth/oauth"
+	emailOAuthStateCookieName    = "email_oauth_state"
+	emailOAuthRedirectCookie     = "email_oauth_redirect"
+	emailOAuthProviderCookie     = "email_oauth_provider"
+	emailOAuthIntentCookieName   = "email_oauth_intent"
+	emailOAuthBindUserCookieName = "email_oauth_bind_user"
+	emailOAuthAffiliateCookie    = "email_oauth_affiliate"
+	emailOAuthCookieMaxAgeSec    = 10 * 60
+	emailOAuthDefaultRedirect    = "/dashboard"
 )
 
 type emailOAuthTokenResponse struct {
@@ -81,6 +83,25 @@ func (h *AuthHandler) emailOAuthStart(c *gin.Context, provider string) {
 	emailOAuthSetCookie(c, emailOAuthStateCookieName, encodeCookieValue(state), secureCookie)
 	emailOAuthSetCookie(c, emailOAuthRedirectCookie, encodeCookieValue(redirectTo), secureCookie)
 	emailOAuthSetCookie(c, emailOAuthProviderCookie, encodeCookieValue(provider), secureCookie)
+	intent := normalizeOAuthIntent(c.Query("intent"))
+	emailOAuthSetCookie(c, emailOAuthIntentCookieName, encodeCookieValue(intent), secureCookie)
+	if intent == oauthIntentBindCurrentUser {
+		browserSessionKey, err := generateOAuthPendingBrowserSession()
+		if err != nil {
+			response.ErrorFrom(c, infraerrors.InternalServer("OAUTH_BROWSER_SESSION_GEN_FAILED", "failed to generate oauth browser session").WithCause(err))
+			return
+		}
+		setOAuthPendingBrowserCookie(c, browserSessionKey, secureCookie)
+		clearOAuthPendingSessionCookie(c, secureCookie)
+		bindCookieValue, err := h.buildOAuthBindUserCookieFromContext(c)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		emailOAuthSetCookie(c, emailOAuthBindUserCookieName, encodeCookieValue(bindCookieValue), secureCookie)
+	} else {
+		emailOAuthClearCookie(c, emailOAuthBindUserCookieName, secureCookie)
+	}
 	captureOAuthPromoCode(c, secureCookie)
 	if affCode := strings.TrimSpace(firstNonEmpty(c.Query("aff_code"), c.Query("aff"))); affCode != "" {
 		emailOAuthSetCookie(c, emailOAuthAffiliateCookie, encodeCookieValue(affCode), secureCookie)
@@ -97,8 +118,11 @@ func (h *AuthHandler) emailOAuthStart(c *gin.Context, provider string) {
 }
 
 func (h *AuthHandler) emailOAuthCallback(c *gin.Context, provider string) {
+	secureCookie := isRequestHTTPS(c)
+
 	cfg, cfgErr := h.getEmailOAuthConfig(c.Request.Context(), provider)
 	if cfgErr != nil {
+		clearEmailOAuthFailedCallbackCookies(c, secureCookie)
 		response.ErrorFrom(c, cfgErr)
 		return
 	}
@@ -107,32 +131,23 @@ func (h *AuthHandler) emailOAuthCallback(c *gin.Context, provider string) {
 		frontendCallback = "/auth/oauth/callback"
 	}
 	if providerErr := strings.TrimSpace(c.Query("error")); providerErr != "" {
-		redirectOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
+		redirectEmailOAuthError(c, frontendCallback, "provider_error", providerErr, c.Query("error_description"))
 		return
 	}
 	code := strings.TrimSpace(c.Query("code"))
 	state := strings.TrimSpace(c.Query("state"))
 	if code == "" || state == "" {
-		redirectOAuthError(c, frontendCallback, "missing_params", "missing code/state", "")
+		redirectEmailOAuthError(c, frontendCallback, "missing_params", "missing code/state", "")
 		return
 	}
-
-	secureCookie := isRequestHTTPS(c)
-	defer func() {
-		emailOAuthClearCookie(c, emailOAuthStateCookieName, secureCookie)
-		emailOAuthClearCookie(c, emailOAuthRedirectCookie, secureCookie)
-		emailOAuthClearCookie(c, emailOAuthProviderCookie, secureCookie)
-		emailOAuthClearCookie(c, emailOAuthAffiliateCookie, secureCookie)
-		clearOAuthPromoCodeCookie(c, secureCookie)
-	}()
 	expectedState, err := readCookieDecoded(c, emailOAuthStateCookieName)
 	if err != nil || expectedState == "" || expectedState != state {
-		redirectOAuthError(c, frontendCallback, "invalid_state", "invalid oauth state", "")
+		redirectEmailOAuthError(c, frontendCallback, "invalid_state", "invalid oauth state", "")
 		return
 	}
 	expectedProvider, _ := readCookieDecoded(c, emailOAuthProviderCookie)
 	if !strings.EqualFold(strings.TrimSpace(expectedProvider), provider) {
-		redirectOAuthError(c, frontendCallback, "invalid_state", "invalid oauth provider", "")
+		redirectEmailOAuthError(c, frontendCallback, "invalid_state", "invalid oauth provider", "")
 		return
 	}
 	redirectTo, _ := readCookieDecoded(c, emailOAuthRedirectCookie)
@@ -143,12 +158,12 @@ func (h *AuthHandler) emailOAuthCallback(c *gin.Context, provider string) {
 
 	tokenResp, err := exchangeEmailOAuthCode(c.Request.Context(), cfg, code)
 	if err != nil {
-		redirectOAuthError(c, frontendCallback, "token_exchange_failed", "failed to exchange oauth code", singleLine(err.Error()))
+		redirectEmailOAuthError(c, frontendCallback, "token_exchange_failed", "failed to exchange oauth code", singleLine(err.Error()))
 		return
 	}
 	profile, err := fetchEmailOAuthProfile(c.Request.Context(), provider, cfg, tokenResp)
 	if err != nil {
-		redirectOAuthError(c, frontendCallback, "userinfo_failed", "failed to fetch verified email", singleLine(err.Error()))
+		redirectEmailOAuthError(c, frontendCallback, "userinfo_failed", "failed to fetch verified email", singleLine(err.Error()))
 		return
 	}
 	h.emailOAuthCallbackWithProfile(c, provider, cfg, frontendCallback, redirectTo, profile)
@@ -173,15 +188,65 @@ func (h *AuthHandler) emailOAuthCallbackWithProfile(
 		AvatarURL:        profile.AvatarURL,
 		UpstreamMetadata: profile.Metadata,
 	}
+	intent, _ := readCookieDecoded(c, emailOAuthIntentCookieName)
+	intent = normalizeOAuthIntent(intent)
+	if intent == oauthIntentBindCurrentUser {
+		targetUserID, err := h.readOAuthBindUserIDFromCookie(c, emailOAuthBindUserCookieName)
+		if err != nil {
+			redirectEmailOAuthError(c, frontendCallback, "invalid_state", "invalid oauth bind target", "")
+			return
+		}
+		browserSessionKey, _ := readOAuthPendingBrowserCookie(c)
+		if strings.TrimSpace(browserSessionKey) == "" {
+			redirectEmailOAuthError(c, frontendCallback, "missing_browser_session", "missing oauth browser session", "")
+			return
+		}
+		upstreamClaims := map[string]any{
+			"email":                  profile.Email,
+			"email_verified":         profile.EmailVerified,
+			"username":               profile.Username,
+			"provider":               provider,
+			"provider_key":           provider,
+			"provider_subject":       profile.Subject,
+			"suggested_display_name": profile.DisplayName,
+			"suggested_avatar_url":   profile.AvatarURL,
+		}
+		for key, value := range profile.Metadata {
+			if _, exists := upstreamClaims[key]; !exists {
+				upstreamClaims[key] = value
+			}
+		}
+		if err := h.createOAuthPendingSession(c, oauthPendingSessionPayload{
+			Intent:                 oauthIntentBindCurrentUser,
+			Identity:               service.PendingAuthIdentityKey{ProviderType: provider, ProviderKey: provider, ProviderSubject: profile.Subject},
+			TargetUserID:           &targetUserID,
+			ResolvedEmail:          profile.Email,
+			RedirectTo:             redirectTo,
+			BrowserSessionKey:      browserSessionKey,
+			UpstreamIdentityClaims: upstreamClaims,
+			CompletionResponse: map[string]any{
+				"auth_result":       "bind",
+				"adoption_required": false,
+				"redirect":          redirectTo,
+			},
+		}); err != nil {
+			redirectEmailOAuthError(c, frontendCallback, "session_error", "failed to continue oauth bind", "")
+			return
+		}
+		clearEmailOAuthCookies(c, isRequestHTTPS(c))
+		redirectToFrontendCallback(c, frontendCallback)
+		return
+	}
 	affiliateCode := h.emailOAuthAffiliateCode(c)
 	if shouldCreate, err := h.emailOAuthShouldCreatePendingRegistration(c.Request.Context(), input); err != nil {
-		redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
+		redirectEmailOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
 		return
 	} else if shouldCreate {
 		if pendingErr := h.createEmailOAuthRegistrationPendingSession(c, provider, frontendCallback, redirectTo, profile); pendingErr != nil {
-			redirectOAuthError(c, frontendCallback, infraerrors.Reason(pendingErr), infraerrors.Message(pendingErr), "")
+			redirectEmailOAuthError(c, frontendCallback, infraerrors.Reason(pendingErr), infraerrors.Message(pendingErr), "")
 			return
 		}
+		clearEmailOAuthCookies(c, isRequestHTTPS(c))
 		redirectToFrontendCallback(c, frontendCallback)
 		return
 	}
@@ -196,20 +261,22 @@ func (h *AuthHandler) emailOAuthCallbackWithProfile(
 	if err != nil {
 		if errors.Is(err, service.ErrOAuthInvitationRequired) {
 			if pendingErr := h.createEmailOAuthRegistrationPendingSession(c, provider, frontendCallback, redirectTo, profile); pendingErr != nil {
-				redirectOAuthError(c, frontendCallback, infraerrors.Reason(pendingErr), infraerrors.Message(pendingErr), "")
+				redirectEmailOAuthError(c, frontendCallback, infraerrors.Reason(pendingErr), infraerrors.Message(pendingErr), "")
 				return
 			}
+			clearEmailOAuthCookies(c, isRequestHTTPS(c))
 			redirectToFrontendCallback(c, frontendCallback)
 			return
 		}
-		redirectOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
+		redirectEmailOAuthError(c, frontendCallback, infraerrors.Reason(err), infraerrors.Message(err), "")
 		return
 	}
 	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
-		redirectOAuthError(c, frontendCallback, "login_blocked", infraerrors.Reason(err), infraerrors.Message(err))
+		redirectEmailOAuthError(c, frontendCallback, "login_blocked", infraerrors.Reason(err), infraerrors.Message(err))
 		return
 	}
 	setOAuthAuditActor(c, user)
+	clearEmailOAuthCookies(c, isRequestHTTPS(c))
 
 	fragment := url.Values{}
 	fragment.Set("access_token", tokenPair.AccessToken)
@@ -619,6 +686,31 @@ func emailOAuthSetCookie(c *gin.Context, name, value string, secure bool) {
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func clearEmailOAuthCookies(c *gin.Context, secure bool) {
+	for _, name := range []string{
+		emailOAuthStateCookieName,
+		emailOAuthRedirectCookie,
+		emailOAuthProviderCookie,
+		emailOAuthIntentCookieName,
+		emailOAuthBindUserCookieName,
+		emailOAuthAffiliateCookie,
+	} {
+		emailOAuthClearCookie(c, name, secure)
+	}
+	clearOAuthPromoCodeCookie(c, secure)
+}
+
+func clearEmailOAuthFailedCallbackCookies(c *gin.Context, secure bool) {
+	clearEmailOAuthCookies(c, secure)
+	clearOAuthPendingSessionCookie(c, secure)
+	clearOAuthPendingBrowserCookie(c, secure)
+}
+
+func redirectEmailOAuthError(c *gin.Context, frontendCallback string, code string, message string, description string) {
+	clearEmailOAuthFailedCallbackCookies(c, isRequestHTTPS(c))
+	redirectOAuthError(c, frontendCallback, code, message, description)
 }
 
 func emailOAuthClearCookie(c *gin.Context, name string, secure bool) {

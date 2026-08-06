@@ -33,8 +33,16 @@
               :class="providerIconClass(item.provider)"
               class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-semibold"
             >
+              <GitHubMark
+                v-if="item.provider === 'github'"
+                class="h-5 w-5"
+              />
+              <GoogleMark
+                v-else-if="item.provider === 'google'"
+                class="h-5 w-5"
+              />
               <Icon
-                v-if="item.provider === 'email'"
+                v-else-if="item.provider === 'email'"
                 name="mail"
                 size="sm"
                 class="text-current"
@@ -207,6 +215,8 @@ import {
   startOAuthBinding,
   unbindAuthIdentity,
 } from '@/api/user'
+import GitHubMark from '@/components/auth/GitHubMark.vue'
+import GoogleMark from '@/components/auth/GoogleMark.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore, useAuthStore } from '@/stores'
 import type { User, UserAuthBindingStatus, UserAuthProvider } from '@/types'
@@ -216,6 +226,8 @@ type BindableProvider = Exclude<UserAuthProvider, 'email'>
 const props = withDefaults(
   defineProps<{
     user: User | null
+    githubEnabled?: boolean
+    googleEnabled?: boolean
     linuxdoEnabled?: boolean
     dingtalkEnabled?: boolean
     oidcEnabled?: boolean
@@ -228,6 +240,8 @@ const props = withDefaults(
   }>(),
   {
     linuxdoEnabled: false,
+    githubEnabled: false,
+    googleEnabled: false,
     dingtalkEnabled: false,
     oidcEnabled: false,
     oidcProviderName: 'OIDC',
@@ -405,6 +419,12 @@ function getDisplayableEmail(user: User | null | undefined): string {
 }
 
 function isProviderEnabledForBinding(provider: BindableProvider): boolean {
+  if (provider === 'github') {
+    return props.githubEnabled
+  }
+  if (provider === 'google') {
+    return props.googleEnabled
+  }
   if (provider === 'linuxdo') {
     return props.linuxdoEnabled
   }
@@ -425,6 +445,28 @@ const providerItems = computed(() => [
     canBind: false,
     canUnbind: false,
     details: getBindingDetails('email'),
+  },
+  {
+    provider: 'github' as const,
+    label: t('profile.authBindings.providers.github'),
+    bound: getBindingStatus('github'),
+    canBind:
+      !getBindingStatus('github') &&
+      isProviderEnabledForBinding('github') &&
+      (getBindingDetails('github')?.can_bind ?? true),
+    canUnbind: Boolean(getBindingStatus('github') && getBindingDetails('github')?.can_unbind),
+    details: getBindingDetails('github'),
+  },
+  {
+    provider: 'google' as const,
+    label: t('profile.authBindings.providers.google'),
+    bound: getBindingStatus('google'),
+    canBind:
+      !getBindingStatus('google') &&
+      isProviderEnabledForBinding('google') &&
+      (getBindingDetails('google')?.can_bind ?? true),
+    canUnbind: Boolean(getBindingStatus('google') && getBindingDetails('google')?.can_unbind),
+    details: getBindingDetails('google'),
   },
   {
     provider: 'linuxdo' as const,
@@ -473,6 +515,12 @@ const providerItems = computed(() => [
 ])
 
 function providerInitial(provider: UserAuthProvider): string {
+  if (provider === 'github') {
+    return 'G'
+  }
+  if (provider === 'google') {
+    return 'G'
+  }
   if (provider === 'linuxdo') {
     return 'L'
   }
@@ -489,6 +537,12 @@ function providerInitial(provider: UserAuthProvider): string {
 }
 
 function providerIconClass(provider: UserAuthProvider): string {
+  if (provider === 'github') {
+    return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100'
+  }
+  if (provider === 'google') {
+    return 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300'
+  }
   if (provider === 'linuxdo') {
     return 'bg-orange-100 text-orange-600 dark:bg-orange-900/20 dark:text-orange-300'
   }

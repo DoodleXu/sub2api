@@ -185,6 +185,7 @@ const invalidCallback = ref(false)
 const EMAIL_OAUTH_PENDING_PROVIDER_KEY = 'email_oauth_pending_provider'
 
 type EmailOAuthPendingCompletion = Partial<OAuthTokenResponse> & {
+  auth_result?: string
   error?: string
   provider?: string
   redirect?: string
@@ -293,6 +294,16 @@ async function resumePendingEmailOAuth() {
     const completionRedirect = completion.redirect || '/dashboard'
     if (hasOAuthTokenResponse(completion)) {
       await finalizeTokenResponse(completion, completionRedirect)
+      return
+    }
+
+    if (completion.auth_result === 'bind') {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.removeItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY)
+      }
+      clearAllAffiliateReferralCodes()
+      appStore.showSuccess(t('profile.authBindings.bindSuccess'))
+      await router.replace(sanitizeRedirectPath(completionRedirect))
       return
     }
 

@@ -1371,6 +1371,9 @@ func applySuggestedProfileToCompletionResponse(payload map[string]any, upstream 
 	if len(payload) == 0 || len(upstream) == 0 {
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(pendingSessionStringValue(payload, "auth_result")), "bind") {
+		return
+	}
 
 	displayName := pendingSessionStringValue(upstream, "suggested_display_name")
 	avatarURL := pendingSessionStringValue(upstream, "suggested_avatar_url")
@@ -1502,6 +1505,7 @@ func (h *AuthHandler) consumePendingOAuthSessionOnLogout(c *gin.Context) {
 func clearOAuthLogoutCookies(c *gin.Context) {
 	secureCookie := isRequestHTTPS(c)
 
+	clearEmailOAuthCookies(c, secureCookie)
 	clearOAuthPendingSessionCookie(c, secureCookie)
 	clearOAuthPendingBrowserCookie(c, secureCookie)
 	clearOAuthBindAccessTokenCookie(c, secureCookie)

@@ -46,6 +46,8 @@ vi.mock('vue-i18n', async (importOriginal) => {
         if (key === 'profile.authBindings.status.bound') return 'Bound'
         if (key === 'profile.authBindings.status.notBound') return 'Not bound'
         if (key === 'profile.authBindings.providers.email') return 'Email'
+        if (key === 'profile.authBindings.providers.github') return 'GitHub'
+        if (key === 'profile.authBindings.providers.google') return 'Google'
         if (key === 'profile.authBindings.providers.linuxdo') return 'LinuxDo'
         if (key === 'profile.authBindings.providers.wechat') return 'WeChat'
         if (key === 'profile.authBindings.providers.oidc') return params?.providerName || 'OIDC'
@@ -174,6 +176,32 @@ describe('ProfileIdentityBindingsSection', () => {
     expect(locationState.current.href).toContain('mode=open')
     expect(locationState.current.href).toContain('intent=bind_current_user')
     expect(locationState.current.href).toContain('redirect=%2Fprofile')
+  })
+
+  it('renders and starts enabled GitHub and Google bind flows', async () => {
+    const wrapper = mount(ProfileIdentityBindingsSection, {
+      global: {
+        plugins: [pinia],
+      },
+      props: {
+        user: createUser(),
+        githubEnabled: true,
+        googleEnabled: true,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="profile-binding-github-status"]').text()).toBe('Not bound')
+    expect(wrapper.get('[data-testid="profile-binding-google-status"]').text()).toBe('Not bound')
+    expect(wrapper.get('[data-testid="profile-binding-github-action"]').text()).toBe('Bind GitHub')
+    expect(wrapper.get('[data-testid="profile-binding-google-action"]').text()).toBe('Bind Google')
+
+    await wrapper.get('[data-testid="profile-binding-github-action"]').trigger('click')
+    expect(locationState.current.href).toContain('/api/v1/auth/oauth/github/bind/start?')
+    expect(locationState.current.href).toContain('intent=bind_current_user')
+
+    await wrapper.get('[data-testid="profile-binding-google-action"]').trigger('click')
+    expect(locationState.current.href).toContain('/api/v1/auth/oauth/google/bind/start?')
+    expect(locationState.current.href).toContain('intent=bind_current_user')
   })
 
   it('hides the WeChat bind action outside the WeChat browser when only mp mode is configured', () => {
