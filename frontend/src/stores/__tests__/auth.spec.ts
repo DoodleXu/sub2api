@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { AUTH_SESSION_STORAGE_KEY } from '@/utils/authSessionEvents'
 
 // Mock authAPI
 const mockLogin = vi.fn()
@@ -55,6 +56,7 @@ describe('useAuthStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
+    sessionStorage.clear()
     vi.useFakeTimers()
     vi.clearAllMocks()
   })
@@ -233,6 +235,92 @@ describe('useAuthStore', () => {
         provider: 'wechat',
         redirect: '/profile',
       })
+    })
+
+    it('服务端返回不同用户身份时清除当前会话', async () => {
+      localStorage.setItem('auth_token', 'admin-token')
+      localStorage.setItem('auth_user', JSON.stringify(fakeAdminUser))
+      mockGetCurrentUser.mockResolvedValue({ data: fakeUser })
+
+      const store = useAuthStore()
+      await store.checkAuth()
+
+      expect(store.isAuthenticated).toBe(false)
+      expect(localStorage.getItem('auth_token')).toBeNull()
+      expect(localStorage.getItem('auth_user')).toBeNull()
+    })
+  })
+
+  describe('cross-tab identity changes', () => {
+    it('receives a different user identity and clears stale in-memory admin state', async () => {
+      mockLogin.mockResolvedValue({ ...fakeAuthResponse, user: fakeAdminUser })
+      const store = useAuthStore()
+      await store.login({ email: fakeAdminUser.email, password: '123456' })
+
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: AUTH_SESSION_STORAGE_KEY,
+        newValue: JSON.stringify({
+          eventId: 'other-tab-event',
+          sourceId: 'other-tab',
+          type: 'identity_changed',
+          userId: fakeUser.id,
+          createdAt: Date.now(),
+        }),
+      }))
+
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.isAdmin).toBe(false)
+      expect(localStorage.getItem('auth_user')).toEqual(JSON.stringify(fakeAdminUser))
+    })
+  })
+
+  describe('OAuth token staging', () => {
+    it('only commits callback refresh credentials after current-user verification', async () => {
+      sessionStorage.setItem('sub2api_pending_oauth_refresh_token', 'oauth-refresh')
+      sessionStorage.setItem(
+        'sub2api_pending_oauth_token_expires_at',
+        String(Date.now() + 3600_000),
+      )
+      mockGetCurrentUser.mockResolvedValue({ data: fakeUser })
+
+      const store = useAuthStore()
+      await store.setToken('oauth-access')
+
+      expect(localStorage.getItem('auth_token')).toBe('oauth-access')
+      expect(localStorage.getItem('refresh_token')).toBe('oauth-refresh')
+      expect(localStorage.getItem('auth_user')).toBe(JSON.stringify(fakeUser))
+      expect(sessionStorage.getItem('sub2api_pending_oauth_refresh_token')).toBeNull()
+      expect(sessionStorage.getItem('sub2api_pending_oauth_token_expires_at')).toBeNull()
+    })
+
+    it('preserves a pending auth session when callback token verification fails', async () => {
+      const store = useAuthStore()
+      store.setPendingAuthSession({
+        token: '',
+        token_field: 'pending_oauth_token',
+        provider: 'oidc',
+        redirect: '/welcome',
+      })
+      sessionStorage.setItem('sub2api_pending_oauth_refresh_token', 'oauth-refresh')
+      mockGetCurrentUser.mockRejectedValue(new Error('current-user lookup failed'))
+
+      await expect(store.setToken('oauth-access')).rejects.toThrow('current-user lookup failed')
+
+      expect(store.hasPendingAuthSession).toBe(true)
+      expect(store.pendingAuthSession).toEqual({
+        token: '',
+        token_field: 'pending_oauth_token',
+        provider: 'oidc',
+        redirect: '/welcome',
+      })
+      expect(JSON.parse(localStorage.getItem('pending_auth_session') || 'null')).toEqual({
+        token: '',
+        token_field: 'pending_oauth_token',
+        provider: 'oidc',
+        redirect: '/welcome',
+      })
+      expect(localStorage.getItem('auth_token')).toBeNull()
+      expect(sessionStorage.getItem('sub2api_pending_oauth_refresh_token')).toBeNull()
     })
   })
 

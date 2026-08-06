@@ -63,6 +63,28 @@ describe('API Client', () => {
 
       const config = adapter.mock.calls[0][0]
       expect(config.headers.get('Authorization')).toBe('Bearer my-jwt-token')
+      expect(config.headers.get('Cache-Control')).toBe('no-cache')
+    })
+
+    it('登录和注册请求不会携带上一账号的 Authorization', async () => {
+      localStorage.setItem('auth_token', 'previous-account-token')
+
+      const adapter = vi.fn().mockResolvedValue({
+        status: 200,
+        data: { code: 0, data: {} },
+        headers: {},
+        config: {},
+        statusText: 'OK',
+      })
+      apiClient.defaults.adapter = adapter
+
+      await apiClient.post('/auth/login', {}, {
+        headers: { Authorization: 'Bearer explicitly-stale-token' },
+      })
+
+      const config = adapter.mock.calls[0][0]
+      expect(config.headers.get('Authorization')).toBeFalsy()
+      expect(config.headers.get('Cache-Control')).toBe('no-cache')
     })
 
     it('无 token 时不附加 Authorization 头', async () => {

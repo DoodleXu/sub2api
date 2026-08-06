@@ -14,6 +14,12 @@ import {
 } from './adminUIRequest'
 import { refreshAuthTokens } from './tokenRefresh'
 import { getAPIBaseURL } from './url'
+import {
+  clearStoredAuthSessionIfMatches,
+  getStoredAuthSnapshot,
+  getStoredAuthToken,
+} from '@/utils/authStorage'
+import { publishAuthSessionEvent } from '@/utils/authSessionEvents'
 export { buildApiUrl, buildGatewayUrl } from './url'
 
 export function isAPIErrorStatus(error: unknown, expectedStatus: number): boolean {
@@ -34,6 +40,20 @@ export const apiClient: AxiosInstance = axios.create({
 
 export function isOpsMonitoringPath(pathname: string): boolean {
   return pathname === '/admin/ops' || pathname.startsWith('/admin/ops/')
+}
+
+function isAuthBootstrapRequest(url: string): boolean {
+  const path = url.split('?')[0]
+  return /\/auth\/(login|login\/2fa|register)$/.test(path)
+}
+
+function isAuthRefreshRequest(url: string): boolean {
+  return /\/auth\/refresh$/.test(url.split('?')[0])
+}
+
+function isAdminAPIRequest(url: string): boolean {
+  const path = url.split('?')[0]
+  return path.includes('/admin/') || path.endsWith('/admin')
 }
 
 async function decodeBlobAPIError(data: unknown, contentType: unknown): Promise<unknown> {
@@ -67,10 +87,20 @@ const getUserTimezone = (): string => {
 
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Attach token from localStorage
-    const token = localStorage.getItem('auth_token')
-    if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`
+    // Public login/register requests must not inherit the previous account's
+    // Authorization header. Other requests use the committed shared session.
+    const token = getStoredAuthToken()
+    const requestURL = String(config.url || '')
+    if (config.headers) {
+      if (isAuthBootstrapRequest(requestURL)) {
+        delete config.headers.Authorization
+        delete config.headers.authorization
+      } else if (token) {
+        config.headers.Authorization = `Bearer ${token}`
+      }
+      // API responses are user- and role-specific. This request hint helps
+      // proxies that ignore the origin response policy during revalidation.
+      config.headers['Cache-Control'] = 'no-cache'
     }
 
     // Attach locale for backend translations
@@ -145,6 +175,16 @@ apiClient.interceptors.response.use(
 
       // Validate `data` shape to avoid HTML error pages breaking our error handling.
       const apiData = (typeof data === 'object' && data !== null ? data : {}) as Record<string, any>
+      const isAuthBootstrap = isAuthBootstrapRequest(url)
+      const isAuthRefresh = isAuthRefreshRequest(url)
+
+      if (status === 403 && isAdminAPIRequest(url)) {
+        publishAuthSessionEvent(
+          'role_mismatch',
+          getStoredAuthSnapshot().userId,
+          'admin_api_forbidden',
+        )
+      }
 
       // Ops monitoring disabled: treat as feature-flagged 404, and proactively redirect away
       // from ops pages to avoid broken UI states.
@@ -192,22 +232,33 @@ apiClient.interceptors.response.use(
       // 401: Try to refresh the token if we have a refresh token
       // This handles TOKEN_EXPIRED, INVALID_TOKEN, TOKEN_REVOKED, etc.
       if (status === 401 && !originalRequest._retry) {
-        const refreshToken = localStorage.getItem('refresh_token')
-        const isAuthEndpoint =
-          url.includes('/auth/login') || url.includes('/auth/register') || url.includes('/auth/refresh')
+        const refreshToken = getStoredAuthSnapshot().refreshToken
+
+        // A failed login/register attempt must not log out an already active
+        // account in the same browser tab.
+        if (isAuthBootstrap) {
+          return Promise.reject({
+            status,
+            code: apiData.code,
+            reason: apiData.reason,
+            error: apiData.error,
+            message: apiData.message || apiData.detail || error.message,
+            metadata: apiData.metadata,
+          })
+        }
 
         // If we have a refresh token and this is not an auth endpoint, try to refresh
-        if (refreshToken && !isAuthEndpoint) {
-          const refreshSessionUser = localStorage.getItem('auth_user')
+        if (refreshToken && !isAuthRefresh) {
+          const refreshSessionUser = getStoredAuthSnapshot().userRaw
           originalRequest._retry = true
+          const headers = originalRequest.headers as Record<string, unknown> | undefined
+          const authHeader = headers?.Authorization ?? headers?.authorization
+          const failedAccessToken =
+            typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+              ? authHeader.slice('Bearer '.length)
+              : null
 
           try {
-            const headers = originalRequest.headers as Record<string, unknown> | undefined
-            const authHeader = headers?.Authorization ?? headers?.authorization
-            const failedAccessToken =
-              typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
-                ? authHeader.slice('Bearer '.length)
-                : null
             const tokens = await refreshAuthTokens({ failedAccessToken })
 
             // Retry the original request with the refreshed token
@@ -219,8 +270,8 @@ apiClient.interceptors.response.use(
             // A stale request must never destroy a session that was logged out or replaced while
             // its refresh was in flight (for example, when another tab signs in as another user).
             const sessionChanged =
-              localStorage.getItem('refresh_token') !== refreshToken ||
-              localStorage.getItem('auth_user') !== refreshSessionUser
+              getStoredAuthSnapshot().refreshToken !== refreshToken ||
+              getStoredAuthSnapshot().userRaw !== refreshSessionUser
             if (sessionChanged) {
               return Promise.reject({
                 status: 401,
@@ -229,11 +280,14 @@ apiClient.interceptors.response.use(
               })
             }
 
-            // Clear tokens and redirect to login
-            localStorage.removeItem('auth_token')
-            localStorage.removeItem('refresh_token')
-            localStorage.removeItem('auth_user')
-            localStorage.removeItem('token_expires_at')
+            const cleared = clearStoredAuthSessionIfMatches({
+              accessToken: failedAccessToken ?? getStoredAuthToken(),
+              refreshToken,
+              userRaw: refreshSessionUser,
+            })
+            if (cleared) {
+              publishAuthSessionEvent('invalidated', getStoredAuthSnapshot().userId, 'token_refresh_failed')
+            }
             sessionStorage.setItem('auth_expired', '1')
 
             if (!window.location.pathname.includes('/login')) {
@@ -248,8 +302,9 @@ apiClient.interceptors.response.use(
           }
         }
 
-        // No refresh token or is auth endpoint - clear auth and redirect
-        const hasToken = !!localStorage.getItem('auth_token')
+        // No refresh token or refresh endpoint: clear only the session that
+        // produced this response, never a newer account's session.
+        const currentSnapshot = getStoredAuthSnapshot()
         const headers = error.config?.headers as Record<string, unknown> | undefined
         const authHeader = headers?.Authorization ?? headers?.authorization
         const sentAuth =
@@ -258,12 +313,24 @@ apiClient.interceptors.response.use(
             : Array.isArray(authHeader)
               ? authHeader.length > 0
               : !!authHeader
+        const hasPersistedSession = Boolean(
+          currentSnapshot.accessToken || currentSnapshot.refreshToken || currentSnapshot.userRaw,
+        )
 
-        localStorage.removeItem('auth_token')
-        localStorage.removeItem('refresh_token')
-        localStorage.removeItem('auth_user')
-        localStorage.removeItem('token_expires_at')
-        if ((hasToken || sentAuth) && !isAuthEndpoint) {
+        const failedAccessToken =
+          typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+            ? authHeader.slice('Bearer '.length)
+            : currentSnapshot.accessToken
+        if (hasPersistedSession || sentAuth) {
+          const cleared = clearStoredAuthSessionIfMatches({
+            accessToken: failedAccessToken,
+            userRaw: currentSnapshot.userRaw,
+          })
+          if (cleared) {
+            publishAuthSessionEvent('invalidated', currentSnapshot.userId, isAuthRefresh ? 'refresh_unauthorized' : 'token_unauthorized')
+          }
+        }
+        if ((hasPersistedSession || sentAuth) && !isAuthBootstrap) {
           sessionStorage.setItem('auth_expired', '1')
         }
         // Only redirect if not already on login page

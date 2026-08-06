@@ -13,6 +13,7 @@ import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { applyRouteSEO, resolveRouteSEO } from './title'
+import { subscribeToAuthSessionEvents } from '@/utils/authSessionEvents'
 
 /**
  * Route definitions with lazy loading
@@ -830,6 +831,37 @@ const BACKEND_MODE_CALLBACK_PATHS = [
 ]
 const BACKEND_MODE_PENDING_AUTH_PATHS = ['/register', '/email-verify']
 
+subscribeToAuthSessionEvents((event) => {
+  const currentRoute = router.currentRoute.value
+
+  if (event.type === 'role_mismatch') {
+    if (currentRoute.path.startsWith('/admin')) {
+      const authStore = useAuthStore()
+      void authStore.ensureCurrentUser({ force: true }).then((verified) => {
+        if (!verified || !authStore.isAdmin) {
+          return router.replace('/dashboard')
+        }
+        return undefined
+      })
+    }
+    return
+  }
+
+  const shouldLeaveRoute =
+    event.type === 'invalidated' ||
+    event.type === 'logged_out' ||
+    (event.source === 'cross-tab' &&
+      (event.type === 'authenticated' || event.type === 'identity_changed'))
+
+  if (
+    shouldLeaveRoute &&
+    currentRoute.path !== '/login' &&
+    (currentRoute.meta.requiresAuth !== false || currentRoute.path.startsWith('/admin'))
+  ) {
+    void router.replace('/login')
+  }
+})
+
 export async function ensurePublicSettingsForRoute(
   meta: Record<string, any>,
   appStore: {
@@ -898,9 +930,10 @@ router.beforeEach(async (to, _from, next) => {
 
   // Restore auth state from localStorage on first navigation (page refresh)
   if (!authInitialized) {
-    authStore.checkAuth()
     authInitialized = true
+    await authStore.checkAuth()
   }
+  authStore.reconcilePersistedSession()
 
   // Set page title and SEO metadata
   const appStore = useAppStore()
@@ -986,6 +1019,13 @@ router.beforeEach(async (to, _from, next) => {
       path: '/login',
       query: { redirect: to.fullPath } // Save intended destination
     })
+    return
+  }
+
+  // Admin routes require a current server-confirmed identity. Cached user data
+  // must never be enough to render an admin page after a cross-tab switch.
+  if (requiresAdmin && !await authStore.ensureCurrentUser({ force: !authStore.identityVerified })) {
+    next('/login')
     return
   }
 

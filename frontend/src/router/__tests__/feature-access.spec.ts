@@ -12,8 +12,11 @@ const routerHarness = vi.hoisted(() => ({
 
 const authStore = vi.hoisted(() => ({
   checkAuth: vi.fn(),
+  ensureCurrentUser: vi.fn().mockResolvedValue(true),
+  reconcilePersistedSession: vi.fn(),
   isAuthenticated: true,
   isAdmin: false,
+  identityVerified: true,
   isSimpleMode: false,
   hasPendingAuthSession: false,
 }))
