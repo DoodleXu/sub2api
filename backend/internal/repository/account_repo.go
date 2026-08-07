@@ -3228,7 +3228,7 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 	query := `
 		SELECT
 			account_id,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS total_account_cost
+			COALESCE(SUM(total_cost), 0) AS total_account_cost
 		FROM usage_logs
 		WHERE account_id = ANY($1)
 		GROUP BY account_id

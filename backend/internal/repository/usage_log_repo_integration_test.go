@@ -826,15 +826,17 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 		TotalCostCNY: 20,
 	})
 
+	openAIAccountMultiplier := 2.0
 	logs := []*service.UsageLog{
 		{
-			UserID:     user.ID,
-			APIKeyID:   apiKey.ID,
-			AccountID:  costedOpenAI.ID,
-			Model:      "gpt-4o",
-			TotalCost:  2,
-			ActualCost: 2,
-			CreatedAt:  todayStart.Add(1 * time.Hour),
+			UserID:                user.ID,
+			APIKeyID:              apiKey.ID,
+			AccountID:             costedOpenAI.ID,
+			Model:                 "gpt-4o",
+			TotalCost:             2,
+			ActualCost:            2,
+			AccountRateMultiplier: &openAIAccountMultiplier,
+			CreatedAt:             todayStart.Add(1 * time.Hour),
 		},
 		{
 			UserID:     user.ID,
@@ -891,7 +893,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	}
 	s.Require().InEpsilon(30.0, stats.TotalCostCNY, 0.0001)
 	s.Require().InEpsilon(costedTotalCNY, stats.TotalCostCNY, 0.0001)
-	s.Require().InEpsilon(108.0, stats.TotalAccountCost, 0.0001, "display total should keep all account usage")
+	s.Require().InEpsilon(110.0, stats.TotalAccountCost, 0.0001, "display total should keep account-billed usage")
 	s.Require().InEpsilon(30.0, stats.TodayRealCostCNY, 0.0001, "today real cost must apply each account's own CNY cost per USD")
 	s.Require().InEpsilon(3.0, stats.AverageCostCNYPerUSD, 0.0001, "average must ignore uncosted account usage")
 	s.Require().InEpsilon(costedTotalCNY/costedTotalAccountCost, stats.AverageCostCNYPerUSD, 0.0001, "dashboard average must match account list cumulative weighted average")

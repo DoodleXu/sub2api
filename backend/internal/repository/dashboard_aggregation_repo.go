@@ -750,7 +750,8 @@ func (r *dashboardAggregationRepository) upsertHourlyAccountCostAggregates(ctx c
 			SELECT
 				date_trunc('hour', created_at AT TIME ZONE $3) AT TIME ZONE $3 AS bucket_start,
 				account_id,
-				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost,
+				COALESCE(SUM(total_cost), 0) AS standard_account_cost
 			FROM usage_logs
 			WHERE created_at >= $1 AND created_at < $2
 			GROUP BY 1, account_id
@@ -759,17 +760,20 @@ func (r *dashboardAggregationRepository) upsertHourlyAccountCostAggregates(ctx c
 			bucket_start,
 			account_id,
 			account_cost,
+			standard_account_cost,
 			computed_at
 		)
 		SELECT
 			bucket_start,
 			account_id,
 			account_cost,
+			standard_account_cost,
 			NOW()
 		FROM hourly
 		ON CONFLICT (bucket_start, account_id)
 		DO UPDATE SET
 			account_cost = EXCLUDED.account_cost,
+			standard_account_cost = EXCLUDED.standard_account_cost,
 			computed_at = EXCLUDED.computed_at
 	`
 	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
@@ -783,7 +787,8 @@ func (r *dashboardAggregationRepository) upsertDailyAccountCostAggregates(ctx co
 			SELECT
 				(bucket_start AT TIME ZONE $3)::date AS bucket_date,
 				account_id,
-				COALESCE(SUM(account_cost), 0) AS account_cost
+				COALESCE(SUM(account_cost), 0) AS account_cost,
+				COALESCE(SUM(standard_account_cost), 0) AS standard_account_cost
 			FROM usage_dashboard_account_cost_hourly
 			WHERE bucket_start >= $1 AND bucket_start < $2
 			GROUP BY 1, account_id
@@ -792,13 +797,15 @@ func (r *dashboardAggregationRepository) upsertDailyAccountCostAggregates(ctx co
 			bucket_date,
 			account_id,
 			account_cost,
+			standard_account_cost,
 			computed_at
 		)
-		SELECT bucket_date, account_id, account_cost, NOW()
+		SELECT bucket_date, account_id, account_cost, standard_account_cost, NOW()
 		FROM daily
 		ON CONFLICT (bucket_date, account_id)
 		DO UPDATE SET
 			account_cost = EXCLUDED.account_cost,
+			standard_account_cost = EXCLUDED.standard_account_cost,
 			computed_at = EXCLUDED.computed_at
 	`
 	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
@@ -912,7 +919,9 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			SELECT
 				account_id,
 				COALESCE(SUM(account_cost), 0) AS total_account_cost,
-				COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $3::date), 0) AS today_account_cost
+				COALESCE(SUM(standard_account_cost), 0) AS total_standard_account_cost,
+				COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $3::date), 0) AS today_account_cost,
+				COALESCE(SUM(standard_account_cost) FILTER (WHERE bucket_date = $3::date), 0) AS today_standard_account_cost
 			FROM usage_dashboard_account_cost_daily
 			GROUP BY account_id
 		),
@@ -922,7 +931,9 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 				a.platform,
 				a.total_cost_cny,
 				COALESCE(c.total_account_cost, 0) AS total_account_cost,
-				COALESCE(c.today_account_cost, 0) AS today_account_cost
+				COALESCE(c.total_standard_account_cost, 0) AS total_standard_account_cost,
+				COALESCE(c.today_account_cost, 0) AS today_account_cost,
+				COALESCE(c.today_standard_account_cost, 0) AS today_standard_account_cost
 			FROM accounts a
 			LEFT JOIN cost_by_account c ON c.account_id = a.id
 			WHERE a.deleted_at IS NULL AND a.total_cost_cny > 0
@@ -932,15 +943,15 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts), 0) AS total_cost_cny,
 				COALESCE((SELECT SUM(total_account_cost) FROM cost_by_account), 0) AS total_account_cost,
 				COALESCE((SELECT SUM(today_account_cost) FROM cost_by_account), 0) AS today_account_cost,
-				COALESCE((SELECT SUM(total_account_cost) FROM costed_accounts), 0) AS costed_total_account_cost,
+				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts), 0) AS costed_total_standard_account_cost,
 				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_cost_cny,
-				COALESCE((SELECT SUM(total_account_cost) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_account_cost,
+				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_standard_account_cost,
 				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $5), 0) AS openai_cost_cny,
-				COALESCE((SELECT SUM(total_account_cost) FROM costed_accounts WHERE platform = $5), 0) AS openai_account_cost,
+				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $5), 0) AS openai_standard_account_cost,
 				COALESCE((
-					SELECT SUM(today_account_cost * total_cost_cny / NULLIF(total_account_cost, 0))
+					SELECT SUM(today_standard_account_cost * total_cost_cny / NULLIF(total_standard_account_cost, 0))
 					FROM costed_accounts
-					WHERE total_account_cost > 0
+					WHERE total_standard_account_cost > 0
 				), 0) AS today_real_cost_cny
 		)
 		INSERT INTO usage_dashboard_cost_snapshot (
@@ -954,9 +965,9 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			m.total_cost_cny,
 			m.total_account_cost,
 			m.today_account_cost,
-			CASE WHEN m.costed_total_account_cost > 0 THEN m.total_cost_cny / m.costed_total_account_cost ELSE 0 END,
-			CASE WHEN m.anthropic_account_cost > 0 THEN m.anthropic_cost_cny / m.anthropic_account_cost ELSE 0 END,
-			CASE WHEN m.openai_account_cost > 0 THEN m.openai_cost_cny / m.openai_account_cost ELSE 0 END,
+			CASE WHEN m.costed_total_standard_account_cost > 0 THEN m.total_cost_cny / m.costed_total_standard_account_cost ELSE 0 END,
+			CASE WHEN m.anthropic_standard_account_cost > 0 THEN m.anthropic_cost_cny / m.anthropic_standard_account_cost ELSE 0 END,
+			CASE WHEN m.openai_standard_account_cost > 0 THEN m.openai_cost_cny / m.openai_standard_account_cost ELSE 0 END,
 			c.start_time,
 			c.end_time,
 			TRUE,

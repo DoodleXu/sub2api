@@ -58,7 +58,7 @@ type DashboardStats struct {
 	TotalTokens              int64   `json:"total_tokens"`
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
-	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本
+	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号计费（含账号倍率；每美元成本分母另按标准计费计算）
 	TotalCostCNY             float64 `json:"total_cost_cny"`     // 累计人民币成本
 	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd"`
 	AnthropicCostCNYPerUSD   float64 `json:"anthropic_cost_cny_per_usd"`
