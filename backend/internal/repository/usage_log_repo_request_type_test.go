@@ -480,6 +480,111 @@ func TestUsageLogRepositoryGetUsageTrendWithUsageFiltersRequestedModelSource(t *
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageLogRepositoryUpstreamModelMismatchFilterReachesAllAdminQueries(t *testing.T) {
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	trueValue := true
+	falseValue := false
+
+	t.Run("list", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		repo := &usageLogRepository{sql: db}
+		filters := usagestats.UsageLogFilters{UpstreamModelMismatch: &trueValue}
+
+		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM usage_logs WHERE upstream_model_mismatch IS TRUE").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
+		mock.ExpectQuery("SELECT .* FROM usage_logs WHERE upstream_model_mismatch IS TRUE").
+			WithArgs(20, 0).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+		logs, page, err := repo.ListWithFilters(context.Background(), pagination.PaginationParams{Page: 1, PageSize: 20}, filters)
+		require.NoError(t, err)
+		require.Empty(t, logs)
+		require.Equal(t, int64(0), page.Total)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("trend", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		repo := &usageLogRepository{sql: db}
+		filters := usagestats.UsageLogFilters{UpstreamModelMismatch: &trueValue}
+
+		mock.ExpectQuery("AND upstream_model_mismatch IS TRUE").
+			WithArgs(start, end).
+			WillReturnRows(sqlmock.NewRows([]string{"date", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost"}))
+
+		trend, err := repo.GetUsageTrendWithUsageFilters(context.Background(), start, end, "day", filters)
+		require.NoError(t, err)
+		require.Empty(t, trend)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("models", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		repo := &usageLogRepository{sql: db}
+		filters := usagestats.UsageLogFilters{UpstreamModelMismatch: &falseValue}
+
+		mock.ExpectQuery("AND upstream_model_mismatch IS FALSE").
+			WithArgs(start, end).
+			WillReturnRows(sqlmock.NewRows([]string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost"}))
+
+		models, err := repo.GetModelStatsWithUsageFiltersBySource(context.Background(), start, end, filters, usagestats.ModelSourceRequested)
+		require.NoError(t, err)
+		require.Empty(t, models)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("groups", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		repo := &usageLogRepository{sql: db}
+		filters := usagestats.UsageLogFilters{UpstreamModelMismatch: &trueValue}
+
+		mock.ExpectQuery("AND ul.upstream_model_mismatch IS TRUE").
+			WithArgs(start, end).
+			WillReturnRows(sqlmock.NewRows([]string{"group_id", "group_name", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}))
+
+		groups, err := repo.GetGroupStatsWithUsageFilters(context.Background(), start, end, filters)
+		require.NoError(t, err)
+		require.Empty(t, groups)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("summary_and_endpoints", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		repo := &usageLogRepository{sql: db}
+		filters := usagestats.UsageLogFilters{
+			StartTime: &start, EndTime: &end, UpstreamModelMismatch: &trueValue,
+		}
+
+		mock.ExpectQuery("FROM usage_logs\\s+WHERE upstream_model_mismatch IS TRUE").
+			WithArgs(start, end).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"total_requests", "total_input_tokens", "total_output_tokens", "total_cache_tokens",
+				"total_cache_creation_tokens", "total_cache_read_tokens", "total_cost", "total_actual_cost",
+				"total_account_cost", "avg_duration_ms",
+			}).AddRow(int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), 0.0, 0.0, 0.0, 0.0))
+		for _, pattern := range []string{
+			"SELECT COALESCE\\(NULLIF\\(TRIM\\(inbound_endpoint\\)",
+			"SELECT COALESCE\\(NULLIF\\(TRIM\\(upstream_endpoint\\)",
+			"SELECT CONCAT\\(",
+		} {
+			mock.ExpectQuery("(?s)"+pattern+".*upstream_model_mismatch IS TRUE").
+				WithArgs(start, end).
+				WillReturnRows(sqlmock.NewRows([]string{"endpoint", "requests", "total_tokens", "cost", "actual_cost"}))
+		}
+
+		stats, err := repo.GetStatsWithFilters(context.Background(), filters)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), stats.TotalRequests)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestShouldUseFastUsageLogTotalMismatchFilterRequiresExactCount(t *testing.T) {
+	trueValue := true
+	require.False(t, shouldUseFastUsageLogTotal(usagestats.UsageLogFilters{UpstreamModelMismatch: &trueValue}))
+}
+
 func TestUsageLogRepositoryGetModelStatsWithFiltersRequestTypePriority(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}

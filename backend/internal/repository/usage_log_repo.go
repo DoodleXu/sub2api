@@ -174,6 +174,29 @@ func appendUsageLogBillingModeQueryFilter(query string, args []any, billingMode 
 	return query + " AND " + conditions[0], nextArgs
 }
 
+func appendUsageLogUpstreamModelMismatchWhereCondition(
+	conditions []string,
+	upstreamModelMismatch *bool,
+	alias string,
+) []string {
+	if upstreamModelMismatch == nil {
+		return conditions
+	}
+	column := usageLogQualifiedColumn(alias, "upstream_model_mismatch")
+	if *upstreamModelMismatch {
+		return append(conditions, column+" IS TRUE")
+	}
+	return append(conditions, column+" IS FALSE")
+}
+
+func appendUsageLogUpstreamModelMismatchQueryFilter(query string, upstreamModelMismatch *bool, alias string) string {
+	conditions := appendUsageLogUpstreamModelMismatchWhereCondition(nil, upstreamModelMismatch, alias)
+	if len(conditions) == 0 {
+		return query
+	}
+	return query + " AND " + conditions[0]
+}
+
 func usageLogQualifiedColumn(alias string, column string) string {
 	if strings.TrimSpace(alias) == "" {
 		return column
@@ -3276,6 +3299,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		args = append(args, int16(*filters.BillingType))
 	}
 	conditions, args = appendUsageLogBillingModeWhereCondition(conditions, args, filters.BillingMode)
+	conditions = appendUsageLogUpstreamModelMismatchWhereCondition(conditions, filters.UpstreamModelMismatch, "")
 	if filters.StartTime != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", len(args)+1))
 		args = append(args, *filters.StartTime)
@@ -3307,7 +3331,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 }
 
 func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
-	if filters.ExactTotal {
+	if filters.ExactTotal || filters.UpstreamModelMismatch != nil {
 		return false
 	}
 	// 强选择过滤下记录集通常较小，保留精确总数。
@@ -3597,6 +3621,7 @@ func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, 
 		args = append(args, int16(*filters.BillingType))
 	}
 	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "")
+	query = appendUsageLogUpstreamModelMismatchQueryFilter(query, filters.UpstreamModelMismatch, "")
 	query += " GROUP BY date ORDER BY date ASC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -3929,6 +3954,7 @@ func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.C
 		args = append(args, int16(*filters.BillingType))
 	}
 	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "")
+	query = appendUsageLogUpstreamModelMismatchQueryFilter(query, filters.UpstreamModelMismatch, "")
 	query += fmt.Sprintf(" GROUP BY %s ORDER BY total_tokens DESC", modelExpr)
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -4061,6 +4087,7 @@ func (r *usageLogRepository) GetGroupStatsWithUsageFilters(ctx context.Context, 
 		args = append(args, int16(*filters.BillingType))
 	}
 	query, args = appendUsageLogBillingModeQueryFilter(query, args, filters.BillingMode, "ul")
+	query = appendUsageLogUpstreamModelMismatchQueryFilter(query, filters.UpstreamModelMismatch, "ul")
 	query += " GROUP BY ul.group_id, g.name ORDER BY total_tokens DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -4316,6 +4343,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		args = append(args, int16(*filters.BillingType))
 	}
 	conditions, args = appendUsageLogBillingModeWhereCondition(conditions, args, filters.BillingMode)
+	conditions = appendUsageLogUpstreamModelMismatchWhereCondition(conditions, filters.UpstreamModelMismatch, "")
 	if filters.StartTime != nil {
 		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", len(args)+1))
 		args = append(args, *filters.StartTime)
@@ -4373,7 +4401,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	}
 	// endpoint 明细:best-effort(失败 log + 返空),不致命。
 	runEndpoints := func(c context.Context) {
-		res, err := r.GetEndpointStatsWithFilters(c, start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType)
+		res, err := r.getEndpointStatsByColumnWithFilters(c, "inbound_endpoint", start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				logger.LegacyPrintf("repository.usage_log", "GetEndpointStatsWithFilters failed in GetStatsWithFilters: %v", err)
@@ -4383,7 +4411,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		endpoints = res
 	}
 	runUpstream := func(c context.Context) {
-		res, err := r.GetUpstreamEndpointStatsWithFilters(c, start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType)
+		res, err := r.getEndpointStatsByColumnWithFilters(c, "upstream_endpoint", start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				logger.LegacyPrintf("repository.usage_log", "GetUpstreamEndpointStatsWithFilters failed in GetStatsWithFilters: %v", err)
@@ -4393,7 +4421,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		upstreamEndpoints = res
 	}
 	runPaths := func(c context.Context) {
-		res, err := r.getEndpointPathStatsWithFilters(c, start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType)
+		res, err := r.getEndpointPathStatsWithFilters(c, start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				logger.LegacyPrintf("repository.usage_log", "getEndpointPathStatsWithFilters failed in GetStatsWithFilters: %v", err)
@@ -4444,7 +4472,7 @@ type AccountUsageStatsResponse = usagestats.AccountUsageStatsResponse
 // EndpointStat represents endpoint usage statistics row.
 type EndpointStat = usagestats.EndpointStat
 
-func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []EndpointStat, err error) {
+func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, upstreamModelMismatch *bool) (results []EndpointStat, err error) {
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
 		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
@@ -4484,6 +4512,7 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 		query += fmt.Sprintf(" AND billing_type = $%d", len(args)+1)
 		args = append(args, int16(*billingType))
 	}
+	query = appendUsageLogUpstreamModelMismatchQueryFilter(query, upstreamModelMismatch, "")
 	query += " GROUP BY endpoint ORDER BY requests DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -4511,7 +4540,7 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 	return results, nil
 }
 
-func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) (results []EndpointStat, err error) {
+func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, upstreamModelMismatch *bool) (results []EndpointStat, err error) {
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
 		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
@@ -4555,6 +4584,7 @@ func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context
 		query += fmt.Sprintf(" AND billing_type = $%d", len(args)+1)
 		args = append(args, int16(*billingType))
 	}
+	query = appendUsageLogUpstreamModelMismatchQueryFilter(query, upstreamModelMismatch, "")
 	query += " GROUP BY endpoint ORDER BY requests DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -4584,12 +4614,12 @@ func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context
 
 // GetEndpointStatsWithFilters returns inbound endpoint statistics with optional filters.
 func (r *usageLogRepository) GetEndpointStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) ([]EndpointStat, error) {
-	return r.getEndpointStatsByColumnWithFilters(ctx, "inbound_endpoint", startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	return r.getEndpointStatsByColumnWithFilters(ctx, "inbound_endpoint", startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, nil)
 }
 
 // GetUpstreamEndpointStatsWithFilters returns upstream endpoint statistics with optional filters.
 func (r *usageLogRepository) GetUpstreamEndpointStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8) ([]EndpointStat, error) {
-	return r.getEndpointStatsByColumnWithFilters(ctx, "upstream_endpoint", startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	return r.getEndpointStatsByColumnWithFilters(ctx, "upstream_endpoint", startTime, endTime, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, nil)
 }
 
 // GetAccountUsageStats returns comprehensive usage statistics for an account over a time range

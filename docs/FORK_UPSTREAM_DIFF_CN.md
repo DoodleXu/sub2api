@@ -35,12 +35,13 @@ git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 - Codex 出站身份采用上游默认 TUI originator；容量降载的 `error -> response.failed` 序列可在首个真实输出前安全 failover，输出开始后仅改写下游错误码以允许客户端退避重试，不改变监控和账号状态判定使用的原始错误。
 - 订阅日额度窗口改为本地时区自然日零点，周/月周期窗口仍使用实际重置时刻；腾讯验证码新增中国站/国际站区域并同步公开设置、服务端 endpoint 与 CSP。fork 的批量周额度重置继续复用同一原子窗口接口。
 - 上游新增的 20 个 handler/repository/gateway/setting 拆分文件继续保持删除，增量移植回 fork 聚合模块；`backend/cmd/server/VERSION` 保持 `0.1.241`，未跟随上游源码中的 `0.1.171` 降级。
+- 合并后全面审核发现 fork 聚合 `usage_log_repo.go` 已接收 `upstream_model_mismatch`，但列表、汇总、趋势、模型、分组和 endpoint SQL 未追加该条件，导致管理端筛选静默返回未过滤数据。现已统一接入三态查询条件；筛选启用时强制精确总数，并使用字面量 `IS TRUE` / `IS FALSE` 保持 migration 195 部分索引可用。
 
 ### v0.1.172 合并验证
 
 - 合并前使用 `git merge-tree --write-tree` 预检，实际处理 40 个冲突路径；20 个 modify/delete 冲突继续保持 fork 拆分文件删除，Ent 与 Wire 已按合并后的 schema/依赖重新生成。
-- 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 与 `TZ=UTC go vet -tags=unit ./...` 全量通过；定向回归覆盖上游响应模型记录、工具 Schema、容量降载、Grok 视频 task ID、订阅额度重置、腾讯验证码区域和 fork 用量日志图片字段。
-- 前端 `pnpm typecheck`、`pnpm lint:check`、`pnpm test:run`（232 个测试文件、1648 个用例）和 `pnpm build` 全部通过；管理端用量导出继续保持 fork 的安全 CSV 方案，没有恢复上游 XLSX 依赖。
+- 后端 `TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...` 全量通过，`golangci-lint v2.9.0` 为 `0 issues`；PostgreSQL 集成用例 `TestUsageLog_UpstreamModelMismatchFilterAndPartialIndex` 验证筛选结果正确且命中部分索引。其余定向回归覆盖上游响应模型记录、工具 Schema、容量降载、Grok 视频 task ID、订阅额度重置、腾讯验证码区域和 fork 用量日志图片字段。
+- 前端 `pnpm typecheck`、`pnpm lint`、`pnpm exec vitest run`（232 个测试文件、1648 个用例）和 `pnpm build` 全部通过；管理端用量导出继续保持 fork 的安全 CSV 方案，没有恢复上游 XLSX 依赖。
 
 ## 2026-08-05 Fork 定制：个人设置绑定 GitHub/Google OAuth
 
