@@ -30,7 +30,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, image_first_output_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, created_at"
+const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, upstream_response_model, upstream_model_mismatch, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, image_first_output_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, created_at"
 
 // usageLogInsertArgTypes must stay in the same order as:
 //  1. prepareUsageLogInsert().args
@@ -47,6 +47,8 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // model
 	"text",        // requested_model
 	"text",        // upstream_model
+	"text",        // upstream_response_model
+	"boolean",     // upstream_model_mismatch
 	"bigint",      // group_id
 	"bigint",      // subscription_id
 	"integer",     // input_tokens
@@ -409,6 +411,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -466,7 +470,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -865,6 +869,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -954,6 +960,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				model,
 				requested_model,
 				upstream_model,
+				upstream_response_model,
+				upstream_model_mismatch,
 				group_id,
 				subscription_id,
 				input_tokens,
@@ -1014,6 +1022,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				model,
 				requested_model,
 				upstream_model,
+				upstream_response_model,
+				upstream_model_mismatch,
 				group_id,
 				subscription_id,
 				input_tokens,
@@ -1114,6 +1124,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1200,6 +1212,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1260,6 +1274,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1328,6 +1344,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			model,
 			requested_model,
 			upstream_model,
+			upstream_response_model,
+			upstream_model_mismatch,
 			group_id,
 			subscription_id,
 			input_tokens,
@@ -1385,7 +1403,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1433,6 +1451,11 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 		requestedModel = strings.TrimSpace(log.Model)
 	}
 	upstreamModel := nullString(log.UpstreamModel)
+	upstreamResponseModel := nullString(log.UpstreamResponseModel)
+	upstreamModelMismatch := sql.NullBool{}
+	if log.UpstreamModelMismatch != nil {
+		upstreamModelMismatch = sql.NullBool{Bool: *log.UpstreamModelMismatch, Valid: true}
+	}
 
 	var requestIDArg any
 	if requestID != "" {
@@ -1452,6 +1475,8 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			log.Model,
 			nullString(&requestedModel),
 			upstreamModel,
+			upstreamResponseModel,
+			upstreamModelMismatch,
 			groupID,
 			subscriptionID,
 			log.InputTokens,
@@ -5022,6 +5047,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		model                     string
 		requestedModel            sql.NullString
 		upstreamModel             sql.NullString
+		upstreamResponseModel     sql.NullString
+		upstreamModelMismatch     sql.NullBool
 		groupID                   sql.NullInt64
 		subscriptionID            sql.NullInt64
 		inputTokens               int
@@ -5084,6 +5111,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&model,
 		&requestedModel,
 		&upstreamModel,
+		&upstreamResponseModel,
+		&upstreamModelMismatch,
 		&groupID,
 		&subscriptionID,
 		&inputTokens,
@@ -5241,6 +5270,12 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	}
 	if upstreamModel.Valid {
 		log.UpstreamModel = &upstreamModel.String
+	}
+	if upstreamResponseModel.Valid {
+		log.UpstreamResponseModel = &upstreamResponseModel.String
+	}
+	if upstreamModelMismatch.Valid {
+		log.UpstreamModelMismatch = &upstreamModelMismatch.Bool
 	}
 	if channelID.Valid {
 		value := channelID.Int64

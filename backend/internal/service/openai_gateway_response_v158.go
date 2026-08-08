@@ -27,6 +27,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 	redactionCtx := ctx
 	if c != nil && c.Request != nil {
 		redactionCtx = c.Request.Context()
@@ -400,6 +404,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			dataBytes := []byte(data)
 			eventTypeRaw := gjson.GetBytes(dataBytes, "type").String()
 			eventType := strings.TrimSpace(eventTypeRaw)
+			observer.ObserveOpenAI(dataBytes, eventTypeRaw)
 			if isOpenAIErrorBearingEventType(eventType) {
 				if redacted := redactSensitiveBody(dataBytes); !bytes.Equal(redacted, dataBytes) {
 					dataBytes = redacted
@@ -818,10 +823,18 @@ func applyOpenAIStreamFailedErrorPassthroughRule(c *gin.Context, platform string
 }
 
 func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string, clientOutputStarted bool) ([]byte, bool) {
-	if eventType != "response.failed" || len(payload) == 0 || !gjson.ValidBytes(payload) {
+	eventType = strings.TrimSpace(eventType)
+	isFailedEvent := eventType == "response.failed"
+	if (!isFailedEvent && eventType != "error") || len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return payload, false
 	}
 	updated := payload
+	if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(updated); changed {
+		updated = rewritten
+	}
+	if !isFailedEvent {
+		return updated, !bytes.Equal(updated, payload)
+	}
 	if clientOutputStarted && isOpenAIContextWindowError(extractOpenAISSEErrorMessage(payload), payload) {
 		errorPath := ""
 		if gjson.GetBytes(updated, "response.error").Exists() {

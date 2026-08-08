@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +31,8 @@ type resetQuotaUserSubRepoStub struct {
 	resetDailyErr      error
 	resetWeeklyErr     error
 	resetMonthlyErr    error
-	windowStart        time.Time
+	dailyStart         time.Time
+	periodicStart      time.Time
 }
 
 func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserSubscription, error) {
@@ -70,11 +72,12 @@ func (r *resetQuotaUserSubRepoStub) List(_ context.Context, params pagination.Pa
 	return out, &pagination.PaginationResult{Total: int64(len(r.list)), Page: params.Page, PageSize: params.PageSize, Pages: pages}, nil
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, windowStart time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, periodicStart time.Time) error {
 	r.resetDailyCalled = resetDaily
 	r.resetWeeklyCalled = resetWeekly
 	r.resetMonthlyCalled = resetMonthly
-	r.windowStart = windowStart
+	r.dailyStart = dailyStart
+	r.periodicStart = periodicStart
 	if resetDaily && r.resetDailyErr != nil {
 		return r.resetDailyErr
 	}
@@ -98,15 +101,15 @@ func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, id int6
 	}
 	if resetDaily {
 		r.sub.DailyUsageUSD = 0
-		r.sub.DailyWindowStart = &windowStart
+		r.sub.DailyWindowStart = &dailyStart
 	}
 	if resetWeekly {
 		r.sub.WeeklyUsageUSD = 0
-		r.sub.WeeklyWindowStart = &windowStart
+		r.sub.WeeklyWindowStart = &periodicStart
 	}
 	if resetMonthly {
 		r.sub.MonthlyUsageUSD = 0
-		r.sub.MonthlyWindowStart = &windowStart
+		r.sub.MonthlyWindowStart = &periodicStart
 	}
 	return nil
 }
@@ -152,8 +155,9 @@ func TestAdminResetQuota_ResetBoth(t *testing.T) {
 	require.True(t, stub.resetDailyCalled, "应调用 ResetDailyUsage")
 	require.True(t, stub.resetWeeklyCalled, "应调用 ResetWeeklyUsage")
 	require.False(t, stub.resetMonthlyCalled, "不应调用 ResetMonthlyUsage")
-	require.Equal(t, resetAt, stub.windowStart)
-	require.Equal(t, resetAt, *result.DailyWindowStart)
+	require.Equal(t, timezone.StartOfDay(resetAt), stub.dailyStart)
+	require.Equal(t, resetAt, stub.periodicStart)
+	require.Equal(t, timezone.StartOfDay(resetAt), *result.DailyWindowStart)
 	require.Equal(t, resetAt, *result.WeeklyWindowStart)
 }
 

@@ -180,6 +180,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if writeClientMessage == nil {
 		return nil, errors.New("client websocket writer is nil")
 	}
+	responseModelObserver := &upstreamResponseModelObserver{}
 	identityMetadata, identityErr := s.agentIdentityRequestMetadata(ctx, account)
 	if identityErr != nil {
 		return nil, fmt.Errorf("resolve agent identity request metadata for http bridge: %w", identityErr)
@@ -330,19 +331,21 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	resultWithUsage := func() *OpenAIForwardResult {
 		imageCount := imageCounter.Count()
 		result := &OpenAIForwardResult{
-			RequestID:             responseID,
-			Usage:                 usage,
-			Model:                 originalModel,
-			UpstreamModel:         mappedModel,
-			ServiceTier:           extractOpenAIServiceTierFromBody(body),
-			ReasoningEffort:       ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
-			Stream:                reqStream,
-			OpenAIWSMode:          true,
-			UpstreamTerminalEvent: upstreamTerminalEvent,
-			ResponseHeaders:       cloneHeader(resp.Header),
-			Duration:              time.Since(turnStart),
-			FirstTokenMs:          firstTokenMs,
-			ImageFirstOutputMs:    imageFirstOutputMs,
+			RequestID:                     responseID,
+			Usage:                         usage,
+			Model:                         originalModel,
+			UpstreamModel:                 mappedModel,
+			UpstreamResponseModel:         responseModelObserver.Model(),
+			UpstreamResponseModelConflict: responseModelObserver.Conflict(),
+			ServiceTier:                   extractOpenAIServiceTierFromBody(body),
+			ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(body, mappedModel, originalModel), body, mappedModel),
+			Stream:                        reqStream,
+			OpenAIWSMode:                  true,
+			UpstreamTerminalEvent:         upstreamTerminalEvent,
+			ResponseHeaders:               cloneHeader(resp.Header),
+			Duration:                      time.Since(turnStart),
+			FirstTokenMs:                  firstTokenMs,
+			ImageFirstOutputMs:            imageFirstOutputMs,
 		}
 		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 			result.wsReplayInput = replayInput
@@ -387,6 +390,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			upstreamMessage = normalized
 		}
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+		responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 		if isOpenAIErrorBearingEventType(eventType) {
 			upstreamMessage = redactSensitiveBody(upstreamMessage)
 		}
@@ -460,8 +464,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			upstreamEventErr = errors.New(errMessage)
 		}
 
+		clientMessage := upstreamMessage
+		if eventType == "error" || eventType == "response.failed" {
+			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
+				clientMessage = rewritten
+			}
+		}
 		if !clientDisconnected {
-			if err := writeClientMessage(upstreamMessage); err != nil {
+			if err := writeClientMessage(clientMessage); err != nil {
 				if isOpenAIWSClientDisconnectError(err) {
 					clientDisconnected = true
 					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)

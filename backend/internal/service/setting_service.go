@@ -1019,6 +1019,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyTurnstileSiteKey,
 		SettingKeyTencentCaptchaEnabled,
 		SettingKeyTencentCaptchaAppID,
+		SettingKeyTencentCaptchaRegion,
 		SettingKeyAliyunCaptchaEnabled,
 		SettingKeyAliyunCaptchaSceneID,
 		SettingKeyAliyunCaptchaPrefix,
@@ -1161,6 +1162,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
 		TencentCaptchaEnabled:            settings[SettingKeyTencentCaptchaEnabled] == "true",
 		TencentCaptchaAppID:              settings[SettingKeyTencentCaptchaAppID],
+		TencentCaptchaRegion:             normalizeTencentCaptchaRegion(settings[SettingKeyTencentCaptchaRegion]),
 		AliyunCaptchaEnabled:             settings[SettingKeyAliyunCaptchaEnabled] == "true",
 		AliyunCaptchaSceneID:             settings[SettingKeyAliyunCaptchaSceneID],
 		AliyunCaptchaPrefix:              settings[SettingKeyAliyunCaptchaPrefix],
@@ -2025,6 +2027,7 @@ type PublicSettingsInjectionPayload struct {
 	TurnstileSiteKey                 string                   `json:"turnstile_site_key"`
 	TencentCaptchaEnabled            bool                     `json:"tencent_captcha_enabled"`
 	TencentCaptchaAppID              string                   `json:"tencent_captcha_app_id"`
+	TencentCaptchaRegion             string                   `json:"tencent_captcha_region"`
 	AliyunCaptchaEnabled             bool                     `json:"aliyun_captcha_enabled"`
 	AliyunCaptchaSceneID             string                   `json:"aliyun_captcha_scene_id"`
 	AliyunCaptchaPrefix              string                   `json:"aliyun_captcha_prefix"`
@@ -2109,6 +2112,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		TurnstileSiteKey:                 settings.TurnstileSiteKey,
 		TencentCaptchaEnabled:            settings.TencentCaptchaEnabled,
 		TencentCaptchaAppID:              settings.TencentCaptchaAppID,
+		TencentCaptchaRegion:             settings.TencentCaptchaRegion,
 		AliyunCaptchaEnabled:             settings.AliyunCaptchaEnabled,
 		AliyunCaptchaSceneID:             settings.AliyunCaptchaSceneID,
 		AliyunCaptchaPrefix:              settings.AliyunCaptchaPrefix,
@@ -2697,6 +2701,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyTencentCaptchaEnabled] = strconv.FormatBool(settings.TencentCaptchaEnabled)
 	updates[SettingKeyTencentCaptchaAppID] = settings.TencentCaptchaAppID
+	updates[SettingKeyTencentCaptchaRegion] = normalizeTencentCaptchaRegion(settings.TencentCaptchaRegion)
 	if settings.TencentCaptchaAppSecretKey != "" {
 		updates[SettingKeyTencentCaptchaAppSecretKey] = settings.TencentCaptchaAppSecretKey
 	}
@@ -4210,6 +4215,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		TurnstileSecretKeyConfigured:           settings[SettingKeyTurnstileSecretKey] != "",
 		TencentCaptchaEnabled:                  settings[SettingKeyTencentCaptchaEnabled] == "true",
 		TencentCaptchaAppID:                    settings[SettingKeyTencentCaptchaAppID],
+		TencentCaptchaRegion:                   normalizeTencentCaptchaRegion(settings[SettingKeyTencentCaptchaRegion]),
 		TencentCaptchaAppSecretKeyConfigured:   settings[SettingKeyTencentCaptchaAppSecretKey] != "",
 		TencentCaptchaCloudSecretIDConfigured:  settings[SettingKeyTencentCaptchaCloudSecretID] != "",
 		TencentCaptchaCloudSecretKeyConfigured: settings[SettingKeyTencentCaptchaCloudSecretKey] != "",
@@ -5429,6 +5435,7 @@ type TencentCaptchaConfig struct {
 	AppSecretKey   string
 	CloudSecretID  string
 	CloudSecretKey string
+	Region         string
 }
 
 // AliyunCaptchaConfig contains the credentials required by Aliyun Captcha 2.0's
@@ -5457,6 +5464,7 @@ func (s *SettingService) GetCaptchaProviderConfig(ctx context.Context) (CaptchaP
 		SettingKeyTencentCaptchaAppSecretKey,
 		SettingKeyTencentCaptchaCloudSecretID,
 		SettingKeyTencentCaptchaCloudSecretKey,
+		SettingKeyTencentCaptchaRegion,
 		SettingKeyAliyunCaptchaEnabled,
 		SettingKeyAliyunCaptchaAccessKeyID,
 		SettingKeyAliyunCaptchaAccessKeySecret,
@@ -5475,6 +5483,7 @@ func (s *SettingService) GetCaptchaProviderConfig(ctx context.Context) (CaptchaP
 			AppSecretKey:   values[SettingKeyTencentCaptchaAppSecretKey],
 			CloudSecretID:  values[SettingKeyTencentCaptchaCloudSecretID],
 			CloudSecretKey: values[SettingKeyTencentCaptchaCloudSecretKey],
+			Region:         normalizeTencentCaptchaRegion(values[SettingKeyTencentCaptchaRegion]),
 		},
 		Aliyun: AliyunCaptchaConfig{
 			Enabled:         values[SettingKeyAliyunCaptchaEnabled] == "true",

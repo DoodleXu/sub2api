@@ -192,6 +192,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TencentCaptchaAppSecretKeyConfigured:                   settings.TencentCaptchaAppSecretKeyConfigured,
 		TencentCaptchaCloudSecretIDConfigured:                  settings.TencentCaptchaCloudSecretIDConfigured,
 		TencentCaptchaCloudSecretKeyConfigured:                 settings.TencentCaptchaCloudSecretKeyConfigured,
+		TencentCaptchaRegion:                                   settings.TencentCaptchaRegion,
 		AliyunCaptchaEnabled:                                   settings.AliyunCaptchaEnabled,
 		AliyunCaptchaAccessKeyID:                               settings.AliyunCaptchaAccessKeyID,
 		AliyunCaptchaAccessKeySecretConfigured:                 settings.AliyunCaptchaAccessKeySecretConfigured,
@@ -1081,6 +1082,7 @@ type UpdateSettingsRequest struct {
 	// 腾讯天御验证码设置
 	TencentCaptchaEnabled        bool   `json:"tencent_captcha_enabled"`
 	TencentCaptchaAppID          string `json:"tencent_captcha_app_id"`
+	TencentCaptchaRegion         string `json:"tencent_captcha_region"`
 	TencentCaptchaAppSecretKey   string `json:"tencent_captcha_app_secret_key"`
 	TencentCaptchaCloudSecretID  string `json:"tencent_captcha_cloud_secret_id"`
 	TencentCaptchaCloudSecretKey string `json:"tencent_captcha_cloud_secret_key"`
@@ -1713,6 +1715,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if req.AliyunCaptchaRegion != service.AliyunCaptchaRegionSGP {
 		req.AliyunCaptchaRegion = service.AliyunCaptchaRegionCN
+	}
+	if req.TencentCaptchaRegion != service.TencentCaptchaRegionINTL {
+		req.TencentCaptchaRegion = service.TencentCaptchaRegionCN
 	}
 	if req.TencentCaptchaEnabled {
 		appID, err := strconv.ParseUint(req.TencentCaptchaAppID, 10, 64)
@@ -2541,6 +2546,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TurnstileSecretKey:               req.TurnstileSecretKey,
 		TencentCaptchaEnabled:            req.TencentCaptchaEnabled,
 		TencentCaptchaAppID:              req.TencentCaptchaAppID,
+		TencentCaptchaRegion:             req.TencentCaptchaRegion,
 		TencentCaptchaAppSecretKey:       req.TencentCaptchaAppSecretKey,
 		TencentCaptchaCloudSecretID:      req.TencentCaptchaCloudSecretID,
 		TencentCaptchaCloudSecretKey:     req.TencentCaptchaCloudSecretKey,
@@ -3279,6 +3285,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TurnstileSecretKeyConfigured:                           updatedSettings.TurnstileSecretKeyConfigured,
 		TencentCaptchaEnabled:                                  updatedSettings.TencentCaptchaEnabled,
 		TencentCaptchaAppID:                                    updatedSettings.TencentCaptchaAppID,
+		TencentCaptchaRegion:                                   updatedSettings.TencentCaptchaRegion,
 		TencentCaptchaAppSecretKeyConfigured:                   updatedSettings.TencentCaptchaAppSecretKeyConfigured,
 		TencentCaptchaCloudSecretIDConfigured:                  updatedSettings.TencentCaptchaCloudSecretIDConfigured,
 		TencentCaptchaCloudSecretKeyConfigured:                 updatedSettings.TencentCaptchaCloudSecretKeyConfigured,
@@ -3656,6 +3663,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.TencentCaptchaAppID != after.TencentCaptchaAppID {
 		changed = append(changed, "tencent_captcha_app_id")
+	}
+	if before.TencentCaptchaRegion != after.TencentCaptchaRegion {
+		changed = append(changed, "tencent_captcha_region")
 	}
 	if req.TencentCaptchaAppSecretKey != "" {
 		changed = append(changed, "tencent_captcha_app_secret_key")

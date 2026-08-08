@@ -46,7 +46,7 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	// 与真实 Codex CLI 的 User-Agent 结构对齐：
+	// 与真实 Codex TUI 的 User-Agent 结构对齐：
 	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
 	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
 	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
@@ -54,7 +54,7 @@ const (
 	// codexCLIUserAgent 是编译期兜底 UA；运行时优先使用由后台版本号拼出的规范 UA。
 	// 版本段必须来自 codexCLIVersion：UA 与 version 头是同一个版本声明的两个出口，
 	// 各自硬编码会漂移成互相矛盾的身份。
-	codexCLIUserAgent = "codex_cli_rs/" + codexCLIVersion + codexCLIUserAgentSuffix
+	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexCLIUserAgentSuffix
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -256,6 +256,10 @@ type OpenAIForwardResult struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Empty when no mapping was applied (requested model was used as-is).
 	UpstreamModel string
+	// UpstreamResponseModel is captured from the raw successful upstream
+	// response before any client-facing rewrite or protocol conversion.
+	UpstreamResponseModel         string
+	UpstreamResponseModelConflict bool
 	// UpstreamEndpoint is the actual upstream API path used for this request.
 	// It avoids guessing when one downstream protocol can use multiple upstream endpoints.
 	UpstreamEndpoint string
@@ -1459,7 +1463,7 @@ func resolveOpenAIUpstreamOriginator(c *gin.Context, isOfficialClient bool) stri
 		}
 	}
 	if isOfficialClient {
-		return "codex_cli_rs"
+		return openai.CodexDefaultOriginator
 	}
 	return "opencode"
 }
@@ -2911,7 +2915,7 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 
 func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	switch statusCode {
-	case 401, 402, 403, 429, 529:
+	case 401, 402, 403, 405, 429, 529:
 		return true
 	default:
 		return statusCode >= 500
@@ -2985,6 +2989,7 @@ func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, re
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	beginUpstreamResponseModelObservation(c)
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
 	startTime := time.Now()
@@ -3010,6 +3015,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	if normalized {
 		body = normalizedBody
+	}
+	sanitizedToolBody, toolSchemaSanitized, toolSchemaErr := sanitizeOpenAIResponsesToolParameterTypes(body)
+	if toolSchemaErr != nil {
+		return nil, fmt.Errorf("sanitize OpenAI Responses tool parameters: %w", toolSchemaErr)
+	}
+	if toolSchemaSanitized {
+		body = sanitizedToolBody
 	}
 	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
 		liteBody, changed, liteErr := normalizeOpenAIResponsesLiteToolsPayload(body)
@@ -3957,19 +3969,21 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		forwardResult := &OpenAIForwardResult{
-			RequestID:          resp.Header.Get("x-request-id"),
-			ResponseID:         responseID,
-			Usage:              *usage,
-			Model:              originalModel,
-			BillingModel:       billingModel,
-			UpstreamModel:      upstreamModel,
-			ServiceTier:        serviceTier,
-			ReasoningEffort:    reasoningEffort,
-			Stream:             reqStream,
-			OpenAIWSMode:       false,
-			Duration:           time.Since(startTime),
-			FirstTokenMs:       firstTokenMs,
-			ImageFirstOutputMs: imageFirstOutputMs,
+			RequestID:                     resp.Header.Get("x-request-id"),
+			ResponseID:                    responseID,
+			Usage:                         *usage,
+			Model:                         originalModel,
+			BillingModel:                  billingModel,
+			UpstreamModel:                 upstreamModel,
+			UpstreamResponseModel:         observedUpstreamResponseModel(c),
+			UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+			ServiceTier:                   serviceTier,
+			ReasoningEffort:               reasoningEffort,
+			Stream:                        reqStream,
+			OpenAIWSMode:                  false,
+			Duration:                      time.Since(startTime),
+			FirstTokenMs:                  firstTokenMs,
+			ImageFirstOutputMs:            imageFirstOutputMs,
 		}
 		if imageCount > 0 {
 			forwardResult.ImageCount = imageCount
@@ -4251,18 +4265,20 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	forwardResult := &OpenAIForwardResult{
-		RequestID:          resp.Header.Get("x-request-id"),
-		ResponseID:         responseID,
-		Usage:              *usage,
-		Model:              reqModel,
-		UpstreamModel:      upstreamPassthroughModel,
-		ServiceTier:        serviceTier,
-		ReasoningEffort:    reasoningEffort,
-		Stream:             reqStream,
-		OpenAIWSMode:       false,
-		Duration:           time.Since(startTime),
-		FirstTokenMs:       firstTokenMs,
-		ImageFirstOutputMs: imageFirstOutputMs,
+		RequestID:                     resp.Header.Get("x-request-id"),
+		ResponseID:                    responseID,
+		Usage:                         *usage,
+		Model:                         reqModel,
+		UpstreamModel:                 upstreamPassthroughModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		ServiceTier:                   serviceTier,
+		ReasoningEffort:               reasoningEffort,
+		Stream:                        reqStream,
+		OpenAIWSMode:                  false,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ImageFirstOutputMs:            imageFirstOutputMs,
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -4388,7 +4404,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			req.Header.Set("OpenAI-Beta", "responses=experimental")
 		}
 		if req.Header.Get("originator") == "" {
-			req.Header.Set("originator", "codex_cli_rs")
+			req.Header.Set("originator", openai.CodexDefaultOriginator)
 		}
 		// 用隔离后的 session 标识符覆盖客户端透传值，防止跨用户会话碰撞。
 		if clientSessionID == "" {
@@ -4613,8 +4629,12 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if strings.TrimSpace(eventType) == "response.failed" {
+	switch strings.TrimSpace(eventType) {
+	case "response.failed":
 		return false
+	case "error":
+		payload := []byte(trimmed)
+		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
 	}
 	return !openAIStreamEventIsPreamble(eventType)
 }
@@ -4634,6 +4654,32 @@ func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
 	default:
 		return false
 	}
+}
+
+const openAICapacityShedRetryableClientCode = "server_error"
+
+// sanitizeOpenAICapacityShedErrorCodeForClient rewrites terminal capacity-shed
+// codes only in the payload sent to clients, allowing Codex clients to retry.
+func sanitizeOpenAICapacityShedErrorCodeForClient(payload []byte) ([]byte, bool) {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) || !isOpenAIUpstreamCapacityShedEvent(payload) {
+		return payload, false
+	}
+	updated := payload
+	changed := false
+	for _, path := range []string{"response.error.code", "error.code"} {
+		switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(updated, path).String())) {
+		case "server_is_overloaded", "slow_down":
+		default:
+			continue
+		}
+		next, err := sjson.SetBytes(updated, path, openAICapacityShedRetryableClientCode)
+		if err != nil {
+			return payload, false
+		}
+		updated = next
+		changed = true
+	}
+	return updated, changed
 }
 
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
@@ -4845,6 +4891,15 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
+	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	if bodyHasSSEFraming(body) {
+		observeOpenAISSEBody(observer, string(body))
+	} else {
+		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
 
 	// Detect SSE responses from upstream and convert to JSON.
@@ -5759,6 +5814,15 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
+	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	if bodyHasSSEFraming(body) {
+		observeOpenAISSEBody(observer, string(body))
+	} else {
+		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
 
 	// Detect SSE responses for ALL account types via Content-Type header.
@@ -6908,30 +6972,42 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input.OriginalModel != "" {
 		requestedModel = input.OriginalModel
 	}
+	sentModel := upstreamSentModel(result.Model, result.UpstreamModel)
+	if result.UpstreamResponseModelConflict {
+		logger.L().Warn("upstream_response_model_conflict",
+			zap.String("platform", account.Platform),
+			zap.Int64("account_id", account.ID),
+			zap.String("request_id", requestID),
+			zap.String("sent_model", sentModel),
+			zap.String("selected_response_model", strings.TrimSpace(result.UpstreamResponseModel)),
+		)
+	}
 
 	usageLog := &UsageLog{
-		UserID:              user.ID,
-		APIKeyID:            apiKey.ID,
-		AccountID:           account.ID,
-		RequestID:           requestID,
-		Model:               result.Model,
-		RequestedModel:      requestedModel,
-		UpstreamModel:       optionalTrimmedStringPtr(result.UpstreamModel),
-		ServiceTier:         result.ServiceTier,
-		ReasoningEffort:     result.ReasoningEffort,
-		InboundEndpoint:     optionalTrimmedStringPtr(input.InboundEndpoint),
-		UpstreamEndpoint:    optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:         actualInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
-		ImageCount:          result.ImageCount,
-		ImageSize:           optionalTrimmedStringPtr(result.ImageSize),
-		ImageInputSize:      optionalTrimmedStringPtr(result.ImageInputSize),
-		ImageOutputSize:     optionalTrimmedStringPtr(result.ImageOutputSize),
-		ImageSizeSource:     optionalTrimmedStringPtr(result.ImageSizeSource),
-		ImageSizeBreakdown:  result.ImageSizeBreakdown,
+		UserID:                user.ID,
+		APIKeyID:              apiKey.ID,
+		AccountID:             account.ID,
+		RequestID:             requestID,
+		Model:                 result.Model,
+		RequestedModel:        requestedModel,
+		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
+		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ServiceTier:           result.ServiceTier,
+		ReasoningEffort:       result.ReasoningEffort,
+		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:           actualInputTokens,
+		OutputTokens:          result.Usage.OutputTokens,
+		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:       result.Usage.CacheReadInputTokens,
+		ImageOutputTokens:     result.Usage.ImageOutputTokens,
+		ImageCount:            result.ImageCount,
+		ImageSize:             optionalTrimmedStringPtr(result.ImageSize),
+		ImageInputSize:        optionalTrimmedStringPtr(result.ImageInputSize),
+		ImageOutputSize:       optionalTrimmedStringPtr(result.ImageOutputSize),
+		ImageSizeSource:       optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeBreakdown:    result.ImageSizeBreakdown,
 	}
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
@@ -7080,6 +7156,16 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 	durationMs := int(result.Duration.Milliseconds())
 	billingMode := string(BillingModePricingPending)
 	accountRateMultiplier := input.Account.BillingRateMultiplier()
+	sentModel := upstreamSentModel(result.Model, result.UpstreamModel)
+	if result.UpstreamResponseModelConflict {
+		logger.L().Warn("upstream_response_model_conflict",
+			zap.String("platform", input.Account.Platform),
+			zap.Int64("account_id", input.Account.ID),
+			zap.String("request_id", requestID),
+			zap.String("sent_model", sentModel),
+			zap.String("selected_response_model", strings.TrimSpace(result.UpstreamResponseModel)),
+		)
+	}
 	usageLog := &UsageLog{
 		UserID:                input.User.ID,
 		APIKeyID:              input.APIKey.ID,
@@ -7088,6 +7174,8 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
 		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
+		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
 		ChannelID:             optionalInt64Ptr(input.ChannelID),
 		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
 		BillingMode:           &billingMode,

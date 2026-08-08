@@ -95,6 +95,18 @@ func dashboardDetailContext(c *gin.Context) (context.Context, context.CancelFunc
 	return context.WithTimeout(c.Request.Context(), dashboardDetailQueryTimeout)
 }
 
+func parseOptionalBoolDashboardFilter(c *gin.Context, name string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
 func finishDashboardDetailQuery(c *gin.Context, section string, startedAt time.Time) {
 	duration := time.Since(startedAt)
 	c.Header("X-Dashboard-Query-Duration-Ms", strconv.FormatInt(duration.Milliseconds(), 10))
@@ -316,14 +328,19 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 			return
 		}
 	}
-	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || strings.TrimSpace(model) != "" || requestType != nil || stream != nil || billingType != nil
+	upstreamModelMismatch, err := parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
+	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || strings.TrimSpace(model) != "" || requestType != nil || stream != nil || billingType != nil || upstreamModelMismatch != nil
 	if usesRawLogs && !validateDashboardDetailRange(c, startTime, endTime) {
 		return
 	}
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	trend, hit, err := h.getUsageTrendCached(queryCtx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType)
+	trend, hit, err := h.getUsageTrendCached(queryCtx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get usage trend")
 		return
@@ -408,14 +425,19 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 			return
 		}
 	}
-	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || requestType != nil || stream != nil || billingType != nil || usagestats.NormalizeModelSource(modelSource) != usagestats.ModelSourceRequested
+	upstreamModelMismatch, err := parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
+	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || requestType != nil || stream != nil || billingType != nil || upstreamModelMismatch != nil || usagestats.NormalizeModelSource(modelSource) != usagestats.ModelSourceRequested
 	if usesRawLogs && !validateDashboardDetailRange(c, startTime, endTime) {
 		return
 	}
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	stats, hit, err := h.getModelStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, billingType)
+	stats, hit, err := h.getModelStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get model statistics")
 		return
@@ -502,10 +524,15 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 			return
 		}
 	}
+	upstreamModelMismatch, err := parseOptionalBoolDashboardFilter(c, "upstream_model_mismatch")
+	if err != nil {
+		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
+		return
+	}
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	stats, hit, err := h.getGroupStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType)
+	stats, hit, err := h.getGroupStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get group statistics")
 		return

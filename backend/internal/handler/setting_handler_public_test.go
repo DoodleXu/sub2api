@@ -91,6 +91,7 @@ func TestSettingHandler_GetPublicSettings_ExposesWebConsoleAndTencentCaptchaSett
 			service.SettingKeyWebConsoleDefaultEndpoint: "https://api.example.com",
 			service.SettingKeyTencentCaptchaEnabled:     "true",
 			service.SettingKeyTencentCaptchaAppID:       "123456789",
+			service.SettingKeyTencentCaptchaRegion:      service.TencentCaptchaRegionINTL,
 		},
 	}
 	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
@@ -110,6 +111,7 @@ func TestSettingHandler_GetPublicSettings_ExposesWebConsoleAndTencentCaptchaSett
 			WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 			TencentCaptchaEnabled     bool   `json:"tencent_captcha_enabled"`
 			TencentCaptchaAppID       string `json:"tencent_captcha_app_id"`
+			TencentCaptchaRegion      string `json:"tencent_captcha_region"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
@@ -118,6 +120,7 @@ func TestSettingHandler_GetPublicSettings_ExposesWebConsoleAndTencentCaptchaSett
 	require.Equal(t, "https://api.example.com", resp.Data.WebConsoleDefaultEndpoint)
 	require.True(t, resp.Data.TencentCaptchaEnabled)
 	require.Equal(t, "123456789", resp.Data.TencentCaptchaAppID)
+	require.Equal(t, service.TencentCaptchaRegionINTL, resp.Data.TencentCaptchaRegion)
 }
 
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {

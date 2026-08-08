@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-05
+最后更新：2026-08-08
 
 ## 当前对比基线
 
@@ -10,23 +10,37 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `b9c86b905 test: 修复跨时区聚合测试环境依赖` | 本次合并 v0.1.171 前的 fork 基线；fork 发布版本保持 `0.1.239` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.171` -> `f0e7a9c7a23a` | 本次将 v0.1.171 合入本 fork；版本源继续保持 `0.1.239` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.171` -> `f0e7a9c7a23a` | 2026-08-04 发布的官方最新非草稿 release |
-| 上游 main HEAD | `00b859617` | 比 v0.1.171 release 多 sponsor 同步提交；本次只合入 release 标签，没有越过标签合并 main |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 29 个冲突路径；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游退款确认、验证码/CSP、Codex 身份同步、降载重试和前端刷新协调能力 |
+| Fork 同步前 HEAD | `42bf228dfc92` | 本次合并 v0.1.172 前的 fork 基线；fork 发布版本保持 `0.1.241` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.172` -> `155c494964c3` | 本次将 v0.1.172 合入本 fork；版本源继续保持 `0.1.241` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.172` -> `155c494964c3` | 2026-08-07 发布的官方最新非草稿 release |
+| 上游 main HEAD | `cc67b1aca1d3` | 本次刷新时的上游 main；同步范围严格停在 v0.1.172 release 标签，没有越过标签合并 main |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 40 个冲突路径，其中 20 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游响应模型审计、Codex TUI 身份、容量降载恢复、订阅日额度午夜重置、验证码区域和兼容性修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.170:refs/tags/upstream/v0.1.170 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.170^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.170^{}..HEAD
+git fetch upstream refs/tags/v0.1.172:refs/tags/upstream/v0.1.172 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.172^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.172` 合并说明：
+
+- 合入上游 OAuth 账号接管安全修复、Responses 到 Anthropic 无效块清理、工具 Schema `type: null` 归一化、Grok 405 failover、代理拨号超时、运营日志退避和 Gemini 3.6 等兼容性修复。
+- OpenAI、Anthropic、HTTP 与 WebSocket 转发链路新增上游响应模型观测；用量日志持久化 `upstream_response_model` 与 mismatch 标记，管理端筛选、趋势、模型/分组统计和快照缓存同步接入。fork 继续使用聚合 repository/service 文件承载上游拆分实现，并保留图片计费、首图耗时、逐 turn WS 计费和高级调度字段。
+- Codex 出站身份采用上游默认 TUI originator；容量降载的 `error -> response.failed` 序列可在首个真实输出前安全 failover，输出开始后仅改写下游错误码以允许客户端退避重试，不改变监控和账号状态判定使用的原始错误。
+- 订阅日额度窗口改为本地时区自然日零点，周/月周期窗口仍使用实际重置时刻；腾讯验证码新增中国站/国际站区域并同步公开设置、服务端 endpoint 与 CSP。fork 的批量周额度重置继续复用同一原子窗口接口。
+- 上游新增的 20 个 handler/repository/gateway/setting 拆分文件继续保持删除，增量移植回 fork 聚合模块；`backend/cmd/server/VERSION` 保持 `0.1.241`，未跟随上游源码中的 `0.1.171` 降级。
+
+### v0.1.172 合并验证
+
+- 合并前使用 `git merge-tree --write-tree` 预检，实际处理 40 个冲突路径；20 个 modify/delete 冲突继续保持 fork 拆分文件删除，Ent 与 Wire 已按合并后的 schema/依赖重新生成。
+- 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 与 `TZ=UTC go vet -tags=unit ./...` 全量通过；定向回归覆盖上游响应模型记录、工具 Schema、容量降载、Grok 视频 task ID、订阅额度重置、腾讯验证码区域和 fork 用量日志图片字段。
+- 前端 `pnpm typecheck`、`pnpm lint:check`、`pnpm test:run`（232 个测试文件、1648 个用例）和 `pnpm build` 全部通过；管理端用量导出继续保持 fork 的安全 CSV 方案，没有恢复上游 XLSX 依赖。
 
 ## 2026-08-05 Fork 定制：个人设置绑定 GitHub/Google OAuth
 

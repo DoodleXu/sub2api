@@ -37,6 +37,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	responseModelObserver := &upstreamResponseModelObserver{}
 	identityMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
 	if metadataErr != nil {
 		return nil, wrapOpenAIWSFallback("agent_identity_redactor", fmt.Errorf("resolve agent identity credentials for ws redaction: %w", metadataErr))
@@ -554,6 +555,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if eventType == "" {
 			continue
 		}
+		responseModelObserver.ObserveOpenAI(message, eventType)
 		if isOpenAIErrorBearingEventType(eventType) {
 			message = redactSensitiveBody(message)
 			eventType, eventResponseID, responseField = parseOpenAIWSEventEnvelope(message)
@@ -795,21 +797,23 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	return &OpenAIForwardResult{
-		RequestID:             responseID,
-		Usage:                 *usage,
-		Model:                 originalModel,
-		UpstreamModel:         mappedModel,
-		ImageCount:            imageCounter.Count(),
-		ImageOutputSizes:      imageCounter.Sizes(),
-		ServiceTier:           extractOpenAIServiceTier(reqBody),
-		ReasoningEffort:       extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
-		Stream:                reqStream,
-		OpenAIWSMode:          true,
-		UpstreamTerminalEvent: upstreamTerminalEvent,
-		ResponseHeaders:       lease.HandshakeHeaders(),
-		Duration:              time.Since(startTime),
-		FirstTokenMs:          firstTokenMs,
-		ImageFirstOutputMs:    imageFirstOutputMs,
+		RequestID:                     responseID,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 mappedModel,
+		UpstreamResponseModel:         responseModelObserver.Model(),
+		UpstreamResponseModelConflict: responseModelObserver.Conflict(),
+		ImageCount:                    imageCounter.Count(),
+		ImageOutputSizes:              imageCounter.Sizes(),
+		ServiceTier:                   extractOpenAIServiceTier(reqBody),
+		ReasoningEffort:               extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+		Stream:                        reqStream,
+		OpenAIWSMode:                  true,
+		UpstreamTerminalEvent:         upstreamTerminalEvent,
+		ResponseHeaders:               lease.HandshakeHeaders(),
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ImageFirstOutputMs:            imageFirstOutputMs,
 	}, nil
 }
 

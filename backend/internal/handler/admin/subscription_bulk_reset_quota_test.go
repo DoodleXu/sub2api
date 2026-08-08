@@ -97,10 +97,10 @@ func (r *bulkResetUserSubRepoStub) UpdateStatus(context.Context, int64, string) 
 func (r *bulkResetUserSubRepoStub) UpdateNotes(context.Context, int64, string) error {
 	panic("unexpected UpdateNotes call")
 }
-func (r *bulkResetUserSubRepoStub) ActivateWindows(context.Context, int64, time.Time) error {
+func (r *bulkResetUserSubRepoStub) ActivateWindows(context.Context, int64, time.Time, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
-func (r *bulkResetUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, _ time.Time) error {
+func (r *bulkResetUserSubRepoStub) ResetUsageWindows(_ context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, _, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if resetDaily {
