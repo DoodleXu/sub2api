@@ -285,6 +285,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	streamOutputAccumulator := apicompat.NewBufferedResponseAccumulator()
 	streamImageOutputs := make([]json.RawMessage, 0, 1)
 	streamSeenImages := make(map[string]struct{})
+	searchCount := 0
+	streamSearchSeen := make(map[string]struct{})
 	resultWithUsage := func() *openaiStreamingResult {
 		return &openaiStreamingResult{
 			usage:              usage,
@@ -293,6 +295,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			responseID:         responseID,
 			imageCount:         imageCounter.Count(),
 			imageOutputSizes:   imageCounter.Sizes(),
+			searchCount:        searchCount,
 		}
 	}
 	flushPending := func(disconnectMessage string) {
@@ -468,6 +471,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				line = "data: " + data
 			}
 			imageCounter.AddSSEData(dataBytes)
+			searchCount += countGrokNativeSearchCallsInSSEDataDedup(dataBytes, streamSearchSeen)
 			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(dataBytes) {
 				ms := int(time.Since(startTime).Milliseconds())
 				imageFirstOutputMs = &ms

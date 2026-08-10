@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-08
+最后更新：2026-08-10
 
 ## 当前对比基线
 
@@ -10,23 +10,37 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `42bf228dfc92` | 本次合并 v0.1.172 前的 fork 基线；fork 发布版本保持 `0.1.241` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.172` -> `155c494964c3` | 本次将 v0.1.172 合入本 fork；版本源继续保持 `0.1.241` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.172` -> `155c494964c3` | 2026-08-07 发布的官方最新非草稿 release |
-| 上游 main HEAD | `cc67b1aca1d3` | 本次刷新时的上游 main；同步范围严格停在 v0.1.172 release 标签，没有越过标签合并 main |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 40 个冲突路径，其中 20 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游响应模型审计、Codex TUI 身份、容量降载恢复、订阅日额度午夜重置、验证码区域和兼容性修复 |
+| Fork 同步前 HEAD | `f0466ad7c` | 本次合并 v0.1.173 前的 fork 基线；fork 发布版本保持 `0.1.243` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.173` -> `29009f0b2ea1` | 本次将 v0.1.173 合入本 fork；版本源继续保持 `0.1.243` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.173` -> `29009f0b2ea1` | 2026-08-09 发布的官方最新非草稿 release |
+| 上游 main HEAD | `10a4c6e3a` | 本次刷新时的上游 main；同步范围严格停在 v0.1.173 release 标签，没有越过标签合并 main |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 45 个冲突路径，其中 16 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游 Channel Monitor V2、Grok 媒体/音频与搜索计费、注册邮箱域名配额、OpenAI 路由提示、Gemini 图片实际计费和兼容性修复 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
 git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.172:refs/tags/upstream/v0.1.172 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.172^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
+git fetch upstream refs/tags/v0.1.173:refs/tags/upstream/v0.1.173 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.173^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.173` 合并说明：
+
+- 合入上游 Channel Monitor V2 的迁移、聚合、隐私默认值、缓存和前端管理/用户视图；fork 保留既有渠道监控聚合服务、通知和运行时设置注入，并继续由聚合模块承载重复的上游拆分实现。
+- 合入 Grok 媒体与音频接口、视频异步任务语义、官方图片 URL 兼容、搜索调用计数与计费、默认 Base URL 模式及模型映射修复；fork 继续保留图片归档、生图历史、WS 逐轮计费和现有调度/计费链路。
+- 合入注册邮箱域名配额公开设置、Grok OAuth/CLI Identity、OpenAI Agent Identity、路由提示、Gemini 图片实际输出计费和上游兼容性修复；`backend/cmd/server/VERSION` 保持 `0.1.243`，未跟随 release 源码中的版本回退。
+- 上游新增的 16 个 handler/service 拆分文件继续保持删除，相关行为迁回 fork 聚合文件；签到、运营中心、人民币成本、账号归档、Web 创作台、Responses Lite、图片/WS 计费和发布约束继续保留。
+
+### v0.1.173 合并验证
+
+- 合并前使用 `git merge-tree --write-tree` 预检，实际处理 45 个冲突路径；16 个 modify/delete 冲突继续保持 fork 拆分文件删除，Wire、Ent 和相关聚合实现按 fork 结构重新生成或校验。
+- 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过，`go vet -tags=unit ./...` 通过；设置公开注入 schema、Grok 视频/配额探测、调度阈值、强制计费 request ID 和 Gin 全局状态均有回归覆盖。
+- 前端 `pnpm typecheck`、`pnpm exec vitest run --reporter=dot`（243 个测试文件、1698 个用例）和 `pnpm build` 全部通过；构建产物正常生成到 `backend/internal/web/dist`。
+- `git diff --check`、冲突标记和未合并索引检查在提交前再次执行；本次未执行 push，版本源继续保持 `0.1.243`。
 
 本次 `v0.1.172` 合并说明：
 
