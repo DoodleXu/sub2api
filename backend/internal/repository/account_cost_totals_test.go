@@ -13,7 +13,7 @@ import (
 func TestAccountRepositoryLoadTotalAccountCostsReadsOnlyLedger(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}).AddRow(42, 12.5, 10.0))
@@ -28,7 +28,7 @@ func TestAccountRepositoryLoadTotalAccountCostsReadsOnlyLedger(t *testing.T) {
 func TestAccountRepositoryLoadTotalAccountCostsDoesNotScanUsageDuringBackfill(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
 		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}))
@@ -43,7 +43,7 @@ func TestAccountRepositoryLoadTotalAccountCostsDoesNotScanUsageDuringBackfill(t 
 func TestDashboardAggregationRepositoryProcessAccountCostTotalsAdvancesAccountCheckpointAtomically(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT account_id, last_processed_usage_id")).
@@ -63,7 +63,7 @@ func TestDashboardAggregationRepositoryProcessAccountCostTotalsAdvancesAccountCh
 func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotKeepsPreviousSnapshotWhileLedgerPending(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(`(?s)BOOL_AND\(initialized AND NOT needs_processing\).*AND l\.complete`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -79,7 +79,7 @@ func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotKeepsPrevious
 func TestDashboardAggregationRepositoryMarkDashboardCostSnapshotStale(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE usage_dashboard_cost_snapshot")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
