@@ -42,6 +42,17 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 - 前端 `pnpm typecheck`、`pnpm exec vitest run --reporter=dot`（243 个测试文件、1698 个用例）和 `pnpm build` 全部通过；构建产物正常生成到 `backend/internal/web/dist`。
 - `git diff --check`、冲突标记和未合并索引检查在提交前再次执行；本次未执行 push，版本源继续保持 `0.1.243`。
 
+## 2026-08-10 上游同步后全面审核修复
+
+- OAuth 首次注册与密码/邮箱注册统一经过邮箱别名防护和非白名单域名限额的原子写入守卫；后续同步任何 OAuth 注册入口时，不能绕过 `validateRegistrationEmailQuota` 与 `createUserWithRegistrationEmailGuard`。
+- Grok 异步视频创建在把上游 request ID 返回给客户端前，将账号归属、模型、分辨率、时长和创建时间持久化到 PostgreSQL `grok_video_tasks`；Redis 只作加速和旧任务兼容回退。状态查询和内容下载会直接按该表绑定的创建账号路由，缓存淘汰、重启或跨实例不能改选其他账号；绑定账号暂不可用时返回可重试的 503，不伪装为 404。一次性 billing claim 同样以该表为事实源，简易模式也只有 usage log 最终落库或命中去重后才写入 billed 终态；双写失败会释放 claim 供后续轮询重试。任务快照按 30 天机会性清理，长期审计仍以 `usage_logs` 为准。
+- Grok 默认 Base URL 模式改为进程内短期缓存，并在后台设置写入后立即刷新；请求热路径不再逐次查询 `settings`。后台设置 PUT 已完整支持 `registration_email_domain_quota_enabled`，缺省字段继续沿用局部更新的保留语义。
+
+### 本次验证
+
+- 已重新生成 Wire；`TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...` 和 `git diff --check` 通过。
+- 二次审修复回归：无 Redis 缓存、同组多账号时仍只选择持久化绑定账号；任务账号不可用保持 503；简易模式 usage log 的批处理与同步兜底均失败时返回错误以释放 claim。`service`、`handler` 完整单元测试、相应 `-race` 用例及 PostgreSQL/Redis 迁移幂等 schema 集成测试均通过。
+
 本次 `v0.1.172` 合并说明：
 
 - 合入上游 OAuth 账号接管安全修复、Responses 到 Anthropic 无效块清理、工具 Schema `type: null` 归一化、Grok 405 failover、代理拨号超时、运营日志退避和 Gemini 3.6 等兼容性修复。
