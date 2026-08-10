@@ -947,7 +947,7 @@ func (s *OpenAIGatewayService) writeLiveUsageLog(record *LiveCallRecord) {
 	//
 	// Redis 故障与并发 finalizer 可能重复进入；持久层唯一约束负责幂等，写入失败则
 	// 继续走带日志与同步兜底的 writeUsageLogBestEffort（issue #3656）。
-	writeUsageLogBestEffort(context.Background(), s.usageLogRepo, &UsageLog{
+	_ = writeUsageLogBestEffort(context.Background(), s.usageLogRepo, &UsageLog{
 		UserID:           record.UserID,
 		APIKeyID:         record.APIKeyID,
 		AccountID:        record.AccountID,

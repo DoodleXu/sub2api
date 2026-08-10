@@ -29,6 +29,27 @@ func (s *openAIRecordUsageLogRepoStub) Create(ctx context.Context, log *UsageLog
 	return s.inserted, s.err
 }
 
+// openAIRecordUsagePersistenceFailureLogRepoStub is kept in this untagged test
+// file because golangci-lint type-checks the package without the unit tag.
+type openAIRecordUsagePersistenceFailureLogRepoStub struct {
+	UsageLogRepository
+
+	bestEffortErr   error
+	createErr       error
+	bestEffortCalls int
+	createCalls     int
+}
+
+func (s *openAIRecordUsagePersistenceFailureLogRepoStub) CreateBestEffort(_ context.Context, _ *UsageLog) error {
+	s.bestEffortCalls++
+	return s.bestEffortErr
+}
+
+func (s *openAIRecordUsagePersistenceFailureLogRepoStub) Create(_ context.Context, _ *UsageLog) (bool, error) {
+	s.createCalls++
+	return false, s.createErr
+}
+
 type openAIRecordUsageBillingRepoStub struct {
 	UsageBillingRepository
 
@@ -1763,7 +1784,7 @@ func TestOpenAIGatewayServiceRecordUsage_SimpleModeSkipsBillingAfterPersist(t *t
 }
 
 func TestOpenAIGatewayServiceRecordUsage_SimpleModeReportsRequiredUsageLogPersistenceFailure(t *testing.T) {
-	usageRepo := &openAIRecordUsageBestEffortLogRepoStub{
+	usageRepo := &openAIRecordUsagePersistenceFailureLogRepoStub{
 		bestEffortErr: errors.New("usage queue unavailable"),
 		createErr:     errors.New("usage database unavailable"),
 	}

@@ -127,21 +127,6 @@ func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) stri
 	return seed
 }
 
-func grokStickyAffinitySeed(sessionID string, body []byte) string {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return ""
-	}
-	model := ""
-	if len(body) > 0 {
-		model = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "model").String()))
-	}
-	if model == "" {
-		return "grok-affinity:v1:" + sessionID
-	}
-	return "grok-affinity:v1:" + model + ":" + sessionID
-}
-
 func grokPreviousResponseSessionSeed(body []byte) string {
 	id := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
 	if id == "" || ClassifyOpenAIPreviousResponseIDKind(id) != OpenAIPreviousResponseIDKindResponseID {

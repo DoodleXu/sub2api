@@ -48,15 +48,6 @@ func TestIsGrokModelSpecificFreeUsage(t *testing.T) {
 	require.False(t, isGrokModelSpecificFreeUsage("free usage exhausted", "grok-4.5"))
 }
 
-func TestGrokStickyAffinitySeed_ScopesByModel(t *testing.T) {
-	a := grokStickyAffinitySeed("session-1", []byte(`{"model":"grok-4.5"}`))
-	b := grokStickyAffinitySeed("session-1", []byte(`{"model":"grok-4.3"}`))
-	c := grokStickyAffinitySeed("session-1", []byte(`{"model":"grok-4.5"}`))
-	require.NotEqual(t, a, b)
-	require.Equal(t, a, c)
-	require.Contains(t, a, "grok-affinity:v1:")
-}
-
 func TestExtractGrokModelIDsFromModelsBody(t *testing.T) {
 	body := []byte(`{"object":"list","data":[{"id":"grok-4.5"},{"id":"grok-4.3"},{"id":"grok-4.5"}]}`)
 	ids := extractGrokModelIDsFromModelsBody(body)
