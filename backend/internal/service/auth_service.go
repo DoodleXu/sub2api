@@ -722,6 +722,11 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 			if s.settingService == nil || (!s.settingService.IsRegistrationEnabled(ctx) && !s.canBypassRegistrationDisabledForOAuth(ctx, signupSource)) {
 				return nil, nil, ErrRegDisabled
 			}
+			// OAuth 首次登录与密码注册使用同一套邮箱域名准入和额度规则。
+			// 最终写入仍由下方的原子 guard 复核，避免并发请求绕过额度。
+			if err := s.validateRegistrationEmailQuota(ctx, email); err != nil {
+				return nil, nil, err
+			}
 
 			// 检查是否需要邀请码
 			var invitationRedeemCode *RedeemCode
@@ -781,13 +786,15 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 				defer func() { _ = tx.Rollback() }()
 				txCtx := dbent.NewTxContext(ctx, tx)
 
-				if err := s.userRepo.Create(txCtx, newUser); err != nil {
+				if err := s.createUserWithRegistrationEmailGuard(txCtx, newUser); err != nil {
 					if errors.Is(err, ErrEmailExists) {
 						user, err = s.userRepo.GetByEmail(ctx, email)
 						if err != nil {
 							logger.LegacyPrintf("service.auth", "[Auth] Database error getting user after conflict: %v", err)
 							return nil, nil, ErrServiceUnavailable
 						}
+					} else if errors.Is(err, ErrEmailDomainRegistrationLimit) || errors.Is(err, ErrEmailSuffixNotAllowed) {
+						return nil, nil, err
 					} else {
 						logger.LegacyPrintf("service.auth", "[Auth] Database error creating oauth user: %v", err)
 						return nil, nil, ErrServiceUnavailable
@@ -809,13 +816,15 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 					s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 				}
 			} else {
-				if err := s.userRepo.Create(ctx, newUser); err != nil {
+				if err := s.createUserWithRegistrationEmailGuard(ctx, newUser); err != nil {
 					if errors.Is(err, ErrEmailExists) {
 						user, err = s.userRepo.GetByEmail(ctx, email)
 						if err != nil {
 							logger.LegacyPrintf("service.auth", "[Auth] Database error getting user after conflict: %v", err)
 							return nil, nil, ErrServiceUnavailable
 						}
+					} else if errors.Is(err, ErrEmailDomainRegistrationLimit) || errors.Is(err, ErrEmailSuffixNotAllowed) {
+						return nil, nil, err
 					} else {
 						logger.LegacyPrintf("service.auth", "[Auth] Database error creating oauth user: %v", err)
 						return nil, nil, ErrServiceUnavailable

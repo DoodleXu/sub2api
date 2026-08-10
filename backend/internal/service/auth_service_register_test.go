@@ -866,6 +866,24 @@ func TestAuthService_LoginOrRegisterOAuthWithTokenPair_UsesLinuxDoAuthSourceDefa
 	require.Equal(t, 14, assigner.calls[0].ValidityDays)
 }
 
+func TestAuthService_LoginOrRegisterOAuthWithTokenPair_RejectsLimitedEmailDomain(t *testing.T) {
+	repo := &userRepoStub{nextID: 62, domainCounts: map[string]int{"external.example": 1}}
+	svc := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:                 "true",
+		SettingKeyRegistrationEmailSuffixWhitelist:    `["allowed.example"]`,
+		SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+	}, nil, nil)
+	svc.refreshTokenCache = &refreshTokenCacheStub{}
+
+	tokenPair, user, err := svc.LoginOrRegisterOAuthWithTokenPair(
+		context.Background(), "first@external.example", "external_user", "", "", "oidc",
+	)
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
+	require.Nil(t, tokenPair)
+	require.Nil(t, user)
+	require.Empty(t, repo.created)
+}
+
 func TestAuthService_LoginOrRegisterOAuthWithTokenPair_ExistingUserDoesNotGrantAgain(t *testing.T) {
 	existing := &User{
 		ID:           88,

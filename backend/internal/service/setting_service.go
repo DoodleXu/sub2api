@@ -2846,6 +2846,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		return nil, fmt.Errorf("marshal registration email suffix whitelist: %w", err)
 	}
 	updates[SettingKeyRegistrationEmailSuffixWhitelist] = string(registrationEmailSuffixWhitelistJSON)
+	updates[SettingKeyRegistrationEmailDomainQuotaEnabled] = strconv.FormatBool(settings.RegistrationEmailDomainQuotaEnabled)
 	updates[SettingKeyPromoCodeEnabled] = strconv.FormatBool(settings.PromoCodeEnabled)
 	updates[SettingKeyPasswordResetEnabled] = strconv.FormatBool(settings.PasswordResetEnabled)
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
@@ -4512,6 +4513,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		RegistrationEnabled:                    settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:                     emailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:       ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		RegistrationEmailDomainQuotaEnabled:    settings[SettingKeyRegistrationEmailDomainQuotaEnabled] == "true",
 		PromoCodeEnabled:                       settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:                   emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
 		FrontendURL:                            settings[SettingKeyFrontendURL],

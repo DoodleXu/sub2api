@@ -109,6 +109,18 @@ func TestUpdateSettingsGrokDefaultBaseURLModeIsWritable(t *testing.T) {
 	require.Equal(t, service.GrokDefaultBaseURLModeEUWest1, repo.values[service.SettingKeyGrokDefaultBaseURLMode])
 }
 
+func TestUpdateSettingsRegistrationEmailDomainQuotaIsWritable(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyRegistrationEmailDomainQuotaEnabled: "false",
+	})
+
+	rec := doUpdateSettings(t, h, map[string]any{
+		"registration_email_domain_quota_enabled": true,
+	}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "true", repo.values[service.SettingKeyRegistrationEmailDomainQuotaEnabled])
+}
+
 func TestUpdateSettingsRejectsTwoCaptchaProviders(t *testing.T) {
 	h, _ := newStepUpSwitchTestHandler(t, map[string]string{
 		service.SettingKeyTurnstileEnabled:   "true",
