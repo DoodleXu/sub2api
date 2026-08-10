@@ -11,9 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type grokBaseURLSettingRepoStub struct{ values map[string]string }
+type grokBaseURLSettingRepoStub struct {
+	values        map[string]string
+	getValueCalls int
+}
 
 func (r *grokBaseURLSettingRepoStub) GetValue(_ context.Context, key string) (string, error) {
+	r.getValueCalls++
 	if value, ok := r.values[key]; ok {
 		return value, nil
 	}
@@ -65,6 +69,14 @@ func TestSettingServiceResolveGrokBaseURLHonorsModeAndExplicitPins(t *testing.T)
 	// An explicit regional pin remains authoritative.
 	account.Credentials["base_url"] = xai.DefaultEUWest1BaseURL
 	require.Equal(t, xai.DefaultEUWest1BaseURL, svc.ResolveGrokBaseURL(context.Background(), account))
+}
+
+func TestSettingServiceGetGrokDefaultBaseURLModeCachesRepositoryRead(t *testing.T) {
+	repo := &grokBaseURLSettingRepoStub{values: map[string]string{SettingKeyGrokDefaultBaseURLMode: GrokDefaultBaseURLModeEUWest1}}
+	svc := NewSettingService(repo, nil)
+	require.Equal(t, GrokDefaultBaseURLModeEUWest1, svc.GetGrokDefaultBaseURLMode(context.Background()))
+	require.Equal(t, GrokDefaultBaseURLModeEUWest1, svc.GetGrokDefaultBaseURLMode(context.Background()))
+	require.Equal(t, 1, repo.getValueCalls)
 }
 
 func TestAccountGetGrokBaseURLOrPreservesCustomOAuthURLForPolicyValidation(t *testing.T) {

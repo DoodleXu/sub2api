@@ -92,13 +92,30 @@ func (s *SettingService) GetGrokDefaultBaseURLMode(ctx context.Context) string {
 	if s == nil || s.settingRepo == nil {
 		return GrokDefaultBaseURLModeCLI
 	}
-	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
-	defer cancel()
-	raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyGrokDefaultBaseURLMode)
-	if err != nil {
-		return GrokDefaultBaseURLModeCLI
+	if cached, ok := s.grokDefaultBaseURLModeCache.Load().(*cachedGrokDefaultBaseURLMode); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.mode
 	}
-	return normalizeGrokDefaultBaseURLMode(raw)
+	value, _, _ := s.grokDefaultBaseURLModeSF.Do("grok_default_base_url_mode", func() (any, error) {
+		if cached, ok := s.grokDefaultBaseURLModeCache.Load().(*cachedGrokDefaultBaseURLMode); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			return cached.mode, nil
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
+		defer cancel()
+		raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyGrokDefaultBaseURLMode)
+		mode := GrokDefaultBaseURLModeCLI
+		ttl := gatewayForwardingCacheTTL
+		if err != nil {
+			ttl = gatewayForwardingErrorTTL
+		} else {
+			mode = normalizeGrokDefaultBaseURLMode(raw)
+		}
+		s.grokDefaultBaseURLModeCache.Store(&cachedGrokDefaultBaseURLMode{mode: mode, expiresAt: time.Now().Add(ttl).UnixNano()})
+		return mode, nil
+	})
+	if mode, ok := value.(string); ok {
+		return mode
+	}
+	return GrokDefaultBaseURLModeCLI
 }
 
 func (s *SettingService) GetGrokDefaultBaseURL(ctx context.Context) string {
@@ -231,6 +248,14 @@ var gatewayForwardingSF singleflight.Group
 const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
+
+// cachedGrokDefaultBaseURLMode avoids a database lookup on every Grok request.
+// The cache is refreshed synchronously after a settings write and has the same
+// short fail-safe TTL as the other forwarding settings.
+type cachedGrokDefaultBaseURLMode struct {
+	mode      string
+	expiresAt int64
+}
 
 // IsSessionBindingEnabled checks whether login sessions are bound to their
 // original IP and User-Agent. The release-compatible default is disabled.
@@ -475,6 +500,8 @@ type SettingService struct {
 	sessionBindingSF              singleflight.Group
 	sessionBindingGeneration      atomic.Uint64
 	sessionBindingPublicationMu   sync.Mutex
+	grokDefaultBaseURLModeCache   atomic.Value // *cachedGrokDefaultBaseURLMode
+	grokDefaultBaseURLModeSF      singleflight.Group
 
 	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。
 	// 面板每个认证请求都会读取，禁止在热路径上直接访问 DB。
@@ -3341,6 +3368,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		expiresAt: time.Now().Add(sessionBindingCacheTTL).UnixNano(),
 	})
 	s.sessionBindingPublicationMu.Unlock()
+	s.grokDefaultBaseURLModeSF.Forget("grok_default_base_url_mode")
+	s.grokDefaultBaseURLModeCache.Store(&cachedGrokDefaultBaseURLMode{
+		mode:      normalizeGrokDefaultBaseURLMode(settings.GrokDefaultBaseURLMode),
+		expiresAt: time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
 		fingerprintUnification:           settings.EnableFingerprintUnification,
