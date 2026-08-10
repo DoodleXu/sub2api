@@ -113,6 +113,9 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if (includeTrend || includeModels || includeGroups || includeUsersTrend || includeRanking) && !validateDashboardDetailRange(c, startTime, endTime) {
+		return
+	}
 
 	keyRaw, _ := json.Marshal(dashboardSnapshotV2CacheKey{
 		StartTime:             startTime.UTC().Format(time.RFC3339),

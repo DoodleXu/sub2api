@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
@@ -18,7 +17,6 @@ type dashboardAggregationRepository struct {
 	sql sqlExecutor
 }
 
-const usageLogsCleanupBatchSize = 10000
 const usageBillingDedupCleanupBatchSize = 10000
 
 // NewDashboardAggregationRepository 创建仪表盘预聚合仓储。
@@ -82,6 +80,110 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 		return tx.Commit()
 	}
 	return r.aggregateRangeInTx(ctx, hourStart, hourEnd, endLocal, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd)
+}
+
+// ProcessAccountCostTotals processes one account's bounded usage_logs.id range
+// and updates that account's totals and checkpoint in one transaction. New
+// usage rows only mark the account pending, so archived accounts with no new
+// usage are never scanned again.
+func (r *dashboardAggregationRepository) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
+	if r == nil || r.sql == nil {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = 10000
+	}
+
+	if db, ok := r.sql.(*sql.DB); ok {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return 0, err
+		}
+		processed, err := newDashboardAggregationRepositoryWithSQL(tx).processAccountCostTotalsInTx(ctx, batchSize)
+		if err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return processed, nil
+	}
+
+	processed, err := r.processAccountCostTotalsInTx(ctx, batchSize)
+	return processed, err
+}
+
+func (r *dashboardAggregationRepository) processAccountCostTotalsInTx(ctx context.Context, batchSize int64) (int64, error) {
+	var accountID, lastProcessedID int64
+	if err := scanSingleRow(ctx, r.sql, `
+		SELECT account_id, last_processed_usage_id
+		FROM usage_account_cost_totals
+		WHERE needs_processing OR NOT initialized
+		ORDER BY computed_at, account_id
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`, nil, &accountID, &lastProcessedID); err == sql.ErrNoRows {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+
+	var processedRows int64
+	err := scanSingleRow(ctx, r.sql, `
+		WITH batch AS MATERIALIZED (
+			SELECT
+				id,
+				total_cost,
+				COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1) AS account_cost
+			FROM usage_logs
+			WHERE account_id = $1 AND id > $2
+			ORDER BY id
+			LIMIT $3
+		), totals AS (
+			SELECT
+				COUNT(*)::BIGINT AS processed_rows,
+				COALESCE(MAX(id), $2) AS newest_id,
+				COALESCE(SUM(account_cost), 0) AS account_cost,
+				COALESCE(SUM(total_cost), 0) AS standard_cost
+			FROM batch
+		), updated AS (
+			UPDATE usage_account_cost_totals ledger
+			SET total_account_cost = ledger.total_account_cost + totals.account_cost,
+				total_standard_account_cost = ledger.total_standard_account_cost + totals.standard_cost,
+				last_processed_usage_id = totals.newest_id,
+				initialized = TRUE,
+				needs_processing = totals.processed_rows >= $3,
+				computed_at = NOW()
+			FROM totals
+			WHERE ledger.account_id = $1
+			RETURNING totals.processed_rows
+		)
+		SELECT processed_rows FROM updated
+	`, []any{accountID, lastProcessedID, batchSize}, &processedRows)
+	if err != nil {
+		return 0, err
+	}
+	// 返回“已处理账号数”而非 usage 行数，保证空账号的首次回填也能继续推进
+	// 其它账号；无候选账号时上层收到 0 并停止本轮回填。
+	return 1, nil
+}
+
+func (r *dashboardAggregationRepository) GetAccountCostAggregationState(ctx context.Context) (service.AccountCostAggregationState, error) {
+	var state service.AccountCostAggregationState
+	if r == nil || r.sql == nil {
+		return state, nil
+	}
+	err := scanSingleRow(ctx, r.sql, `
+		SELECT
+			COALESCE(MAX(last_processed_usage_id), 0),
+			COUNT(*)::BIGINT,
+			COUNT(*) FILTER (WHERE needs_processing OR NOT initialized)::BIGINT,
+			COALESCE(BOOL_AND(initialized AND NOT needs_processing), TRUE),
+			COALESCE(MAX(computed_at), NOW())
+		FROM usage_account_cost_totals
+	`, nil, &state.LastProcessedUsageID, &state.TotalAccounts, &state.PendingAccounts, &state.BackfillComplete, &state.ComputedAt)
+	return state, err
 }
 
 func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context, hourStart, hourEnd, accountCostEnd, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd time.Time) error {
@@ -188,7 +290,10 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 	if err := r.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
 		return err
 	}
-	return r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd)
+	if err := r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context, hourStart, hourEnd, accountCostEnd, dayStart, dayEnd time.Time) error {
@@ -549,51 +654,6 @@ func (r *dashboardAggregationRepository) trimUserAggregateCoverage(ctx context.C
 	return err
 }
 
-func (r *dashboardAggregationRepository) CleanupUsageLogs(ctx context.Context, cutoff time.Time) error {
-	accountCostCutoff := cutoff.UTC().Truncate(time.Hour)
-	if cutoff.UTC().After(accountCostCutoff) {
-		accountCostCutoff = accountCostCutoff.Add(time.Hour)
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_hourly WHERE bucket_start < $1", accountCostCutoff); err != nil {
-		return err
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_daily WHERE bucket_date < $1::date", accountCostCutoff); err != nil {
-		return err
-	}
-	if err := r.trimUserAggregateCoverage(ctx, "account_cost_hourly_aggregated_from", "account_cost_hourly_last_aggregated_at", accountCostCutoff); err != nil {
-		return err
-	}
-	isPartitioned, err := r.isUsageLogsPartitioned(ctx)
-	if err != nil {
-		return err
-	}
-	if isPartitioned {
-		return r.dropUsageLogsPartitions(ctx, cutoff)
-	}
-	for {
-		res, err := r.sql.ExecContext(ctx, `
-			WITH victims AS (
-				SELECT ctid
-				FROM usage_logs
-				WHERE created_at < $1
-				LIMIT $2
-			)
-			DELETE FROM usage_logs
-			WHERE ctid IN (SELECT ctid FROM victims)
-		`, cutoff.UTC(), usageLogsCleanupBatchSize)
-		if err != nil {
-			return err
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if affected < usageLogsCleanupBatchSize {
-			return nil
-		}
-	}
-}
-
 func (r *dashboardAggregationRepository) CleanupUsageBillingDedup(ctx context.Context, cutoff time.Time) error {
 	for {
 		res, err := r.sql.ExecContext(ctx, `
@@ -622,6 +682,22 @@ func (r *dashboardAggregationRepository) CleanupUsageBillingDedup(ctx context.Co
 			return nil
 		}
 	}
+}
+
+func (r *dashboardAggregationRepository) isUsageLogsPartitioned(ctx context.Context) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1
+			FROM pg_partitioned_table pt
+			JOIN pg_class c ON c.oid = pt.partrelid
+			WHERE c.relname = 'usage_logs'
+		)
+	`
+	var partitioned bool
+	if err := scanSingleRow(ctx, r.sql, query, nil, &partitioned); err != nil {
+		return false, err
+	}
+	return partitioned, nil
 }
 
 func (r *dashboardAggregationRepository) EnsureUsageLogsPartitions(ctx context.Context, now time.Time) error {
@@ -915,14 +991,25 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			FROM usage_dashboard_aggregation_watermark
 			WHERE id = 1
 		),
+		ledger_state AS (
+			SELECT
+				COALESCE(BOOL_AND(initialized AND NOT needs_processing), TRUE) AS complete
+			FROM usage_account_cost_totals
+		),
 		cost_by_account AS (
 			SELECT
 				account_id,
-				COALESCE(SUM(account_cost), 0) AS total_account_cost,
-				COALESCE(SUM(standard_account_cost), 0) AS total_standard_account_cost,
-				COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $3::date), 0) AS today_account_cost,
-				COALESCE(SUM(standard_account_cost) FILTER (WHERE bucket_date = $3::date), 0) AS today_standard_account_cost
+				total_account_cost,
+				total_standard_account_cost
+			FROM usage_account_cost_totals
+		),
+		today_by_account AS (
+			SELECT
+				account_id,
+				COALESCE(SUM(account_cost), 0) AS today_account_cost,
+				COALESCE(SUM(standard_account_cost), 0) AS today_standard_account_cost
 			FROM usage_dashboard_account_cost_daily
+			WHERE bucket_date = $3::date
 			GROUP BY account_id
 		),
 		costed_accounts AS (
@@ -932,17 +1019,18 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 				a.total_cost_cny,
 				COALESCE(c.total_account_cost, 0) AS total_account_cost,
 				COALESCE(c.total_standard_account_cost, 0) AS total_standard_account_cost,
-				COALESCE(c.today_account_cost, 0) AS today_account_cost,
-				COALESCE(c.today_standard_account_cost, 0) AS today_standard_account_cost
+				COALESCE(t.today_account_cost, 0) AS today_account_cost,
+				COALESCE(t.today_standard_account_cost, 0) AS today_standard_account_cost
 			FROM accounts a
 			LEFT JOIN cost_by_account c ON c.account_id = a.id
+			LEFT JOIN today_by_account t ON t.account_id = a.id
 			WHERE a.deleted_at IS NULL AND a.total_cost_cny > 0
 		),
 		metrics AS (
 			SELECT
 				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts), 0) AS total_cost_cny,
 				COALESCE((SELECT SUM(total_account_cost) FROM cost_by_account), 0) AS total_account_cost,
-				COALESCE((SELECT SUM(today_account_cost) FROM cost_by_account), 0) AS today_account_cost,
+				COALESCE((SELECT SUM(today_account_cost) FROM today_by_account), 0) AS today_account_cost,
 				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts), 0) AS costed_total_standard_account_cost,
 				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_cost_cny,
 				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_standard_account_cost,
@@ -970,11 +1058,14 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			CASE WHEN m.openai_standard_account_cost > 0 THEN m.openai_cost_cny / m.openai_standard_account_cost ELSE 0 END,
 			c.start_time,
 			c.end_time,
-			TRUE,
+			l.complete,
 			NOW()
 		FROM coverage c
+		CROSS JOIN ledger_state l
 		CROSS JOIN metrics m
-		WHERE c.start_time <= $1 AND c.end_time >= $2
+		WHERE c.start_time <= $1
+			AND c.end_time >= $2
+			AND l.complete
 		ON CONFLICT (id)
 		DO UPDATE SET
 			today_real_cost_cny = EXCLUDED.today_real_cost_cny,
@@ -1002,6 +1093,23 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 		return false, nil
 	}
 	return complete, err
+}
+
+// MarkDashboardCostSnapshotStale prevents a pre-cleanup snapshot from being
+// presented as complete while the affected usage range is being recomputed.
+func (r *dashboardAggregationRepository) MarkDashboardCostSnapshotStale(ctx context.Context) error {
+	if r == nil || r.sql == nil {
+		return nil
+	}
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE usage_dashboard_cost_snapshot
+		SET aggregation_complete = FALSE
+		WHERE id = 1
+	`)
+	if isUndefinedTableError(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *dashboardAggregationRepository) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
@@ -1243,61 +1351,6 @@ func (r *dashboardAggregationRepository) upsertDailyUserStats(ctx context.Contex
 	`
 	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
 	return err
-}
-
-func (r *dashboardAggregationRepository) isUsageLogsPartitioned(ctx context.Context) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1
-			FROM pg_partitioned_table pt
-			JOIN pg_class c ON c.oid = pt.partrelid
-			WHERE c.relname = 'usage_logs'
-		)
-	`
-	var partitioned bool
-	if err := scanSingleRow(ctx, r.sql, query, nil, &partitioned); err != nil {
-		return false, err
-	}
-	return partitioned, nil
-}
-
-func (r *dashboardAggregationRepository) dropUsageLogsPartitions(ctx context.Context, cutoff time.Time) error {
-	rows, err := r.sql.QueryContext(ctx, `
-		SELECT c.relname
-		FROM pg_inherits
-		JOIN pg_class c ON c.oid = pg_inherits.inhrelid
-		JOIN pg_class p ON p.oid = pg_inherits.inhparent
-		WHERE p.relname = 'usage_logs'
-	`)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	cutoffMonth := truncateToMonthUTC(cutoff)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		if !strings.HasPrefix(name, "usage_logs_") {
-			continue
-		}
-		suffix := strings.TrimPrefix(name, "usage_logs_")
-		month, err := time.Parse("200601", suffix)
-		if err != nil {
-			continue
-		}
-		month = month.UTC()
-		if month.Before(cutoffMonth) {
-			if _, err := r.sql.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", pq.QuoteIdentifier(name))); err != nil {
-				return err
-			}
-		}
-	}
-	return rows.Err()
 }
 
 func (r *dashboardAggregationRepository) createUsageLogsPartition(ctx context.Context, month time.Time) error {

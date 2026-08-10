@@ -16,11 +16,11 @@ const (
 )
 
 // UsageCleanupFilters 定义清理任务过滤条件
-// 时间范围为必填，其他字段可选
+// 时间范围为必填，其他字段可选；时间范围采用半开区间 [StartTime, EndTime)
 // JSON 序列化用于存储任务参数
 //
 // start_time/end_time 使用 RFC3339 时间格式
-// 以 UTC 或用户时区解析后的时间为准
+// 以 UTC 或用户时区解析后的时间为准，EndTime 不包含在清理范围内
 //
 // 说明：
 // - nil 表示未设置该过滤条件

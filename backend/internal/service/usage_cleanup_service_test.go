@@ -69,6 +69,14 @@ func (s *dashboardRepoStub) AggregateAccountCostRange(ctx context.Context, start
 	return nil
 }
 
+func (s *dashboardRepoStub) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *dashboardRepoStub) GetAccountCostAggregationState(ctx context.Context) (AccountCostAggregationState, error) {
+	return AccountCostAggregationState{BackfillComplete: true}, nil
+}
+
 func (s *dashboardRepoStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
 	return true, nil
 }
@@ -514,6 +522,58 @@ func TestUsageCleanupServiceExecuteTaskDeleteCanceled(t *testing.T) {
 
 	svc.executeTask(context.Background(), task)
 
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Empty(t, repo.markSucceeded)
+	require.Empty(t, repo.markFailed)
+}
+
+func TestUsageCleanupServiceExecuteTaskPartialDeleteFailureTriggersRecompute(t *testing.T) {
+	dashboardRepo := &dashboardRepoStub{}
+	repo := &cleanupRepoStub{
+		deleteQueue: []cleanupDeleteResponse{
+			{deleted: 2},
+			{err: errors.New("delete failed")},
+		},
+	}
+	dashboard := NewDashboardAggregationService(dashboardRepo, nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{Enabled: true},
+	})
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2}}
+	svc := NewUsageCleanupService(repo, nil, dashboard, cfg)
+	task := &UsageCleanupTask{ID: 16, Filters: UsageCleanupFilters{
+		StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour),
+	}}
+
+	svc.executeTask(context.Background(), task)
+
+	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls.Load() == 1 }, time.Second, 10*time.Millisecond)
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.markFailed, 1)
+	require.Equal(t, int64(2), repo.markFailed[0].deletedRows)
+}
+
+func TestUsageCleanupServiceExecuteTaskPartialDeleteCancellationTriggersRecompute(t *testing.T) {
+	dashboardRepo := &dashboardRepoStub{}
+	repo := &cleanupRepoStub{
+		deleteQueue: []cleanupDeleteResponse{
+			{deleted: 2},
+			{err: context.Canceled},
+		},
+	}
+	dashboard := NewDashboardAggregationService(dashboardRepo, nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{Enabled: true},
+	})
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2}}
+	svc := NewUsageCleanupService(repo, nil, dashboard, cfg)
+	task := &UsageCleanupTask{ID: 17, Filters: UsageCleanupFilters{
+		StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour),
+	}}
+
+	svc.executeTask(context.Background(), task)
+
+	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls.Load() == 1 }, time.Second, 10*time.Millisecond)
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
 	require.Empty(t, repo.markSucceeded)

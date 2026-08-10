@@ -724,6 +724,19 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 	if len(groupIDs) == 0 {
 		groupIDs = account.GroupIDs
 	}
+	// 母账号归档/恢复时，影子账号自身的 archived_at 不变；必须把影子实际
+	// 所在的分组也纳入重建，否则旧影子成员仍可能留在调度 bucket 中。
+	if account.ParentAccountID == nil && account.IsOpenAIOAuth() {
+		shadows, err := s.accountRepo.ListShadowsByParent(ctx, account.ID)
+		if err != nil {
+			return err
+		}
+		for _, shadow := range shadows {
+			if shadow != nil {
+				groupIDs = append(groupIDs, shadow.GroupIDs...)
+			}
+		}
+	}
 	return s.rebuildByAccount(ctx, account, groupIDs, "account_change", seen)
 }
 

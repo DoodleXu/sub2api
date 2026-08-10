@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,28 @@ func newBulkEventAccountRepo(accounts ...*Account) *bulkEventAccountRepo {
 
 func (r *bulkEventAccountRepo) GetByIDs(context.Context, []int64) ([]*Account, error) {
 	return append([]*Account(nil), r.accounts...), nil
+}
+
+func (r *bulkEventAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	for _, account := range r.accounts {
+		if account != nil && account.ID == id {
+			copy := *account
+			return &copy, nil
+		}
+	}
+	return nil, ErrAccountNotFound
+}
+
+func (r *bulkEventAccountRepo) ListShadowsByParent(_ context.Context, parentID int64) ([]*Account, error) {
+	shadows := make([]*Account, 0)
+	for _, account := range r.accounts {
+		if account == nil || account.ParentAccountID == nil || *account.ParentAccountID != parentID {
+			continue
+		}
+		copy := *account
+		shadows = append(shadows, &copy)
+	}
+	return shadows, nil
 }
 
 type bulkEventSnapshotCache struct {
@@ -208,4 +231,27 @@ func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *test
 	require.NoError(t, err)
 	platforms := schedulerSnapshotPlatforms()
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{41, 42}, platforms[:]...), cache.capturedBuckets())
+}
+
+func TestSchedulerAccountEventRebuildsParentAndShadowGroups(t *testing.T) {
+	archivedAt := time.Now().UTC()
+	parentID := int64(20)
+	parent := &Account{
+		ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		ArchivedAt: &archivedAt, GroupIDs: []int64{201},
+	}
+	shadow := &Account{
+		ID: 21, Platform: PlatformOpenAI, ParentAccountID: &parentID,
+		GroupIDs: []int64{202},
+	}
+	cache := newBulkEventSnapshotCache()
+	repo := newBulkEventAccountRepo(parent, shadow)
+	svc := newBulkEventTestService(cache, repo)
+
+	err := svc.handleAccountEvent(context.Background(), &parentID, map[string]any{
+		"group_ids": []any{float64(201)},
+	}, make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	require.ElementsMatch(t, schedulerBucketsForTest([]int64{201, 202}, PlatformOpenAI), cache.capturedBuckets())
 }

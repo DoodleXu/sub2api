@@ -2209,6 +2209,8 @@ func setDefaults() {
 	viper.SetDefault("dashboard_aggregation.lookback_seconds", 120)
 	viper.SetDefault("dashboard_aggregation.backfill_enabled", false)
 	viper.SetDefault("dashboard_aggregation.backfill_max_days", 31)
+	// UsageLogsDays remains the aggregation lookback horizon. Cost aggregation
+	// never uses this setting to delete raw usage records.
 	viper.SetDefault("dashboard_aggregation.retention.usage_logs_days", 90)
 	viper.SetDefault("dashboard_aggregation.retention.usage_billing_dedup_days", 365)
 	viper.SetDefault("dashboard_aggregation.retention.hourly_days", 180)

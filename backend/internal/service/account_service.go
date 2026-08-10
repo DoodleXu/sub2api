@@ -125,6 +125,14 @@ type AccountRepository interface {
 	ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error)
 }
 
+// AccountCascadeDeleteRepository is implemented by repositories that can
+// delete an account and all managed shadow accounts atomically.
+// AccountRepository remains broad for compatibility with focused test doubles
+// and non-account services.
+type AccountCascadeDeleteRepository interface {
+	DeleteWithShadows(ctx context.Context, id int64) error
+}
+
 // OpenAISchedulingCostStatsAttacher is an optional repository capability used
 // only while an OpenAI cost-aware scheduling strategy is active.
 type OpenAISchedulingCostStatsAttacher interface {
@@ -418,9 +426,14 @@ func (s *AccountService) Delete(ctx context.Context, id int64) error {
 		return ErrAccountNotFound
 	}
 
-	// 注意:此处不级联删除 spark 影子账号。当前唯一的后台删除入口走 AdminService.DeleteAccount
-	// (已 ListShadowsByParent 先删影子再删母)。本方法目前无删除调用方;若未来有调用方经此
-	// 删除母账号,需在此补级联,否则会留下孤儿影子(外审第6轮 P3:当前不可达,记为残留)。
+	if deleteRepo, ok := s.accountRepo.(AccountCascadeDeleteRepository); ok {
+		if err := deleteRepo.DeleteWithShadows(ctx, id); err != nil {
+			return fmt.Errorf("delete account with shadows: %w", err)
+		}
+		return nil
+	}
+	// Compatibility fallback for narrow repository test doubles and external
+	// implementations that predate the cascade capability.
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}

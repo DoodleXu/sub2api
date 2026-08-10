@@ -501,6 +501,28 @@ func TestCreateShadow_RejectsShadowAsParent(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err), "影子当母应返回 400")
 }
 
+func TestCreateShadowRejectsArchivedParent(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+	archivedAt := time.Now().UTC()
+	parent := &Account{
+		Name: "archived-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, ArchivedAt: &archivedAt,
+		Credentials: map[string]any{"chatgpt_account_id": "org-archived"},
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+
+	_, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "should-reject"})
+
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, infraerrors.Code(err))
+	require.Equal(t, "SPARK_SHADOW_PARENT_ARCHIVED", infraerrors.Reason(err))
+	shadows, listErr := repo.ListShadowsByParent(ctx, parent.ID)
+	require.NoError(t, listErr)
+	require.Empty(t, shadows)
+}
+
 // TestCreateShadow_StructuredErrors 验证外审 G3:可预期业务错误返回结构化 4xx 而非 500。
 func TestCreateShadow_StructuredErrors(t *testing.T) {
 	ctx := context.Background()

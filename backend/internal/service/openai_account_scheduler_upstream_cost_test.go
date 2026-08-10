@@ -671,6 +671,7 @@ func TestSchedulerSnapshotCostStatsLoadFailureIsFailOpen(t *testing.T) {
 	account.Schedulable = true
 	account.TotalCostCNY = 12
 	cached := *account
+	cached.TotalCostCNY = 6
 	cached.TotalAccountCost = 100
 	cached.CostCNYPerUSD = 0.06
 	repo := &schedulerCostStatsRepo{
@@ -817,6 +818,20 @@ func TestPreserveOpenAISchedulingCostStatsRecomputesWithLatestCNYCost(t *testing
 
 	require.Equal(t, 100.0, target.TotalAccountCost)
 	require.Equal(t, 0.12, target.CostCNYPerUSD)
+}
+
+func TestPreserveOpenAISchedulingCostStatsUsesStandardDenominatorForMultiplier(t *testing.T) {
+	source := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	source.TotalCostCNY = 10
+	source.TotalAccountCost = 20 // actual cost after a 2x account multiplier
+	source.CostCNYPerUSD = 1     // 10 CNY / 10 standard account cost
+	target := upstreamCostTestAccount(1, UpstreamBillingProbeStatusUnsupported, 0, time.Now(), time.Minute)
+	target.TotalCostCNY = 20
+
+	preserveOpenAISchedulingCostStats(target, source)
+
+	require.Equal(t, 20.0, target.TotalAccountCost)
+	require.Equal(t, 2.0, target.CostCNYPerUSD)
 }
 
 func TestLegacyLowRateSnapshotRecheckPreservesUnsupportedCost(t *testing.T) {

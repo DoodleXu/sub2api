@@ -146,6 +146,14 @@ func (s *dashboardAggregationRepoStub) AggregateAccountCostRange(ctx context.Con
 	return nil
 }
 
+func (s *dashboardAggregationRepoStub) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *dashboardAggregationRepoStub) GetAccountCostAggregationState(ctx context.Context) (AccountCostAggregationState, error) {
+	return AccountCostAggregationState{BackfillComplete: true}, nil
+}
+
 func (s *dashboardAggregationRepoStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
 	return true, nil
 }

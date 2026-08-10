@@ -16,6 +16,8 @@ func TestDashboardAggregationRecomputeRangeAdvancesModelCoverage(t *testing.T) {
 	end := start.AddDate(0, 0, 1)
 
 	require.NoError(t, repo.RecomputeRange(context.Background(), start, end))
-	require.Contains(t, strings.Join(sqlRecorder.execQueries, "\n"), "model_hourly_aggregated_from")
-	require.Contains(t, strings.Join(sqlRecorder.execQueries, "\n"), "model_hourly_last_aggregated_at")
+	queries := strings.Join(sqlRecorder.execQueries, "\n")
+	require.Contains(t, queries, "model_hourly_aggregated_from")
+	require.Contains(t, queries, "model_hourly_last_aggregated_at")
+	require.NotContains(t, queries, "usage_account_cost_totals")
 }

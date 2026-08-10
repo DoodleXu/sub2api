@@ -304,13 +304,12 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 		RETURNING id
 	`, whereClause, len(args))
 
+	var deleted int64
 	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = rows.Close() }()
-
-	var deleted int64
 	for rows.Next() {
 		deleted++
 	}
@@ -330,7 +329,7 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 		idx++
 	}
 	if !filters.EndTime.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", idx))
+		conditions = append(conditions, fmt.Sprintf("created_at < $%d", idx))
 		args = append(args, filters.EndTime)
 		idx++
 	}

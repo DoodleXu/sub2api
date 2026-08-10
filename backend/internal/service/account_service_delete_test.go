@@ -30,6 +30,17 @@ type accountRepoStub struct {
 	deletedIDs []int64 // 记录已删除的账号 ID 列表
 }
 
+type accountCascadeRepoStub struct {
+	*accountRepoStub
+	cascadeIDs []int64
+	cascadeErr error
+}
+
+func (s *accountCascadeRepoStub) DeleteWithShadows(ctx context.Context, id int64) error {
+	s.cascadeIDs = append(s.cascadeIDs, id)
+	return s.cascadeErr
+}
+
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
 
 func (s *accountRepoStub) Create(ctx context.Context, account *Account) error {
@@ -288,4 +299,13 @@ func TestAccountService_Delete_Success(t *testing.T) {
 	err := svc.Delete(context.Background(), 55)
 	require.NoError(t, err)
 	require.Equal(t, []int64{55}, repo.deletedIDs) // 验证正确的 ID 被删除
+}
+
+func TestAccountService_DeleteUsesAtomicCascadeCapability(t *testing.T) {
+	repo := &accountCascadeRepoStub{accountRepoStub: &accountRepoStub{exists: true}}
+	svc := &AccountService{accountRepo: repo}
+
+	require.NoError(t, svc.Delete(context.Background(), 55))
+	require.Equal(t, []int64{55}, repo.cascadeIDs)
+	require.Empty(t, repo.deletedIDs)
 }

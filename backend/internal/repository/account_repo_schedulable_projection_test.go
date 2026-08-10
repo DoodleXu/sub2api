@@ -110,6 +110,8 @@ func TestListSchedulableCapacityIncludesOpenAILimitContinuationAccounts(t *testi
 	normalized := normalizeSQLWhitespace(capturedSQL)
 	require.Contains(t, normalized, service.OpenAIContinueSchedulingAfterLimitExtraKey)
 	require.Contains(t, normalized, "rate_limit_reset_at")
+	require.Contains(t, normalized, "a.archived_at IS NULL")
+	require.Contains(t, normalized, "parent.archived_at IS NULL")
 	require.Contains(t, normalized, "temp_unschedulable_reason")
 	require.Contains(t, normalized, `status_code":429`)
 }

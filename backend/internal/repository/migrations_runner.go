@@ -59,6 +59,8 @@ const latestAPIKeyIPIndexMigration = "174_add_usage_logs_api_key_latest_ip_index
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
 const usageLogsUpstreamModelMismatchIndexMigration = "195_add_usage_log_upstream_model_mismatch_index_notx.sql"
 const usageLogsUpstreamModelMismatchIndex = "idx_usage_logs_upstream_model_mismatch_created_at"
+const usageLogsAccountCostLookupIndexMigration = "197_usage_account_cost_lookup_index_notx.sql"
+const usageLogsAccountCostLookupIndex = "idx_usage_logs_account_id_id"
 
 type migrationChecksumCompatibilityRule struct {
 	fileChecksum       string
@@ -223,18 +225,8 @@ func applyMigrationsFS(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 
 			// *_notx.sql：用于 CREATE/DROP INDEX CONCURRENTLY 场景，必须非事务执行。
 			// 逐条语句执行，避免将多条 CONCURRENTLY 语句放入同一个隐式事务块。
-			statements := splitSQLStatements(content)
-			for i, stmt := range statements {
-				trimmed := strings.TrimSpace(stmt)
-				if trimmed == "" {
-					continue
-				}
-				if stripSQLLineComment(trimmed) == "" {
-					continue
-				}
-				if _, err := lockConn.ExecContext(ctx, trimmed); err != nil {
-					return fmt.Errorf("apply migration %s (non-tx statement %d): %w", name, i+1, err)
-				}
+			if err := applyNonTransactionalMigration(ctx, lockConn, name, content); err != nil {
+				return fmt.Errorf("apply migration %s (non-tx): %w", name, err)
 			}
 			if _, err := lockConn.ExecContext(ctx, "INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", name, checksum); err != nil {
 				return fmt.Errorf("record migration %s (non-tx): %w", name, err)
@@ -275,6 +267,253 @@ type migrationConnection interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+func applyNonTransactionalMigration(ctx context.Context, db migrationConnection, name, content string) error {
+	if name == usageLogsAccountCostLookupIndexMigration {
+		return applyUsageLogsAccountCostLookupIndexMigration(ctx, db, content)
+	}
+	return applyNonTransactionalMigrationStatements(ctx, db, content)
+}
+
+func applyUsageLogsAccountCostLookupIndexMigration(ctx context.Context, db migrationConnection, content string) error {
+	partitioned, err := isPartitionedTable(ctx, db, "usage_logs")
+	if err != nil {
+		return fmt.Errorf("check usage_logs partitioning: %w", err)
+	}
+	if !partitioned {
+		return applyNonTransactionalMigrationStatements(ctx, db, content)
+	}
+	return ensurePartitionedIndex(ctx, db, "usage_logs", usageLogsAccountCostLookupIndex, []string{"account_id", "id"})
+}
+
+func applyNonTransactionalMigrationStatements(ctx context.Context, db migrationConnection, content string) error {
+	statements := splitSQLStatements(content)
+	for i, stmt := range statements {
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed == "" || stripSQLLineComment(trimmed) == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, trimmed); err != nil {
+			return fmt.Errorf("non-tx statement %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+func isPartitionedTable(ctx context.Context, db migrationConnection, tableName string) (bool, error) {
+	var partitioned bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM pg_partitioned_table pt
+			JOIN pg_class c ON c.oid = pt.partrelid
+			JOIN pg_namespace ns ON ns.oid = c.relnamespace
+			WHERE ns.nspname = current_schema()
+			  AND c.relname = $1
+		)
+	`, tableName).Scan(&partitioned)
+	return partitioned, err
+}
+
+func ensurePartitionedIndex(ctx context.Context, db migrationConnection, tableName, indexName string, columns []string) error {
+	if len(columns) == 0 {
+		return errors.New("partitioned index requires at least one column")
+	}
+
+	quotedColumns := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quotedColumns = append(quotedColumns, quoteMigrationIdentifier(column))
+	}
+	quotedTable := quoteMigrationIdentifier(tableName)
+	quotedIndex := quoteMigrationIdentifier(indexName)
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"CREATE INDEX IF NOT EXISTS %s ON ONLY %s (%s)",
+		quotedIndex,
+		quotedTable,
+		strings.Join(quotedColumns, ", "),
+	)); err != nil {
+		return fmt.Errorf("create partitioned parent index: %w", err)
+	}
+
+	parentOID, err := partitionedTableOID(ctx, db, tableName)
+	if err != nil {
+		return fmt.Errorf("find partitioned table: %w", err)
+	}
+	parentIndexOID, err := partitionedIndexOID(ctx, db, parentOID, indexName)
+	if err != nil {
+		return fmt.Errorf("find partitioned parent index: %w", err)
+	}
+
+	leaves, err := partitionLeafTables(ctx, db, parentOID)
+	if err != nil {
+		return fmt.Errorf("list partition leaves: %w", err)
+	}
+	for _, leaf := range leaves {
+		if err := ensurePartitionLeafIndex(ctx, db, parentIndexOID, indexName, leaf, quotedColumns); err != nil {
+			return fmt.Errorf("ensure index on partition %s.%s: %w", leaf.schema, leaf.name, err)
+		}
+	}
+
+	if len(leaves) > 0 {
+		var valid bool
+		if err := db.QueryRowContext(ctx, `SELECT indisvalid FROM pg_index WHERE indexrelid = $1`, parentIndexOID).Scan(&valid); err != nil {
+			return fmt.Errorf("verify partitioned parent index: %w", err)
+		}
+		if !valid {
+			return errors.New("partitioned parent index remains invalid after attaching partitions")
+		}
+	}
+	return nil
+}
+
+type partitionLeafTable struct {
+	schema string
+	name   string
+	oid    int64
+}
+
+func partitionedTableOID(ctx context.Context, db migrationConnection, tableName string) (int64, error) {
+	var oid int64
+	err := db.QueryRowContext(ctx, `
+		SELECT c.oid
+		FROM pg_partitioned_table pt
+		JOIN pg_class c ON c.oid = pt.partrelid
+		JOIN pg_namespace ns ON ns.oid = c.relnamespace
+		WHERE ns.nspname = current_schema() AND c.relname = $1
+	`, tableName).Scan(&oid)
+	return oid, err
+}
+
+func partitionedIndexOID(ctx context.Context, db migrationConnection, tableOID int64, indexName string) (int64, error) {
+	var oid int64
+	err := db.QueryRowContext(ctx, `
+		SELECT idx.oid
+		FROM pg_class idx
+		JOIN pg_namespace idx_ns ON idx_ns.oid = idx.relnamespace
+		JOIN pg_index i ON i.indexrelid = idx.oid
+		WHERE i.indrelid = $1
+		  AND idx_ns.nspname = current_schema()
+		  AND idx.relname = $2
+	`, tableOID, indexName).Scan(&oid)
+	return oid, err
+}
+
+func partitionLeafTables(ctx context.Context, db migrationConnection, parentOID int64) ([]partitionLeafTable, error) {
+	rows, err := db.QueryContext(ctx, `
+		WITH RECURSIVE partition_tree(relid) AS (
+			SELECT inhrelid FROM pg_inherits WHERE inhparent = $1
+			UNION ALL
+			SELECT i.inhrelid
+			FROM pg_inherits i
+			JOIN partition_tree p ON p.relid = i.inhparent
+		)
+		SELECT ns.nspname, c.relname, c.oid
+		FROM partition_tree p
+		JOIN pg_class c ON c.oid = p.relid
+		JOIN pg_namespace ns ON ns.oid = c.relnamespace
+		WHERE NOT EXISTS (
+			SELECT 1 FROM pg_inherits nested WHERE nested.inhparent = c.oid
+		)
+		ORDER BY ns.nspname, c.relname
+	`, parentOID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	leaves := make([]partitionLeafTable, 0)
+	for rows.Next() {
+		var leaf partitionLeafTable
+		if err := rows.Scan(&leaf.schema, &leaf.name, &leaf.oid); err != nil {
+			return nil, err
+		}
+		leaves = append(leaves, leaf)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return leaves, nil
+}
+
+func ensurePartitionLeafIndex(ctx context.Context, db migrationConnection, parentIndexOID int64, parentIndexName string, leaf partitionLeafTable, quotedColumns []string) error {
+	childIndexName := partitionChildIndexName(parentIndexName, leaf.oid)
+	childIndexOID, valid, ready, attached, err := partitionChildIndexState(ctx, db, leaf, childIndexName, parentIndexOID)
+	if err != nil {
+		return err
+	}
+	quotedChildIndex := quoteMigrationIdentifier(childIndexName)
+	quotedLeaf := quoteMigrationIdentifier(leaf.schema) + "." + quoteMigrationIdentifier(leaf.name)
+	if childIndexOID > 0 && (!valid || !ready) {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX CONCURRENTLY IF EXISTS %s.%s", quoteMigrationIdentifier(leaf.schema), quotedChildIndex)); err != nil {
+			return fmt.Errorf("drop invalid child index: %w", err)
+		}
+		childIndexOID = 0
+		attached = false
+	}
+	if childIndexOID == 0 {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			"CREATE INDEX CONCURRENTLY IF NOT EXISTS %s ON %s (%s)",
+			quotedChildIndex,
+			quotedLeaf,
+			strings.Join(quotedColumns, ", "),
+		)); err != nil {
+			return fmt.Errorf("create child index: %w", err)
+		}
+		childIndexOID, valid, ready, attached, err = partitionChildIndexState(ctx, db, leaf, childIndexName, parentIndexOID)
+		if err != nil {
+			return err
+		}
+	}
+	if childIndexOID == 0 || !valid || !ready {
+		return errors.New("child index is not ready after creation")
+	}
+	if attached {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"ALTER INDEX %s ATTACH PARTITION %s",
+		quoteMigrationIdentifier(parentIndexName),
+		quoteMigrationIdentifier(leaf.schema)+"."+quoteMigrationIdentifier(childIndexName),
+	)); err != nil {
+		return fmt.Errorf("attach child index: %w", err)
+	}
+	return nil
+}
+
+func partitionChildIndexState(ctx context.Context, db migrationConnection, leaf partitionLeafTable, indexName string, parentIndexOID int64) (int64, bool, bool, bool, error) {
+	var oid int64
+	var valid, ready, attached bool
+	err := db.QueryRowContext(ctx, `
+		SELECT idx.oid, i.indisvalid, i.indisready,
+		       EXISTS(
+			       SELECT 1 FROM pg_inherits
+			       WHERE inhparent = $1 AND inhrelid = idx.oid
+		       )
+		FROM pg_class idx
+		JOIN pg_namespace ns ON ns.oid = idx.relnamespace
+		JOIN pg_index i ON i.indexrelid = idx.oid
+		WHERE ns.nspname = $2
+		  AND idx.relname = $3
+		  AND i.indrelid = $4
+	`, parentIndexOID, leaf.schema, indexName, leaf.oid).Scan(&oid, &valid, &ready, &attached)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, false, false, nil
+	}
+	return oid, valid, ready, attached, err
+}
+
+func partitionChildIndexName(parentIndexName string, partitionOID int64) string {
+	suffix := fmt.Sprintf("_p%d", partitionOID)
+	maxParentLength := 63 - len(suffix)
+	if len(parentIndexName) > maxParentLength {
+		parentIndexName = parentIndexName[:maxParentLength]
+	}
+	return parentIndexName + suffix
+}
+
+func quoteMigrationIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func prepareNonTransactionalMigration(ctx context.Context, db migrationConnection, name string) error {

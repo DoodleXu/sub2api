@@ -513,7 +513,9 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		response.BadRequest(c, "Invalid end_date format, use YYYY-MM-DD")
 		return
 	}
-	endTime = endTime.Add(24*time.Hour - time.Nanosecond)
+	// Cleanup uses the half-open range [start, end). AddDate preserves the
+	// user's calendar-day boundary across daylight-saving transitions.
+	endTime = endTime.AddDate(0, 0, 1)
 
 	var requestType *int16
 	stream := req.Stream

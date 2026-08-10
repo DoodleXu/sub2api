@@ -193,8 +193,19 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 
 	batchSize := s.batchSize()
 	deletedTotal := task.DeletedRows
+	recomputeNeeded := deletedTotal > 0
 	start := time.Now()
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task started: task=%d batch_size=%d deleted_rows=%d %s", task.ID, batchSize, deletedTotal, describeUsageCleanupFilters(task.Filters))
+	defer func() {
+		if !recomputeNeeded || s.dashboard == nil {
+			return
+		}
+		if err := s.dashboard.TriggerRecomputeRange(task.Filters.StartTime, task.Filters.EndTime); err != nil {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute failed: task=%d err=%v", task.ID, err)
+			return
+		}
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute: task=%d start=%s end=%s", task.ID, task.Filters.StartTime.UTC().Format(time.RFC3339), task.Filters.EndTime.UTC().Format(time.RFC3339))
+	}()
 	var batchNum int
 
 	for {
@@ -225,6 +236,7 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 		deletedTotal += deleted
 		if deleted > 0 {
+			recomputeNeeded = true
 			updateCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if err := s.repo.UpdateTaskProgress(updateCtx, task.ID, deletedTotal); err != nil {
 				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task progress update failed: task=%d deleted_rows=%d err=%v", task.ID, deletedTotal, err)
@@ -239,20 +251,14 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 	}
 
+	// 保持原有成功任务契约：即使本轮没有删除行，也要触发一次范围重算。
+	recomputeNeeded = true
 	updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.repo.MarkTaskSucceeded(updateCtx, task.ID, deletedTotal); err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] update task succeeded failed: task=%d err=%v", task.ID, err)
 	} else {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task succeeded: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
-	}
-
-	if s.dashboard != nil {
-		if err := s.dashboard.TriggerRecomputeRange(task.Filters.StartTime, task.Filters.EndTime); err != nil {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute failed: task=%d err=%v", task.ID, err)
-		} else {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute: task=%d start=%s end=%s", task.ID, task.Filters.StartTime.UTC().Format(time.RFC3339), task.Filters.EndTime.UTC().Format(time.RFC3339))
-		}
 	}
 }
 

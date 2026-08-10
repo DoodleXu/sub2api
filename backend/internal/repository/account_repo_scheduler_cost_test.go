@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -112,5 +114,40 @@ func TestPreserveCachedAccountCostStats(t *testing.T) {
 	repo.preserveCachedAccountCostStats(context.Background(), target)
 
 	require.Equal(t, 100.0, target.TotalAccountCost)
-	require.Equal(t, 0.0695, target.CostCNYPerUSD)
+	require.Equal(t, 999.0, target.CostCNYPerUSD)
+}
+
+func TestPreserveCachedAccountCostStatsRecomputesAfterAccountCostChange(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}).AddRow(1, 120.0, 100.0))
+
+	target := &service.Account{
+		ID:           1,
+		Platform:     service.PlatformOpenAI,
+		Type:         service.AccountTypeAPIKey,
+		TotalCostCNY: 12,
+		Extra: map[string]any{
+			service.UpstreamBillingProbeExtraKey: map[string]any{
+				"status": service.UpstreamBillingProbeStatusUnsupported,
+			},
+		},
+	}
+	repo := &accountRepository{
+		sql: db,
+		schedulerCache: schedulerCostSnapshotCache{account: &service.Account{
+			ID:               1,
+			TotalAccountCost: 100,
+			CostCNYPerUSD:    0.06,
+		}},
+	}
+
+	repo.preserveCachedAccountCostStats(context.Background(), target)
+
+	require.Equal(t, 120.0, target.TotalAccountCost)
+	require.Equal(t, 0.12, target.CostCNYPerUSD)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

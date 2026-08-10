@@ -4149,7 +4149,25 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
-	// 级联删除 spark 影子账号（先删影子，再删母账号）
+	if s.entClient != nil && dbent.TxFromContext(ctx) == nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return fmt.Errorf("begin account delete transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := s.deleteAccountWithShadows(dbent.NewTxContext(ctx, tx), id); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit account delete transaction: %w", err)
+		}
+		return nil
+	}
+	return s.deleteAccountWithShadows(ctx, id)
+}
+
+func (s *adminServiceImpl) deleteAccountWithShadows(ctx context.Context, id int64) error {
+	// 影子和母账号必须位于同一事务；任一软删除失败时整体回滚。
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {
 		return fmt.Errorf("list spark shadows for cascade delete: %w", err)
@@ -4234,6 +4252,10 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	if !parent.IsOpenAIOAuth() {
 		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_INVALID_PARENT",
 			"spark shadow requires an OpenAI OAuth parent account")
+	}
+	if parent.IsArchived() {
+		return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_ARCHIVED",
+			"cannot create a spark shadow for an archived parent account")
 	}
 	// G6:母账号本身不能是影子,否则会建出二级影子——resolveCredentialAccount 只解一层,
 	// 会解析到无凭据的一级影子,进入坏调度/上游失败。

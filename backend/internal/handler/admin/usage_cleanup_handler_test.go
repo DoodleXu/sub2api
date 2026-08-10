@@ -346,7 +346,7 @@ func TestUsageHandlerCreateCleanupTaskSuccess(t *testing.T) {
 	require.Equal(t, "gpt-4", *created.Filters.Model)
 
 	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC).Add(24*time.Hour - time.Nanosecond)
+	end := time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)
 	require.True(t, created.Filters.StartTime.Equal(start))
 	require.True(t, created.Filters.EndTime.Equal(end))
 }

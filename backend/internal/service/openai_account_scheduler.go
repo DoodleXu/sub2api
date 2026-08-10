@@ -2861,10 +2861,18 @@ func preserveOpenAISchedulingCostStats(target, source *Account) {
 	if !isOpenAIUnsupportedBillingProbeAccount(target) {
 		return
 	}
-	if target.TotalCostCNY <= 0 || source.TotalAccountCost <= 0 {
+	if target.TotalCostCNY <= 0 || source.TotalCostCNY <= 0 || source.CostCNYPerUSD <= 0 {
 		return
 	}
-	rate := target.TotalCostCNY / source.TotalAccountCost
+	// CostCNYPerUSD is defined against standard account cost, while
+	// TotalAccountCost may include the account's billing multiplier. Recover
+	// the standard denominator from the canonical cached ratio instead of using
+	// the multiplier-aware actual cost directly.
+	standardAccountCost := source.TotalCostCNY / source.CostCNYPerUSD
+	if standardAccountCost <= 0 || math.IsNaN(standardAccountCost) || math.IsInf(standardAccountCost, 0) {
+		return
+	}
+	rate := target.TotalCostCNY / standardAccountCost
 	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
 		return
 	}

@@ -80,6 +80,14 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "upstream_response_model", "character varying", 200, true)
 	requireColumn(t, tx, "usage_logs", "upstream_model_mismatch", "boolean", 0, true)
 	requireIndex(t, tx, "usage_logs", usageLogsUpstreamModelMismatchIndex)
+	requireIndex(t, tx, "usage_logs", "idx_usage_logs_account_id_id")
+	requireForeignKeyOnDelete(t, tx, "usage_logs", "account_id", "accounts", "CASCADE")
+
+	requireColumn(t, tx, "usage_account_cost_totals", "last_processed_usage_id", "bigint", 0, false)
+	requireColumn(t, tx, "usage_account_cost_totals", "initialized", "boolean", 0, false)
+	requireColumn(t, tx, "usage_account_cost_totals", "needs_processing", "boolean", 0, false)
+	requireIndex(t, tx, "usage_account_cost_totals", "idx_usage_account_cost_totals_pending")
+	requireForeignKeyOnDelete(t, tx, "usage_account_cost_totals", "account_id", "accounts", "CASCADE")
 
 	var mismatchIndexDef string
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
@@ -196,6 +204,50 @@ WHERE ns.nspname = 'public'
 
 	// user_allowed_groups: created_at should be timestamptz
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
+}
+
+func TestMigrationsRunner_EnsuresIndexOnPartitionedTable(t *testing.T) {
+	ctx := context.Background()
+	const tableName = "migration_partitioned_usage_logs_test"
+	const indexName = "migration_partitioned_usage_logs_account_id_id"
+
+	_, err := integrationDB.ExecContext(ctx, `
+		CREATE TABLE migration_partitioned_usage_logs_test (
+			id BIGINT NOT NULL,
+			account_id BIGINT NOT NULL
+		) PARTITION BY RANGE (id);
+		CREATE TABLE migration_partitioned_usage_logs_test_p1
+			PARTITION OF migration_partitioned_usage_logs_test FOR VALUES FROM (MINVALUE) TO (1000);
+		CREATE TABLE migration_partitioned_usage_logs_test_p2
+			PARTITION OF migration_partitioned_usage_logs_test FOR VALUES FROM (1000) TO (MAXVALUE);
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), "DROP TABLE IF EXISTS migration_partitioned_usage_logs_test CASCADE")
+	})
+
+	require.NoError(t, ensurePartitionedIndex(ctx, integrationDB, tableName, indexName, []string{"account_id", "id"}))
+
+	var parentValid bool
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT i.indisvalid
+		FROM pg_class idx
+		JOIN pg_index i ON i.indexrelid = idx.oid
+		WHERE idx.relname = $1
+	`, indexName).Scan(&parentValid))
+	require.True(t, parentValid)
+
+	var attached int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM pg_inherits inh
+		JOIN pg_class parent_idx ON parent_idx.oid = inh.inhparent
+		WHERE parent_idx.relname = $1
+	`, indexName).Scan(&attached))
+	require.Equal(t, 2, attached)
+
+	// A retry after a partially or fully completed run must be a no-op.
+	require.NoError(t, ensurePartitionedIndex(ctx, integrationDB, tableName, indexName, []string{"account_id", "id"}))
 }
 
 func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) {

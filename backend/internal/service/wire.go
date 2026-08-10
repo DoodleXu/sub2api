@@ -238,9 +238,10 @@ func ProvideGrokTokenProvider(
 }
 
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
-func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config) *DashboardAggregationService {
+func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, dashboardCache DashboardStatsCache, cfg *config.Config) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
 	svc.SetLeaderLock(lockCache, db)
+	svc.SetDashboardCache(dashboardCache)
 	svc.Start()
 	return svc
 }

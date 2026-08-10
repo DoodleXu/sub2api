@@ -28,6 +28,8 @@ const (
 	accountCostBackfillMaxChunks      = 128
 	accountCostBackfillYield          = 100 * time.Millisecond
 	accountCostBackfillLogTimeout     = 5 * time.Second
+	accountCostTotalsBatchSize        = int64(10000)
+	accountCostIncrementalMaxChunks   = 128
 )
 
 var (
@@ -42,6 +44,10 @@ var (
 type DashboardAggregationRepository interface {
 	AggregateRange(ctx context.Context, start, end time.Time) error
 	AggregateAccountCostRange(ctx context.Context, start, end time.Time) error
+	// ProcessAccountCostTotals 在一个事务中处理一个账号的一段 usage_logs.id，
+	// 并推进该账号的累计账本检查点。新增日志只处理检查点之后的增量。
+	ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error)
+	GetAccountCostAggregationState(ctx context.Context) (AccountCostAggregationState, error)
 	RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error)
 	// RecomputeRange 重新计算指定时间范围内的聚合数据（包含活跃用户等派生表）。
 	// 设计目的：当 usage_logs 被批量删除/回滚后，确保聚合表可恢复一致性。
@@ -50,9 +56,24 @@ type DashboardAggregationRepository interface {
 	GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error)
 	UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error
 	CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error
-	CleanupUsageLogs(ctx context.Context, cutoff time.Time) error
 	CleanupUsageBillingDedup(ctx context.Context, cutoff time.Time) error
 	EnsureUsageLogsPartitions(ctx context.Context, now time.Time) error
+}
+
+// dashboardCostSnapshotStaler is an optional repository capability. Keeping it
+// optional avoids making lightweight aggregation test doubles implement a
+// persistence-only invalidation operation.
+type dashboardCostSnapshotStaler interface {
+	MarkDashboardCostSnapshotStale(ctx context.Context) error
+}
+
+// AccountCostAggregationState 描述账号累计成本账本的后台进度。
+type AccountCostAggregationState struct {
+	LastProcessedUsageID int64
+	TotalAccounts        int64
+	PendingAccounts      int64
+	BackfillComplete     bool
+	ComputedAt           time.Time
 }
 
 // DashboardAggregationService 负责定时聚合与回填。
@@ -65,9 +86,10 @@ type DashboardAggregationService struct {
 	lastRetentionCleanup       atomic.Value // time.Time
 	accountCostBackfillYieldFn func(context.Context) bool
 
-	lockCache  LeaderLockCache
-	db         *sql.DB
-	instanceID string
+	lockCache      LeaderLockCache
+	db             *sql.DB
+	instanceID     string
+	dashboardCache DashboardStatsCache
 }
 
 // NewDashboardAggregationService 创建聚合服务。
@@ -93,6 +115,15 @@ func (s *DashboardAggregationService) SetLeaderLock(lockCache LeaderLockCache, d
 	}
 	s.lockCache = lockCache
 	s.db = db
+}
+
+// SetDashboardCache injects the shared dashboard cache so explicit usage-log
+// cleanup cannot serve a cost summary built before the deletion.
+func (s *DashboardAggregationService) SetDashboardCache(cache DashboardStatsCache) {
+	if s == nil {
+		return
+	}
+	s.dashboardCache = cache
 }
 
 // Start 启动定时聚合作业（重启生效配置）。
@@ -142,6 +173,10 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillRunBudget)
 	defer cancel()
+
+	// 账本回填和增量消费使用相同的低速预算，避免首次部署时一次性扫完整张
+	// usage_logs。完成后该循环自然变成空转，实时新增由每个调度周期消费。
+	s.processAccountCostTotalsBackfill(ctx)
 
 	// Historical chunks must align to complete hours. Using a minute/second
 	// boundary would split one hour across adjacent descending chunks and let the
@@ -219,6 +254,69 @@ func (s *DashboardAggregationService) backfillAccountCostAggregates() {
 		}
 		cursor = windowStart
 	}
+}
+
+func (s *DashboardAggregationService) processAccountCostTotalsBackfill(ctx context.Context) {
+	startedAt := time.Now()
+	processedBatches := 0
+	for processedBatches < accountCostBackfillMaxChunks {
+		if ctx.Err() != nil {
+			break
+		}
+		processed, ok := s.processAccountCostTotalsChunk(ctx)
+		if !ok {
+			break
+		}
+		processedBatches++
+		if processed == 0 || processedBatches >= accountCostBackfillMaxChunks || !s.yieldAccountCostBackfill(ctx) {
+			break
+		}
+	}
+
+	logCtx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
+	defer cancel()
+	state, err := s.repo.GetAccountCostAggregationState(logCtx)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取累计成本账本进度失败: %v", err)
+		return
+	}
+	logger.LegacyPrintf(
+		"service.dashboard_aggregation",
+		"[DashboardAggregation] 累计成本账本进度 (batches=%d last_id=%d total_accounts=%d pending_accounts=%d complete=%t duration=%s)",
+		processedBatches,
+		state.LastProcessedUsageID,
+		state.TotalAccounts,
+		state.PendingAccounts,
+		state.BackfillComplete,
+		time.Since(startedAt).String(),
+	)
+}
+
+func (s *DashboardAggregationService) processAccountCostTotalsChunk(ctx context.Context) (int64, bool) {
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		return 0, false
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+
+	release, ok := tryAcquireSingletonLeaderLock(
+		ctx,
+		s.lockCache,
+		s.db,
+		dashboardAggregationLeaderLockKey,
+		s.instanceID,
+		dashboardAggregationLeaderLockTTL,
+	)
+	if !ok {
+		return 0, false
+	}
+	defer release()
+
+	processed, err := s.repo.ProcessAccountCostTotals(ctx, accountCostTotalsBatchSize)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 累计成本账本批次失败: %v", err)
+		return 0, false
+	}
+	return processed, true
 }
 
 func (s *DashboardAggregationService) refreshDashboardCostSnapshot(targetStart, targetEnd time.Time) {
@@ -338,11 +436,12 @@ func (s *DashboardAggregationService) TriggerRecomputeRange(start, end time.Time
 	if s == nil || s.repo == nil {
 		return errors.New("聚合服务未初始化")
 	}
-	if !s.cfg.Enabled {
-		return errors.New("聚合服务已禁用")
-	}
 	if !end.After(start) {
 		return errors.New("重新计算时间范围无效")
+	}
+	s.invalidateDashboardCostSnapshot()
+	if !s.cfg.Enabled {
+		return errors.New("聚合服务已禁用")
 	}
 
 	go func() {
@@ -391,12 +490,31 @@ func (s *DashboardAggregationService) recomputeRange(ctx context.Context, start,
 	if err := s.repo.RecomputeRange(ctx, start, end); err != nil {
 		return err
 	}
+	s.refreshDashboardCostSnapshot(start, end)
 	logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 重新计算完成 (start=%s end=%s duration=%s)",
 		start.UTC().Format(time.RFC3339),
 		end.UTC().Format(time.RFC3339),
 		time.Since(jobStart).String(),
 	)
 	return nil
+}
+
+func (s *DashboardAggregationService) invalidateDashboardCostSnapshot() {
+	if s == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
+	defer cancel()
+	if staler, ok := s.repo.(dashboardCostSnapshotStaler); ok {
+		if err := staler.MarkDashboardCostSnapshotStale(ctx); err != nil {
+			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 标记成本快照过期失败: %v", err)
+		}
+	}
+	if s.dashboardCache != nil {
+		if err := s.dashboardCache.DeleteDashboardCostSummary(ctx); err != nil {
+			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 删除成本快照缓存失败: %v", err)
+		}
+	}
 }
 
 func (s *DashboardAggregationService) runScheduledAggregation() {
@@ -440,6 +558,22 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 	if err := s.aggregateRange(ctx, start, now); err != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合失败: %v", err)
 		return
+	}
+
+	processedAccounts := 0
+	for processedAccounts < accountCostIncrementalMaxChunks {
+		processed, processErr := s.repo.ProcessAccountCostTotals(ctx, accountCostTotalsBatchSize)
+		if processErr != nil {
+			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 增量成本账本失败: %v", processErr)
+			break
+		}
+		if processed == 0 {
+			break
+		}
+		processedAccounts++
+	}
+	if processedAccounts > 0 {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 增量成本账本已处理 (account_batches=%d)", processedAccounts)
 	}
 
 	updateErr := s.repo.UpdateAggregationWatermark(ctx, now)
@@ -512,6 +646,9 @@ func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start,
 }
 
 func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {
+	// Cost aggregation is deliberately read-only with respect to usage_logs.
+	// Raw-log deletion, when explicitly requested, belongs to UsageCleanupService
+	// and is never triggered by the dashboard/account-cost scheduler.
 	lastAny := s.lastRetentionCleanup.Load()
 	if lastAny != nil {
 		if last, ok := lastAny.(time.Time); ok && now.Sub(last) < dashboardAggregationRetentionInterval {
@@ -521,22 +658,17 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	usageCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageLogsDays)
 	dedupCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageBillingDedupDays)
 
 	aggErr := s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
 	if aggErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
 	}
-	usageErr := s.repo.CleanupUsageLogs(ctx, usageCutoff)
-	if usageErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
-	}
 	dedupErr := s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
 	if dedupErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_billing_dedup 保留清理失败: %v", dedupErr)
 	}
-	if aggErr == nil && usageErr == nil && dedupErr == nil {
+	if aggErr == nil && dedupErr == nil {
 		s.lastRetentionCleanup.Store(now)
 	}
 }

@@ -205,3 +205,20 @@ func TestDashboardHandler_GetGroupStats_RejectsRawDetailRangeOverThirtyOneDays(t
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "cannot exceed 31 days")
 }
+
+func TestDashboardHandler_GetSnapshotV2RejectsRawDetailRangeOverThirtyOneDays(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &dashboardUsageRepoCacheProbe{}
+	dashboardSvc := service.NewDashboardService(repo, nil, nil, nil)
+	handler := NewDashboardHandler(dashboardSvc, nil)
+	router := gin.New()
+	router.GET("/admin/dashboard/snapshot-v2", handler.GetSnapshotV2)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/dashboard/snapshot-v2?start_date=2026-01-01&end_date=2026-03-01&upstream_model_mismatch=true", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "cannot exceed 31 days")
+	require.Zero(t, repo.trendCalls.Load())
+}

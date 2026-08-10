@@ -1050,14 +1050,15 @@ func (s *SubscriptionService) adminBulkResetQuota(ctx context.Context, resetDail
 	}
 
 	const pageSize = 1000
-	windowStart := startOfDay(time.Now())
+	now := s.now()
+	dailyStart := timezone.StartOfDay(now)
 	result := &BulkResetQuotaResult{
 		DryRun:     dryRun,
 		SuccessIDs: make([]int64, 0),
 		FailedIDs:  make([]int64, 0),
 	}
 	if !dryRun {
-		result.RunID = fmt.Sprintf("sub-bulk-reset-%d", time.Now().UnixNano())
+		result.RunID = fmt.Sprintf("sub-bulk-reset-%d", now.UnixNano())
 	}
 
 	for page := 1; ; page++ {
@@ -1075,7 +1076,7 @@ func (s *SubscriptionService) adminBulkResetQuota(ctx context.Context, resetDail
 			if dryRun {
 				continue
 			}
-			if err := s.userSubRepo.ResetUsageWindows(ctx, sub.ID, resetDaily, resetWeekly, resetMonthly, windowStart, windowStart); err != nil {
+			if err := s.userSubRepo.ResetUsageWindows(ctx, sub.ID, resetDaily, resetWeekly, resetMonthly, dailyStart, now); err != nil {
 				result.Failed++
 				result.FailedIDs = append(result.FailedIDs, sub.ID)
 				continue

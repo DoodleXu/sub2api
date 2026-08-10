@@ -230,6 +230,51 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 	s.Require().Equal("gpt-5.2", mapping["gpt-5"])
 }
 
+func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotRecomputesChangedAccountCostRatio() {
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "sync-cost-update",
+		Platform:     service.PlatformOpenAI,
+		Type:         service.AccountTypeAPIKey,
+		Status:       service.StatusActive,
+		Schedulable:  true,
+		TotalCostCNY: 6,
+		Extra: map[string]any{
+			service.UpstreamBillingProbeExtraKey: map[string]any{
+				"status": service.UpstreamBillingProbeStatusUnsupported,
+			},
+		},
+	})
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "sync-cost-update@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-sync-cost-update", Name: "k"})
+	_, err := s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (user_id, api_key_id, account_id, model, total_cost, actual_cost)
+		VALUES ($1, $2, $3, $4, $5, $5)
+	`, user.ID, apiKey.ID, account.ID, "gpt-4o", 100.0)
+	s.Require().NoError(err)
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.client)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+
+	cacheRecorder := &schedulerCacheRecorder{
+		accounts: map[int64]*service.Account{
+			account.ID: {
+				ID:               account.ID,
+				TotalAccountCost: 100,
+				CostCNYPerUSD:    0.06,
+			},
+		},
+	}
+	s.repo.schedulerCache = cacheRecorder
+	account.TotalCostCNY = 12
+	s.Require().NoError(s.repo.Update(s.ctx, account))
+
+	s.Require().Len(cacheRecorder.setAccounts, 1)
+	s.Require().Equal(100.0, cacheRecorder.setAccounts[0].TotalAccountCost)
+	s.Require().InEpsilon(0.12, cacheRecorder.setAccounts[0].CostCNYPerUSD, 0.000001)
+}
+
 func (s *AccountRepoSuite) TestUpdateCredentials_SyncsSnapshotAndDurableOutbox() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:        "sync-refresh-credentials",
@@ -300,6 +345,56 @@ func (s *AccountRepoSuite) TestDelete_WithGroupBindings() {
 	count, err := s.client.AccountGroup.Query().Where(accountgroup.AccountIDEQ(account.ID)).Count(s.ctx)
 	s.Require().NoError(err)
 	s.Require().Zero(count, "expected bindings to be removed")
+}
+
+func (s *AccountRepoSuite) TestDelete_WithUsageHistoryPreservesUsageAndLedger() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "account-delete-usage@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-account-delete-usage", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "account-with-usage"})
+	_, err := s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (user_id, api_key_id, account_id, model, total_cost, actual_cost)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, user.ID, apiKey.ID, account.ID, "test-model", 1, 1)
+	s.Require().NoError(err)
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.client)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+
+	err = s.repo.Delete(s.ctx, account.ID)
+	s.Require().NoError(err)
+	_, err = s.repo.GetByID(s.ctx, account.ID)
+	s.Require().Error(err)
+
+	var usageCount, ledgerCount int
+	s.Require().NoError(scanSingleRow(s.ctx, s.client,
+		"SELECT COUNT(*) FROM usage_logs WHERE account_id = $1", []any{account.ID}, &usageCount))
+	s.Require().NoError(scanSingleRow(s.ctx, s.client,
+		"SELECT COUNT(*) FROM usage_account_cost_totals WHERE account_id = $1", []any{account.ID}, &ledgerCount))
+	s.Require().Equal(1, usageCount)
+	s.Require().Equal(1, ledgerCount)
+}
+
+func (s *AccountRepoSuite) TestHardDelete_WithUsageHistoryCascadesUsageAndLedger() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "account-hard-delete-usage@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-account-hard-delete-usage", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "account-hard-delete-with-usage"})
+	_, err := s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (user_id, api_key_id, account_id, model, total_cost, actual_cost)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, user.ID, apiKey.ID, account.ID, "test-model", 1, 1)
+	s.Require().NoError(err)
+
+	_, err = s.client.ExecContext(s.ctx, "DELETE FROM accounts WHERE id = $1", account.ID)
+	s.Require().NoError(err)
+
+	var usageCount, ledgerCount int
+	s.Require().NoError(scanSingleRow(s.ctx, s.client,
+		"SELECT COUNT(*) FROM usage_logs WHERE account_id = $1", []any{account.ID}, &usageCount))
+	s.Require().NoError(scanSingleRow(s.ctx, s.client,
+		"SELECT COUNT(*) FROM usage_account_cost_totals WHERE account_id = $1", []any{account.ID}, &ledgerCount))
+	s.Require().Zero(usageCount)
+	s.Require().Zero(ledgerCount)
 }
 
 // --- List / ListWithFilters ---

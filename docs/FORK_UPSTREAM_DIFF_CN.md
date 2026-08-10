@@ -373,12 +373,18 @@ git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 
 - 账号上增加 `total_cost_cny`，支持创建、更新、批量更新和增量成本录入。
 - usage/dashboard 聚合返回 `total_account_cost`、`total_cost_cny`、`average_cost_cny_per_usd`、`today_real_cost_cny` 等字段。
-- dashboard 成本链路为“账号小时聚合 → 账号日聚合 → 单行成本快照”，请求时只读取成本快照，禁止对 coverage 前缀/尾部同步回扫 `usage_logs`；`/admin/dashboard/cost-summary` 与核心 Token 快照独立，成本聚合故障只返回最近 30 分钟内旧值并标记 `stale`，不会拖垮首屏。
+- dashboard 成本链路为“账号累计成本账本 + 今日账号日聚合 → 单行成本快照”，请求时只读取成本快照，禁止对 coverage 前缀/尾部同步回扫 `usage_logs`；`/admin/dashboard/cost-summary` 与核心 Token 快照独立，成本聚合故障只返回最近 30 分钟内旧值并标记 `stale`，不会拖垮首屏。
+- 新增 `usage_account_cost_totals` 单表账本：每个账号独立保存账号倍率成本、标准成本和 `last_processed_usage_id` 检查点。后台只处理标记为待核算的账号及检查点后的 usage；首次按账号低速分批回填（包含已有软删除账号），请求路径始终只读账本，不再保留 `usage_logs GROUP BY account_id` 兜底。写入触发器同时防护序列 ID 与事务提交顺序不一致的边界：检查点之前的晚提交 usage 会触发该账号精确重建，不会静默漏账。
+- `197_usage_account_cost_lookup_index_notx.sql` 对普通 `usage_logs` 保持并发建索引；迁移执行器检测到分区父表时改为创建父级分区索引、对子分区逐个并发建索引并 attach，支持中断重试和幂等，不会对分区父表直接执行 PostgreSQL 不支持的 `CREATE INDEX CONCURRENTLY`。
 - 历史账号成本与默认无筛选模型统计共用独立覆盖水位，启动后先处理当前小时和最近日期，再向历史倒序按日分块；每个分块独立获取并释放聚合锁，实时聚合优先。完整历史区间 coverage 不足时成本显示“聚合中”、用户趋势/排行/模型统计返回局部不可用，均不回扫大表；包含当前未结束日期的请求会把未来尾部截到实际小时聚合水位，完整历史日仍使用日表，当前日期使用小时表，避免默认首屏因次日零点尚未覆盖而错误返回空数据。
 - 手动范围重算在重建账号、用户和模型聚合后同步推进三类覆盖水位，避免模型表已重建但模型 coverage 仍停留在旧位置。
 - `snapshot-v2` 对趋势、模型、分组、用户趋势和排行实行 3 秒独立预算，允许部分成功并返回 `partial_errors` / `section_durations_ms`；核心统计使用 1 秒预算。Redis 统计缓存默认调整为 2 分钟新鲜、30 分钟兜底。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
-- 账号及 dashboard 的“每刀成本”分母统一使用 `SUM(usage_logs.total_cost)` 标准计费，不受 `account_rate_multiplier` 或 `account_stats_cost` 影响；账号实际计费和今日实际成本仍保留倍率口径。账号级 dashboard 聚合额外维护标准计费列，避免快照请求回扫 `usage_logs`。
+- 账号及 dashboard 的“每刀成本”分母统一使用标准成本账本（等价于 `SUM(usage_logs.total_cost)`），不受 `account_rate_multiplier` 或 `account_stats_cost` 影响；账号实际累计成本和今日实际成本仍保留倍率口径。账号级 dashboard 聚合额外维护标准计费列，避免快照请求回扫 `usage_logs`。
+- 归档账号不删除累计账本；归档且无新增 usage 的账号不会再次扫描，晚到 usage 由数据库触发器重新标记待核算。成本聚合和 Dashboard retention 对原始 `usage_logs` 严格只读，不会因为核算、回填或成本快照刷新而清理历史明细。管理员显式清理、单条删除或成本字段修正仍是独立数据管理流程；数据库触发器会将受影响账号标记为精确重算，仅重扫该账号。后台普通账号删除沿用 `SoftDeleteMixin`，保留该账号的 usage 与累计账本，确保历史成本不丢失；只有绕过软删除的显式物理删除才由外键级联清理 usage 与账本。
+- 显式 usage 清理采用半开时间范围 `[start, end)`；删除完成后先让数据库成本快照变为未完成并清除 Redis 成本缓存，再异步重算受影响范围并刷新快照，重算期间不会继续展示旧的“已完成”口径。成本核算路径没有删除 `usage_logs` 的行为。
+- 调度器主动同步账号快照时，优先使用账本中的标准成本分母重算当前 `total_cost_cny / total_standard_account_cost`；账本回填未完成或数据库读取失败时才保留旧缓存，避免管理员修改累计成本后继续使用过期的每美元成本比例；恢复旧缓存时也不会把含账号倍率的实际成本误当作标准成本分母。
+- 首次生产切换必须先执行迁移，并让不承接账号列表/Dashboard 流量的固定版本实例完成低速回填；确认 `pending_accounts=0`、抽样账本一致且成本快照已刷新后再切换读流量，避免回填期间展示部分累计值。
 - 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。
 
 关键代码：
@@ -401,6 +407,8 @@ git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 - `backend/migrations/140_add_account_total_cost_cny.sql`
 - `backend/migrations/141_dashboard_account_cost_aggregation_tables.sql`
 - `backend/migrations/142_remove_dashboard_cost_trend.sql`
+- `backend/migrations/196_usage_account_cost_totals.sql`
+- `backend/migrations/197_usage_account_cost_lookup_index_notx.sql`
 - `backend/migrations/150_restore_dashboard_account_cost_columns.sql`
 - `backend/migrations/152_usage_dashboard_user_stats.sql`
 - `backend/migrations/174_dashboard_account_cost_hourly.sql`
@@ -418,6 +426,7 @@ git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 同步上游注意：
 
 - 上游若重构 usage log、dashboard aggregation 或 account schema，必须保留 `total_cost_cny`、账号小时/日成本聚合、模型小时/日聚合、单行成本快照，以及“coverage 不完整时绝不在 dashboard 请求中回扫原始日志”的边界。
+- 上游若重构 usage retention、账号归档或成本修正流程，必须保留每账号累计账本、ID 检查点事务性、归档账号无新增即不重扫，以及“成本聚合绝不删除原始日志、显式数据变更只触发对应账号重算、普通账号软删除保留 usage 与账本、物理删除才级联清理”的边界。
 - 成本口径涉及经营数据，合并后至少跑 dashboard/usage/account 相关测试，并人工检查后台金额单位是否仍为 `¥`。
 
 ### 4. 账号归档
@@ -427,9 +436,10 @@ git diff --name-status refs/tags/upstream/v0.1.172^{}..HEAD
 主要差异：
 
 - 账号 schema 新增 `archived_at`，归档独立于原始 `status`，避免覆盖真实上游状态。
-- 默认账号列表、调度候选、后台批量操作会过滤归档账号。
+- 默认账号列表、调度候选、OAuth 刷新、计费倍率探测、分组容量和后台批量操作会过滤归档账号；Spark 影子同时继承母账号的归档生命周期。
 - 支持单账号归档/取消归档和批量归档，前端显示独立归档状态。
 - 运维统计排除归档账号，避免历史账号污染当前容量和健康度。
+- 归档只冻结生命周期和调度行为，不删除 `usage_account_cost_totals`；取消归档无需历史回填，历史成本继续计入 Dashboard 和账号成本展示。
 
 关键代码：
 

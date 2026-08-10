@@ -276,6 +276,8 @@ func TestAccountRepository_ListOAuthRefreshCandidatePage_SQLFilter(t *testing.T)
 
 	normalized := normalizeSQLWhitespace(capturedSQL)
 	require.Contains(t, normalized, "deleted_at IS NULL")
+	require.Contains(t, normalized, "archived_at IS NULL")
+	require.Contains(t, normalized, "parent.archived_at IS NULL")
 	require.Contains(t, normalized, "schedulable = TRUE",
 		"permanently unschedulable accounts must not remain OAuth refresh candidates")
 	require.Contains(t, normalized, "status = 'active'")

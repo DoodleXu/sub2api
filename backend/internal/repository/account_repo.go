@@ -842,23 +842,27 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 }
 
 func (r *accountRepository) Delete(ctx context.Context, id int64) error {
+	baseCtx := ctx
 	groupIDs, err := r.loadAccountGroupIDs(ctx, id)
 	if err != nil {
 		return err
 	}
-	// 使用事务保证账号与关联分组的删除原子性
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
-	var txClient *dbent.Client
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
+	// 复用外层事务；没有外层事务时自行创建，保证账号和关联记录原子删除。
+	contextTx := dbent.TxFromContext(ctx)
+	txClient := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		txClient = contextTx.Client()
 	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前 client
-		txClient = r.client
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			txClient = tx.Client()
+			ctx = dbent.NewTxContext(ctx, tx)
+		}
 	}
 
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id)).Exec(ctx); err != nil {
@@ -868,6 +872,9 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 		return err
 	}
 	if _, err := txClient.Account.Delete().Where(dbaccount.IDEQ(id)).Exec(ctx); err != nil {
+		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+	}
+	if err := enqueueSchedulerOutbox(ctx, txClient, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
 		return err
 	}
 
@@ -876,11 +883,45 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 			return err
 		}
 	}
-	r.deleteSchedulerAccountSnapshot(ctx, id)
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
+	// 外层事务尚未提交时不能提前修改缓存；提交后的 outbox 会完成同步。
+	if contextTx == nil {
+		r.deleteSchedulerAccountSnapshot(baseCtx, id)
 	}
 	return nil
+}
+
+// DeleteWithShadows deletes the managed Spark shadows and their parent in one
+// Ent transaction. It also participates in an existing transaction so admin
+// deletion and generic account deletion share the same atomic boundary.
+func (r *accountRepository) DeleteWithShadows(ctx context.Context, id int64) error {
+	if dbent.TxFromContext(ctx) != nil {
+		return r.deleteAccountWithShadows(ctx, id)
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := r.deleteAccountWithShadows(dbent.NewTxContext(ctx, tx), id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *accountRepository) deleteAccountWithShadows(ctx context.Context, id int64) error {
+	shadows, err := r.ListShadowsByParent(ctx, id)
+	if err != nil {
+		return err
+	}
+	for _, shadow := range shadows {
+		if shadow == nil {
+			continue
+		}
+		if err := r.Delete(ctx, shadow.ID); err != nil {
+			return fmt.Errorf("delete shadow account %d: %w", shadow.ID, err)
+		}
+	}
+	return r.Delete(ctx, id)
 }
 
 func (r *accountRepository) List(ctx context.Context, params pagination.PaginationParams) ([]service.Account, *pagination.PaginationResult, error) {
@@ -897,9 +938,14 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 		q = q.Where(dbaccount.TypeEQ(accountType))
 	}
 	if status == service.AccountStatusArchivedFilter {
-		q = q.Where(dbaccount.ArchivedAtNotNil())
+		// A shadow inherits the parent's archive lifecycle even though its own
+		// archived_at column is kept independent for history and recovery.
+		q = q.Where(dbaccount.Or(
+			dbaccount.ArchivedAtNotNil(),
+			dbaccount.HasParentWith(dbaccount.ArchivedAtNotNil()),
+		))
 	} else {
-		q = q.Where(dbaccount.ArchivedAtIsNil())
+		q = q.Where(dbaccount.ArchivedAtIsNil(), activeAccountParentPredicate())
 	}
 	if status != "" {
 		switch status {
@@ -960,6 +1006,16 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 	return q
 }
 
+// activeAccountParentPredicate keeps linked shadows out of operational paths
+// when their parent is archived. Normal accounts have no parent and therefore
+// remain eligible.
+func activeAccountParentPredicate() dbpredicate.Account {
+	return dbaccount.Or(
+		dbaccount.ParentAccountIDIsNil(),
+		dbaccount.HasParentWith(dbaccount.ArchivedAtIsNil()),
+	)
+}
+
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
 	q := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode)
 	// Clone before Count so interceptor-appended predicates (SoftDeleteMixin's
@@ -1006,7 +1062,7 @@ func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platfor
 		return []service.Account{}, nil
 	}
 
-	q := r.client.Account.Query().Where(dbaccount.ArchivedAtIsNil())
+	q := r.client.Account.Query().Where(dbaccount.ArchivedAtIsNil(), activeAccountParentPredicate())
 	if platformFilter = strings.TrimSpace(platformFilter); platformFilter != "" {
 		q = q.Where(dbaccount.PlatformEQ(platformFilter))
 	}
@@ -1137,6 +1193,7 @@ func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, 
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -1165,6 +1222,16 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 		SELECT id
 		FROM accounts
 		WHERE deleted_at IS NULL
+			AND archived_at IS NULL
+			AND (
+				parent_account_id IS NULL
+				OR EXISTS (
+					SELECT 1 FROM accounts parent
+					WHERE parent.id = accounts.parent_account_id
+						AND parent.deleted_at IS NULL
+						AND parent.archived_at IS NULL
+				)
+			)
 			AND schedulable = TRUE
 			AND platform = ANY($1)
 			AND id > $2`
@@ -1248,6 +1315,7 @@ func (r *accountRepository) ListByPlatform(ctx context.Context, platform string)
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -1864,6 +1932,7 @@ func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.Accou
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -1921,6 +1990,16 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		JOIN accounts a ON a.id = ag.account_id
 		WHERE ag.group_id = ANY($1)
 			AND a.deleted_at IS NULL
+			AND a.archived_at IS NULL
+			AND (
+				a.parent_account_id IS NULL
+				OR EXISTS (
+					SELECT 1 FROM accounts parent
+					WHERE parent.id = a.parent_account_id
+						AND parent.deleted_at IS NULL
+						AND parent.archived_at IS NULL
+				)
+			)
 			AND a.status = $2
 			AND a.schedulable = TRUE
 			AND (
@@ -1987,6 +2066,7 @@ func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platf
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2022,6 +2102,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
@@ -2043,6 +2124,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Conte
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
@@ -2068,6 +2150,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.ArchivedAtIsNil(),
+			activeAccountParentPredicate(),
 			dbaccount.SchedulableEQ(true),
 			dbaccount.Not(dbaccount.HasAccountGroups()),
 			tempUnschedulablePredicate(),
@@ -2108,6 +2191,8 @@ func (r *accountRepository) ListModelAvailabilityCandidates(ctx context.Context,
 	}
 	preds := []dbpredicate.Account{
 		dbaccount.StatusEQ(service.StatusActive),
+		dbaccount.ArchivedAtIsNil(),
+		activeAccountParentPredicate(),
 		dbaccount.SchedulableEQ(true),
 		dbaccount.PlatformIn(platforms...),
 	}
@@ -3033,7 +3118,7 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
 	preds := make([]dbpredicate.Account, 0, 7)
 	preds = append(preds, dbaccount.DeletedAtIsNil())
-	preds = append(preds, dbaccount.ArchivedAtIsNil())
+	preds = append(preds, dbaccount.ArchivedAtIsNil(), activeAccountParentPredicate())
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -3219,8 +3304,13 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 	return proxyMap, nil
 }
 
-func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountIDs []int64) (map[int64]float64, error) {
-	result := make(map[int64]float64, len(accountIDs))
+type accountCostTotal struct {
+	totalAccountCost         float64
+	totalStandardAccountCost float64
+}
+
+func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountIDs []int64) (map[int64]accountCostTotal, error) {
+	result := make(map[int64]accountCostTotal, len(accountIDs))
 	if len(accountIDs) == 0 {
 		return result, nil
 	}
@@ -3228,10 +3318,10 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 	query := `
 		SELECT
 			account_id,
-			COALESCE(SUM(total_cost), 0) AS total_account_cost
-		FROM usage_logs
+			total_account_cost,
+			total_standard_account_cost
+		FROM usage_account_cost_totals
 		WHERE account_id = ANY($1)
-		GROUP BY account_id
 	`
 	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs))
 	if err != nil {
@@ -3241,8 +3331,8 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 
 	for rows.Next() {
 		var accountID int64
-		var cost float64
-		if err := rows.Scan(&accountID, &cost); err != nil {
+		var cost accountCostTotal
+		if err := rows.Scan(&accountID, &cost.totalAccountCost, &cost.totalStandardAccountCost); err != nil {
 			return nil, err
 		}
 		result[accountID] = cost
@@ -3285,13 +3375,14 @@ func (r *accountRepository) attachMatchingAccountCostStats(ctx context.Context, 
 		if include != nil && !include(&accounts[i]) {
 			continue
 		}
-		totalAccountCost := costs[accounts[i].ID]
-		accounts[i].TotalAccountCost = totalAccountCost
+		cost := costs[accounts[i].ID]
+		accounts[i].TotalAccountCost = cost.totalAccountCost
 		if accounts[i].TotalCostCNY <= 0 {
 			continue
 		}
-		if totalAccountCost > 0 {
-			accounts[i].CostCNYPerUSD = accounts[i].TotalCostCNY / totalAccountCost
+		if cost.totalStandardAccountCost > 0 {
+			// 每美元成本的分母保持标准 usage 成本口径，不受账号倍率影响。
+			accounts[i].CostCNYPerUSD = accounts[i].TotalCostCNY / cost.totalStandardAccountCost
 		}
 	}
 	return nil
@@ -3320,8 +3411,17 @@ func (r *accountRepository) preserveCachedAccountCostStats(ctx context.Context, 
 	if err != nil || cached == nil || cached.TotalAccountCost <= 0 {
 		return
 	}
+	if r.sql != nil {
+		if costs, err := r.loadTotalAccountCosts(ctx, []int64{account.ID}); err == nil {
+			if cost, ok := costs[account.ID]; ok && cost.totalStandardAccountCost > 0 && account.TotalCostCNY > 0 {
+				account.TotalAccountCost = cost.totalAccountCost
+				account.CostCNYPerUSD = account.TotalCostCNY / cost.totalStandardAccountCost
+				return
+			}
+		}
+	}
 	account.TotalAccountCost = cached.TotalAccountCost
-	account.CostCNYPerUSD = account.TotalCostCNY / cached.TotalAccountCost
+	account.CostCNYPerUSD = cached.CostCNYPerUSD
 }
 
 func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []int64) (map[int64][]*service.Group, map[int64][]int64, map[int64][]service.AccountGroup, error) {
@@ -3418,7 +3518,7 @@ func uniquePositiveInt64s(ids []int64) []int64 {
 }
 
 func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
-	entries, err := r.client.AccountGroup.
+	entries, err := clientFromContext(ctx, r.client).AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
 		All(ctx)
@@ -3625,6 +3725,16 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 				extra #>> '{upstream_billing_probe,next_probe_at}' AS next_probe_at
 			FROM accounts
 			WHERE deleted_at IS NULL
+				AND archived_at IS NULL
+				AND (
+					parent_account_id IS NULL
+					OR EXISTS (
+						SELECT 1 FROM accounts parent
+						WHERE parent.id = accounts.parent_account_id
+							AND parent.deleted_at IS NULL
+							AND parent.archived_at IS NULL
+					)
+				)
 				AND status = 'active'
 				AND type = 'apikey'
 				AND extra @> '{"upstream_billing_probe_enabled": true}'::jsonb
@@ -3918,15 +4028,20 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 // ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
 // 软删除行由 SoftDeleteMixin 拦截器自动排除，无需手写 deleted_at IS NULL。
 func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID int64) ([]*service.Account, error) {
-	rows, err := r.client.Account.Query().
+	rows, err := clientFromContext(ctx, r.client).Account.Query().
 		Where(dbaccount.ParentAccountIDEQ(parentID), dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark)).
 		All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*service.Account, 0, len(rows))
-	for _, m := range rows {
-		out = append(out, accountEntityToService(m))
+	accounts, err := r.accountsToService(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*service.Account, 0, len(accounts))
+	for i := range accounts {
+		account := accounts[i]
+		out = append(out, &account)
 	}
 	return out, nil
 }

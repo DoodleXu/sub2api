@@ -64,6 +64,18 @@ func (s *UsageLogRepoSuite) createUsageLog(user *service.User, apiKey *service.A
 	return log
 }
 
+func (s *UsageLogRepoSuite) processAllAccountCostTotals(repo *dashboardAggregationRepository) {
+	s.T().Helper()
+	for attempts := 0; attempts < 1024; attempts++ {
+		processed, err := repo.ProcessAccountCostTotals(s.ctx, 10000)
+		s.Require().NoError(err)
+		if processed == 0 {
+			return
+		}
+	}
+	s.Fail("account cost ledger did not drain within 1024 account batches")
+}
+
 // --- Create / GetByID ---
 
 func (s *UsageLogRepoSuite) TestCreate() {
@@ -605,6 +617,189 @@ func (s *UsageLogRepoSuite) TestDelete() {
 	s.Require().Error(err, "expected error after delete")
 }
 
+func (s *UsageLogRepoSuite) TestUsageCleanupDeleteBatchAdjustsProcessedAccountCostLedger() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "delete-ledger@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-delete-ledger", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-delete-ledger"})
+	multiplier := 1.5
+	start := time.Now().UTC().Add(-time.Minute)
+	for index, totalCost := range []float64{2, 3} {
+		_, err := s.repo.Create(s.ctx, &service.UsageLog{
+			UserID:                user.ID,
+			APIKeyID:              apiKey.ID,
+			AccountID:             account.ID,
+			RequestID:             uuid.NewString(),
+			Model:                 "delete-ledger-model",
+			TotalCost:             totalCost,
+			ActualCost:            totalCost,
+			AccountRateMultiplier: &multiplier,
+			CreatedAt:             start.Add(time.Duration(index+1) * time.Second),
+		})
+		s.Require().NoError(err)
+	}
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Positive(processed)
+
+	var totalAccountCost, totalStandardCost float64
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT total_account_cost, total_standard_account_cost
+		 FROM usage_account_cost_totals WHERE account_id = $1`,
+		[]any{account.ID},
+		&totalAccountCost,
+		&totalStandardCost,
+	))
+	s.Require().InEpsilon(7.5, totalAccountCost, 0.000001)
+	s.Require().InEpsilon(5.0, totalStandardCost, 0.000001)
+
+	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Zero(processed, "replaying with an unchanged watermark must not add costs twice")
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT total_account_cost, total_standard_account_cost
+		 FROM usage_account_cost_totals WHERE account_id = $1`,
+		[]any{account.ID},
+		&totalAccountCost,
+		&totalStandardCost,
+	))
+	s.Require().InEpsilon(7.5, totalAccountCost, 0.000001)
+	s.Require().InEpsilon(5.0, totalStandardCost, 0.000001)
+
+	cleanupRepo := newUsageCleanupRepositoryWithSQL(nil, s.tx)
+	accountID := account.ID
+	deleted, err := cleanupRepo.DeleteUsageLogsBatch(s.ctx, service.UsageCleanupFilters{
+		StartTime: start,
+		EndTime:   start.Add(time.Minute),
+		AccountID: &accountID,
+	}, 10)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), deleted)
+
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT total_account_cost, total_standard_account_cost
+		 FROM usage_account_cost_totals WHERE account_id = $1`,
+		[]any{account.ID},
+		&totalAccountCost,
+		&totalStandardCost,
+	))
+	s.Require().Zero(totalAccountCost, "usage deletion marks only this account for exact rebuild")
+	s.Require().Zero(totalStandardCost)
+
+	_, err = aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT total_account_cost, total_standard_account_cost
+		 FROM usage_account_cost_totals WHERE account_id = $1`,
+		[]any{account.ID},
+		&totalAccountCost,
+		&totalStandardCost,
+	))
+	s.Require().Zero(totalAccountCost)
+	s.Require().Zero(totalStandardCost)
+}
+
+func (s *UsageLogRepoSuite) TestArchivedAccountLedgerStaysFrozenUntilLateUsageArrives() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "archived-ledger@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-archived-ledger", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "archived-ledger-account"})
+
+	first := s.createUsageLog(user, apiKey, account, 10, 20, 2, time.Now().UTC())
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+
+	_, err = s.client.ExecContext(s.ctx, "UPDATE accounts SET archived_at = NOW() WHERE id = $1", account.ID)
+	s.Require().NoError(err)
+	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Zero(processed, "fully processed archived account must not scan usage again")
+
+	late := s.createUsageLog(user, apiKey, account, 10, 20, 3, time.Now().UTC().Add(time.Second))
+	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed, "late usage must reactivate only this account ledger")
+
+	var total float64
+	var checkpoint int64
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `
+		SELECT total_standard_account_cost, last_processed_usage_id
+		FROM usage_account_cost_totals WHERE account_id = $1
+	`, []any{account.ID}, &total, &checkpoint))
+	s.Require().InEpsilon(5.0, total, 0.000001)
+	s.Require().Equal(late.ID, checkpoint)
+	s.Require().Greater(late.ID, first.ID)
+}
+
+func (s *UsageLogRepoSuite) TestLateLowerIDUsageResetsOnlyAffectedAccountLedger() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "late-lower-id-ledger@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-late-lower-id-ledger", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "late-lower-id-ledger"})
+
+	_, err := s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (user_id, api_key_id, account_id, model, total_cost, actual_cost)
+		VALUES ($1, $2, $3, $4, 1, 1)
+	`, user.ID, apiKey.ID, account.ID, "test-model")
+	s.Require().NoError(err)
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.client)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+
+	var lateID int64
+	s.Require().NoError(scanSingleRow(s.ctx, s.client,
+		"SELECT nextval(pg_get_serial_sequence('usage_logs', 'id'))", nil, &lateID))
+	_, err = s.client.ExecContext(s.ctx, `
+		UPDATE usage_account_cost_totals
+		SET last_processed_usage_id = $2, initialized = TRUE, needs_processing = FALSE
+		WHERE account_id = $1
+	`, account.ID, lateID+100)
+	s.Require().NoError(err)
+
+	_, err = s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (id, user_id, api_key_id, account_id, model, total_cost, actual_cost)
+		VALUES ($1, $2, $3, $4, $5, 2, 2)
+	`, lateID, user.ID, apiKey.ID, account.ID, "test-model")
+	s.Require().NoError(err)
+
+	var totalAccountCost, totalStandardCost float64
+	var checkpoint int64
+	var initialized, pending bool
+	s.Require().NoError(scanSingleRow(s.ctx, s.client, `
+		SELECT total_account_cost, total_standard_account_cost,
+		       last_processed_usage_id, initialized, needs_processing
+		FROM usage_account_cost_totals
+		WHERE account_id = $1
+	`, []any{account.ID}, &totalAccountCost, &totalStandardCost, &checkpoint, &initialized, &pending))
+	s.Require().Zero(totalAccountCost)
+	s.Require().Zero(totalStandardCost)
+	s.Require().Zero(checkpoint)
+	s.Require().False(initialized)
+	s.Require().True(pending)
+
+	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 10000)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+	s.Require().NoError(scanSingleRow(s.ctx, s.client, `
+		SELECT total_account_cost, total_standard_account_cost
+		FROM usage_account_cost_totals
+		WHERE account_id = $1
+	`, []any{account.ID}, &totalAccountCost, &totalStandardCost))
+	s.Require().Equal(3.0, totalAccountCost)
+	s.Require().Equal(3.0, totalStandardCost)
+}
+
 // --- ListByUser ---
 
 func (s *UsageLogRepoSuite) TestListByUser() {
@@ -865,6 +1060,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
 	coverageEnd := now.Add(24 * time.Hour)
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, coverageEnd))
+	s.processAllAccountCostTotals(aggRepo)
 	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, coverageEnd)
 	s.Require().NoError(err)
 	s.Require().True(complete)
@@ -896,7 +1092,8 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	s.Require().InEpsilon(110.0, stats.TotalAccountCost, 0.0001, "display total should keep account-billed usage")
 	s.Require().InEpsilon(30.0, stats.TodayRealCostCNY, 0.0001, "today real cost must apply each account's own CNY cost per USD")
 	s.Require().InEpsilon(3.0, stats.AverageCostCNYPerUSD, 0.0001, "average must ignore uncosted account usage")
-	s.Require().InEpsilon(costedTotalCNY/costedTotalAccountCost, stats.AverageCostCNYPerUSD, 0.0001, "dashboard average must match account list cumulative weighted average")
+	s.Require().InEpsilon(12.0, costedTotalAccountCost, 0.0001, "account list total_account_cost must keep account-billed usage")
+	s.Require().NotEqual(costedTotalCNY/costedTotalAccountCost, stats.AverageCostCNYPerUSD, "dashboard average uses the separate standard-cost denominator")
 	s.Require().InEpsilon(5.0, stats.OpenAICostCNYPerUSD, 0.0001)
 	s.Require().InEpsilon(2.5, stats.AnthropicCostCNYPerUSD, 0.0001)
 }
@@ -927,6 +1124,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts(
 	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
 	coverageEnd := now.Add(24 * time.Hour)
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart, coverageEnd))
+	s.processAllAccountCostTotals(aggRepo)
 	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, todayStart, coverageEnd)
 	s.Require().NoError(err)
 	s.Require().True(complete)
@@ -968,6 +1166,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYSnapshotWaitsForCompleteCoverage
 	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart.Add(time.Hour), aggregateEnd))
 	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, todayStart, todayStart.Add(time.Hour)))
+	s.processAllAccountCostTotals(aggRepo)
 	var coverageStart, coverageEnd time.Time
 	s.Require().NoError(scanSingleRow(
 		s.ctx,
@@ -1000,63 +1199,6 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYSnapshotWaitsForCompleteCoverage
 	s.Require().InEpsilon(4.0, stats.AverageCostCNYPerUSD, 0.0001)
 	s.Require().InEpsilon(4.0, stats.OpenAICostCNYPerUSD, 0.0001)
 	s.Require().InEpsilon(12.0, stats.TodayRealCostCNY, 0.0001)
-}
-
-func (s *UsageLogRepoSuite) TestDashboardCostCNYCleanupRequiresReaggregationBeforePublishing() {
-	todayStart := timezone.Today()
-	cutoff := todayStart.Add(12*time.Hour + 34*time.Minute)
-	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-cleanup@example.com"})
-	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-cost-cny-cleanup", Name: "k"})
-	account := mustCreateAccount(s.T(), s.client, &service.Account{
-		Name:         "costed-account-cleanup-boundary",
-		Platform:     service.PlatformOpenAI,
-		TotalCostCNY: 6,
-	})
-
-	_, err := s.repo.Create(s.ctx, &service.UsageLog{
-		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
-		Model: "gpt-4o", TotalCost: 1, ActualCost: 1,
-		CreatedAt: cutoff.Add(11 * time.Minute),
-	})
-	s.Require().NoError(err)
-
-	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
-	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, cutoff.Truncate(time.Hour), cutoff.Add(26*time.Minute)))
-	s.Require().NoError(aggRepo.CleanupUsageLogs(s.ctx, cutoff))
-
-	var coverageStart, coverageEnd time.Time
-	s.Require().NoError(scanSingleRow(
-		s.ctx,
-		s.tx,
-		`SELECT account_cost_hourly_aggregated_from, account_cost_hourly_last_aggregated_at
-		 FROM usage_dashboard_aggregation_watermark WHERE id = 1`,
-		nil,
-		&coverageStart,
-		&coverageEnd,
-	))
-	accountCostCutoff := cutoff.Truncate(time.Hour).Add(time.Hour)
-	s.Require().False(
-		coverageEnd.After(coverageStart) && coverageStart.Before(accountCostCutoff),
-		"cleanup must not claim aggregate coverage before the retained raw prefix: start=%s end=%s cutoff=%s",
-		coverageStart,
-		coverageEnd,
-		accountCostCutoff,
-	)
-
-	stats := &DashboardStats{}
-	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
-	s.Require().Zero(stats.TotalCostCNY)
-	s.Require().Zero(stats.AverageCostCNYPerUSD)
-	s.Require().Zero(stats.TodayRealCostCNY)
-
-	s.Require().NoError(aggRepo.AggregateAccountCostRange(s.ctx, cutoff.Truncate(time.Hour), accountCostCutoff))
-	complete, err := aggRepo.RefreshDashboardCostSnapshot(s.ctx, cutoff.Truncate(time.Hour), accountCostCutoff)
-	s.Require().NoError(err)
-	s.Require().True(complete)
-	s.Require().NoError(s.repo.fillDashboardCostCNYStats(s.ctx, stats, todayStart))
-	s.Require().InEpsilon(6.0, stats.TotalCostCNY, 0.0001)
-	s.Require().InEpsilon(6.0, stats.AverageCostCNYPerUSD, 0.0001)
-	s.Require().InEpsilon(6.0, stats.TodayRealCostCNY, 0.0001)
 }
 
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRangeWithoutCostSnapshotLeavesRatesUnavailable() {

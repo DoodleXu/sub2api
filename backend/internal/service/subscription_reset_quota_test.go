@@ -327,6 +327,8 @@ func TestAdminBulkResetQuota_ResetDailyAndWeeklyOnly(t *testing.T) {
 		},
 	}
 	svc := newResetQuotaSvc(stub)
+	resetAt := time.Date(2026, 8, 8, 20, 37, 42, 123, time.UTC)
+	svc.now = func() time.Time { return resetAt }
 
 	result, err := svc.AdminBulkResetQuota(context.Background(), true, true, false)
 
@@ -340,6 +342,8 @@ func TestAdminBulkResetQuota_ResetDailyAndWeeklyOnly(t *testing.T) {
 	require.Equal(t, []int64{11, 12}, stub.resetDailyIDs)
 	require.Equal(t, []int64{11, 12}, stub.resetWeeklyIDs)
 	require.Empty(t, stub.resetMonthlyIDs, "补偿型周配额重置不应清月用量")
+	require.Equal(t, timezone.StartOfDay(resetAt), stub.dailyStart)
+	require.Equal(t, resetAt, stub.periodicStart)
 }
 
 func TestAdminBulkResetQuota_AtomicFailureDoesNotPartiallyReset(t *testing.T) {
