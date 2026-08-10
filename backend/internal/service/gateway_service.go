@@ -9947,9 +9947,13 @@ func (s *GatewayService) billingDeps() *billingDeps {
 	}
 }
 
-func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usageLog *UsageLog, logKey string) {
+// writeUsageLogBestEffort writes through the optional batcher, then falls back to
+// a synchronous insert. Callers that need to make a terminal-state decision (for
+// example an async video billing claim) must handle its returned error rather
+// than treating a logged failure as a durable write.
+func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usageLog *UsageLog, logKey string) error {
 	if repo == nil || usageLog == nil {
-		return
+		return errors.New("usage log repository or record is unavailable")
 	}
 	usageCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
@@ -9969,14 +9973,17 @@ func writeUsageLogBestEffort(ctx context.Context, repo UsageLogRepository, usage
 			}
 			if _, syncErr := repo.Create(fallbackCtx, usageLog); syncErr != nil {
 				logger.LegacyPrintf(logKey, "Create usage log sync fallback failed: %v", syncErr)
+				return syncErr
 			}
 		}
-		return
+		return nil
 	}
 
 	if _, err := repo.Create(usageCtx, usageLog); err != nil {
 		logger.LegacyPrintf(logKey, "Create usage log failed: %v", err)
+		return err
 	}
+	return nil
 }
 
 // recordUsageOpts 内部选项，参数化普通计费与长上下文计费的差异点。

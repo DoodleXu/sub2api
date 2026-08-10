@@ -1,11 +1,84 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type grokVideoTaskRepoStub struct {
+	tasks   map[string]*GrokVideoTask
+	claimed map[string]bool
+	billed  map[string]bool
+}
+
+type grokVideoLookupAccountRepoStub struct {
+	AccountRepository
+	accounts map[int64]*Account
+}
+
+func (s *grokVideoLookupAccountRepoStub) GetByID(_ context.Context, id int64) (*Account, error) {
+	account := s.accounts[id]
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	copy := *account
+	return &copy, nil
+}
+
+func (s *grokVideoTaskRepoStub) Upsert(_ context.Context, task *GrokVideoTask) error {
+	if s.tasks == nil {
+		s.tasks = make(map[string]*GrokVideoTask)
+	}
+	copy := *task
+	s.tasks[task.RequestID] = &copy
+	return nil
+}
+
+func (s *grokVideoTaskRepoStub) GetByOwner(_ context.Context, requestID string, userID, apiKeyID int64) (*GrokVideoTask, error) {
+	task := s.tasks[requestID]
+	if task == nil || task.UserID != userID || task.APIKeyID != apiKeyID {
+		return nil, ErrGrokVideoTaskNotFound
+	}
+	copy := *task
+	return &copy, nil
+}
+
+func (s *grokVideoTaskRepoStub) ClaimBilling(_ context.Context, requestID string, userID, apiKeyID int64) (bool, error) {
+	if _, err := s.GetByOwner(context.Background(), requestID, userID, apiKeyID); err != nil {
+		return false, err
+	}
+	if s.claimed == nil {
+		s.claimed = make(map[string]bool)
+	}
+	if s.claimed[requestID] || s.billed[requestID] {
+		return false, nil
+	}
+	s.claimed[requestID] = true
+	return true, nil
+}
+
+func (s *grokVideoTaskRepoStub) ReleaseBilling(_ context.Context, requestID string, userID, apiKeyID int64) error {
+	if _, err := s.GetByOwner(context.Background(), requestID, userID, apiKeyID); err != nil {
+		return err
+	}
+	delete(s.claimed, requestID)
+	return nil
+}
+
+func (s *grokVideoTaskRepoStub) MarkBilled(_ context.Context, requestID string, userID, apiKeyID int64) error {
+	if _, err := s.GetByOwner(context.Background(), requestID, userID, apiKeyID); err != nil {
+		return err
+	}
+	if s.billed == nil {
+		s.billed = make(map[string]bool)
+	}
+	s.billed[requestID] = true
+	return nil
+}
 
 func TestGrokVideoE2EDurationFromCreatedAt(t *testing.T) {
 	t.Parallel()
@@ -28,6 +101,90 @@ func TestGrokVideoPendingCreatedAtStampOnStoreShape(t *testing.T) {
 	d := GrokVideoE2EDuration(stamp, time.Now().UTC().Add(2*time.Second))
 	require.GreaterOrEqual(t, d, time.Second)
 	require.LessOrEqual(t, d, 3*time.Second)
+}
+
+func TestGrokVideoTaskDurableStoreOwnsRoutingSnapshotAndBillingClaim(t *testing.T) {
+	repo := &grokVideoTaskRepoStub{}
+	svc := &OpenAIGatewayService{grokVideoTaskRepo: repo}
+	groupID := int64(7)
+	pending := GrokVideoPendingBilling{
+		Model:                "grok-imagine-video-1.5",
+		BillingModel:         "grok-imagine-video-1.5",
+		VideoResolution:      VideoBillingResolution1080P,
+		VideoDurationSeconds: 10,
+		CreatedAt:            GrokVideoPendingCreatedAtNow(),
+	}
+	require.NoError(t, svc.RegisterGrokMediaVideoTask(context.Background(), &groupID, "video-1", 11, 12, 13, pending))
+
+	accountID, err := svc.ResolveGrokMediaVideoRequestAccount(context.Background(), &groupID, "video-1", 11, 12)
+	require.NoError(t, err)
+	require.Equal(t, int64(13), accountID)
+
+	loaded, err := svc.LoadGrokVideoPendingBilling(context.Background(), "video-1", 11, 12)
+	require.NoError(t, err)
+	require.Equal(t, VideoBillingResolution1080P, loaded.VideoResolution)
+	require.Equal(t, 10, loaded.VideoDurationSeconds)
+
+	claimed, err := svc.ClaimGrokVideoBilling(context.Background(), "video-1", 11, 12)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	claimed, err = svc.ClaimGrokVideoBilling(context.Background(), "video-1", 11, 12)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.NoError(t, svc.ReleaseGrokVideoBilling(context.Background(), "video-1", 11, 12))
+	claimed, err = svc.ClaimGrokVideoBilling(context.Background(), "video-1", 11, 12)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, svc.MarkGrokVideoBillingCompleted(context.Background(), "video-1", 11, 12))
+	claimed, err = svc.ClaimGrokVideoBilling(context.Background(), "video-1", 11, 12)
+	require.NoError(t, err)
+	require.False(t, claimed)
+}
+
+func TestSelectGrokMediaVideoLookupAccountKeepsDurableAccountBindingWithoutCache(t *testing.T) {
+	groupID := int64(77)
+	bound := &Account{
+		ID:          701,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	other := &Account{
+		ID:          702,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+		Priority:    100,
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo: &grokVideoLookupAccountRepoStub{accounts: map[int64]*Account{
+			bound.ID: bound,
+			other.ID: other,
+		}},
+		// Deliberately no cache: this models Redis loss after a video create.
+	}
+
+	selection, decision, err := svc.SelectGrokMediaVideoLookupAccount(context.Background(), &groupID, bound.ID, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, bound.ID, selection.Account.ID)
+	require.Equal(t, "grok_video_task_binding", decision.Layer)
+	require.Equal(t, bound.ID, decision.SelectedAccountID)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	_, _, err = svc.SelectGrokMediaVideoLookupAccount(context.Background(), &groupID, 999, "")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrGrokVideoTaskAccountUnavailable) || errors.Is(err, ErrAccountNotFound))
 }
 
 func TestIsGrokVideoStatusBillable(t *testing.T) {

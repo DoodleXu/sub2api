@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -36,12 +37,62 @@ const (
 	grokMediaMaxEditSourceImages = 3
 )
 
+var (
+	ErrGrokVideoTaskNotFound           = errors.New("grok video task not found")
+	ErrGrokVideoTaskAccountUnavailable = errors.New("grok video task account unavailable")
+)
+
+// GrokVideoTaskRepository persists the async video task state needed to route
+// status/content polling and charge a completed task exactly once.
+// Redis remains an optional acceleration layer; it is not the source of truth.
+type GrokVideoTaskRepository interface {
+	Upsert(ctx context.Context, task *GrokVideoTask) error
+	GetByOwner(ctx context.Context, requestID string, userID, apiKeyID int64) (*GrokVideoTask, error)
+	ClaimBilling(ctx context.Context, requestID string, userID, apiKeyID int64) (bool, error)
+	ReleaseBilling(ctx context.Context, requestID string, userID, apiKeyID int64) error
+	MarkBilled(ctx context.Context, requestID string, userID, apiKeyID int64) error
+}
+
+type GrokVideoTask struct {
+	RequestID string
+	GroupID   *int64
+	UserID    int64
+	APIKeyID  int64
+	AccountID int64
+	Pending   GrokVideoPendingBilling
+}
+
 func (e GrokMediaEndpoint) RequiresRequestBody() bool {
 	return !e.IsVideoLookupRequest()
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
 	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent
+}
+
+func (e GrokMediaEndpoint) IsVideoCreateRequest() bool {
+	switch e {
+	case GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
+		return true
+	default:
+		return false
+	}
+}
+
+type grokMediaDeferredVideoCreateResponseCtxKey struct{}
+
+// WithGrokMediaDeferredVideoCreateResponse lets the handler register the
+// durable task before the upstream create result is written to the client.
+func WithGrokMediaDeferredVideoCreateResponse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, grokMediaDeferredVideoCreateResponseCtxKey{}, struct{}{})
+}
+
+func shouldDeferGrokMediaVideoCreateResponse(ctx context.Context, endpoint GrokMediaEndpoint) bool {
+	if !endpoint.IsVideoCreateRequest() {
+		return false
+	}
+	_, deferred := ctx.Value(grokMediaDeferredVideoCreateResponseCtxKey{}).(struct{})
+	return deferred
 }
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
@@ -328,14 +379,89 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	requestID string,
 	userID, apiKeyID int64,
 ) (int64, error) {
-	if s == nil || s.cache == nil {
-		return 0, fmt.Errorf("grok video request binding cache is unavailable")
+	if s == nil {
+		return 0, fmt.Errorf("grok video task service is unavailable")
+	}
+	if s.grokVideoTaskRepo != nil {
+		task, err := s.grokVideoTaskRepo.GetByOwner(ctx, requestID, userID, apiKeyID)
+		if err == nil {
+			if task.AccountID <= 0 {
+				return 0, fmt.Errorf("grok video task account is invalid")
+			}
+			return task.AccountID, nil
+		}
+		if !errors.Is(err, ErrGrokVideoTaskNotFound) {
+			return 0, err
+		}
+	}
+	if s.cache == nil {
+		return 0, ErrGrokVideoTaskNotFound
 	}
 	cacheKey := s.openAISessionCacheKey(GrokMediaVideoRequestSessionHash(requestID, userID, apiKeyID))
 	if cacheKey == "" {
 		return 0, fmt.Errorf("grok video request binding is invalid")
 	}
 	return s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), cacheKey)
+}
+
+// SelectGrokMediaVideoLookupAccount selects only the account that accepted an
+// async video create. The durable task store makes that ownership binding survive
+// Redis loss; lookup requests must never fall through to a different account,
+// because xAI video task IDs are account-scoped.
+func (s *OpenAIGatewayService) SelectGrokMediaVideoLookupAccount(
+	ctx context.Context,
+	groupID *int64,
+	accountID int64,
+	requestedModel string,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	decision := OpenAIAccountScheduleDecision{
+		Layer:             "grok_video_task_binding",
+		CandidateCount:    1,
+		TopK:              1,
+		SelectedAccountID: accountID,
+	}
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return nil, decision, ErrGrokVideoTaskAccountUnavailable
+	}
+
+	account, err := s.getSchedulableAccount(ctx, accountID)
+	if err != nil {
+		return nil, decision, fmt.Errorf("load grok video task account: %w", err)
+	}
+	account = s.recheckSelectedOpenAIAccountFromDB(
+		ctx, account, groupID, PlatformGrok, requestedModel, false, "",
+	)
+	if account == nil || !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
+		return nil, decision, ErrGrokVideoTaskAccountUnavailable
+	}
+	decision.SelectedAccountType = account.Type
+
+	acquireResult, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+	if err != nil {
+		return nil, decision, fmt.Errorf("acquire grok video task account slot: %w", err)
+	}
+	if acquireResult != nil && acquireResult.Acquired {
+		selection, selectErr := s.newAcquiredSelectionResult(ctx, account, acquireResult.ReleaseFunc)
+		if selectErr != nil {
+			return nil, decision, selectErr
+		}
+		return selection, decision, nil
+	}
+	if s.concurrencyService == nil {
+		return nil, decision, ErrGrokVideoTaskAccountUnavailable
+	}
+
+	cfg := s.schedulingConfig()
+	selection, err := s.newSelectionResult(ctx, account, false, nil, &AccountWaitPlan{
+		AccountID:      account.ID,
+		MaxConcurrency: account.Concurrency,
+		Timeout:        cfg.StickySessionWaitTimeout,
+		MaxWaiting:     cfg.StickySessionMaxWaiting,
+	})
+	if err != nil {
+		return nil, decision, err
+	}
+	return selection, decision, nil
 }
 
 // GrokVideoPendingBilling is the create-time snapshot used when status polling
@@ -406,6 +532,66 @@ func grokVideoBilledClaimTTL(cfg *config.Config) time.Duration {
 	return 48 * time.Hour
 }
 
+func normalizeGrokVideoPendingBilling(pending GrokVideoPendingBilling) GrokVideoPendingBilling {
+	pending.Model = strings.TrimSpace(pending.Model)
+	pending.BillingModel = strings.TrimSpace(pending.BillingModel)
+	pending.UpstreamModel = strings.TrimSpace(pending.UpstreamModel)
+	pending.OriginalModel = strings.TrimSpace(pending.OriginalModel)
+	if pending.VideoResolution != "" {
+		pending.VideoResolution = NormalizeVideoBillingResolutionOrDefault(pending.VideoResolution)
+	}
+	if pending.VideoDurationSeconds > 0 {
+		pending.VideoDurationSeconds = NormalizeVideoBillingDurationSecondsOrDefault(pending.VideoDurationSeconds)
+	}
+	if strings.TrimSpace(pending.CreatedAt) == "" {
+		pending.CreatedAt = GrokVideoPendingCreatedAtNow()
+	} else {
+		pending.CreatedAt = strings.TrimSpace(pending.CreatedAt)
+	}
+	return pending
+}
+
+// RegisterGrokMediaVideoTask durably records a successful async video create
+// before its response is returned to the client. Cache writes are best-effort
+// accelerators and cannot make a durable create appear failed.
+func (s *OpenAIGatewayService) RegisterGrokMediaVideoTask(
+	ctx context.Context,
+	groupID *int64,
+	requestID string,
+	userID, apiKeyID, accountID int64,
+	pending GrokVideoPendingBilling,
+) error {
+	if s == nil {
+		return fmt.Errorf("grok video task service is unavailable")
+	}
+	pending = normalizeGrokVideoPendingBilling(pending)
+	if s.grokVideoTaskRepo == nil {
+		// Compatibility for direct unit construction. Production wiring always
+		// supplies the database-backed store.
+		if err := s.BindGrokMediaVideoRequestAccount(ctx, groupID, requestID, userID, apiKeyID, accountID); err != nil {
+			return err
+		}
+		return s.StoreGrokVideoPendingBilling(ctx, requestID, userID, apiKeyID, pending)
+	}
+	if err := s.grokVideoTaskRepo.Upsert(ctx, &GrokVideoTask{
+		RequestID: strings.TrimSpace(requestID),
+		GroupID:   groupID,
+		UserID:    userID,
+		APIKeyID:  apiKeyID,
+		AccountID: accountID,
+		Pending:   pending,
+	}); err != nil {
+		return err
+	}
+	if s.cache != nil {
+		// Cache misses must never erase a durable task. They only make legacy
+		// lookup paths slower until the next successful request.
+		_ = s.BindGrokMediaVideoRequestAccount(ctx, groupID, requestID, userID, apiKeyID, accountID)
+		_ = s.StoreGrokVideoPendingBilling(ctx, requestID, userID, apiKeyID, pending)
+	}
+	return nil
+}
+
 // StoreGrokVideoPendingBilling persists create-time billing params for deferred status billing.
 func (s *OpenAIGatewayService) StoreGrokVideoPendingBilling(
 	ctx context.Context,
@@ -420,22 +606,7 @@ func (s *OpenAIGatewayService) StoreGrokVideoPendingBilling(
 	if key == "" {
 		return fmt.Errorf("grok video pending billing key is invalid")
 	}
-	pending.Model = strings.TrimSpace(pending.Model)
-	pending.BillingModel = strings.TrimSpace(pending.BillingModel)
-	pending.UpstreamModel = strings.TrimSpace(pending.UpstreamModel)
-	pending.OriginalModel = strings.TrimSpace(pending.OriginalModel)
-	if pending.VideoResolution != "" {
-		pending.VideoResolution = NormalizeVideoBillingResolutionOrDefault(pending.VideoResolution)
-	}
-	if pending.VideoDurationSeconds > 0 {
-		pending.VideoDurationSeconds = NormalizeVideoBillingDurationSecondsOrDefault(pending.VideoDurationSeconds)
-	}
-	// Always stamp create-accept time when missing so deferred duration_ms is E2E.
-	if strings.TrimSpace(pending.CreatedAt) == "" {
-		pending.CreatedAt = GrokVideoPendingCreatedAtNow()
-	} else {
-		pending.CreatedAt = strings.TrimSpace(pending.CreatedAt)
-	}
+	pending = normalizeGrokVideoPendingBilling(pending)
 	payload, err := json.Marshal(pending)
 	if err != nil {
 		return err
@@ -449,8 +620,21 @@ func (s *OpenAIGatewayService) LoadGrokVideoPendingBilling(
 	requestID string,
 	userID, apiKeyID int64,
 ) (*GrokVideoPendingBilling, error) {
-	if s == nil || s.cache == nil {
-		return nil, fmt.Errorf("grok video pending billing cache is unavailable")
+	if s == nil {
+		return nil, fmt.Errorf("grok video task service is unavailable")
+	}
+	if s.grokVideoTaskRepo != nil {
+		task, err := s.grokVideoTaskRepo.GetByOwner(ctx, requestID, userID, apiKeyID)
+		if err == nil {
+			pending := task.Pending
+			return &pending, nil
+		}
+		if !errors.Is(err, ErrGrokVideoTaskNotFound) {
+			return nil, err
+		}
+	}
+	if s.cache == nil {
+		return nil, ErrGrokVideoTaskNotFound
 	}
 	key := grokVideoPendingBillingKey(requestID, userID, apiKeyID)
 	if key == "" {
@@ -474,7 +658,13 @@ func (s *OpenAIGatewayService) ClaimGrokVideoBilling(
 	requestID string,
 	userID, apiKeyID int64,
 ) (bool, error) {
-	if s == nil || s.cache == nil {
+	if s == nil {
+		return false, fmt.Errorf("grok video task service is unavailable")
+	}
+	if s.grokVideoTaskRepo != nil {
+		return s.grokVideoTaskRepo.ClaimBilling(ctx, requestID, userID, apiKeyID)
+	}
+	if s.cache == nil {
 		return false, fmt.Errorf("grok video billing claim cache is unavailable")
 	}
 	key := grokVideoPendingBillingKey(requestID, userID, apiKeyID)
@@ -491,7 +681,18 @@ func (s *OpenAIGatewayService) ReleaseGrokVideoBilling(
 	requestID string,
 	userID, apiKeyID int64,
 ) error {
-	if s == nil || s.cache == nil {
+	if s == nil {
+		return fmt.Errorf("grok video task service is unavailable")
+	}
+	if s.grokVideoTaskRepo != nil {
+		if err := s.grokVideoTaskRepo.ReleaseBilling(ctx, requestID, userID, apiKeyID); err != nil {
+			return err
+		}
+		if s.cache == nil {
+			return nil
+		}
+	}
+	if s.cache == nil {
 		return fmt.Errorf("grok video billing claim cache is unavailable")
 	}
 	key := grokVideoPendingBillingKey(requestID, userID, apiKeyID)
@@ -499,6 +700,19 @@ func (s *OpenAIGatewayService) ReleaseGrokVideoBilling(
 		return fmt.Errorf("grok video billing claim key is invalid")
 	}
 	return s.cache.ReleaseGrokVideoBilled(ctx, key)
+}
+
+// MarkGrokVideoBillingCompleted records that RecordUsage durably accepted the
+// task. A later poll cannot charge it again even after the claim lease expires.
+func (s *OpenAIGatewayService) MarkGrokVideoBillingCompleted(
+	ctx context.Context,
+	requestID string,
+	userID, apiKeyID int64,
+) error {
+	if s == nil || s.grokVideoTaskRepo == nil {
+		return nil
+	}
+	return s.grokVideoTaskRepo.MarkBilled(ctx, requestID, userID, apiKeyID)
 }
 
 // StableGrokVideoBillingRequestID is the durable usage_logs / dedup key for one
@@ -738,7 +952,10 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 			grokMediaContentProxyURL(c, requestID),
 		)
 	}
-	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	deferVideoCreateResponse := shouldDeferGrokMediaVideoCreateResponse(ctx, endpoint)
+	if !deferVideoCreateResponse {
+		writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
+	}
 	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
 	resultModel := requestModel
 	resultBillingModel := requestModel
@@ -752,13 +969,25 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		}
 	}
 	return &OpenAIForwardResult{
-		RequestID:            requestIDHeader,
-		ResponseID:           usage.ResponseID,
-		Usage:                usage.Usage,
-		Model:                resultModel,
-		BillingModel:         resultBillingModel,
-		UpstreamModel:        upstreamModel,
-		ResponseHeaders:      resp.Header.Clone(),
+		RequestID:       requestIDHeader,
+		ResponseID:      usage.ResponseID,
+		Usage:           usage.Usage,
+		Model:           resultModel,
+		BillingModel:    resultBillingModel,
+		UpstreamModel:   upstreamModel,
+		ResponseHeaders: resp.Header.Clone(),
+		DeferredResponseStatus: func() int {
+			if deferVideoCreateResponse {
+				return resp.StatusCode
+			}
+			return 0
+		}(),
+		DeferredResponseBody: func() []byte {
+			if deferVideoCreateResponse {
+				return append([]byte(nil), respBody...)
+			}
+			return nil
+		}(),
 		Duration:             time.Since(startTime),
 		ImageCount:           usage.ImageCount,
 		ImageSize:            usage.ImageSize,
@@ -1377,6 +1606,20 @@ func writeGrokMediaResponse(c *gin.Context, resp *http.Response, body []byte, fi
 		contentType = "application/json"
 	}
 	c.Data(resp.StatusCode, contentType, body)
+}
+
+// WriteDeferredGrokMediaVideoCreateResponse writes a create response retained
+// by ForwardGrokMedia while the handler persisted its durable task record.
+func (s *OpenAIGatewayService) WriteDeferredGrokMediaVideoCreateResponse(c *gin.Context, result *OpenAIForwardResult) error {
+	if c == nil || result == nil || result.DeferredResponseStatus <= 0 {
+		return fmt.Errorf("deferred grok video create response is incomplete")
+	}
+	resp := &http.Response{
+		StatusCode: result.DeferredResponseStatus,
+		Header:     result.ResponseHeaders,
+	}
+	writeGrokMediaResponse(c, resp, result.DeferredResponseBody, s.responseHeaderFilter)
+	return nil
 }
 
 func writeGrokMediaContentResponse(c *gin.Context, resp *http.Response) error {

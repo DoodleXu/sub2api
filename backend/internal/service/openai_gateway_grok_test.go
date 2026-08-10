@@ -1233,6 +1233,41 @@ func TestForwardGrokMediaVideoGenerationReturnsUsageAndResponseID(t *testing.T) 
 	require.Equal(t, 10, result.VideoDurationSeconds)
 }
 
+func TestForwardGrokMediaDefersTaggedVideoCreateResponse(t *testing.T) {
+	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"grok-imagine-video","prompt":"waves"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	account := &Account{
+		ID:          63,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "api-key", "base_url": "https://xai.test/v1"},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"request_id":"video-request-123"}`)),
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	result, err := svc.ForwardGrokMedia(
+		WithGrokMediaDeferredVideoCreateResponse(context.Background()), c, account,
+		GrokMediaEndpointVideosGenerations, "", body, "application/json",
+	)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, result.DeferredResponseStatus)
+	require.JSONEq(t, `{"request_id":"video-request-123"}`, string(result.DeferredResponseBody))
+	require.Empty(t, recorder.Body.String(), "the handler must persist task state before this response is written")
+
+	require.NoError(t, svc.WriteDeferredGrokMediaVideoCreateResponse(c, result))
+	require.JSONEq(t, `{"request_id":"video-request-123"}`, recorder.Body.String())
+}
+
 func TestForwardGrokMediaVideoGenerationReturnsTaskIDAsResponseID(t *testing.T) {
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
 

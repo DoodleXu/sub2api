@@ -142,6 +142,15 @@ WHERE ns.nspname = 'public'
 	requireIndex(t, tx, "usage_billing_dedup", "idx_usage_billing_dedup_request_api_key")
 	requireIndex(t, tx, "usage_billing_dedup", "idx_usage_billing_dedup_created_at_brin")
 
+	// grok_video_tasks: durable ownership and billing snapshots for async video.
+	var grokVideoTasksRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.grok_video_tasks')").Scan(&grokVideoTasksRegclass))
+	require.True(t, grokVideoTasksRegclass.Valid, "expected grok_video_tasks table to exist")
+	requireColumn(t, tx, "grok_video_tasks", "request_id", "character varying", 255, false)
+	requireColumn(t, tx, "grok_video_tasks", "billing_claimed_at", "timestamp with time zone", 0, true)
+	requireColumn(t, tx, "grok_video_tasks", "billed_at", "timestamp with time zone", 0, true)
+	requireIndex(t, tx, "grok_video_tasks", "idx_grok_video_tasks_created_at")
+
 	var usageBillingDedupArchiveRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.usage_billing_dedup_archive')").Scan(&usageBillingDedupArchiveRegclass))
 	require.True(t, usageBillingDedupArchiveRegclass.Valid, "expected usage_billing_dedup_archive table to exist")

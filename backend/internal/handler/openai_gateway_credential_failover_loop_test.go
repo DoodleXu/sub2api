@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,84 @@ type grokCredentialHandlerRepo struct {
 	setErrorErr    error
 	setTempErr     error
 	missingOnGet   map[int64]bool
+}
+
+type grokVideoTaskHandlerRepo struct {
+	mu      sync.Mutex
+	tasks   map[string]*service.GrokVideoTask
+	claimed map[string]bool
+	billed  map[string]bool
+}
+
+func grokVideoTaskHandlerKey(requestID string, userID, apiKeyID int64) string {
+	return fmt.Sprintf("%d:%d:%s", userID, apiKeyID, requestID)
+}
+
+func (r *grokVideoTaskHandlerRepo) Upsert(_ context.Context, task *service.GrokVideoTask) error {
+	if task == nil {
+		return errors.New("nil grok video task")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.tasks == nil {
+		r.tasks = make(map[string]*service.GrokVideoTask)
+	}
+	copy := *task
+	r.tasks[grokVideoTaskHandlerKey(task.RequestID, task.UserID, task.APIKeyID)] = &copy
+	return nil
+}
+
+func (r *grokVideoTaskHandlerRepo) GetByOwner(_ context.Context, requestID string, userID, apiKeyID int64) (*service.GrokVideoTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	task := r.tasks[grokVideoTaskHandlerKey(requestID, userID, apiKeyID)]
+	if task == nil {
+		return nil, service.ErrGrokVideoTaskNotFound
+	}
+	copy := *task
+	return &copy, nil
+}
+
+func (r *grokVideoTaskHandlerRepo) ClaimBilling(_ context.Context, requestID string, userID, apiKeyID int64) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := grokVideoTaskHandlerKey(requestID, userID, apiKeyID)
+	if r.tasks[key] == nil {
+		return false, service.ErrGrokVideoTaskNotFound
+	}
+	if r.claimed == nil {
+		r.claimed = make(map[string]bool)
+	}
+	if r.claimed[key] || r.billed[key] {
+		return false, nil
+	}
+	r.claimed[key] = true
+	return true, nil
+}
+
+func (r *grokVideoTaskHandlerRepo) ReleaseBilling(_ context.Context, requestID string, userID, apiKeyID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := grokVideoTaskHandlerKey(requestID, userID, apiKeyID)
+	if r.tasks[key] == nil {
+		return service.ErrGrokVideoTaskNotFound
+	}
+	delete(r.claimed, key)
+	return nil
+}
+
+func (r *grokVideoTaskHandlerRepo) MarkBilled(_ context.Context, requestID string, userID, apiKeyID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := grokVideoTaskHandlerKey(requestID, userID, apiKeyID)
+	if r.tasks[key] == nil {
+		return service.ErrGrokVideoTaskNotFound
+	}
+	if r.billed == nil {
+		r.billed = make(map[string]bool)
+	}
+	r.billed[key] = true
+	return nil
 }
 
 func (r *grokCredentialHandlerRepo) ListSchedulableByPlatform(_ context.Context, platform string) ([]service.Account, error) {
@@ -929,6 +1008,7 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
 		&service.DeferredService{}, nil, provider, nil, nil, nil, nil, nil,
 	)
+	gateway.SetGrokVideoTaskRepository(&grokVideoTaskHandlerRepo{})
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
 		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },

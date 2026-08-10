@@ -268,20 +268,22 @@ type OpenAIForwardResult struct {
 	ServiceTier *string
 	// ReasoningEffort is extracted from request body (reasoning.effort) or derived from model suffix.
 	// Stored for usage records display; nil means not provided / not applicable.
-	ReasoningEffort       *string
-	Stream                bool
-	OpenAIWSMode          bool
-	UpstreamTerminalEvent string
-	ResponseHeaders       http.Header
-	Duration              time.Duration
-	FirstTokenMs          *int
-	ImageFirstOutputMs    *int
-	ClientDisconnect      bool
-	ImageCount            int
-	ImageSize             string
-	ImageInputSize        string
-	ImageOutputSize       string
-	ImageOutputSizes      []string
+	ReasoningEffort        *string
+	Stream                 bool
+	OpenAIWSMode           bool
+	UpstreamTerminalEvent  string
+	ResponseHeaders        http.Header
+	DeferredResponseStatus int
+	DeferredResponseBody   []byte
+	Duration               time.Duration
+	FirstTokenMs           *int
+	ImageFirstOutputMs     *int
+	ClientDisconnect       bool
+	ImageCount             int
+	ImageSize              string
+	ImageInputSize         string
+	ImageOutputSize        string
+	ImageOutputSizes       []string
 	// ImageResponseBody is populated only for successful non-streaming image
 	// responses so the gateway handler can archive the original JSON without
 	// changing the client-visible payload.
@@ -437,6 +439,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	grokVideoTaskRepo     GrokVideoTaskRepository
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -549,6 +552,15 @@ func NewOpenAIGatewayService(
 	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
+}
+
+// SetGrokVideoTaskRepository injects the durable store for Grok async-video
+// tasks. It is a setter to keep existing direct constructor users source
+// compatible; production wiring always supplies the repository.
+func (s *OpenAIGatewayService) SetGrokVideoTaskRepository(repo GrokVideoTaskRepository) {
+	if s != nil {
+		s.grokVideoTaskRepo = repo
+	}
 }
 
 // ResolveChannelMapping 解析渠道级模型映射（代理到 ChannelService）
@@ -6848,6 +6860,10 @@ type OpenAIRecordUsageInput struct {
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
+	// RequireUsageLogPersistence makes RecordUsage report a final usage-log write
+	// failure. It is used by async tasks whose terminal state must remain retryable
+	// until their usage row is durable.
+	RequireUsageLogPersistence bool
 	// PricingAt 是请求级定价时刻（请求开始捕获，与利润门的定价时刻同源）。
 	// 零值回退记录时刻，供未装配的图片、异步和 cyber 路径沿用。
 	PricingAt time.Time
@@ -7175,7 +7191,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		if err := writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway"); err != nil && input.RequireUsageLogPersistence {
+			return fmt.Errorf("persist simple-mode usage log: %w", err)
+		}
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
