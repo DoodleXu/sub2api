@@ -50,6 +50,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 - Grok 默认 Base URL 模式改为进程内短期缓存，并在后台设置写入后立即刷新；请求热路径不再逐次查询 `settings`。后台设置 PUT 已完整支持 `registration_email_domain_quota_enabled`，缺省字段继续沿用局部更新的保留语义。
 - 2026-08-11 审核修复：Grok Free 额度软门禁必须使用正缓存 TTL；后台刷新有 5 秒硬超时，陈旧但已确认超限的缓存会在刷新期间继续阻断，未确认或低于阈值的账号保持 fail-open。
 - 2026-08-11 审核修复：Channel Monitor V2 的错误分类表按 `user_id` 同时保存全局（0）与用户维度；用户排名只按自己的 ignored category 精确调整，不再按全局错误比例估算。迁移会清空错误分类派生表并把水位回拨至最长 90 天保留窗口，由既有有界聚合重建，部署后必须观察水位和 PostgreSQL I/O。
+- 2026-08-11：Channel Monitor V2 的“错误原因”仅管理员可见；普通用户页面移除页签、用户路由不注册该接口，handler 也拒绝非管理员直连，避免暴露上游错误分类与原始错误信息。
 - 2026-08-11 审核修复：`usage_logs.succeeded` 为新写入的成功结果事实源，Channel Monitor 对零价/免费成功请求不再以 `actual_cost=0` 误判失败；历史 NULL 行严格保留原有 `actual_cost > 0` 回退口径，避免升级时重写历史统计。
 
 ### 本次验证
@@ -405,6 +406,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 - 账号上增加 `total_cost_cny`，支持创建、更新、批量更新和增量成本录入。
 - usage/dashboard 聚合返回 `total_account_cost`、`total_cost_cny`、`average_cost_cny_per_usd`、`today_real_cost_cny` 等字段。
 - dashboard 成本链路为“账号累计成本账本 + 今日账号日聚合 → 单行成本快照”，请求时只读取成本快照，禁止对 coverage 前缀/尾部同步回扫 `usage_logs`；`/admin/dashboard/cost-summary` 与核心 Token 快照独立，成本聚合故障只返回最近 30 分钟内旧值并标记 `stale`，不会拖垮首屏。
+- 管理员保存单个或批量账号的 `total_cost_cny`（含 API Key 增量成本）后，立即废弃 Redis 成本摘要并重算单行成本快照；无需重扫 `usage_logs`，首页“今日人民币实际成本”不会继续显示保存前的账号成本。
 - 新增 `usage_account_cost_totals` 单表账本：每个账号独立保存账号倍率成本、标准成本和 `last_processed_usage_id` 检查点。后台只处理标记为待核算的账号及检查点后的 usage；首次按账号低速分批回填（包含已有软删除账号），请求路径始终只读账本，不再保留 `usage_logs GROUP BY account_id` 兜底。写入触发器同时防护序列 ID 与事务提交顺序不一致的边界：检查点之前的晚提交 usage 会触发该账号精确重建，不会静默漏账。
 - `197_usage_account_cost_lookup_index_notx.sql` 对普通 `usage_logs` 保持并发建索引；迁移执行器检测到分区父表时改为创建父级分区索引、对子分区逐个并发建索引并 attach，支持中断重试和幂等，不会对分区父表直接执行 PostgreSQL 不支持的 `CREATE INDEX CONCURRENTLY`。
 - 历史账号成本与默认无筛选模型统计共用独立覆盖水位，启动后先处理当前小时和最近日期，再向历史倒序按日分块；每个分块独立获取并释放聚合锁，实时聚合优先。完整历史区间 coverage 不足时成本显示“聚合中”、用户趋势/排行/模型统计返回局部不可用，均不回扫大表；包含当前未结束日期的请求会把未来尾部截到实际小时聚合水位，完整历史日仍使用日表，当前日期使用小时表，避免默认首屏因次日零点尚未覆盖而错误返回空数据。
