@@ -1,4 +1,4 @@
-import type { WebConsoleMode, WebConsoleSession } from './types'
+import type { WebConsoleSession } from './types'
 
 const STORAGE_KEY = 'sub2api-web-console-sessions-v1'
 const MAX_SESSIONS = 50
@@ -14,12 +14,12 @@ function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-export function createWebConsoleSession(mode: WebConsoleMode): WebConsoleSession {
+export function createWebConsoleSession(): WebConsoleSession {
   const now = nowIso()
   return {
     id: newId('session'),
-    title: mode === 'image' ? '创建新会话' : '新对话',
-    mode,
+    title: '创建新会话',
+    mode: 'image',
     messages: [],
     created_at: now,
     updated_at: now,
@@ -34,10 +34,10 @@ export function loadWebConsoleSessions(): WebConsoleSession[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw) as WebConsoleSession[]
+    const parsed = JSON.parse(raw) as Array<WebConsoleSession & { mode?: unknown }>
     if (!Array.isArray(parsed)) return []
     return parsed
-      .filter((item) => typeof item?.id === 'string' && Array.isArray(item.messages))
+      .filter((item) => item?.mode === 'image' && typeof item.id === 'string' && Array.isArray(item.messages))
       .map(sanitizeSessionForStorage)
       .slice(0, MAX_SESSIONS)
   } catch {

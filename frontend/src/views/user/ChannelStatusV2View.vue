@@ -411,7 +411,7 @@
                       class="font-semibold"
                       :class="row.is_self ? 'text-primary-700 dark:text-primary-300' : 'text-gray-900 dark:text-white'"
                     >
-                      {{ row.display_label }}
+                      {{ userRankingLabel(row) }}
                       <span
                         v-if="row.is_self"
                         class="badge badge-primary ml-2 !px-1.5 !py-0 text-[10px]"
@@ -497,6 +497,7 @@ import {
   formatMonitorTokensPerSecond,
   tokensPerSecondFromTpm,
   healthScoreClass,
+  maskMonitorEmail,
   monitorErrorCategoryLabel,
 } from '@/features/channel-monitor-v2/monitorFormat'
 
@@ -654,6 +655,13 @@ const matrixRows = computed(() => {
   }
   return items
 })
+
+/** Email-backed ranking labels are visible to all channel-status viewers. */
+function userRankingLabel(row: MonitorUserRow): string {
+  return row.email && row.display_label === row.email
+    ? maskMonitorEmail(row.email)
+    : row.display_label
+}
 
 function csv(value: unknown) {
   return typeof value === 'string' ? value.split(',').filter(Boolean) : []

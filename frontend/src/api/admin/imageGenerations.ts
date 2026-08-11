@@ -12,6 +12,7 @@ export interface AsyncImageObjectPage {
   items: AsyncImageObject[]
   next_cursor?: string
   has_more: boolean
+  total_count: number
   prefix: string
   bucket: string
 }

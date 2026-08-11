@@ -3,8 +3,11 @@ package repository
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -172,61 +176,134 @@ func (s *S3ImageStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// List exposes objects already written by upstream async image tasks. It is
-// intentionally read-only; lifecycle rules remain the owner of retention.
+type imageStorageObjectCursor struct {
+	LastModified int64  `json:"last_modified"`
+	Key          string `json:"key"`
+}
+
+// List exposes objects already written by upstream async image tasks. S3 only
+// lists by key, so the complete prefix must be read before sorting globally by
+// object write time and applying cursor pagination.
 func (s *S3ImageStorage) List(ctx context.Context, prefix, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 60
 	}
-	maxKeys := int32(limit)
+	maxKeys := int32(1000)
 	input := &s3.ListObjectsV2Input{
 		Bucket:  &s.bucket,
 		Prefix:  &prefix,
 		MaxKeys: &maxKeys,
 	}
-	if strings.TrimSpace(cursor) != "" {
-		input.ContinuationToken = &cursor
+	objects := make([]service.ImageStorageObject, 0, maxKeys)
+	paginator := s3.NewListObjectsV2Paginator(s.client, input)
+	for paginator.HasMorePages() {
+		result, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("S3 ListObjectsV2: %w", err)
+		}
+		for _, object := range result.Contents {
+			if object.Key == nil || strings.HasSuffix(*object.Key, "/") {
+				continue
+			}
+			item := service.ImageStorageObject{Key: *object.Key}
+			if object.Size != nil {
+				item.Size = *object.Size
+			}
+			if object.ETag != nil {
+				item.ETag = strings.Trim(*object.ETag, "\"")
+			}
+			if object.LastModified != nil {
+				item.LastModified = *object.LastModified
+			}
+			objects = append(objects, item)
+		}
 	}
-	result, err := s.client.ListObjectsV2(ctx, input)
+
+	page, err := buildImageStorageObjectPage(objects, cursor, limit)
 	if err != nil {
-		return nil, fmt.Errorf("S3 ListObjectsV2: %w", err)
-	}
-	page := &service.ImageStorageObjectPage{
-		Items:   make([]service.ImageStorageObject, 0, len(result.Contents)),
-		HasMore: result.IsTruncated != nil && *result.IsTruncated,
-	}
-	if result.NextContinuationToken != nil {
-		page.NextCursor = *result.NextContinuationToken
+		return nil, err
 	}
 	presignClient := s3.NewPresignClient(s.client)
-	for _, object := range result.Contents {
-		if object.Key == nil || strings.HasSuffix(*object.Key, "/") {
+	for index := range page.Items {
+		item := &page.Items[index]
+		if s.publicBaseURL != "" {
+			item.URL = s.publicBaseURL + "/" + strings.TrimLeft(item.Key, "/")
 			continue
 		}
-		objectURL := ""
-		if s.publicBaseURL != "" {
-			objectURL = s.publicBaseURL + "/" + strings.TrimLeft(*object.Key, "/")
-		} else {
-			presigned, presignErr := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-				Bucket: &s.bucket,
-				Key:    object.Key,
-			}, s3.WithPresignExpires(s.presignExpiry))
-			if presignErr != nil {
-				return nil, fmt.Errorf("presign image object %q: %w", *object.Key, presignErr)
-			}
-			objectURL = presigned.URL
+		presigned, presignErr := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+			Bucket: &s.bucket,
+			Key:    &item.Key,
+		}, s3.WithPresignExpires(s.presignExpiry))
+		if presignErr != nil {
+			return nil, fmt.Errorf("presign image object %q: %w", item.Key, presignErr)
 		}
-		item := service.ImageStorageObject{Key: *object.Key, URL: objectURL}
-		if object.Size != nil {
-			item.Size = *object.Size
-		}
-		if object.ETag != nil {
-			item.ETag = strings.Trim(*object.ETag, "\"")
-		}
-		if object.LastModified != nil {
-			item.LastModified = *object.LastModified
-		}
-		page.Items = append(page.Items, item)
+		item.URL = presigned.URL
 	}
 	return page, nil
+}
+
+func buildImageStorageObjectPage(objects []service.ImageStorageObject, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
+	sort.Slice(objects, func(i, j int) bool {
+		leftTime := imageStorageObjectTime(objects[i])
+		rightTime := imageStorageObjectTime(objects[j])
+		if leftTime != rightTime {
+			return leftTime > rightTime
+		}
+		return objects[i].Key > objects[j].Key
+	})
+
+	decodedCursor, hasCursor, err := decodeImageStorageObjectCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+	start := 0
+	if hasCursor {
+		start = sort.Search(len(objects), func(index int) bool {
+			objectTime := imageStorageObjectTime(objects[index])
+			return objectTime < decodedCursor.LastModified ||
+				(objectTime == decodedCursor.LastModified && objects[index].Key < decodedCursor.Key)
+		})
+	}
+	end := min(start+limit, len(objects))
+	items := append([]service.ImageStorageObject(nil), objects[start:end]...)
+	page := &service.ImageStorageObjectPage{
+		Items:      items,
+		HasMore:    end < len(objects),
+		TotalCount: int64(len(objects)),
+	}
+	if page.HasMore && len(items) > 0 {
+		page.NextCursor = encodeImageStorageObjectCursor(items[len(items)-1])
+	}
+	return page, nil
+}
+
+func imageStorageObjectTime(object service.ImageStorageObject) int64 {
+	if object.LastModified.IsZero() || object.LastModified.Before(time.Unix(0, 0)) {
+		return 0
+	}
+	return object.LastModified.UnixMilli()
+}
+
+func encodeImageStorageObjectCursor(object service.ImageStorageObject) string {
+	payload, _ := json.Marshal(imageStorageObjectCursor{
+		LastModified: imageStorageObjectTime(object),
+		Key:          object.Key,
+	})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeImageStorageObjectCursor(value string) (imageStorageObjectCursor, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return imageStorageObjectCursor{}, false, nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return imageStorageObjectCursor{}, false, infraerrors.BadRequest("INVALID_IMAGE_STORAGE_CURSOR", "invalid image storage cursor")
+	}
+	var cursor imageStorageObjectCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.LastModified < 0 || strings.TrimSpace(cursor.Key) == "" {
+		return imageStorageObjectCursor{}, false, infraerrors.BadRequest("INVALID_IMAGE_STORAGE_CURSOR", "invalid image storage cursor")
+	}
+	return cursor, true, nil
 }

@@ -1189,7 +1189,7 @@ export default {
 
   webConsole: {
     title: 'Creation Studio',
-    description: 'Chat and generate images with your current API keys, subscription quota, or balance'
+    description: 'Generate images with your current API keys, subscription quota, or balance'
   },
 
   affiliate: {
@@ -1549,7 +1549,7 @@ export default {
       description: 'Browse archived results in the asynchronous image bucket.',
       storageEyebrow: 'Async image object storage',
       notConfigured: 'Not configured',
-      pageObjects: 'Objects on page',
+      totalImages: 'Total images in upstream async bucket',
       pageSize: 'Size on page',
       source: 'Source',
       asyncBucket: 'Upstream async image bucket',
@@ -6206,7 +6206,7 @@ export default {
         },
         webConsole: {
           title: 'Creation Studio',
-          description: 'Allow users to chat and generate images in the browser with their own API key, subscription quota, or wallet balance. Sessions and user-side image previews stay local to the browser.',
+          description: 'Allow users to generate images in the browser with their own API key, subscription quota, or wallet balance. Sessions and user-side image previews stay local to the browser.',
           enabled: 'Enable Creation Studio',
           enabledHint: 'When off, the sidebar entry is hidden. Existing local sessions are not removed.',
           defaultEndpoint: 'Default API endpoint',

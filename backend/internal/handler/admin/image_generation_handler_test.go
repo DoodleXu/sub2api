@@ -20,7 +20,10 @@ type imageStorageBrowserStub struct {
 
 func (s *imageStorageBrowserStub) List(_ context.Context, prefix, _ string, _ int) (*service.ImageStorageObjectPage, error) {
 	s.prefix = prefix
-	return &service.ImageStorageObjectPage{Items: []service.ImageStorageObject{{Key: prefix + "imgtask_1-0.png"}}}, nil
+	return &service.ImageStorageObjectPage{
+		Items:      []service.ImageStorageObject{{Key: prefix + "imgtask_1-0.png"}},
+		TotalCount: 1,
+	}, nil
 }
 
 type imageTaskAdminStoreStub struct {
@@ -88,6 +91,7 @@ func TestImageGenerationListUsesConfiguredAsyncPrefix(t *testing.T) {
 	data, ok := body["data"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "images", data["bucket"])
+	require.Equal(t, float64(1), data["total_count"])
 }
 
 func TestImageGenerationListRejectsPrefixOutsideAsyncNamespace(t *testing.T) {

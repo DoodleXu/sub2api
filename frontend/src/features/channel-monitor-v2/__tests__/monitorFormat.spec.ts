@@ -12,6 +12,7 @@ import {
   formatMonitorTokensPerSecond,
   healthScoreClass,
   healthStateClass,
+  maskMonitorEmail,
   scoreToBand,
   tokensPerSecondFromTpm,
 } from '../monitorFormat'
@@ -50,6 +51,13 @@ describe('monitorFormat accuracy', () => {
     expect(formatMonitorThroughput(1_000_000)).toBe('1.0M')
     expect(formatMonitorThroughput(1_500_000)).toBe('1.5M')
     expect(formatMonitorThroughput(0)).toBe('0')
+  })
+
+  it('masks email addresses used as channel-monitor ranking labels', () => {
+    expect(maskMonitorEmail('jr77882024@163.com')).toBe('jr***24@163.com')
+    expect(maskMonitorEmail('ab@qq.com')).toBe('a*@qq.com')
+    expect(maskMonitorEmail('a@qq.com')).toBe('*@qq.com')
+    expect(maskMonitorEmail('DoodleXu')).toBe('DoodleXu')
   })
 
   it('formats latency ms/s boundaries from API fields', () => {

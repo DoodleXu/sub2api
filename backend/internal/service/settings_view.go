@@ -213,7 +213,7 @@ type SystemSettings struct {
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
-	// Web console feature (browser-side chat/image workspace)
+	// Web console feature (browser-side image workspace)
 	WebConsoleEnabled         bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 
@@ -418,7 +418,7 @@ type PublicSettings struct {
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
-	// Web console feature (browser-side chat/image workspace)
+	// Web console feature (browser-side image workspace)
 	WebConsoleEnabled         bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 

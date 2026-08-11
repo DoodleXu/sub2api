@@ -2,7 +2,9 @@ package repository
 
 import (
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +86,39 @@ func TestImageLifecycleRuleCoversPrefix(t *testing.T) {
 			require.Equal(t, tt.want, imageLifecycleRuleCoversPrefix(tt.rule, exactPrefix, 2))
 		})
 	}
+}
+
+func TestBuildImageStorageObjectPageSortsNewestFirstAndReportsTotal(t *testing.T) {
+	objects := []service.ImageStorageObject{
+		{Key: "images/old.png", LastModified: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+		{Key: "images/new.png", LastModified: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)},
+		{Key: "images/tie-a.png", LastModified: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)},
+		{Key: "images/tie-b.png", LastModified: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)},
+	}
+
+	first, err := buildImageStorageObjectPage(objects, "", 2)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), first.TotalCount)
+	require.True(t, first.HasMore)
+	require.Equal(t, []string{"images/new.png", "images/tie-b.png"}, imageStorageObjectKeys(first.Items))
+
+	last, err := buildImageStorageObjectPage(objects, first.NextCursor, 2)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), last.TotalCount)
+	require.False(t, last.HasMore)
+	require.Empty(t, last.NextCursor)
+	require.Equal(t, []string{"images/tie-a.png", "images/old.png"}, imageStorageObjectKeys(last.Items))
+}
+
+func TestBuildImageStorageObjectPageRejectsInvalidCursor(t *testing.T) {
+	_, err := buildImageStorageObjectPage(nil, "not-a-valid-cursor", 60)
+	require.Error(t, err)
+}
+
+func imageStorageObjectKeys(objects []service.ImageStorageObject) []string {
+	keys := make([]string, 0, len(objects))
+	for _, object := range objects {
+		keys = append(keys, object.Key)
+	}
+	return keys
 }

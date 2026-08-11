@@ -17,7 +17,7 @@ describe('ImageGenerationsView', () => {
   beforeEach(() => {
     list.mockReset()
     list.mockResolvedValue({
-      bucket: 'async-images', prefix: 'images/', has_more: false, items: [
+      bucket: 'async-images', prefix: 'images/', has_more: false, total_count: 60, items: [
         { key: 'images/imgtask_1-0.png', size: 2048, etag: 'abc', last_modified: '2026-07-22T05:03:20Z', url: 'https://example.test/image.png' },
       ],
     })
@@ -28,6 +28,7 @@ describe('ImageGenerationsView', () => {
     await flushPromises()
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ limit: 60 }))
     expect(wrapper.text()).toContain('async-images')
+    expect(wrapper.text()).toContain('60')
     expect(wrapper.text()).toContain('imgtask_1-0.png')
     expect(wrapper.text()).toContain('2.0 KB')
     expect(wrapper.text()).not.toContain('启用归档')

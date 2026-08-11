@@ -7,7 +7,6 @@ import type { WebConsoleSession } from '@/features/web-console/types'
 
 const keysListMock = vi.hoisted(() => vi.fn())
 const fetchPublicSettingsMock = vi.hoisted(() => vi.fn())
-const sendWebConsoleChatMock = vi.hoisted(() => vi.fn())
 const createImageTaskMock = vi.hoisted(() => vi.fn())
 const getImageTaskMock = vi.hoisted(() => vi.fn())
 const taskAssetsMock = vi.hoisted(() => vi.fn((task: { assets?: unknown[] }) => task.assets || []))
@@ -20,8 +19,7 @@ const appStore = vi.hoisted(() => ({
   fetchPublicSettings: fetchPublicSettingsMock,
 }))
 
-vi.mock('@/features/web-console/openaiClient', () => ({
-  sendWebConsoleChat: sendWebConsoleChatMock,
+vi.mock('@/features/web-console/utils', () => ({
   isWebConsoleOpenAICompatibleEndpoint: (endpoint: string) => {
     const path = new URL(endpoint, 'https://app.example.com').pathname.replace(/\/+$/, '').toLowerCase()
     return !(path.endsWith('/v1beta') || path.includes('/v1beta/') || path.endsWith('/antigravity/v1') || path.includes('/antigravity/v1/'))
@@ -102,9 +100,9 @@ vi.mock('@/components/common/Select.vue', () => ({
 
 function session(overrides: Partial<WebConsoleSession>): WebConsoleSession {
   return {
-    id: 'session-chat',
-    title: '旧对话',
-    mode: 'chat',
+    id: 'session-image',
+    title: '海报会话',
+    mode: 'image',
     messages: [{
       id: 'message-1',
       role: 'user',
@@ -135,7 +133,6 @@ describe('WebConsoleView', () => {
       web_console_default_endpoint: '',
     }
     fetchPublicSettingsMock.mockResolvedValue(appStore.cachedPublicSettings)
-    sendWebConsoleChatMock.mockReset()
     createImageTaskMock.mockReset()
     getImageTaskMock.mockReset()
     taskAssetsMock.mockClear()
@@ -163,7 +160,7 @@ describe('WebConsoleView', () => {
 
   it('移动端提供会话切换、新建和删除入口', async () => {
     saveWebConsoleSessions([
-      session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
+      session({ id: 'session-avatar', title: '头像会话' }),
       session({
         id: 'session-image',
         title: '海报会话',
@@ -183,7 +180,7 @@ describe('WebConsoleView', () => {
 
     await openSelect(wrapper, '切换会话')
     expect(selectOptionTexts().join('\n')).toContain('海报会话')
-    expect(selectOptionTexts().join('\n')).toContain('旧对话')
+    expect(selectOptionTexts().join('\n')).toContain('头像会话')
     await wrapper.get('button[aria-label="切换会话"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('尺寸')
@@ -205,6 +202,7 @@ describe('WebConsoleView', () => {
     const remainingSessions = selectOptionTexts().join('\n')
     expect(remainingSessions).not.toContain('创建新会话')
     expect(remainingSessions).toContain('海报会话')
+    expect(remainingSessions).toContain('头像会话')
     await wrapper.get('button[aria-label="切换会话"]').trigger('click')
   })
 
@@ -236,7 +234,7 @@ describe('WebConsoleView', () => {
         }],
         updated_at: '2026-05-28T00:01:00.000Z',
       }),
-      session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
+      session({ id: 'session-avatar', title: '头像会话' }),
     ])
 
     const wrapper = mount(WebConsoleView)
@@ -247,24 +245,17 @@ describe('WebConsoleView', () => {
 
     const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
     expect(stored.some((item) => item.id === 'session-image')).toBe(false)
-    expect(stored.some((item) => item.id === 'session-chat')).toBe(true)
+    expect(stored.some((item) => item.id === 'session-avatar')).toBe(true)
   })
 
-  it('删除普通对话会话时只移除本地 session', async () => {
-    saveWebConsoleSessions([
-      session({ id: 'session-chat', title: '旧对话', mode: 'chat' }),
-      session({ id: 'session-image', title: '海报会话', mode: 'image' }),
-    ])
-
+  it('默认只展示生图能力，不再提供对话模式', async () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.get('button[aria-label="删除当前会话"]').trigger('click')
-    await flushPromises()
-
-    const stored = JSON.parse(localStorage.getItem('sub2api-web-console-sessions-v1') || '[]') as WebConsoleSession[]
-    expect(stored.some((item) => item.id === 'session-chat')).toBe(false)
-    expect(stored.some((item) => item.id === 'session-image')).toBe(true)
+    expect(wrapper.text()).toContain('开始一次生图')
+    expect(wrapper.text()).toContain('生成')
+    expect(wrapper.text()).not.toContain('对话')
+    expect(wrapper.findAll('button').some((button) => button.text() === '发送')).toBe(false)
   })
 
   it('只展示 OpenAI-compatible 端点和 OpenAI 分组 API Key', async () => {
@@ -331,11 +322,11 @@ describe('WebConsoleView', () => {
 
     await openSelect(wrapper, '模型')
     const modelOptions = selectOptionTexts()
-    expect(modelOptions).toEqual(['gpt-5.5', 'gpt-5.4'])
+    expect(modelOptions).toEqual(['gpt-image-2', 'gpt-image-1'])
     await wrapper.get('button[aria-label="模型"]').trigger('click')
   })
 
-  it('没有 OpenAI 分组 API Key 时展示明确提示且不发起对话请求', async () => {
+  it('没有 OpenAI 分组 API Key 时展示明确提示且不发起生图请求', async () => {
     appStore.cachedPublicSettings = {
       api_base_url: 'https://api.example.com',
       custom_endpoints: [],
@@ -370,33 +361,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('当前端点仅支持 OpenAI 分组的 API Key')
-    expect(sendWebConsoleChatMock).not.toHaveBeenCalled()
     expect(createImageTaskMock).not.toHaveBeenCalled()
-  })
-
-  it('OpenAI 在线对话提交时使用选中的 OpenAI key 和站内端点', async () => {
-    sendWebConsoleChatMock.mockResolvedValue({
-      text: '你好，有什么可以帮你？',
-      usedMode: 'responses',
-    })
-
-    const wrapper = mount(WebConsoleView)
-    await flushPromises()
-
-    await wrapper.get('textarea').setValue('你好')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(sendWebConsoleChatMock).toHaveBeenCalledTimes(1)
-    expect(sendWebConsoleChatMock).toHaveBeenCalledWith(expect.objectContaining({
-      endpoint: '/',
-      apiKey: 'sk-test',
-      model: 'gpt-5.5',
-      prompt: '你好',
-      tools: [{ type: 'web_search' }, { type: 'image_generation' }],
-      toolChoice: 'auto',
-    }))
-    expect(wrapper.text()).toContain('你好，有什么可以帮你？')
   })
 
   it('管理员指定的自定义默认端点仍使用绝对 URL', async () => {
@@ -409,25 +374,28 @@ describe('WebConsoleView', () => {
       }],
       web_console_default_endpoint: 'https://backup.example.com/v1',
     }
-    sendWebConsoleChatMock.mockResolvedValue({
-      text: '备用线路响应',
-      usedMode: 'responses',
+    createImageTaskMock.mockResolvedValue({
+      task: {
+        id: 'imgtask_backup',
+        task_id: 'imgtask_backup',
+        status: 'processing',
+      },
     })
 
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
     expect(wrapper.get('button[aria-label="API 端点"]').text()).toContain('备用线路')
-    await wrapper.get('textarea').setValue('你好')
+    await wrapper.get('textarea').setValue('画一张海报')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(sendWebConsoleChatMock).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
       endpoint: 'https://backup.example.com/v1',
     }))
   })
 
-  it('生图模式通过任务接口提交图片生成请求', async () => {
+  it('通过任务接口提交图片生成请求', async () => {
     createImageTaskMock.mockResolvedValue({
       task: {
         id: 'imgtask_101',
@@ -444,11 +412,6 @@ describe('WebConsoleView', () => {
     })
 
     const wrapper = mount(WebConsoleView)
-    await flushPromises()
-
-    const imageModeButton = wrapper.findAll('button').find((button) => button.text() === '生图')
-    expect(imageModeButton).toBeTruthy()
-    await imageModeButton!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('Images 原生接口')
@@ -514,7 +477,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.get('textarea').setValue('画一张海报')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -575,7 +537,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.get('textarea').setValue('画一张跨域海报')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -814,7 +775,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.get('textarea').setValue('画一张海报')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -862,7 +822,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.findAll('button').find((button) => button.text() === '编辑')!.trigger('click')
     const fileInputs = wrapper.findAll('input[type="file"]')
     const sourceFile = new File(['source-image'], 'source.png', { type: 'image/png' })
@@ -1076,7 +1035,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.findAll('button').find((button) => button.text() === '编辑')!.trigger('click')
     await wrapper.get('textarea').setValue('只上传蒙版不应提交')
     await wrapper.get('form').trigger('submit')
@@ -1106,7 +1064,6 @@ describe('WebConsoleView', () => {
     const wrapper = mount(WebConsoleView)
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '生图')!.trigger('click')
     await wrapper.get('textarea').setValue('画一张海报')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -1539,29 +1496,4 @@ describe('WebConsoleView', () => {
     expect(createImageTaskMock).not.toHaveBeenCalled()
   })
 
-  it('对话模式不暴露调试选项并默认启用 tools', async () => {
-    sendWebConsoleChatMock.mockResolvedValue({
-      text: '已联网搜索。',
-      usedMode: 'responses',
-    })
-
-    const wrapper = mount(WebConsoleView)
-    await flushPromises()
-
-    expect(wrapper.text()).not.toContain('响应模式')
-    expect(wrapper.text()).not.toContain('tool_choice')
-    expect(wrapper.text()).not.toContain('不使用工具')
-    expect(wrapper.text()).not.toContain('Web Search')
-    expect(wrapper.text()).not.toContain('Imagegen')
-
-    await wrapper.get('textarea').setValue('查一下最新消息')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(sendWebConsoleChatMock).toHaveBeenCalledWith(expect.objectContaining({
-      tools: [{ type: 'web_search' }, { type: 'image_generation' }],
-      toolChoice: 'auto',
-    }))
-    expect(wrapper.text()).toContain('已联网搜索。')
-  })
 })

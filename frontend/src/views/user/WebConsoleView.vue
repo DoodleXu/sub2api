@@ -3,9 +3,9 @@
     <div class="web-console mx-auto flex h-[calc(100vh-8rem)] max-w-7xl gap-4">
       <aside class="hidden w-72 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900 lg:flex lg:flex-col">
         <div class="border-b border-gray-100 p-4 dark:border-dark-700">
-          <button type="button" class="btn btn-primary w-full" @click="startSession(activeMode)">
+          <button type="button" class="btn btn-primary w-full" @click="startSession">
             <Icon name="plus" size="sm" class="mr-2" />
-            {{ activeMode === 'image' ? '创建新会话' : '新对话' }}
+            创建新会话
           </button>
         </div>
         <div class="flex-1 space-y-1 overflow-y-auto p-3">
@@ -19,12 +19,7 @@
               : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-dark-800'"
             @click="selectSession(session.id)"
           >
-            <div class="flex items-center justify-between gap-2">
-              <span class="truncate text-sm font-medium">{{ session.title }}</span>
-              <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-dark-700 dark:text-gray-400">
-                {{ session.mode === 'image' ? '生图' : '对话' }}
-              </span>
-            </div>
+            <span class="block truncate text-sm font-medium">{{ session.title }}</span>
             <p class="mt-1 truncate text-xs text-gray-400">
               {{ formatSessionTime(session.updated_at) }}
             </p>
@@ -52,7 +47,7 @@
               class="btn btn-secondary shrink-0 px-3"
               title="新建会话"
               aria-label="新建会话"
-              @click="startSession(activeMode)"
+              @click="startSession"
             >
               <Icon name="plus" size="sm" />
             </button>
@@ -100,24 +95,6 @@
                 />
               </label>
             </div>
-            <div class="flex rounded-lg border border-gray-200 p-1 dark:border-dark-700">
-              <button
-                type="button"
-                class="rounded-md px-3 py-2 text-sm font-medium"
-                :class="activeMode === 'chat' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'"
-                @click="switchMode('chat')"
-              >
-                对话
-              </button>
-              <button
-                type="button"
-                class="rounded-md px-3 py-2 text-sm font-medium"
-                :class="activeMode === 'image' ? 'bg-primary-600 text-white' : 'text-gray-600 dark:text-gray-300'"
-                @click="switchMode('image')"
-              >
-                生图
-              </button>
-            </div>
           </div>
           <div v-if="selectedKey" class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
             <span class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">{{ isSubscriptionType(selectedKey.group?.subscription_type) ? '订阅额度优先' : '账户余额' }}</span>
@@ -126,7 +103,7 @@
             </span>
             <span class="rounded bg-gray-100 px-2 py-1 dark:bg-dark-800">{{ selectedKey.group?.platform || '未分组' }}</span>
           </div>
-          <div v-if="activeMode === 'image'" class="mt-3 space-y-3">
+          <div class="mt-3 space-y-3">
             <div class="flex flex-wrap items-center gap-3">
               <div class="flex rounded-lg border border-gray-200 p-1 dark:border-dark-700">
                 <button
@@ -232,7 +209,7 @@
           <div v-if="!currentSession || currentSession.messages.length === 0" class="flex h-full items-center justify-center text-center">
             <div>
               <Icon name="sparkles" size="xl" class="mx-auto text-primary-500" />
-              <h2 class="mt-3 text-lg font-semibold text-gray-900 dark:text-white">{{ activeMode === 'image' ? '开始一次生图' : '开始一次对话' }}</h2>
+              <h2 class="mt-3 text-lg font-semibold text-gray-900 dark:text-white">开始一次生图</h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">选择端点和 API Key 后即可使用当前账户额度。</p>
             </div>
           </div>
@@ -325,13 +302,13 @@
             <textarea
               v-model="prompt"
               class="input h-[50px] min-h-[50px] flex-1 resize-none overflow-y-auto"
-              :placeholder="activeMode === 'image' ? (imageTaskMode === 'edit' ? '描述你想怎样编辑参考图...' : '描述你想生成的图片...') : '输入消息...'"
+              :placeholder="imageTaskMode === 'edit' ? '描述你想怎样编辑参考图...' : '描述你想生成的图片...'"
               @keydown.enter.exact.prevent="submit"
               @paste="handlePromptPaste"
             />
             <button type="submit" class="btn btn-primary h-[50px] self-center" :disabled="submitting || !canSubmit">
               <Icon :name="submitting ? 'refresh' : 'arrowRight'" size="md" :class="submitting ? 'mr-2 animate-spin' : 'mr-2'" />
-              {{ submitting ? '处理中' : activeMode === 'image' ? (imageTaskMode === 'edit' ? '编辑' : '生成') : '发送' }}
+              {{ submitting ? '处理中' : imageTaskMode === 'edit' ? '编辑' : '生成' }}
             </button>
           </div>
         </form>
@@ -358,11 +335,7 @@ import {
   saveWebConsoleSessions,
   titleFromPrompt,
 } from '@/features/web-console/storage'
-import {
-  isWebConsoleOpenAICompatibleEndpoint,
-  sendWebConsoleChat,
-  webConsoleErrorMessage,
-} from '@/features/web-console/openaiClient'
+import { isWebConsoleOpenAICompatibleEndpoint, webConsoleErrorMessage } from '@/features/web-console/utils'
 import type {
   WebConsoleImage,
   WebConsoleImageOptions,
@@ -370,7 +343,6 @@ import type {
   WebConsoleImageRequest,
   WebConsoleImageTaskMode,
   WebConsoleMessage,
-  WebConsoleMode,
   WebConsoleSession,
 } from '@/features/web-console/types'
 
@@ -387,9 +359,7 @@ const currentSessionId = ref('')
 const apiKeys = ref<ApiKey[]>([])
 const selectedKeyId = ref(0)
 const selectedEndpoint = ref('')
-const chatModel = ref('gpt-5.5')
-const imageModelValue = ref('gpt-image-2')
-const activeMode = ref<WebConsoleMode>('chat')
+const model = ref('gpt-image-2')
 const imageTaskMode = ref<WebConsoleImageTaskMode>('generate')
 const imageSize = ref('')
 const imageRatio = ref('')
@@ -493,7 +463,7 @@ const compatibleApiKeys = computed(() => {
 })
 const sessionOptions = computed<SelectOption[]>(() => sessions.value.map((session) => ({
   value: session.id,
-  label: `${session.title} · ${session.mode === 'image' ? '生图' : '对话'}`,
+  label: session.title,
 })))
 const endpointSelectOptions = computed<SelectOption[]>(() => endpointOptions.value.map((endpoint) => ({
   value: endpoint.endpoint,
@@ -516,31 +486,15 @@ const keyCompatibilityMessage = computed(() => {
   return `当前端点仅支持 ${platforms} 分组的 API Key，请切换端点或选择对应平台额度。`
 })
 const currentSession = computed(() => sessions.value.find((session) => session.id === currentSessionId.value) || null)
-const model = computed({
-  get: () => activeMode.value === 'image' ? imageModelValue.value : chatModel.value,
-  set: (value: string | number | boolean | null) => {
-    const nextValue = String(value ?? '')
-    if (activeMode.value === 'image') {
-      imageModelValue.value = nextValue
-    } else {
-      chatModel.value = nextValue
-    }
-  },
-})
 const canSubmit = computed(() => {
   if (!prompt.value.trim() || !selectedEndpoint.value || !selectedKey.value || !model.value.trim()) return false
-  if (activeMode.value === 'image' && imageTaskMode.value === 'edit' && referenceImages.value.length === 0) return false
+  if (imageTaskMode.value === 'edit' && referenceImages.value.length === 0) return false
   return true
 })
-const modelOptions = computed<SelectOption[]>(() => activeMode.value === 'image'
-  ? [
-      { value: 'gpt-image-2', label: 'gpt-image-2' },
-      { value: 'gpt-image-1', label: 'gpt-image-1' },
-    ]
-  : [
-      { value: 'gpt-5.5', label: 'gpt-5.5' },
-      { value: 'gpt-5.4', label: 'gpt-5.4' },
-    ])
+const modelOptions: SelectOption[] = [
+  { value: 'gpt-image-2', label: 'gpt-image-2' },
+  { value: 'gpt-image-1', label: 'gpt-image-1' },
+]
 const imageSizeOptions: SelectOption[] = [
   { value: '', label: '默认' },
   { value: '1024x1024', label: '1024 x 1024' },
@@ -585,18 +539,17 @@ function persistSessions(): void {
   saveWebConsoleSessions(sessions.value)
 }
 
-function ensureSession(mode: WebConsoleMode): WebConsoleSession {
+function ensureSession(): WebConsoleSession {
   if (currentSession.value) return currentSession.value
-  const session = createWebConsoleSession(mode)
+  const session = createWebConsoleSession()
   sessions.value.unshift(session)
   currentSessionId.value = session.id
   persistSessions()
   return session
 }
 
-function startSession(mode: WebConsoleMode): void {
-  activeMode.value = mode
-  const session = createWebConsoleSession(mode)
+function startSession(): void {
+  const session = createWebConsoleSession()
   sessions.value.unshift(session)
   currentSessionId.value = session.id
   persistSessions()
@@ -606,19 +559,8 @@ function selectSession(sessionId: string): void {
   currentSessionId.value = sessionId
   const session = sessions.value.find((item) => item.id === sessionId)
   if (session) {
-    activeMode.value = session.mode
     void restoreCachedImagesForSession(session)
     resumeImageTasksForSession(session)
-  }
-}
-
-function switchMode(mode: WebConsoleMode): void {
-  activeMode.value = mode
-  const existing = sessions.value.find((session) => session.mode === mode)
-  if (existing) {
-    currentSessionId.value = existing.id
-  } else {
-    startSession(mode)
   }
 }
 
@@ -626,7 +568,7 @@ function touchSession(session: WebConsoleSession, titlePrompt?: string): void {
   if (deletingSessionIds.has(session.id)) return
   session.updated_at = new Date().toISOString()
   if (titlePrompt && session.messages.length <= 1) {
-    session.title = titleFromPrompt(titlePrompt, session.mode === 'image' ? '创建新会话' : '新对话')
+    session.title = titleFromPrompt(titlePrompt, '创建新会话')
   }
   sessions.value = [
     session,
@@ -642,20 +584,17 @@ async function deleteCurrentSession(): Promise<void> {
   errorMessage.value = ''
   deletingSessionIds.add(session.id)
   deletingSession.value = false
-  const deletedMode = session.mode
   for (const message of session.messages) {
     pendingImageEditPayloads.delete(message.id)
   }
   sessions.value = sessions.value.filter((item) => item.id !== session.id)
-  const nextSession = sessions.value.find((item) => item.mode === deletedMode) || sessions.value[0]
+  const nextSession = sessions.value[0]
   if (nextSession) {
     currentSessionId.value = nextSession.id
-    activeMode.value = nextSession.mode
   } else {
-    const replacement = createWebConsoleSession(deletedMode)
+    const replacement = createWebConsoleSession()
     sessions.value.unshift(replacement)
     currentSessionId.value = replacement.id
-    activeMode.value = replacement.mode
   }
   persistSessions()
   deletingSessionIds.delete(session.id)
@@ -691,18 +630,11 @@ function currentImageOptions(): WebConsoleImageOptions {
   }
 }
 
-function defaultChatTools(): unknown[] {
-  return [
-    { type: 'web_search' },
-    { type: 'image_generation' },
-  ]
-}
-
 function createImageRequest(input: string): WebConsoleImageRequest {
   return {
     prompt: input,
     mode: imageTaskMode.value,
-    model: imageModelValue.value.trim(),
+    model: model.value.trim(),
     options: currentImageOptions(),
     referenceImages: [],
     maskImage: null,
@@ -1028,7 +960,6 @@ function addReferenceImage(reference: WebConsoleImageReference, byteSize = image
   const exists = referenceImages.value.some((item) => item.data_url === reference.data_url)
   if (exists) return true
   if (!validateImageReferenceSize(byteSize)) return false
-  activeMode.value = 'image'
   imageTaskMode.value = 'edit'
   referenceImages.value.push(reference)
   return true
@@ -1071,7 +1002,6 @@ async function handleMaskFileChange(event: Event): Promise<void> {
     return
   }
   errorMessage.value = ''
-  activeMode.value = 'image'
   imageTaskMode.value = 'edit'
   maskImage.value = {
     data_url: await fileToDataURL(file),
@@ -1094,7 +1024,6 @@ function removeMaskImage(): void {
 }
 
 async function handlePromptPaste(event: ClipboardEvent): Promise<void> {
-  if (activeMode.value !== 'image') return
   const files = Array.from(event.clipboardData?.files || []).filter(isImageFile)
   if (files.length === 0) return
   event.preventDefault()
@@ -1374,19 +1303,16 @@ async function submit(): Promise<void> {
     errorMessage.value = keyCompatibilityMessage.value || '当前端点没有可用 API Key。'
     return
   }
-  if (activeMode.value === 'image' && imageTaskMode.value === 'edit' && referenceImages.value.length === 0) {
+  if (imageTaskMode.value === 'edit' && referenceImages.value.length === 0) {
     errorMessage.value = '编辑模式需要至少添加一张参考图。'
     return
   }
   if (!canSubmit.value || submitting.value || !selectedKey.value) return
-  const chatTools = activeMode.value === 'chat' ? defaultChatTools() : []
-  const toolChoice = chatTools.length > 0 ? 'auto' : undefined
-  const session = ensureSession(activeMode.value)
+  const session = ensureSession()
   const input = prompt.value.trim()
   prompt.value = ''
   errorMessage.value = ''
 
-  session.mode = activeMode.value
   session.messages.push({
     id: createWebConsoleMessageId(),
     role: 'user',
@@ -1398,51 +1324,30 @@ async function submit(): Promise<void> {
 
   submitting.value = true
   try {
-    if (activeMode.value === 'image') {
-      const imageRequest = createImageRequest(input)
-      const editPayload = currentImageEditPayload()
-      const assistantMessage: WebConsoleMessage = {
-        id: createWebConsoleMessageId(),
-        role: 'assistant',
-        content: pendingImageContent(),
-        images: [],
-        imageRequest,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      }
-      if (imageRequest.mode === 'edit') {
-        const cachedPayload = await cacheImageEditPayloadForStorage(session.id, assistantMessage.id, editPayload)
-        assistantMessage.imageRequest = {
-          ...imageRequest,
-          referenceImages: cachedPayload.referenceImages,
-          maskImage: cachedPayload.maskImage,
-        }
-        pendingImageEditPayloads.set(assistantMessage.id, editPayload)
-      }
-      session.messages.push(assistantMessage)
-      touchSession(session)
-      await scrollToBottom()
-      await createImageTaskForMessage(session, assistantMessage)
-    } else {
-      const result = await sendWebConsoleChat(
-        {
-          endpoint: requestEndpoint(selectedEndpoint.value),
-          apiKey: selectedKey.value.key,
-          model: model.value.trim(),
-          prompt: input,
-          history: session.messages.slice(0, -1),
-          tools: chatTools,
-          toolChoice,
-        }
-      )
-      session.messages.push({
-        id: createWebConsoleMessageId(),
-        role: 'assistant',
-        content: result.text,
-        images: result.images,
-        created_at: new Date().toISOString(),
-      })
+    const imageRequest = createImageRequest(input)
+    const editPayload = currentImageEditPayload()
+    const assistantMessage: WebConsoleMessage = {
+      id: createWebConsoleMessageId(),
+      role: 'assistant',
+      content: pendingImageContent(),
+      images: [],
+      imageRequest,
+      status: 'pending',
+      created_at: new Date().toISOString(),
     }
+    if (imageRequest.mode === 'edit') {
+      const cachedPayload = await cacheImageEditPayloadForStorage(session.id, assistantMessage.id, editPayload)
+      assistantMessage.imageRequest = {
+        ...imageRequest,
+        referenceImages: cachedPayload.referenceImages,
+        maskImage: cachedPayload.maskImage,
+      }
+      pendingImageEditPayloads.set(assistantMessage.id, editPayload)
+    }
+    session.messages.push(assistantMessage)
+    touchSession(session)
+    await scrollToBottom()
+    await createImageTaskForMessage(session, assistantMessage)
     clearSubmitState()
     touchSession(session)
     await scrollToBottom()
@@ -1488,7 +1393,6 @@ watch([selectedEndpoint, apiKeys], () => {
 watch(currentSessionId, (sessionId) => {
   const session = sessions.value.find((item) => item.id === sessionId)
   if (session) {
-    activeMode.value = session.mode
     void restoreCachedImagesForSession(session)
     resumeImageTasksForSession(session)
   }
@@ -1498,9 +1402,8 @@ onMounted(async () => {
   sessions.value = loadWebConsoleSessions()
   if (sessions.value.length > 0) {
     currentSessionId.value = sessions.value[0].id
-    activeMode.value = sessions.value[0].mode
   } else {
-    startSession('chat')
+    startSession()
   }
   if (!publicSettings.value) {
     await appStore.fetchPublicSettings()

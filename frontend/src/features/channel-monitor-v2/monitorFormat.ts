@@ -55,6 +55,24 @@ export function formatMonitorTokensPerSecond(tpm: number | null | undefined): st
   return formatMonitorThroughput(tokensPerSecondFromTpm(tpm))
 }
 
+/**
+ * Redact an email address when it is used as a public ranking label.
+ * Keep enough of the local part to let a user recognize themselves, without
+ * exposing the full address to every viewer of the channel monitor.
+ */
+export function maskMonitorEmail(value: string): string {
+  const email = value.trim()
+  const at = email.lastIndexOf('@')
+  if (at <= 0 || at === email.length - 1) return value
+
+  const local = email.slice(0, at)
+  const domain = email.slice(at)
+  if (local.length === 1) return `*${domain}`
+  if (local.length === 2) return `${local[0]}*${domain}`
+  if (local.length <= 4) return `${local.slice(0, 1)}***${local.slice(-1)}${domain}`
+  return `${local.slice(0, 2)}***${local.slice(-2)}${domain}`
+}
+
 
 export function formatMonitorPercent(value: number, locale = monitorIntlLocale()): string {
   return `${new Intl.NumberFormat(locale, {

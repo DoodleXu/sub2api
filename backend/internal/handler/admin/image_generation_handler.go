@@ -55,6 +55,7 @@ func (h *ImageGenerationHandler) List(c *gin.Context) {
 		"items":       page.Items,
 		"next_cursor": page.NextCursor,
 		"has_more":    page.HasMore,
+		"total_count": page.TotalCount,
 		"prefix":      cfg.Prefix,
 		"bucket":      cfg.Bucket,
 	})

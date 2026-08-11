@@ -1193,7 +1193,7 @@ export default {
 
   webConsole: {
     title: '创作台',
-    description: '使用当前账户的 API Key、订阅额度或余额进行对话与生图'
+    description: '使用当前账户的 API Key、订阅额度或余额进行生图'
   },
 
   affiliate: {
@@ -1553,7 +1553,7 @@ export default {
       description: '查看异步生图桶中的已归档结果。',
       storageEyebrow: '异步生图对象存储',
       notConfigured: '未配置',
-      pageObjects: '当前页对象',
+      totalImages: '上游异步生图桶内图片总数',
       pageSize: '当前页容量',
       source: '数据来源',
       asyncBucket: '上游异步生图桶',
@@ -6370,7 +6370,7 @@ export default {
         },
         webConsole: {
           title: '创作台',
-          description: '允许用户在网页端使用自己的 API Key、订阅额度或账户余额进行对话与生图。会话和用户侧图片预览只保存在浏览器本地。',
+          description: '允许用户在网页端使用自己的 API Key、订阅额度或账户余额进行生图。会话和用户侧图片预览只保存在浏览器本地。',
           enabled: '启用创作台',
           enabledHint: '关闭后用户侧边栏入口隐藏，已有本地会话不会被删除。',
           defaultEndpoint: '默认 API 端点',

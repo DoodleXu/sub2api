@@ -67,4 +67,21 @@ describe('web console storage', () => {
       cacheKey: '/__sub2api_web_console_image_cache__/edit-references/session-image/message-image/mask/0?name=mask.png',
     })
   })
+
+  it('加载旧数据时丢弃已移除的对话会话', () => {
+    localStorage.setItem('sub2api-web-console-sessions-v1', JSON.stringify([
+      imageSession(),
+      {
+        ...imageSession(),
+        id: 'session-chat',
+        title: '旧对话',
+        mode: 'chat',
+      },
+    ]))
+
+    const restored = loadWebConsoleSessions()
+
+    expect(restored).toHaveLength(1)
+    expect(restored[0].id).toBe('session-image')
+  })
 })

@@ -19,8 +19,8 @@
 
       <section class="grid gap-3 sm:grid-cols-3">
         <div class="border-l-2 border-primary-500 pl-3">
-          <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.pageObjects') }}</div>
-          <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ items.length }}</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.totalImages') }}</div>
+          <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white">{{ totalCount }}</div>
         </div>
         <div class="border-l-2 border-emerald-500 pl-3">
           <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.imageGenerations.pageSize') }}</div>
@@ -113,6 +113,7 @@ const activePrefix = ref('')
 const cursor = ref('')
 const nextCursor = ref('')
 const hasMore = ref(false)
+const totalCount = ref(0)
 const cursorHistory = ref<string[]>([])
 const preview = ref<AsyncImageObject | null>(null)
 const pageBytes = computed(() => items.value.reduce((sum, item) => sum + item.size, 0))
@@ -128,8 +129,10 @@ async function load(): Promise<void> {
     if (!activePrefix.value) prefixInput.value = configuredPrefix.value
     nextCursor.value = page.next_cursor || ''
     hasMore.value = Boolean(page.has_more && page.next_cursor)
+    totalCount.value = page.total_count || 0
   } catch (error: any) {
     items.value = []
+    totalCount.value = 0
     errorMessage.value = error?.message || t('admin.imageGenerations.loadObjectsFailed')
   } finally {
     loading.value = false

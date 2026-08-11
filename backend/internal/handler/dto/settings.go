@@ -318,7 +318,7 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
-	// Web Console feature switch (browser-side chat/image workspace)
+	// Web Console feature switch (browser-side image workspace)
 	WebConsoleEnabled         bool   `json:"web_console_enabled"`
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 

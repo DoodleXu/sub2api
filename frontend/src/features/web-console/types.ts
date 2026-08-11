@@ -1,10 +1,6 @@
 export type WebConsoleRole = 'user' | 'assistant'
 
-export type WebConsoleMode = 'chat' | 'image'
-
 export type WebConsoleImageTaskMode = 'generate' | 'edit'
-
-export type WebConsoleResponseMode = 'responses'
 
 export interface WebConsoleImageReference {
   data_url: string
@@ -50,26 +46,10 @@ export interface WebConsoleMessage {
 export interface WebConsoleSession {
   id: string
   title: string
-  mode: WebConsoleMode
+  mode: 'image'
   messages: WebConsoleMessage[]
   created_at: string
   updated_at: string
-}
-
-export interface WebConsoleRequestContext {
-  endpoint: string
-  apiKey: string
-  model: string
-  prompt: string
-  history: WebConsoleMessage[]
-  tools?: unknown[]
-  toolChoice?: unknown
-}
-
-export interface WebConsoleTextResult {
-  text: string
-  usedMode: WebConsoleResponseMode
-  images?: WebConsoleImage[]
 }
 
 export interface WebConsoleImageRequest {
