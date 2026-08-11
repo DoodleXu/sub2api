@@ -115,6 +115,36 @@ func TestBuildImageStorageObjectPageRejectsInvalidCursor(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestImageStorageObjectCacheReusesAndInvalidatesMatchingPrefixes(t *testing.T) {
+	now := time.Now().UTC()
+	storage := &S3ImageStorage{}
+	objects := []service.ImageStorageObject{{Key: "images/generated/one.png", LastModified: now}}
+	storage.storeCachedObjects("images/", objects, now)
+	storage.storeCachedObjects("images/generated/", objects, now)
+	storage.storeCachedObjects("other/", objects, now)
+
+	cached, ok := storage.cachedObjectsForPrefix("images/", now.Add(time.Second))
+	require.True(t, ok)
+	require.Equal(t, objects, cached)
+
+	storage.invalidateObjectCacheForKey("images/generated/two.png")
+	_, ok = storage.cachedObjectsForPrefix("images/", now.Add(time.Second))
+	require.False(t, ok)
+	_, ok = storage.cachedObjectsForPrefix("images/generated/", now.Add(time.Second))
+	require.False(t, ok)
+	_, ok = storage.cachedObjectsForPrefix("other/", now.Add(time.Second))
+	require.True(t, ok)
+}
+
+func TestImageStorageObjectCacheExpires(t *testing.T) {
+	now := time.Now().UTC()
+	storage := &S3ImageStorage{}
+	storage.storeCachedObjects("images/", []service.ImageStorageObject{{Key: "images/one.png"}}, now)
+
+	_, ok := storage.cachedObjectsForPrefix("images/", now.Add(imageStorageObjectCacheTTL))
+	require.False(t, ok)
+}
+
 func imageStorageObjectKeys(objects []service.ImageStorageObject) []string {
 	keys := make([]string, 0, len(objects))
 	for _, object := range objects {

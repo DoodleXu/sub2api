@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -18,7 +19,10 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"golang.org/x/sync/singleflight"
 )
+
+const imageStorageObjectCacheTTL = 30 * time.Second
 
 // S3ImageStorage 用 S3 兼容对象存储实现 service.ImageStorage。
 type S3ImageStorage struct {
@@ -26,6 +30,16 @@ type S3ImageStorage struct {
 	bucket        string
 	publicBaseURL string
 	presignExpiry time.Duration
+
+	objectCacheMu sync.Mutex
+	objectCache   map[string]imageStorageObjectCacheEntry
+	objectVersion uint64
+	objectLoad    singleflight.Group
+}
+
+type imageStorageObjectCacheEntry struct {
+	objects   []service.ImageStorageObject
+	expiresAt time.Time
 }
 
 var _ service.ImageStorage = (*S3ImageStorage)(nil)
@@ -61,6 +75,7 @@ func NewS3ImageStorage(ctx context.Context, cfg *config.ImageStorageConfig) (*S3
 		bucket:        cfg.Bucket,
 		publicBaseURL: strings.TrimRight(cfg.PublicBaseURL, "/"),
 		presignExpiry: expiry,
+		objectCache:   make(map[string]imageStorageObjectCacheEntry),
 	}, nil
 }
 
@@ -104,6 +119,7 @@ func imageLifecycleRuleCoversPrefix(rule types.LifecycleRule, prefix string, min
 
 // Save 上传图片字节，返回可访问 URL：配了 public_base_url 则返回公开直链，否则返回 presigned 临时链接。
 func (s *S3ImageStorage) Save(ctx context.Context, key, contentType string, data []byte) (string, error) {
+	defer s.invalidateObjectCacheForKey(key)
 	finish := servertiming.ObserveDependency(ctx, "s3")
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.bucket,
@@ -164,6 +180,7 @@ func (s *S3ImageStorage) cleanupAmbiguousPut(key string) error {
 
 // Delete 删除未被任务终态引用的补偿对象。
 func (s *S3ImageStorage) Delete(ctx context.Context, key string) error {
+	defer s.invalidateObjectCacheForKey(key)
 	finish := servertiming.ObserveDependency(ctx, "s3")
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: &s.bucket,
@@ -182,12 +199,68 @@ type imageStorageObjectCursor struct {
 }
 
 // List exposes objects already written by upstream async image tasks. S3 only
-// lists by key, so the complete prefix must be read before sorting globally by
-// object write time and applying cursor pagination.
+// lists by key, so the complete prefix is cached briefly after a globally
+// time-sorted scan. Cursor pages reuse that immutable inventory rather than
+// rescanning the full prefix for every page.
 func (s *S3ImageStorage) List(ctx context.Context, prefix, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 60
 	}
+	objects, err := s.cachedObjects(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	page, err := buildImageStorageObjectPageFromSorted(objects, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	presignClient := s3.NewPresignClient(s.client)
+	for index := range page.Items {
+		item := &page.Items[index]
+		if s.publicBaseURL != "" {
+			item.URL = s.publicBaseURL + "/" + strings.TrimLeft(item.Key, "/")
+			continue
+		}
+		presigned, presignErr := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+			Bucket: &s.bucket,
+			Key:    &item.Key,
+		}, s3.WithPresignExpires(s.presignExpiry))
+		if presignErr != nil {
+			return nil, fmt.Errorf("presign image object %q: %w", item.Key, presignErr)
+		}
+		item.URL = presigned.URL
+	}
+	return page, nil
+}
+
+func (s *S3ImageStorage) cachedObjects(ctx context.Context, prefix string) ([]service.ImageStorageObject, error) {
+	if objects, ok := s.cachedObjectsForPrefix(prefix, time.Now()); ok {
+		return objects, nil
+	}
+	loaded, err, _ := s.objectLoad.Do(prefix, func() (any, error) {
+		if objects, ok := s.cachedObjectsForPrefix(prefix, time.Now()); ok {
+			return objects, nil
+		}
+		version := s.objectCacheVersion()
+		objects, err := s.listObjects(ctx, prefix)
+		if err != nil {
+			return nil, err
+		}
+		sortImageStorageObjects(objects)
+		s.storeCachedObjectsIfVersion(prefix, objects, time.Now(), version)
+		return objects, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	objects, ok := loaded.([]service.ImageStorageObject)
+	if !ok {
+		return nil, fmt.Errorf("unexpected image storage object cache result type %T", loaded)
+	}
+	return objects, nil
+}
+
+func (s *S3ImageStorage) listObjects(ctx context.Context, prefix string) ([]service.ImageStorageObject, error) {
 	maxKeys := int32(1000)
 	input := &s3.ListObjectsV2Input{
 		Bucket:  &s.bucket,
@@ -219,30 +292,72 @@ func (s *S3ImageStorage) List(ctx context.Context, prefix, cursor string, limit 
 		}
 	}
 
-	page, err := buildImageStorageObjectPage(objects, cursor, limit)
-	if err != nil {
-		return nil, err
+	return objects, nil
+}
+
+func (s *S3ImageStorage) cachedObjectsForPrefix(prefix string, now time.Time) ([]service.ImageStorageObject, bool) {
+	s.objectCacheMu.Lock()
+	defer s.objectCacheMu.Unlock()
+	entry, ok := s.objectCache[prefix]
+	if !ok || !now.Before(entry.expiresAt) {
+		return nil, false
 	}
-	presignClient := s3.NewPresignClient(s.client)
-	for index := range page.Items {
-		item := &page.Items[index]
-		if s.publicBaseURL != "" {
-			item.URL = s.publicBaseURL + "/" + strings.TrimLeft(item.Key, "/")
-			continue
-		}
-		presigned, presignErr := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-			Bucket: &s.bucket,
-			Key:    &item.Key,
-		}, s3.WithPresignExpires(s.presignExpiry))
-		if presignErr != nil {
-			return nil, fmt.Errorf("presign image object %q: %w", item.Key, presignErr)
-		}
-		item.URL = presigned.URL
+	return entry.objects, true
+}
+
+func (s *S3ImageStorage) storeCachedObjects(prefix string, objects []service.ImageStorageObject, now time.Time) {
+	s.objectCacheMu.Lock()
+	defer s.objectCacheMu.Unlock()
+	s.storeCachedObjectsLocked(prefix, objects, now)
+}
+
+func (s *S3ImageStorage) storeCachedObjectsIfVersion(prefix string, objects []service.ImageStorageObject, now time.Time, version uint64) {
+	s.objectCacheMu.Lock()
+	defer s.objectCacheMu.Unlock()
+	if s.objectVersion != version {
+		return
 	}
-	return page, nil
+	s.storeCachedObjectsLocked(prefix, objects, now)
+}
+
+func (s *S3ImageStorage) storeCachedObjectsLocked(prefix string, objects []service.ImageStorageObject, now time.Time) {
+	if s.objectCache == nil {
+		s.objectCache = make(map[string]imageStorageObjectCacheEntry)
+	}
+	for cachedPrefix, entry := range s.objectCache {
+		if !now.Before(entry.expiresAt) {
+			delete(s.objectCache, cachedPrefix)
+		}
+	}
+	s.objectCache[prefix] = imageStorageObjectCacheEntry{objects: objects, expiresAt: now.Add(imageStorageObjectCacheTTL)}
+}
+
+func (s *S3ImageStorage) objectCacheVersion() uint64 {
+	s.objectCacheMu.Lock()
+	defer s.objectCacheMu.Unlock()
+	return s.objectVersion
+}
+
+func (s *S3ImageStorage) invalidateObjectCacheForKey(key string) {
+	if s == nil {
+		return
+	}
+	s.objectCacheMu.Lock()
+	defer s.objectCacheMu.Unlock()
+	s.objectVersion++
+	for prefix := range s.objectCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.objectCache, prefix)
+		}
+	}
 }
 
 func buildImageStorageObjectPage(objects []service.ImageStorageObject, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
+	sortImageStorageObjects(objects)
+	return buildImageStorageObjectPageFromSorted(objects, cursor, limit)
+}
+
+func sortImageStorageObjects(objects []service.ImageStorageObject) {
 	sort.Slice(objects, func(i, j int) bool {
 		leftTime := imageStorageObjectTime(objects[i])
 		rightTime := imageStorageObjectTime(objects[j])
@@ -251,7 +366,9 @@ func buildImageStorageObjectPage(objects []service.ImageStorageObject, cursor st
 		}
 		return objects[i].Key > objects[j].Key
 	})
+}
 
+func buildImageStorageObjectPageFromSorted(objects []service.ImageStorageObject, cursor string, limit int) (*service.ImageStorageObjectPage, error) {
 	decodedCursor, hasCursor, err := decodeImageStorageObjectCursor(cursor)
 	if err != nil {
 		return nil, err
