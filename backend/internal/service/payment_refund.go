@@ -626,10 +626,6 @@ func (s *PaymentService) QueryAndFinalizeRefund(ctx context.Context, oid int64) 
 	}
 }
 
-func (s *PaymentService) finalizePendingRefundSuccess(ctx context.Context, p *RefundPlan) (_ *RefundResult, err error) {
-	return s.finalizeRefundSuccessFromStatus(ctx, p, OrderStatusRefundPending)
-}
-
 func (s *PaymentService) finalizeRefundSuccessFromStatus(ctx context.Context, p *RefundPlan, expectedStatus string) (_ *RefundResult, err error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {

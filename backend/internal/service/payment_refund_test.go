@@ -802,11 +802,11 @@ func TestFinalizePendingRefundSuccessRejectsStaleCallerBeforeSecondDeduction(t *
 	}
 
 	pendingDetail := svc.latestRefundPendingDetail(ctx, order.ID)
-	first, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order, pendingDetail))
+	first, err := svc.finalizeRefundSuccessFromStatus(ctx, svc.refundFinalizePlan(order, pendingDetail), OrderStatusRefundPending)
 	require.NoError(t, err)
 	require.True(t, first.Success)
 
-	second, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order, pendingDetail))
+	second, err := svc.finalizeRefundSuccessFromStatus(ctx, svc.refundFinalizePlan(order, pendingDetail), OrderStatusRefundPending)
 	require.Nil(t, second)
 	require.Error(t, err)
 	require.Equal(t, "CONFLICT", infraerrors.Reason(err))
@@ -838,7 +838,7 @@ func TestFinalizePendingRefundSuccessRollsBackPostDeductionFailure(t *testing.T)
 		}},
 	}
 
-	result, err := svc.finalizePendingRefundSuccess(ctx, svc.refundFinalizePlan(order, svc.latestRefundPendingDetail(ctx, order.ID)))
+	result, err := svc.finalizeRefundSuccessFromStatus(ctx, svc.refundFinalizePlan(order, svc.latestRefundPendingDetail(ctx, order.ID)), OrderStatusRefundPending)
 	require.Nil(t, result)
 	require.ErrorContains(t, err, "injected failure after deduction")
 
