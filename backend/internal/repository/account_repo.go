@@ -3307,6 +3307,7 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 type accountCostTotal struct {
 	totalAccountCost         float64
 	totalStandardAccountCost float64
+	hasPublishedResult       bool
 	complete                 bool
 }
 
@@ -3319,8 +3320,9 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 	query := `
 		SELECT
 			account_id,
-			total_account_cost,
-			total_standard_account_cost,
+			published_account_cost,
+			published_standard_account_cost,
+			published_initialized,
 			initialized AND NOT needs_processing AS complete
 		FROM usage_account_cost_totals
 		WHERE account_id = ANY($1)
@@ -3334,7 +3336,7 @@ func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountID
 	for rows.Next() {
 		var accountID int64
 		var cost accountCostTotal
-		if err := rows.Scan(&accountID, &cost.totalAccountCost, &cost.totalStandardAccountCost, &cost.complete); err != nil {
+		if err := rows.Scan(&accountID, &cost.totalAccountCost, &cost.totalStandardAccountCost, &cost.hasPublishedResult, &cost.complete); err != nil {
 			return nil, err
 		}
 		result[accountID] = cost
@@ -3378,13 +3380,14 @@ func (r *accountRepository) attachMatchingAccountCostStats(ctx context.Context, 
 			continue
 		}
 		cost, found := costs[accounts[i].ID]
-		if !found || !cost.complete {
+		if !found || !cost.hasPublishedResult {
 			accounts[i].CostStatsPending = true
 			if include != nil {
 				r.preserveCachedAccountCostStats(ctx, &accounts[i])
 			}
 			continue
 		}
+		accounts[i].CostStatsPending = !cost.complete
 		accounts[i].TotalAccountCost = cost.totalAccountCost
 		if accounts[i].TotalCostCNY <= 0 {
 			continue
@@ -3422,7 +3425,7 @@ func (r *accountRepository) preserveCachedAccountCostStats(ctx context.Context, 
 	}
 	if r.sql != nil {
 		if costs, err := r.loadTotalAccountCosts(ctx, []int64{account.ID}); err == nil {
-			if cost, ok := costs[account.ID]; ok && cost.complete && cost.totalStandardAccountCost > 0 && account.TotalCostCNY > 0 {
+			if cost, ok := costs[account.ID]; ok && cost.hasPublishedResult && cost.totalStandardAccountCost > 0 && account.TotalCostCNY > 0 {
 				account.TotalAccountCost = cost.totalAccountCost
 				account.CostCNYPerUSD = account.TotalCostCNY / cost.totalStandardAccountCost
 				return

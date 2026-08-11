@@ -402,8 +402,11 @@
             />
           </template>
           <template #cell-total_cost_cny="{ row }">
-            <span class="text-sm font-mono text-gray-500 dark:text-dark-400">
-              {{ formatCostPerUsd(row) }}
+            <span class="inline-flex items-center gap-1 text-sm font-mono text-gray-500 dark:text-dark-400">
+              <span>{{ formatCostPerUsd(row) }}</span>
+              <HelpTooltip v-if="row.cost_stats_pending && hasCostPerUsdValue(row)" :content="t('admin.accounts.costStatsPendingHint')" width-class="w-64">
+                <Icon name="refresh" size="xs" class="text-amber-500" />
+              </HelpTooltip>
             </span>
           </template>
           <template #cell-priority="{ value }">
@@ -2024,9 +2027,6 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
 }
 
 const formatCostPerUsd = (account: Account): string => {
-  if (account.cost_stats_pending) {
-    return '-'
-  }
   const totalCny = Number(account.total_cost_cny ?? 0)
   if (!Number.isFinite(totalCny) || totalCny <= 0) {
     return '-'
@@ -2041,6 +2041,8 @@ const formatCostPerUsd = (account: Account): string => {
   }
   return `¥${(totalCny / totalAccountCost).toFixed(4)}`
 }
+
+const hasCostPerUsdValue = (account: Account): boolean => formatCostPerUsd(account) !== '-'
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
   const sortOrder: AccountSortOrder = rawParams.sort_order === 'desc' ? 'desc' : 'asc'

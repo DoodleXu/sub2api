@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -11,6 +12,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 )
+
+type UsageCostRecomputer interface {
+	TriggerRecomputeRange(start, end time.Time) error
+}
 
 var (
 	ErrUsageLogNotFound = infraerrors.NotFound("USAGE_LOG_NOT_FOUND", "usage log not found")
@@ -60,6 +65,7 @@ type UsageService struct {
 	userRepo             UserRepository
 	entClient            *dbent.Client
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	costRecomputer       UsageCostRecomputer
 }
 
 // NewUsageService 创建使用统计服务实例
@@ -69,6 +75,12 @@ func NewUsageService(usageRepo UsageLogRepository, userRepo UserRepository, entC
 		userRepo:             userRepo,
 		entClient:            entClient,
 		authCacheInvalidator: authCacheInvalidator,
+	}
+}
+
+func (s *UsageService) SetUsageCostRecomputer(recomputer UsageCostRecomputer) {
+	if s != nil {
+		s.costRecomputer = recomputer
 	}
 }
 
@@ -283,8 +295,19 @@ func (s *UsageService) GetDailyStats(ctx context.Context, userID int64, days int
 
 // Delete 删除使用日志（管理员功能，谨慎使用）
 func (s *UsageService) Delete(ctx context.Context, id int64) error {
+	log, err := s.usageRepo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get usage log before delete: %w", err)
+	}
 	if err := s.usageRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete usage log: %w", err)
+	}
+	if s.costRecomputer != nil && log != nil && !log.CreatedAt.IsZero() {
+		start := log.CreatedAt.UTC().Truncate(time.Hour)
+		if err := s.costRecomputer.TriggerRecomputeRange(start, start.Add(time.Hour)); err != nil {
+			slog.Error("usage_delete_cost_recompute_schedule_failed", "usage_id", id, "error", err)
+			return fmt.Errorf("delete usage log completed but schedule cost recompute: %w", err)
+		}
 	}
 	return nil
 }

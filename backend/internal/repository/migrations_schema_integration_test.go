@@ -86,6 +86,9 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_account_cost_totals", "last_processed_usage_id", "bigint", 0, false)
 	requireColumn(t, tx, "usage_account_cost_totals", "initialized", "boolean", 0, false)
 	requireColumn(t, tx, "usage_account_cost_totals", "needs_processing", "boolean", 0, false)
+	requireColumn(t, tx, "usage_account_cost_totals", "published_account_cost", "numeric", 0, false)
+	requireColumn(t, tx, "usage_account_cost_totals", "published_standard_account_cost", "numeric", 0, false)
+	requireColumn(t, tx, "usage_account_cost_totals", "published_initialized", "boolean", 0, false)
 	requireIndex(t, tx, "usage_account_cost_totals", "idx_usage_account_cost_totals_pending")
 	requireForeignKeyOnDelete(t, tx, "usage_account_cost_totals", "account_id", "accounts", "CASCADE")
 

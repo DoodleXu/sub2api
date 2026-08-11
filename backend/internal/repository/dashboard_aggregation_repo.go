@@ -151,8 +151,17 @@ func (r *dashboardAggregationRepository) processAccountCostTotalsInTx(ctx contex
 			UPDATE usage_account_cost_totals ledger
 			SET total_account_cost = ledger.total_account_cost + totals.account_cost,
 				total_standard_account_cost = ledger.total_standard_account_cost + totals.standard_cost,
+				published_account_cost = CASE
+					WHEN totals.processed_rows < $3 THEN ledger.total_account_cost + totals.account_cost
+					ELSE ledger.published_account_cost
+				END,
+				published_standard_account_cost = CASE
+					WHEN totals.processed_rows < $3 THEN ledger.total_standard_account_cost + totals.standard_cost
+					ELSE ledger.published_standard_account_cost
+				END,
+				published_initialized = ledger.published_initialized OR totals.processed_rows < $3,
 				last_processed_usage_id = totals.newest_id,
-				initialized = TRUE,
+				initialized = ledger.initialized OR totals.processed_rows < $3,
 				needs_processing = totals.processed_rows >= $3,
 				computed_at = NOW()
 			FROM totals
@@ -993,14 +1002,14 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 		),
 		ledger_state AS (
 			SELECT
-				COALESCE(BOOL_AND(initialized AND NOT needs_processing), TRUE) AS complete
+				COALESCE(BOOL_AND(published_initialized AND initialized), TRUE) AS complete
 			FROM usage_account_cost_totals
 		),
 		cost_by_account AS (
 			SELECT
 				account_id,
-				total_account_cost,
-				total_standard_account_cost
+				published_account_cost AS total_account_cost,
+				published_standard_account_cost AS total_standard_account_cost
 			FROM usage_account_cost_totals
 		),
 		today_by_account AS (

@@ -154,7 +154,8 @@ func TestDashboardAggregationService_RunScheduledAggregationProcessesAccountCost
 
 	svc.runScheduledAggregation()
 
-	require.Equal(t, 2, repo.processTotalsCalls, "one processed account plus one empty probe")
+	require.Zero(t, repo.processTotalsCalls, "scheduled aggregation should not eagerly consume account cost ledger batches")
+	require.Zero(t, repo.refreshSnapshotCalls, "scheduled aggregation should leave cost snapshot refresh to the 10-minute maintenance task")
 }
 
 func TestDashboardAggregationService_BackfillsAccountCostInDailyChunksWithoutGlobalReaggregation(t *testing.T) {
@@ -223,10 +224,102 @@ func TestDashboardAggregationService_BackfillsRetentionWindowWithinSafetyCap(t *
 	svc.backfillAccountCostAggregates()
 
 	require.NotEmpty(t, repo.accountCostRanges)
-	require.LessOrEqual(t, len(repo.accountCostRanges), accountCostBackfillMaxChunks)
+	require.LessOrEqual(t, len(repo.accountCostRanges), accountCostAggregateMaxChunks)
 	require.Greater(t, len(repo.accountCostRanges), 7, "fast backfill should not be artificially limited to seven days")
 	require.Zero(t, atomic.LoadInt32(&svc.running))
 	require.Zero(t, atomic.LoadInt32(&svc.accountCostBackfillRunning))
+}
+
+func TestDashboardAggregationService_AccountCostLedgerCadenceAndBudgets(t *testing.T) {
+	require.Equal(t, 10*time.Minute, accountCostMaintenanceInterval)
+	require.Equal(t, 2*time.Minute, accountCostLedgerRunBudget)
+	require.Equal(t, 2*time.Minute, accountCostAggregateRunBudget)
+	require.Equal(t, 128, accountCostLedgerMaxBatches)
+	require.Equal(t, 128, accountCostAggregateMaxChunks)
+}
+
+func TestDashboardAggregationService_ProcessAccountCostTotalsUsesDedicatedRunner(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
+	svc := &DashboardAggregationService{
+		repo: repo,
+		cfg:  config.DashboardAggregationConfig{Enabled: true},
+	}
+
+	svc.processAccountCostTotals()
+
+	require.Equal(t, 2, repo.processTotalsCalls, "runner should continue until the ledger reports no pending account")
+	require.Zero(t, atomic.LoadInt32(&svc.accountCostLedgerRunning))
+}
+
+func TestDashboardAggregationService_AccountCostMaintenanceSkipsOnPeerLeader(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
+	lockCache := &fakeLeaderLockCache{}
+	held, err := lockCache.TryAcquireLeaderLock(
+		context.Background(),
+		accountCostMaintenanceLeaderLockKey,
+		"peer",
+		accountCostMaintenanceLeaderLockTTL,
+	)
+	require.NoError(t, err)
+	require.True(t, held)
+	svc := &DashboardAggregationService{
+		repo:       repo,
+		lockCache:  lockCache,
+		instanceID: "local",
+		cfg:        config.DashboardAggregationConfig{Enabled: true},
+	}
+
+	svc.runAccountCostMaintenance()
+
+	require.Zero(t, repo.processTotalsCalls)
+	require.Empty(t, repo.accountCostRanges)
+}
+
+func TestDashboardAggregationService_AccountCostMaintenanceUsesIndependentLeaderLock(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
+	lockCache := &fakeLeaderLockCache{}
+	svc := &DashboardAggregationService{
+		repo:                       repo,
+		lockCache:                  lockCache,
+		instanceID:                 "local",
+		accountCostBackfillYieldFn: func(context.Context) bool { return false },
+		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
+			Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 1,
+			},
+		},
+	}
+
+	svc.runAccountCostMaintenance()
+
+	require.Equal(t, 1, repo.processTotalsCalls)
+	require.Len(t, repo.accountCostRanges, 1)
+	require.Empty(t, lockCache.heldBy(dashboardAggregationLeaderLockKey))
+	require.Empty(t, lockCache.heldBy(accountCostMaintenanceLeaderLockKey))
+	require.Zero(t, atomic.LoadInt32(&svc.accountCostMaintenanceRunning))
+}
+
+func TestDashboardAggregationService_AccountLedgerDoesNotWaitForDashboardLeader(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
+	lockCache := &fakeLeaderLockCache{}
+	held, err := lockCache.TryAcquireLeaderLock(
+		context.Background(),
+		dashboardAggregationLeaderLockKey,
+		"dashboard-peer",
+		dashboardAggregationLeaderLockTTL,
+	)
+	require.NoError(t, err)
+	require.True(t, held)
+	svc := &DashboardAggregationService{
+		repo:      repo,
+		lockCache: lockCache,
+		cfg:       config.DashboardAggregationConfig{Enabled: true},
+	}
+
+	svc.processAccountCostTotals()
+
+	require.Equal(t, 2, repo.processTotalsCalls)
 }
 
 func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *testing.T) {

@@ -303,6 +303,56 @@ func (s *AccountRepoSuite) TestUpdateCredentials_SyncsSnapshotAndDurableOutbox()
 	s.Require().Equal(1, outboxCount)
 }
 
+func (s *AccountRepoSuite) TestListPendingAccountUsesPublishedCostStats() {
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:         "pending-published-cost",
+		Platform:     service.PlatformOpenAI,
+		Type:         service.AccountTypeAPIKey,
+		Status:       service.StatusActive,
+		Schedulable:  true,
+		TotalCostCNY: 12,
+	})
+	_, err := s.client.ExecContext(s.ctx, `
+		INSERT INTO usage_account_cost_totals (
+			account_id,
+			total_account_cost,
+			total_standard_account_cost,
+			published_account_cost,
+			published_standard_account_cost,
+			published_initialized,
+			last_processed_usage_id,
+			initialized,
+			needs_processing
+		) VALUES ($1, 150, 120, 120, 100, TRUE, 200, TRUE, TRUE)
+		ON CONFLICT (account_id) DO UPDATE
+		SET total_account_cost = EXCLUDED.total_account_cost,
+			total_standard_account_cost = EXCLUDED.total_standard_account_cost,
+			published_account_cost = EXCLUDED.published_account_cost,
+			published_standard_account_cost = EXCLUDED.published_standard_account_cost,
+			published_initialized = EXCLUDED.published_initialized,
+			last_processed_usage_id = EXCLUDED.last_processed_usage_id,
+			initialized = EXCLUDED.initialized,
+			needs_processing = EXCLUDED.needs_processing
+	`, account.ID)
+	s.Require().NoError(err)
+
+	accounts, page, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
+	s.Require().NoError(err)
+	s.Require().GreaterOrEqual(page.Total, int64(1))
+
+	var got *service.Account
+	for i := range accounts {
+		if accounts[i].ID == account.ID {
+			got = &accounts[i]
+			break
+		}
+	}
+	s.Require().NotNil(got)
+	s.Require().True(got.CostStatsPending)
+	s.Require().Equal(120.0, got.TotalAccountCost)
+	s.Require().InEpsilon(0.12, got.CostCNYPerUSD, 0.000001)
+}
+
 func (s *AccountRepoSuite) TestDelete() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "to-delete"})
 

@@ -3621,6 +3621,7 @@ export default {
         priority: '优先级',
         billingRateMultiplier: '账号倍率',
         totalCostCny: '每刀成本',
+        costStatsPendingHint: '正在基于新用量重算，当前显示的是最近一次完整结果。',
         weight: '权重',
         schedulerScore: '调度权值',
         status: '状态',
