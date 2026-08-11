@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/smartwalle/alipay/v3"
@@ -342,7 +341,7 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		OutTradeNo:   req.OrderID,
 		RefundAmount: req.Amount,
 		RefundReason: req.Reason,
-		OutRequestNo: fmt.Sprintf("%s-refund-%d", req.OrderID, time.Now().UnixNano()),
+		OutRequestNo: alipayRefundRequestID(req),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("alipay TradeRefund: %w", err)
@@ -362,6 +361,15 @@ func (a *Alipay) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		RefundID: refundID,
 		Status:   refundStatus,
 	}, nil
+}
+
+func alipayRefundRequestID(req payment.RefundRequest) string {
+	if refundID := strings.TrimSpace(req.RefundID); refundID != "" {
+		return refundID
+	}
+	// Legacy callers did not pass RefundID. Keep this fallback deterministic so
+	// a timeout retry cannot create another upstream refund request.
+	return fmt.Sprintf("%s-refund-%s", req.OrderID, strings.ReplaceAll(req.Amount, ".", "_"))
 }
 
 // CancelPayment closes a pending trade on Alipay.

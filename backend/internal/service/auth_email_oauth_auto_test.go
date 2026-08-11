@@ -86,3 +86,24 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.NotNil(t, geminiRecord.MonthlyLimitUSD)
 	require.InDelta(t, 100.0, *geminiRecord.MonthlyLimitUSD, 0.0001)
 }
+
+func TestEmailOAuthAuto_CreateUsesAtomicRegistrationDomainGuard(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 89, domainCounts: map[string]int{}}
+	svc := newEmailOAuthAutoAuthService(
+		userRepo,
+		map[string]string{
+			SettingKeyRegistrationEnabled:                 "true",
+			SettingKeyRegistrationEmailSuffixWhitelist:    "trusted.example",
+			SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+		},
+		&userPlatformQuotaRepoStub{},
+	)
+
+	_, err := svc.createEmailOAuthUser(context.Background(), "first@limited.example", "first", "google", "", "")
+	require.NoError(t, err)
+	require.Equal(t, 1, userRepo.domainLimitedCreates)
+
+	userRepo.domainCounts["limited.example"] = 1
+	_, err = svc.createEmailOAuthUser(context.Background(), "second@limited.example", "second", "google", "", "")
+	require.ErrorIs(t, err, ErrEmailDomainRegistrationLimit)
+}

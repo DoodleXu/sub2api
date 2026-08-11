@@ -16,12 +16,12 @@ func TestAccountRepositoryLoadTotalAccountCostsReadsOnlyLedger(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}).AddRow(42, 12.5, 10.0))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost", "complete"}).AddRow(42, 12.5, 10.0, true))
 
 	repo := newAccountRepositoryWithSQL(nil, db, nil)
 	costs, err := repo.loadTotalAccountCosts(context.Background(), []int64{42})
 	require.NoError(t, err)
-	require.Equal(t, accountCostTotal{totalAccountCost: 12.5, totalStandardAccountCost: 10}, costs[42])
+	require.Equal(t, accountCostTotal{totalAccountCost: 12.5, totalStandardAccountCost: 10, complete: true}, costs[42])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -31,7 +31,7 @@ func TestAccountRepositoryLoadTotalAccountCostsDoesNotScanUsageDuringBackfill(t 
 	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost", "complete"}))
 
 	repo := newAccountRepositoryWithSQL(nil, db, nil)
 	costs, err := repo.loadTotalAccountCosts(context.Background(), []int64{42})

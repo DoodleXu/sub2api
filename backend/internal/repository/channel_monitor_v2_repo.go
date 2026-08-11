@@ -642,7 +642,7 @@ func (r *channelMonitorV2Repository) GetErrors(ctx context.Context, filter servi
 	}
 	filter = channelMonitorV2CommonCoverageFilter(filter, *coverage)
 	where, args, _ := channelMonitorV2WhereWithRollup(filter, cfg, "e")
-	rows, err := r.db.QueryContext(ctx, `SELECT e.platform,e.model,e.error_category,SUM(e.error_requests) FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e `+where+` AND e.taxonomy_version = `+fmt.Sprint(service.ChannelMonitorV2TaxonomyVersion)+` GROUP BY e.platform,e.model,e.error_category`, args...)
+	rows, err := r.db.QueryContext(ctx, `SELECT e.platform,e.model,e.error_category,SUM(e.error_requests) FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e `+where+` AND e.user_id = 0 AND e.taxonomy_version = `+fmt.Sprint(service.ChannelMonitorV2TaxonomyVersion)+` GROUP BY e.platform,e.model,e.error_category`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -864,20 +864,9 @@ func (r *channelMonitorV2Repository) GetUsers(ctx context.Context, filter servic
 	// Error category facts are not per-user. Approximate ignored-error impact by
 	// applying the window-level ignored/error ratio to each user's error count so
 	// user-rank rates stay consistent with overview scoring.
-	_, ignoredTotal, err := r.loadIgnoredErrorCounts(ctx, effectiveFilter, cfg)
+	ignoredByUser, err := r.loadIgnoredErrorCountsByUser(ctx, effectiveFilter, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("load ignored error counts for users: %w", err)
-	}
-	var windowErrors int64
-	for _, acc := range accs {
-		windowErrors += acc.errors
-	}
-	ignoreRatio := 0.0
-	if windowErrors > 0 && ignoredTotal > 0 {
-		ignoreRatio = float64(ignoredTotal) / float64(windowErrors)
-		if ignoreRatio > 1 {
-			ignoreRatio = 1
-		}
 	}
 
 	items := make([]service.ChannelMonitorV2UserRow, 0, len(accs))
@@ -890,10 +879,7 @@ func (r *channelMonitorV2Repository) GetUsers(ctx context.Context, filter servic
 			label = m.email
 		}
 		metrics := acc.metric(minutes, false)
-		if ignoreRatio > 0 && metrics.ErrorRequests > 0 {
-			approxIgnored := int64(float64(metrics.ErrorRequests)*ignoreRatio + 0.5)
-			applyIgnoredErrors(&metrics, approxIgnored)
-		}
+		applyIgnoredErrors(&metrics, ignoredByUser[uid])
 		// Recompute health after rate adjustment.
 		// (metric() does not attach health; callers that need it recompute.)
 		items = append(items, service.ChannelMonitorV2UserRow{UserID: &id, Email: m.email, Username: m.username, DisplayLabel: label, CanDrilldown: admin, Metrics: metrics})
@@ -1426,7 +1412,7 @@ func (r *channelMonitorV2Repository) loadIgnoredErrorCounts(
 	query := fmt.Sprintf(
 		`SELECT %s, e.platform, e.model, SUM(e.error_requests)
 		 FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e %s
-		 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
+		 AND e.user_id = 0 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
 		 GROUP BY %s`,
 		bucketExpr, where, catIdx, taxIdx, groupBy,
 	)
@@ -1469,7 +1455,7 @@ func (r *channelMonitorV2Repository) loadIgnoredErrorCountsByPlatformModel(
 	query := fmt.Sprintf(
 		`SELECT e.platform, e.model, SUM(e.error_requests)
 		 FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e %s
-		 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
+		 AND e.user_id = 0 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
 		 GROUP BY e.platform, e.model`,
 		where, catIdx, taxIdx,
 	)
@@ -1492,6 +1478,44 @@ func (r *channelMonitorV2Repository) loadIgnoredErrorCountsByPlatformModel(
 		total += count
 	}
 	return byPM, total, rows.Err()
+}
+
+// loadIgnoredErrorCountsByUser returns exact ignored-category counts for the
+// user ranking. Unlike the old window-wide ratio, it never attributes one
+// user's policy/auth errors to another user.
+func (r *channelMonitorV2Repository) loadIgnoredErrorCountsByUser(
+	ctx context.Context,
+	filter service.ChannelMonitorV2Filter,
+	cfg service.ChannelMonitorV2Config,
+) (map[int64]int64, error) {
+	counts := map[int64]int64{}
+	if len(cfg.IgnoredErrorCategories) == 0 {
+		return counts, nil
+	}
+	where, args, _ := channelMonitorV2WhereWithRollup(filter, cfg, "e")
+	args = append(args, pq.Array(cfg.IgnoredErrorCategories), service.ChannelMonitorV2TaxonomyVersion)
+	categoryIndex := len(args) - 1
+	taxonomyIndex := len(args)
+	query := fmt.Sprintf(
+		`SELECT e.user_id, SUM(e.error_requests)
+		 FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e %s
+		 AND e.user_id > 0 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
+		 GROUP BY e.user_id`,
+		where, categoryIndex, taxonomyIndex,
+	)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var userID, count int64
+		if err := rows.Scan(&userID, &count); err != nil {
+			return nil, err
+		}
+		counts[userID] = count
+	}
+	return counts, rows.Err()
 }
 
 // loadIgnoredErrorCountsByMatrixKey returns ignored counts keyed by matrix dimension
@@ -1522,7 +1546,7 @@ func (r *channelMonitorV2Repository) loadIgnoredErrorCountsByMatrixKey(
 	query := fmt.Sprintf(
 		`SELECT %s, e.platform, e.group_id, e.model, SUM(e.error_requests)
 		 FROM `+channelMonitorV2ErrorMetricsTable(filter)+` e %s
-		 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
+		 AND e.user_id = 0 AND e.error_category = ANY($%d) AND e.taxonomy_version = $%d
 		 GROUP BY %s`,
 		bucketExpr, where, catIdx, taxIdx, groupSQL,
 	)

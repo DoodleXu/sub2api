@@ -186,8 +186,10 @@ type PaymentNotification struct {
 type RefundRequest struct {
 	TradeNo string
 	OrderID string
-	Amount  string // Refund amount formatted to 2 decimal places
-	Reason  string
+	// RefundID is a stable provider idempotency key persisted before dispatch.
+	RefundID string
+	Amount   string // Refund amount formatted to 2 decimal places
+	Reason   string
 }
 
 // RefundQueryRequest contains identifiers needed to query a previously

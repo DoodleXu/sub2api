@@ -147,6 +147,7 @@ type RefundPlan struct {
 	DeductionType        string
 	BalanceToDeduct      float64
 	SubscriptionID       int64
+	ProviderRefundID     string
 }
 
 type RefundResult struct {

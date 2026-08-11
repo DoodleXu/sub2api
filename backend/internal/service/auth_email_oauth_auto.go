@@ -85,10 +85,6 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	if isReservedEmail(email) {
 		return nil, nil, ErrEmailReserved
 	}
-	if err := s.validateRegistrationEmailPolicy(ctx, email); err != nil {
-		return nil, nil, err
-	}
-
 	identityUser, err := s.findEmailOAuthIdentityOwner(ctx, providerType, providerKey, providerSubject)
 	if err != nil {
 		return nil, nil, err
@@ -190,7 +186,11 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 		Status:       StatusActive,
 		SignupSource: providerType,
 	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	// The registration-domain guard must run only while creating a new user.
+	// Existing OAuth identities (and existing email accounts bound to a new
+	// provider) must remain able to sign in after the registration policy
+	// changes. This helper also keeps the quota check and insert atomic.
+	if err := s.createUserWithRegistrationEmailGuard(ctx, user); err != nil {
 		if errors.Is(err, ErrEmailExists) {
 			existing, loadErr := s.userRepo.GetByEmail(ctx, email)
 			if loadErr != nil {

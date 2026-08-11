@@ -190,6 +190,11 @@ func ActualCost(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldActualCost, v))
 }
 
+// Succeeded applies equality check predicate on the "succeeded" field. It's identical to SucceededEQ.
+func Succeeded(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSucceeded, v))
+}
+
 // RateMultiplier applies equality check predicate on the "rate_multiplier" field. It's identical to RateMultiplierEQ.
 func RateMultiplier(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldRateMultiplier, v))
@@ -1538,6 +1543,26 @@ func ActualCostLT(v float64) predicate.UsageLog {
 // ActualCostLTE applies the LTE predicate on the "actual_cost" field.
 func ActualCostLTE(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldActualCost, v))
+}
+
+// SucceededEQ applies the EQ predicate on the "succeeded" field.
+func SucceededEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSucceeded, v))
+}
+
+// SucceededNEQ applies the NEQ predicate on the "succeeded" field.
+func SucceededNEQ(v bool) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldSucceeded, v))
+}
+
+// SucceededIsNil applies the IsNil predicate on the "succeeded" field.
+func SucceededIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldSucceeded))
+}
+
+// SucceededNotNil applies the NotNil predicate on the "succeeded" field.
+func SucceededNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldSucceeded))
 }
 
 // RateMultiplierEQ applies the EQ predicate on the "rate_multiplier" field.

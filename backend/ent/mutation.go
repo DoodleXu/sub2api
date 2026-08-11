@@ -44629,6 +44629,7 @@ type UsageLogMutation struct {
 	addtotal_cost                *float64
 	actual_cost                  *float64
 	addactual_cost               *float64
+	succeeded                    *bool
 	rate_multiplier              *float64
 	addrate_multiplier           *float64
 	long_context_billing_applied *bool
@@ -46136,6 +46137,55 @@ func (m *UsageLogMutation) ResetActualCost() {
 	m.addactual_cost = nil
 }
 
+// SetSucceeded sets the "succeeded" field.
+func (m *UsageLogMutation) SetSucceeded(b bool) {
+	m.succeeded = &b
+}
+
+// Succeeded returns the value of the "succeeded" field in the mutation.
+func (m *UsageLogMutation) Succeeded() (r bool, exists bool) {
+	v := m.succeeded
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSucceeded returns the old "succeeded" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldSucceeded(ctx context.Context) (v *bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSucceeded is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSucceeded requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSucceeded: %w", err)
+	}
+	return oldValue.Succeeded, nil
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (m *UsageLogMutation) ClearSucceeded() {
+	m.succeeded = nil
+	m.clearedFields[usagelog.FieldSucceeded] = struct{}{}
+}
+
+// SucceededCleared returns if the "succeeded" field was cleared in this mutation.
+func (m *UsageLogMutation) SucceededCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldSucceeded]
+	return ok
+}
+
+// ResetSucceeded resets all changes to the "succeeded" field.
+func (m *UsageLogMutation) ResetSucceeded() {
+	m.succeeded = nil
+	delete(m.clearedFields, usagelog.FieldSucceeded)
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (m *UsageLogMutation) SetRateMultiplier(f float64) {
 	m.rate_multiplier = &f
@@ -47415,7 +47465,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 48)
+	fields := make([]string, 0, 49)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -47496,6 +47546,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.actual_cost != nil {
 		fields = append(fields, usagelog.FieldActualCost)
+	}
+	if m.succeeded != nil {
+		fields = append(fields, usagelog.FieldSucceeded)
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, usagelog.FieldRateMultiplier)
@@ -47622,6 +47675,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.TotalCost()
 	case usagelog.FieldActualCost:
 		return m.ActualCost()
+	case usagelog.FieldSucceeded:
+		return m.Succeeded()
 	case usagelog.FieldRateMultiplier:
 		return m.RateMultiplier()
 	case usagelog.FieldLongContextBillingApplied:
@@ -47727,6 +47782,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldTotalCost(ctx)
 	case usagelog.FieldActualCost:
 		return m.OldActualCost(ctx)
+	case usagelog.FieldSucceeded:
+		return m.OldSucceeded(ctx)
 	case usagelog.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
 	case usagelog.FieldLongContextBillingApplied:
@@ -47966,6 +48023,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetActualCost(v)
+		return nil
+	case usagelog.FieldSucceeded:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSucceeded(v)
 		return nil
 	case usagelog.FieldRateMultiplier:
 		v, ok := value.(float64)
@@ -48441,6 +48505,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldSubscriptionID) {
 		fields = append(fields, usagelog.FieldSubscriptionID)
 	}
+	if m.FieldCleared(usagelog.FieldSucceeded) {
+		fields = append(fields, usagelog.FieldSucceeded)
+	}
 	if m.FieldCleared(usagelog.FieldAccountRateMultiplier) {
 		fields = append(fields, usagelog.FieldAccountRateMultiplier)
 	}
@@ -48523,6 +48590,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldSubscriptionID:
 		m.ClearSubscriptionID()
+		return nil
+	case usagelog.FieldSucceeded:
+		m.ClearSucceeded()
 		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		m.ClearAccountRateMultiplier()
@@ -48651,6 +48721,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldActualCost:
 		m.ResetActualCost()
+		return nil
+	case usagelog.FieldSucceeded:
+		m.ResetSucceeded()
 		return nil
 	case usagelog.FieldRateMultiplier:
 		m.ResetRateMultiplier()

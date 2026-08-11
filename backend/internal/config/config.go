@@ -3592,6 +3592,9 @@ func (c *Config) Validate() error {
 		if c.Gateway.Grok.FreeQuotaWindowHours <= 0 {
 			return fmt.Errorf("gateway.grok.free_quota_window_hours must be positive")
 		}
+		if c.Gateway.Grok.FreeQuotaStatsCacheSeconds <= 0 {
+			return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be positive when the soft gate is enabled")
+		}
 	}
 	if c.Gateway.Grok.FreeQuotaStatsCacheSeconds < 0 {
 		return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be non-negative")

@@ -365,6 +365,20 @@ func (_c *UsageLogCreate) SetNillableActualCost(v *float64) *UsageLogCreate {
 	return _c
 }
 
+// SetSucceeded sets the "succeeded" field.
+func (_c *UsageLogCreate) SetSucceeded(v bool) *UsageLogCreate {
+	_c.mutation.SetSucceeded(v)
+	return _c
+}
+
+// SetNillableSucceeded sets the "succeeded" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableSucceeded(v *bool) *UsageLogCreate {
+	if v != nil {
+		_c.SetSucceeded(*v)
+	}
+	return _c
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_c *UsageLogCreate) SetRateMultiplier(v float64) *UsageLogCreate {
 	_c.mutation.SetRateMultiplier(v)
@@ -1069,6 +1083,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 		_spec.SetField(usagelog.FieldActualCost, field.TypeFloat64, value)
 		_node.ActualCost = value
 	}
+	if value, ok := _c.mutation.Succeeded(); ok {
+		_spec.SetField(usagelog.FieldSucceeded, field.TypeBool, value)
+		_node.Succeeded = &value
+	}
 	if value, ok := _c.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
 		_node.RateMultiplier = value
@@ -1749,6 +1767,24 @@ func (u *UsageLogUpsert) UpdateActualCost() *UsageLogUpsert {
 // AddActualCost adds v to the "actual_cost" field.
 func (u *UsageLogUpsert) AddActualCost(v float64) *UsageLogUpsert {
 	u.Add(usagelog.FieldActualCost, v)
+	return u
+}
+
+// SetSucceeded sets the "succeeded" field.
+func (u *UsageLogUpsert) SetSucceeded(v bool) *UsageLogUpsert {
+	u.Set(usagelog.FieldSucceeded, v)
+	return u
+}
+
+// UpdateSucceeded sets the "succeeded" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateSucceeded() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldSucceeded)
+	return u
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (u *UsageLogUpsert) ClearSucceeded() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldSucceeded)
 	return u
 }
 
@@ -2705,6 +2741,27 @@ func (u *UsageLogUpsertOne) AddActualCost(v float64) *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) UpdateActualCost() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetSucceeded sets the "succeeded" field.
+func (u *UsageLogUpsertOne) SetSucceeded(v bool) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSucceeded(v)
+	})
+}
+
+// UpdateSucceeded sets the "succeeded" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateSucceeded() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSucceeded()
+	})
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (u *UsageLogUpsertOne) ClearSucceeded() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearSucceeded()
 	})
 }
 
@@ -3889,6 +3946,27 @@ func (u *UsageLogUpsertBulk) AddActualCost(v float64) *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) UpdateActualCost() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetSucceeded sets the "succeeded" field.
+func (u *UsageLogUpsertBulk) SetSucceeded(v bool) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSucceeded(v)
+	})
+}
+
+// UpdateSucceeded sets the "succeeded" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateSucceeded() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSucceeded()
+	})
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (u *UsageLogUpsertBulk) ClearSucceeded() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearSucceeded()
 	})
 }
 

@@ -123,7 +123,7 @@ func TestPreserveCachedAccountCostStatsRecomputesAfterAccountCostChange(t *testi
 	t.Cleanup(func() { _ = db.Close() })
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM usage_account_cost_totals")).
-		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost"}).AddRow(1, 120.0, 100.0))
+		WillReturnRows(sqlmock.NewRows([]string{"account_id", "total_account_cost", "total_standard_account_cost", "complete"}).AddRow(1, 120.0, 100.0, true))
 
 	target := &service.Account{
 		ID:           1,

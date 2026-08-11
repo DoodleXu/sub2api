@@ -561,6 +561,26 @@ func (_u *UsageLogUpdate) AddActualCost(v float64) *UsageLogUpdate {
 	return _u
 }
 
+// SetSucceeded sets the "succeeded" field.
+func (_u *UsageLogUpdate) SetSucceeded(v bool) *UsageLogUpdate {
+	_u.mutation.SetSucceeded(v)
+	return _u
+}
+
+// SetNillableSucceeded sets the "succeeded" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableSucceeded(v *bool) *UsageLogUpdate {
+	if v != nil {
+		_u.SetSucceeded(*v)
+	}
+	return _u
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (_u *UsageLogUpdate) ClearSucceeded() *UsageLogUpdate {
+	_u.mutation.ClearSucceeded()
+	return _u
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_u *UsageLogUpdate) SetRateMultiplier(v float64) *UsageLogUpdate {
 	_u.mutation.ResetRateMultiplier()
@@ -1290,6 +1310,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Succeeded(); ok {
+		_spec.SetField(usagelog.FieldSucceeded, field.TypeBool, value)
+	}
+	if _u.mutation.SucceededCleared() {
+		_spec.ClearField(usagelog.FieldSucceeded, field.TypeBool)
 	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
@@ -2111,6 +2137,26 @@ func (_u *UsageLogUpdateOne) AddActualCost(v float64) *UsageLogUpdateOne {
 	return _u
 }
 
+// SetSucceeded sets the "succeeded" field.
+func (_u *UsageLogUpdateOne) SetSucceeded(v bool) *UsageLogUpdateOne {
+	_u.mutation.SetSucceeded(v)
+	return _u
+}
+
+// SetNillableSucceeded sets the "succeeded" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableSucceeded(v *bool) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetSucceeded(*v)
+	}
+	return _u
+}
+
+// ClearSucceeded clears the value of the "succeeded" field.
+func (_u *UsageLogUpdateOne) ClearSucceeded() *UsageLogUpdateOne {
+	_u.mutation.ClearSucceeded()
+	return _u
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_u *UsageLogUpdateOne) SetRateMultiplier(v float64) *UsageLogUpdateOne {
 	_u.mutation.ResetRateMultiplier()
@@ -2870,6 +2916,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Succeeded(); ok {
+		_spec.SetField(usagelog.FieldSucceeded, field.TypeBool, value)
+	}
+	if _u.mutation.SucceededCleared() {
+		_spec.ClearField(usagelog.FieldSucceeded, field.TypeBool)
 	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)

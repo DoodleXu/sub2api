@@ -45,8 +45,12 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 ## 2026-08-10 上游同步后全面审核修复
 
 - OAuth 首次注册与密码/邮箱注册统一经过邮箱别名防护和非白名单域名限额的原子写入守卫；后续同步任何 OAuth 注册入口时，不能绕过 `validateRegistrationEmailQuota` 与 `createUserWithRegistrationEmailGuard`。
+- 2026-08-11 审核修复：已绑定或既有邮箱的 OAuth 登录不再执行“新用户注册”域名策略；只有实际创建用户时才走同一原子限额写入守卫，避免策略变更将存量用户锁在登录之外。
 - Grok 异步视频创建在把上游 request ID 返回给客户端前，将账号归属、模型、分辨率、时长和创建时间持久化到 PostgreSQL `grok_video_tasks`；Redis 只作加速和旧任务兼容回退。状态查询和内容下载会直接按该表绑定的创建账号路由，缓存淘汰、重启或跨实例不能改选其他账号；绑定账号暂不可用时返回可重试的 503，不伪装为 404。一次性 billing claim 同样以该表为事实源，简易模式也只有 usage log 最终落库或命中去重后才写入 billed 终态；双写失败会释放 claim 供后续轮询重试。任务快照按 30 天机会性清理，长期审计仍以 `usage_logs` 为准。
 - Grok 默认 Base URL 模式改为进程内短期缓存，并在后台设置写入后立即刷新；请求热路径不再逐次查询 `settings`。后台设置 PUT 已完整支持 `registration_email_domain_quota_enabled`，缺省字段继续沿用局部更新的保留语义。
+- 2026-08-11 审核修复：Grok Free 额度软门禁必须使用正缓存 TTL；后台刷新有 5 秒硬超时，陈旧但已确认超限的缓存会在刷新期间继续阻断，未确认或低于阈值的账号保持 fail-open。
+- 2026-08-11 审核修复：Channel Monitor V2 的错误分类表按 `user_id` 同时保存全局（0）与用户维度；用户排名只按自己的 ignored category 精确调整，不再按全局错误比例估算。迁移会清空错误分类派生表并把水位回拨至最长 90 天保留窗口，由既有有界聚合重建，部署后必须观察水位和 PostgreSQL I/O。
+- 2026-08-11 审核修复：`usage_logs.succeeded` 为新写入的成功结果事实源，Channel Monitor 对零价/免费成功请求不再以 `actual_cost=0` 误判失败；历史 NULL 行严格保留原有 `actual_cost > 0` 回退口径，避免升级时重写历史统计。
 
 ### 本次验证
 
@@ -89,6 +93,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 ## 2026-08-05 全面审核修复
 
 - `REFUND_PENDING` 订单不再允许通过普通退款接口或并发陈旧计划再次发起网关退款，必须走 pending 状态查询确认；新增 pending 重入回归测试，保留当前 pending 金额展示与确认后的累计落账语义。
+- 2026-08-11 审核修复：退款在出站调用前强制持久化稳定的 provider refund ID；网络超时等结果不确定场景转为 `REFUND_PENDING` 并复用该 ID 查询/人工核验，禁止回滚为可重新发起退款的状态。订单终态更新均按 `REFUNDING` 状态 CAS，陈旧失败回调不能覆盖已成功的退款。
 - 阿里云验证码脚本在 load 事件后初始化函数未就绪时会清理失败脚本并允许下一次验证重建；OAuth token 校验失败时保留当前标签页的 pending 注册会话，跨标签页失效通知仍正常发送。
 - API contract fixture 同步 GitHub/Google 身份绑定字段，后端普通测试、`unit` 全量测试和前端全量门禁覆盖本次修复。
 
@@ -151,6 +156,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 
 - 支付管理写操作（配置、取消/补单、退款、套餐和服务商实例）纳入现有 step-up 2FA 门控；支付读取保持 admin auth + 审计语义，公开订单恢复查询接入 fork 面板公开 IP 限流。前端订单、套餐和支付服务商管理复用统一的 15 分钟 TOTP 挑战与管理 API Key 拒绝提示。
 - Release 增加严格且兼容 Docker 的 tag 格式、annotated tag 类型、非空发布说明、tag 版本与目标提交 `backend/cmd/server/VERSION` 一致性、默认分支祖先关系以及精确 SHA 的 CI/Security Scan 成功校验；手动 tag 输入统一通过环境变量传入 shell，发布与前端构建固定检出同一已验证 SHA，发布前再次确认 annotated tag 未被移动。版本必须在打 tag 前提交，Release 不生成 VERSION 产物，也不在发布后反向改写默认分支。
+- 2026-08-11 审核修复：新增 `tools/verify_release_candidate.sh`，在创建 annotated tag 前按候选提交的精确 SHA 校验 `backend-ci.yml` 与 `security-scan.yml` 已成功，并验证 VERSION 与目标 tag 一致；不可再将“先打 tag、后发现检查失败”作为正常发布路径。
 - 管理端用量导出从存在已知高危漏洞的 `xlsx` 依赖改为带公式注入防护的 UTF-8 CSV，并清理失效安全例外；例外检查器兼容 Python 3.9，要求原因、缓解、责任人和到期日，并拒绝过期或已不匹配当前审计的条目。DOMPurify、Mermaid、UUID、YAML 同步固定到已修复版本，生产依赖审计最终为低/中/高/严重漏洞全部 0。
 - 分组、代理、兑换码和旧 dashboard realtime 的未实现统计接口不再返回伪造的全零或 100% 成功数据，改为稳定的 `501 / STATS_NOT_IMPLEMENTED`；前端移除未使用的伪统计客户端声明。后续实现真实聚合前不得恢复成功响应。
 - standalone Compose 示例补齐外部 PostgreSQL/Redis 必填变量；迁移文档统一为不可变、forward-only 和补偿迁移/备份恢复语义。并发测试在 `TestMain` 一次性设置 Gin 全局模式，AST 回归测试禁止 service 包中的并行测试再次修改该进程级状态；异步 dashboard 测试桩改用原子计数，恢复批量账号负载集成断言。账号管理的大型交互弹窗改为按需加载，主视图生产 chunk 从约 678 KB 降至约 158 KB。
@@ -406,6 +412,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 - `snapshot-v2` 对趋势、模型、分组、用户趋势和排行实行 3 秒独立预算，允许部分成功并返回 `partial_errors` / `section_durations_ms`；核心统计使用 1 秒预算。Redis 统计缓存默认调整为 2 分钟新鲜、30 分钟兜底。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
 - 账号及 dashboard 的“每刀成本”分母统一使用标准成本账本（等价于 `SUM(usage_logs.total_cost)`），不受 `account_rate_multiplier` 或 `account_stats_cost` 影响；账号实际累计成本和今日实际成本仍保留倍率口径。账号级 dashboard 聚合额外维护标准计费列，避免快照请求回扫 `usage_logs`。
+- 2026-08-11 审核修复：账号累计成本账本尚未初始化或仍有待处理日志时，接口明确返回 `cost_stats_pending=true`，管理端不再把不完整账本的零值显示为确定的“每刀成本”；成本调度则继续安全复用已有快照，不回扫历史 `usage_logs`。
 - 归档账号不删除累计账本；归档且无新增 usage 的账号不会再次扫描，晚到 usage 由数据库触发器重新标记待核算。成本聚合和 Dashboard retention 对原始 `usage_logs` 严格只读，不会因为核算、回填或成本快照刷新而清理历史明细。管理员显式清理、单条删除或成本字段修正仍是独立数据管理流程；数据库触发器会将受影响账号标记为精确重算，仅重扫该账号。后台普通账号删除沿用 `SoftDeleteMixin`，保留该账号的 usage 与累计账本，确保历史成本不丢失；只有绕过软删除的显式物理删除才由外键级联清理 usage 与账本。
 - 显式 usage 清理采用半开时间范围 `[start, end)`；删除完成后先让数据库成本快照变为未完成并清除 Redis 成本缓存，再异步重算受影响范围并刷新快照，重算期间不会继续展示旧的“已完成”口径。成本核算路径没有删除 `usage_logs` 的行为。
 - 调度器主动同步账号快照时，优先使用账本中的标准成本分母重算当前 `total_cost_cny / total_standard_account_cost`；账本回填未完成或数据库读取失败时才保留旧缓存，避免管理员修改累计成本后继续使用过期的每美元成本比例；恢复旧缓存时也不会把含账号倍率的实际成本误当作标准成本分母。
@@ -495,12 +502,12 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 
 ### 5. Web 创作台
 
-定位：用户侧浏览器内 OpenAI-compatible 对话与生图创作入口。
+定位：用户侧浏览器内的生图创作入口。
 
 主要差异：
 
 - 新增 Web Console 开关和默认端点设置：`web_console_enabled`、`web_console_default_endpoint`。
-- 用户侧前端 `/console` 支持 OpenAI-compatible `/v1` 对话、Responses 工具调用、生图模式和本地会话存储。
+- 用户侧前端 `/console` 仅支持通过 OpenAI-compatible `/v1` 异步 Images 接口生图和本地会话存储；对话模式已移除。
 - 内置“主端点”使用站内相对 `/v1` 路径，不再把对外展示的 `api_base_url` 当作浏览器跨域请求地址；自定义端点仍保留绝对 URL 和目标端 CORS 约束。历史会话中保存的旧主端点会在恢复轮询时自动映射回站内路径。
 - 生图模式只使用上游异步 Images 契约：浏览器以用户选中的 API Key 请求 `/v1/images/generations/async` 或 `/v1/images/edits/async`，再用同一 Key 轮询 `/v1/images/tasks/{task_id}`。
 - 2026-08-02 起，创作台轮询保留 HTTP 状态与上游错误码，只对网络故障、5xx、408/425/429 等可恢复错误继续重试；任务 404、鉴权失败等确定性 4xx 会立即停止、标记本地消息失败并清除失效任务引用。离开 `/console` 时通过 `AbortController` 取消全部在途任务查询和等待定时器，避免旧组件在后台继续轮询、重新进入后叠加重复请求。
@@ -509,7 +516,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 关键代码：
 
 - `frontend/src/views/user/WebConsoleView.vue`
-- `frontend/src/features/web-console/openaiClient.ts`
+- `frontend/src/features/web-console/utils.ts`
 - `frontend/src/features/web-console/storage.ts`
 - `frontend/src/api/asyncImageTasks.ts`
 - `backend/internal/server/routes/user.go`
@@ -533,7 +540,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 
 同步上游注意：
 
-- 上游若更新 OpenAI Responses、tool call、异步 Images 路由或任务结果格式，要同步检查 `openaiClient.ts`、`asyncImageTasks.ts` 与创作台轮询逻辑的请求/响应兼容。
+- 上游若更新异步 Images 路由或任务结果格式，要同步检查 `utils.ts`、`asyncImageTasks.ts` 与创作台轮询逻辑的请求/响应兼容。
 - 上游若改异步任务错误契约或轮询实现，必须保留“确定性 4xx 终止、临时错误有限重试、组件卸载主动取消”三条边界，不能恢复无差别重试或跨路由存活的后台轮询。
 - 上游若调整公共设置加载或路由守卫，要确认 Web Console 开关仍在刷新后生效。
 
@@ -547,6 +554,7 @@ git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
 - 移除本地/S3 双轨归档运行时、独立归档设置、归档清空与签名资产代理；历史 `image_generation_records`、`image_generation_assets`、`web_console_image_tasks` 表和迁移暂时保留为遗留数据，不再读写，也不在升级时自动删除历史文件。
 - 2026-07-31 起，标准 OpenAI/Grok 非流式生图与编辑复用异步生图桶做尽力归档，但不改写客户端原始响应；流式响应不归档，归档通过有界后台队列执行，不占用标准请求并发槽，队列满或归档失败都不阻断标准请求。
 - 2026-07-31 起，管理后台“生图管理”拆分为“生图队列”和“生图结果”：队列复用 Redis 异步任务记录和现有执行器，只读展示状态、耗时、失败原因和结果链接，支持状态筛选、游标分页和可见页面两秒轮询；结果页继续按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载。接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
+- 2026-08-11 起，生图结果页的对象统计改为返回当前异步图片前缀下的完整图片总数；对象列表在服务端读取完整前缀后按 S3 `LastModified`（写入桶时间）倒序排列，使用“写入时间 + 对象键”游标分页，确保最新图片在首页、最老图片在最后一页。
 - 2026-08-02 起，生图队列在执行态 Redis TTL 键之外写入 PostgreSQL `image_task_history` 历史表，后台可查看已完成/失败/处理中全部历史记录，并通过 `start_date`/`end_date` 与浏览器时区按日期筛选；历史结果仍只投影安全运营元数据，不暴露 prompt 或内部对象键。创建和终态转换使用 PostgreSQL 事务包住待提交历史状态，再执行 Redis 写入/CAS；Redis 写入失败时事务回滚，数据库提交结果不明确时使用独立短超时清理或按 Redis 现态对账。若 Redis key 在转换窗口内过期，历史记录落为 `failed/task_expired`，不恢复为永久 `processing`。
 - 生图队列复用管理后台统一的表格、筛选、开关和弹窗组件：页面标题只由全局顶栏展示，任务内容使用不透明表面和可换行的停止原因；自动轮询仅原位更新数据，首次加载后不再反复切换骨架屏。
 - 管理页除异步上传/删除/生命周期读取权限外，还要求对象存储凭证具有 `ListBucket`/`ListObjectsV2` 权限；页面本身只读，对象保留与删除继续由异步任务补偿和桶生命周期规则负责。
@@ -849,7 +857,7 @@ pnpm --dir frontend run build
 - 运营中心：路由权限、筛选分页、导出字段。
 - 成本核算：账号 `total_cost_cny`、dashboard 聚合、今日实际成本。
 - 账号归档：默认列表过滤、调度排除、批量归档/取消归档。
-- Web 创作台：对话、生图、任务轮询、刷新恢复、会话删除。
+- Web 创作台：生图、任务轮询、刷新恢复、会话删除；对话模式已移除。
 - 生图管理：资产鉴权、分页、清空终态归档、对象存储失败重试。
 
 ## 快速定位命令

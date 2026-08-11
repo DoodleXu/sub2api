@@ -305,9 +305,12 @@ WITH dedup AS (
   FROM classified WHERE user_id IS NOT NULL GROUP BY 1,2,3,4,5
   ON CONFLICT (bucket_start, platform, group_id, model, user_id) DO UPDATE SET error_requests = EXCLUDED.error_requests, computed_at = NOW()
 )
-INSERT INTO channel_monitor_v2_error_metrics_1m (bucket_start, platform, group_id, model, error_category, taxonomy_version, error_requests)
-SELECT bucket_start, platform, group_id, model, category, 1, COUNT(*) FROM classified GROUP BY 1,2,3,4,5
-ON CONFLICT (bucket_start, platform, group_id, model, error_category, taxonomy_version)
+INSERT INTO channel_monitor_v2_error_metrics_1m (bucket_start, platform, group_id, model, user_id, error_category, taxonomy_version, error_requests)
+SELECT bucket_start, platform, group_id, model, 0, category, 1, COUNT(*) FROM classified GROUP BY 1,2,3,4,6
+UNION ALL
+SELECT bucket_start, platform, group_id, model, user_id, category, 1, COUNT(*)
+FROM classified WHERE user_id IS NOT NULL GROUP BY 1,2,3,4,5,6
+ON CONFLICT (bucket_start, platform, group_id, model, user_id, error_category, taxonomy_version)
 DO UPDATE SET error_requests = EXCLUDED.error_requests`
 
 // Floor matches channelMonitorV2RetentionMax (90d). Keep the INTERVAL literal in
@@ -444,11 +447,11 @@ GROUP BY 1, 2, 3, 4, 5, 6, 7, 8`
 
 const channelMonitorV2ErrorRollupSQL = `
 INSERT INTO channel_monitor_v2_error_metrics_rollup (
-  bucket_start, bucket_seconds, platform, group_id, model, error_category, taxonomy_version, error_requests
+  bucket_start, bucket_seconds, platform, group_id, model, user_id, error_category, taxonomy_version, error_requests
 )
 ` + channelMonitorV2FixedRollupBoundsSQL + `
 SELECT date_bin($1::interval, e.bucket_start, TIMESTAMPTZ '1970-01-01'), $2::integer,
-       platform, group_id, model, error_category, taxonomy_version, SUM(error_requests)
+       platform, group_id, model, user_id, error_category, taxonomy_version, SUM(error_requests)
 FROM channel_monitor_v2_error_metrics_1m e, bounds
 WHERE e.bucket_start >= bounds.start_at AND e.bucket_start < bounds.end_at
-GROUP BY 1, 2, 3, 4, 5, 6, 7`
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8`

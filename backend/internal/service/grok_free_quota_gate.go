@@ -50,6 +50,8 @@ type grokFreeQuotaGateCacheEntry struct {
 var grokFreeQuotaGateQueryFailureTotal atomic.Int64
 var grokFreeQuotaGateBlockedTotal atomic.Int64
 
+const grokFreeQuotaGateRefreshTimeout = 5 * time.Second
+
 func resolveGrokFreeQuotaGateSettings(cfg *config.Config) (grokFreeQuotaGateSettings, bool) {
 	if cfg == nil || !cfg.Gateway.Grok.FreeQuotaSoftGateEnabled {
 		return grokFreeQuotaGateSettings{}, false
@@ -58,7 +60,7 @@ func resolveGrokFreeQuotaGateSettings(cfg *config.Config) (grokFreeQuotaGateSett
 	percent := cfg.Gateway.Grok.FreeQuotaSoftGatePercent
 	windowHours := cfg.Gateway.Grok.FreeQuotaWindowHours
 	cacheSeconds := cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds
-	if limit <= 0 || percent < 1 || percent > 100 || windowHours <= 0 || cacheSeconds < 0 {
+	if limit <= 0 || percent < 1 || percent > 100 || windowHours <= 0 || cacheSeconds <= 0 {
 		return grokFreeQuotaGateSettings{}, false
 	}
 	gate := calculateGrokFreeQuotaSoftGateTokens(limit, percent)
@@ -157,18 +159,22 @@ func filterGrokFreeQuotaAccountsCore(
 			entry, valid := cached.(grokFreeQuotaGateCacheEntry)
 			if valid {
 				age := now.Sub(entry.checkedAt)
-				// cacheTTL == 0 means "no expiry" for known entries (still fail-open
-				// on first miss; refresh is only scheduled when missing/stale).
-				fresh := settings.cacheTTL <= 0 || (age >= 0 && age < settings.cacheTTL)
+				fresh := age >= 0 && age < settings.cacheTTL
 				if fresh {
 					if entry.known {
 						tokensByID[account.ID] = entry.tokens
 					}
 					continue
 				}
+				// Keep a known over-limit result in force while its asynchronous
+				// refresh is in flight. Failing open here would repeatedly exceed
+				// the soft gate whenever the stats query is slow or temporarily down.
+				if entry.known && entry.tokens >= settings.gateTokens {
+					tokensByID[account.ID] = entry.tokens
+				}
 			}
 		}
-		// Miss / stale: fail open on this request; refresh asynchronously.
+		// Misses and stale under-limit values fail open; refresh asynchronously.
 		if _, exists := seenMissing[account.ID]; !exists {
 			seenMissing[account.ID] = struct{}{}
 			missingIDs = append(missingIDs, account.ID)
@@ -230,12 +236,20 @@ func scheduleGrokFreeQuotaStatsRefresh(
 			}
 		}()
 		now := time.Now().UTC()
-		statsByID, err := queryGrokFreeQuotaWindowStats(context.Background(), usageLogRepo, toFetch, now.Add(-window))
+		refreshCtx, cancel := context.WithTimeout(context.Background(), grokFreeQuotaGateRefreshTimeout)
+		statsByID, err := queryGrokFreeQuotaWindowStats(refreshCtx, usageLogRepo, toFetch, now.Add(-window))
+		cancel()
 		if err != nil {
 			grokFreeQuotaGateQueryFailureTotal.Add(1)
-			// Store a negative entry so subsequent hot-path calls do not thrash.
-			// known=false → still fail open until a successful refresh lands.
+			// Store a negative entry only when no prior successful result exists.
+			// A stale known over-limit result remains a protective hold until a
+			// successful refresh replaces it.
 			for _, accountID := range toFetch {
+				if cached, ok := cache.Load(accountID); ok {
+					if entry, ok := cached.(grokFreeQuotaGateCacheEntry); ok && entry.known {
+						continue
+					}
+				}
 				cache.Store(accountID, grokFreeQuotaGateCacheEntry{checkedAt: now})
 			}
 			slog.Warn("grok_free_quota_soft_gate_stats_failed",

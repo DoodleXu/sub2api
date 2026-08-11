@@ -108,6 +108,11 @@ func (UsageLog) Fields() []ent.Field {
 		field.Float("actual_cost").
 			Default(0).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
+		// Succeeded is nullable for historical rows. New raw inserts receive the
+		// database default TRUE; explicit false is reserved for failure logs.
+		field.Bool("succeeded").
+			Optional().
+			Nillable(),
 		field.Float("rate_multiplier").
 			Default(1).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),

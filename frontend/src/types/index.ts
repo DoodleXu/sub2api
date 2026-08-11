@@ -1162,6 +1162,7 @@ export interface Account {
   total_cost_cny?: number
   total_account_cost?: number
   cost_cny_per_usd?: number
+  cost_stats_pending?: boolean
   status: 'active' | 'inactive' | 'error'
   archived_at?: string | null
   error_message: string | null

@@ -2024,6 +2024,9 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
 }
 
 const formatCostPerUsd = (account: Account): string => {
+  if (account.cost_stats_pending) {
+    return '-'
+  }
   const totalCny = Number(account.total_cost_cny ?? 0)
   if (!Number.isFinite(totalCny) || totalCny <= 0) {
     return '-'

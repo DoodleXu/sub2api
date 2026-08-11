@@ -68,6 +68,8 @@ const (
 	FieldTotalCost = "total_cost"
 	// FieldActualCost holds the string denoting the actual_cost field in the database.
 	FieldActualCost = "actual_cost"
+	// FieldSucceeded holds the string denoting the succeeded field in the database.
+	FieldSucceeded = "succeeded"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
 	FieldRateMultiplier = "rate_multiplier"
 	// FieldLongContextBillingApplied holds the string denoting the long_context_billing_applied field in the database.
@@ -189,6 +191,7 @@ var Columns = []string{
 	FieldCacheReadCost,
 	FieldTotalCost,
 	FieldActualCost,
+	FieldSucceeded,
 	FieldRateMultiplier,
 	FieldLongContextBillingApplied,
 	FieldAccountRateMultiplier,
@@ -436,6 +439,11 @@ func ByTotalCost(opts ...sql.OrderTermOption) OrderOption {
 // ByActualCost orders the results by the actual_cost field.
 func ByActualCost(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldActualCost, opts...).ToFunc()
+}
+
+// BySucceeded orders the results by the succeeded field.
+func BySucceeded(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSucceeded, opts...).ToFunc()
 }
 
 // ByRateMultiplier orders the results by the rate_multiplier field.

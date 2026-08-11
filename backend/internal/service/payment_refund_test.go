@@ -339,6 +339,17 @@ func TestCalculateGatewayRefundAmountUsesCurrencyPrecision(t *testing.T) {
 	require.InDelta(t, 52, calculateGatewayRefundAmount(100, 103, 50, "JPY"), 1e-12)
 }
 
+func TestRefundProviderAttemptIDIsStablePerRefundTranche(t *testing.T) {
+	order := &dbent.PaymentOrder{OutTradeNo: "merchant-order-1"}
+	plan := &RefundPlan{OrderID: 1, Order: order, GatewayAmount: 12.34, PreviousRefundAmount: 0}
+	first := refundProviderAttemptID(plan)
+	require.NotEmpty(t, first)
+	require.Equal(t, first, refundProviderAttemptID(plan))
+
+	plan.PreviousRefundAmount = 12.34
+	require.NotEqual(t, first, refundProviderAttemptID(plan), "later partial refunds need a distinct provider idempotency key")
+}
+
 func TestFormatGatewayRefundAmountUsesOrderCurrency(t *testing.T) {
 	order := &dbent.PaymentOrder{
 		ProviderSnapshot: map[string]any{

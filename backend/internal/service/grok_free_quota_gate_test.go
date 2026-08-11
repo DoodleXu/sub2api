@@ -156,7 +156,8 @@ func TestFilterGrokFreeQuotaAccountsRecoversAfterRollingUsageFalls(t *testing.T)
 	// Fresh positive cache still holds the soft-gate until TTL expires.
 	require.Empty(t, scheduler.filterGrokFreeQuotaAccounts(context.Background(), accounts), "fresh cache keeps the soft-gate hold")
 
-	// Expire entry → miss fails open and schedules refresh with recovered usage.
+	// Expire entry → retain the known over-limit hold while refresh obtains the
+	// recovered usage. This avoids a temporary quota overrun during refresh.
 	// Clear in-flight markers so a refresh is allowed after we force-expire the entry.
 	if root, ok := freeQuotaRefreshInFlight.Load(&scheduler.grokFreeQuotaGateCache); ok {
 		if m, ok := root.(*sync.Map); ok {
@@ -167,8 +168,8 @@ func TestFilterGrokFreeQuotaAccountsRecoversAfterRollingUsageFalls(t *testing.T)
 	scheduler.grokFreeQuotaGateCache.Store(int64(1), grokFreeQuotaGateCacheEntry{
 		tokens: 490_000, checkedAt: time.Now().Add(-2 * time.Minute), known: true, // TTL=60s → stale
 	})
-	// Hot path fail-open while refresh is in flight.
-	require.Equal(t, []int64{1}, accountIDs(scheduler.filterGrokFreeQuotaAccounts(context.Background(), accounts)))
+	// Hot path retains the known block while refresh is in flight.
+	require.Empty(t, scheduler.filterGrokFreeQuotaAccounts(context.Background(), accounts))
 	require.Eventually(t, func() bool {
 		filtered := scheduler.filterGrokFreeQuotaAccounts(context.Background(), accounts)
 		return len(filtered) == 1 && filtered[0].ID == 1 &&
