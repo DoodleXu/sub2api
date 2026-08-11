@@ -323,14 +323,54 @@ func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
 		loadBalancer: newWebhookProviderTestLoadBalancer(client),
 	}
 
-	_, err = svc.gwRefund(ctx, &RefundPlan{
+	plan := &RefundPlan{
 		OrderID:       order.ID,
 		Order:         order,
 		RefundAmount:  order.Amount,
 		GatewayAmount: order.Amount,
 		Reason:        "snapshot mismatch",
-	})
+	}
+	_, err = svc.gwRefund(ctx, plan)
 	require.ErrorContains(t, err, "alipay app_id mismatch")
+	require.False(t, isRefundGatewayOutcomeUnknown(err))
+
+	result, err := svc.ExecuteRefund(ctx, plan)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Success)
+	require.Contains(t, result.Warning, "rolled back")
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	pendingAudits, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_PENDING")).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, pendingAudits)
+}
+
+func TestGwRefundDistinguishesExplicitFailureFromUnknownOutcome(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	order := createPendingRefundOrderForTest(t, ctx, client, "gateway-outcome")
+	svc := &PaymentService{entClient: client, loadBalancer: &captureLoadBalancer{}}
+
+	provider := &refundExecutionProviderTestDouble{
+		refundResponse: &payment.RefundResponse{RefundID: "rf_failed", Status: payment.ProviderStatusFailed},
+		refundErr:      errors.New("provider reported failure"),
+	}
+	restore := replacePaymentProviderFactoryForTest(t, provider)
+	defer restore()
+
+	resp, err := svc.gwRefund(ctx, &RefundPlan{OrderID: order.ID, Order: order, RefundAmount: 10, GatewayAmount: 10})
+	require.NoError(t, err)
+	require.Equal(t, payment.ProviderStatusFailed, resp.Status)
+
+	provider.refundResponse = nil
+	provider.refundErr = context.DeadlineExceeded
+	_, err = svc.gwRefund(ctx, &RefundPlan{OrderID: order.ID, Order: order, RefundAmount: 10, GatewayAmount: 10})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.True(t, isRefundGatewayOutcomeUnknown(err))
 }
 
 func TestCalculateGatewayRefundAmountUsesCurrencyPrecision(t *testing.T) {
@@ -956,6 +996,16 @@ func (refundProviderTestDouble) VerifyNotification(context.Context, string, map[
 }
 func (refundProviderTestDouble) Refund(context.Context, payment.RefundRequest) (*payment.RefundResponse, error) {
 	return nil, nil
+}
+
+type refundExecutionProviderTestDouble struct {
+	refundProviderTestDouble
+	refundResponse *payment.RefundResponse
+	refundErr      error
+}
+
+func (p *refundExecutionProviderTestDouble) Refund(context.Context, payment.RefundRequest) (*payment.RefundResponse, error) {
+	return p.refundResponse, p.refundErr
 }
 
 type refundQueryProviderTestDouble struct {

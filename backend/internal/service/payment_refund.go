@@ -468,13 +468,40 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 	}
 	resp, err := s.gwRefund(ctx, p)
 	if err != nil {
-		// The remote call may have reached the provider despite a local timeout.
-		// Never retry it by rolling status back; retain a durable request id and
-		// move to manual/provider-query recovery instead.
-		s.writeAuditLog(ctx, p.OrderID, "REFUND_GATEWAY_OUTCOME_UNKNOWN", "admin", map[string]any{"detail": psErrMsg(err), "refundID": p.ProviderRefundID})
-		return s.markRefundPending(ctx, p, &payment.RefundResponse{RefundID: p.ProviderRefundID, Status: payment.ProviderStatusPending})
+		if isRefundGatewayOutcomeUnknown(err) {
+			// The remote call may have reached the provider despite a local timeout.
+			// Never retry it by rolling status back; retain a durable request id and
+			// move to manual/provider-query recovery instead.
+			s.writeAuditLog(ctx, p.OrderID, "REFUND_GATEWAY_OUTCOME_UNKNOWN", "admin", map[string]any{"detail": psErrMsg(err), "refundID": p.ProviderRefundID})
+			return s.markRefundPending(ctx, p, &payment.RefundResponse{RefundID: p.ProviderRefundID, Status: payment.ProviderStatusPending})
+		}
+		return s.handleGwFail(ctx, p, err)
 	}
 	return s.finishRefund(ctx, p, resp)
+}
+
+type refundGatewayOutcomeUnknownError struct {
+	err error
+}
+
+func (e *refundGatewayOutcomeUnknownError) Error() string {
+	return e.err.Error()
+}
+
+func (e *refundGatewayOutcomeUnknownError) Unwrap() error {
+	return e.err
+}
+
+func markRefundGatewayOutcomeUnknown(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &refundGatewayOutcomeUnknownError{err: err}
+}
+
+func isRefundGatewayOutcomeUnknown(err error) bool {
+	var target *refundGatewayOutcomeUnknownError
+	return errors.As(err, &target)
 }
 
 func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) (*payment.RefundResponse, error) {
@@ -507,16 +534,19 @@ func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) (*payment.
 		Reason:   p.Reason,
 	})
 	finishProviderCall()
-	if err != nil {
-		if resp != nil && strings.TrimSpace(resp.Status) == payment.ProviderStatusPending {
+	if resp != nil {
+		switch strings.TrimSpace(resp.Status) {
+		case payment.ProviderStatusSuccess, payment.ProviderStatusRefunded, payment.ProviderStatusPending, payment.ProviderStatusFailed:
 			return resp, nil
 		}
-		return nil, err
 	}
-	if err := validateRefundProviderResponse(resp); err != nil {
-		return nil, err
+	if err != nil {
+		return nil, markRefundGatewayOutcomeUnknown(err)
 	}
-	return resp, nil
+	if resp == nil {
+		return nil, markRefundGatewayOutcomeUnknown(errors.New("payment refund response missing"))
+	}
+	return nil, markRefundGatewayOutcomeUnknown(fmt.Errorf("payment refund returned unknown status: %s", strings.TrimSpace(resp.Status)))
 }
 
 func formatGatewayRefundAmount(amount float64, order *dbent.PaymentOrder) string {
