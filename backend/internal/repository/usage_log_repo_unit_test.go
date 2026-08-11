@@ -65,3 +65,16 @@ func TestBuildUsageLogBatchInsertQuery_UsesConflictDoNothing(t *testing.T) {
 	require.Contains(t, query, "ON CONFLICT (request_id, api_key_id) DO NOTHING")
 	require.NotContains(t, strings.ToUpper(query), "DO UPDATE")
 }
+
+func TestPrepareUsageLogInsertDefaultsSucceededAndPreservesFailure(t *testing.T) {
+	success := prepareUsageLogInsert(&service.UsageLog{UserID: 1, APIKeyID: 2, AccountID: 3, Model: "free-model"})
+	require.Equal(t, true, success.args[len(success.args)-2])
+
+	failed := false
+	failure := prepareUsageLogInsert(&service.UsageLog{UserID: 1, APIKeyID: 2, AccountID: 3, Model: "failed-model", Succeeded: &failed})
+	require.Equal(t, false, failure.args[len(failure.args)-2])
+
+	key := usageLogBatchKey("failed-request", 2)
+	query, _ := buildUsageLogBatchInsertQuery([]string{key}, map[string]usageLogInsertPrepared{key: failure})
+	require.GreaterOrEqual(t, strings.Count(query, "succeeded"), 3)
+}

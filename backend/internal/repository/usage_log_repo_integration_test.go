@@ -671,6 +671,22 @@ func (s *UsageLogRepoSuite) TestUsageCleanupDeleteBatchAdjustsProcessedAccountCo
 	s.Require().InEpsilon(7.5, totalAccountCost, 0.000001)
 	s.Require().InEpsilon(5.0, totalStandardCost, 0.000001)
 
+	var publishedAccountCost, publishedStandardCost float64
+	var publishedInitialized bool
+	s.Require().NoError(scanSingleRow(
+		s.ctx,
+		s.tx,
+		`SELECT published_account_cost, published_standard_account_cost, published_initialized
+		 FROM usage_account_cost_totals WHERE account_id = $1`,
+		[]any{account.ID},
+		&publishedAccountCost,
+		&publishedStandardCost,
+		&publishedInitialized,
+	))
+	s.Require().InEpsilon(7.5, publishedAccountCost, 0.000001)
+	s.Require().InEpsilon(5.0, publishedStandardCost, 0.000001)
+	s.Require().True(publishedInitialized)
+
 	cleanupRepo := newUsageCleanupRepositoryWithSQL(nil, s.tx)
 	accountID := account.ID
 	deleted, err := cleanupRepo.DeleteUsageLogsBatch(s.ctx, service.UsageCleanupFilters{
@@ -798,6 +814,86 @@ func (s *UsageLogRepoSuite) TestLateLowerIDUsageResetsOnlyAffectedAccountLedger(
 	`, []any{account.ID}, &totalAccountCost, &totalStandardCost))
 	s.Require().Equal(3.0, totalAccountCost)
 	s.Require().Equal(3.0, totalStandardCost)
+}
+
+func (s *UsageLogRepoSuite) TestAccountLedgerPublishesOnlyAfterFinalBatch() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "ledger-publish@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-ledger-publish", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "ledger-publish-account"})
+
+	for i := 0; i < 3; i++ {
+		_, err := s.repo.Create(s.ctx, &service.UsageLog{
+			UserID:     user.ID,
+			APIKeyID:   apiKey.ID,
+			AccountID:  account.ID,
+			RequestID:  uuid.NewString(),
+			Model:      "ledger-publish-model",
+			TotalCost:  1,
+			ActualCost: 1,
+			CreatedAt:  time.Now().UTC().Add(time.Duration(i) * time.Millisecond),
+		})
+		s.Require().NoError(err)
+	}
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	processed, err := aggRepo.ProcessAccountCostTotals(s.ctx, 2)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+
+	var publishedCost, publishedStandard float64
+	var initialized, publishedInitialized bool
+	var pending bool
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `
+		SELECT published_account_cost, published_standard_account_cost, initialized, published_initialized, needs_processing
+		FROM usage_account_cost_totals WHERE account_id = $1
+	`, []any{account.ID}, &publishedCost, &publishedStandard, &initialized, &publishedInitialized, &pending))
+	s.Require().Zero(publishedCost)
+	s.Require().Zero(publishedStandard)
+	s.Require().False(initialized)
+	s.Require().False(publishedInitialized)
+	s.Require().True(pending)
+
+	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 2)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), processed)
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `
+		SELECT published_account_cost, published_standard_account_cost, initialized, published_initialized, needs_processing
+		FROM usage_account_cost_totals WHERE account_id = $1
+	`, []any{account.ID}, &publishedCost, &publishedStandard, &initialized, &publishedInitialized, &pending))
+	s.Require().Equal(3.0, publishedCost)
+	s.Require().Equal(3.0, publishedStandard)
+	s.Require().True(initialized)
+	s.Require().True(publishedInitialized)
+	s.Require().False(pending)
+}
+
+func (s *UsageLogRepoSuite) TestCreatePersistsExplicitUsageOutcome() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "usage-outcome@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-usage-outcome", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "usage-outcome-account"})
+
+	success := &service.UsageLog{
+		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "free-success", ActualCost: 0,
+	}
+	inserted, err := s.repo.Create(s.ctx, success)
+	s.Require().NoError(err)
+	s.Require().True(inserted)
+
+	failedOutcome := false
+	failure := &service.UsageLog{
+		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "billing-failure", ActualCost: 0, Succeeded: &failedOutcome,
+	}
+	inserted, err = s.repo.Create(s.ctx, failure)
+	s.Require().NoError(err)
+	s.Require().True(inserted)
+
+	var successOutcome, failureOutcome bool
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `SELECT succeeded FROM usage_logs WHERE id = $1`, []any{success.ID}, &successOutcome))
+	s.Require().NoError(scanSingleRow(s.ctx, s.tx, `SELECT succeeded FROM usage_logs WHERE id = $1`, []any{failure.ID}, &failureOutcome))
+	s.Require().True(successOutcome)
+	s.Require().False(failureOutcome)
 }
 
 // --- ListByUser ---
