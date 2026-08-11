@@ -748,6 +748,11 @@ func TestQueryAndFinalizeRefundKeepsCumulativeAmountForPartialPending(t *testing
 		DeductionType:        payment.DeductionTypeBalance,
 		BalanceToDeduct:      20,
 	}
+	// finishRefund is invoked only after ExecuteRefund has atomically claimed
+	// the order. Model that production state so the status CAS is exercised.
+	_, err = client.PaymentOrder.UpdateOneID(order.ID).SetStatus(OrderStatusRefunding).Save(ctx)
+	require.NoError(t, err)
+	order.Status = OrderStatusRefunding
 
 	pendingResult, err := svc.finishRefund(ctx, plan, &payment.RefundResponse{RefundID: "rf_second_partial", Status: payment.ProviderStatusPending})
 	require.NoError(t, err)

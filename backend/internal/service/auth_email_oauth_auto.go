@@ -198,6 +198,9 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 			}
 			return existing, nil
 		}
+		if errors.Is(err, ErrEmailDomainRegistrationLimit) {
+			return nil, err
+		}
 		return nil, ErrServiceUnavailable
 	}
 	s.postAuthUserBootstrap(ctx, user, providerType, false)

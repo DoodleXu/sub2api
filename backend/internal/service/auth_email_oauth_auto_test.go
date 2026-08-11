@@ -93,7 +93,7 @@ func TestEmailOAuthAuto_CreateUsesAtomicRegistrationDomainGuard(t *testing.T) {
 		userRepo,
 		map[string]string{
 			SettingKeyRegistrationEnabled:                 "true",
-			SettingKeyRegistrationEmailSuffixWhitelist:    "trusted.example",
+			SettingKeyRegistrationEmailSuffixWhitelist:    `["trusted.example"]`,
 			SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
 		},
 		&userPlatformQuotaRepoStub{},
