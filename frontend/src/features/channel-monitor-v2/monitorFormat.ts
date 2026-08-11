@@ -73,6 +73,20 @@ export function maskMonitorEmail(value: string): string {
   return `${local.slice(0, 2)}***${local.slice(-2)}${domain}`
 }
 
+/**
+ * Redact a username when it is used as a public ranking label.
+ * Match the email local-part convention so a viewer can recognize themselves
+ * without exposing another user's complete username.
+ */
+export function maskMonitorUsername(value: string): string {
+  const username = value.trim()
+  if (username.length === 0) return value
+  if (username.length === 1) return '*'
+  if (username.length === 2) return `${username[0]}*`
+  if (username.length <= 4) return `${username.slice(0, 1)}***${username.slice(-1)}`
+  return `${username.slice(0, 2)}***${username.slice(-2)}`
+}
+
 
 export function formatMonitorPercent(value: number, locale = monitorIntlLocale()): string {
   return `${new Intl.NumberFormat(locale, {

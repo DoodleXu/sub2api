@@ -498,6 +498,7 @@ import {
   tokensPerSecondFromTpm,
   healthScoreClass,
   maskMonitorEmail,
+  maskMonitorUsername,
   monitorErrorCategoryLabel,
 } from '@/features/channel-monitor-v2/monitorFormat'
 
@@ -522,7 +523,7 @@ const ranges = computed(() => [
 ])
 const tabs = computed(() => [
   { value: 'models' as Tab, label: t('channelMonitorV2.tabs.models') },
-  { value: 'errors' as Tab, label: t('channelMonitorV2.tabs.errors') },
+  ...(isAdmin.value ? [{ value: 'errors' as Tab, label: t('channelMonitorV2.tabs.errors') }] : []),
   { value: 'users' as Tab, label: t('channelMonitorV2.tabs.users') },
 ])
 const matrixGroupOptions = computed(() => [
@@ -544,9 +545,10 @@ const filter = ref<MonitorFilter>({
   groupIds: csv(route.query.group).map(Number).filter(Boolean),
   models: csv(route.query.model),
 })
-const activeTab = ref<Tab>(
-  (['models', 'errors', 'users'].includes(String(route.query.tab)) ? route.query.tab : 'models') as Tab
-)
+const requestedTab = ['models', 'errors', 'users'].includes(String(route.query.tab))
+  ? route.query.tab as Tab
+  : 'models'
+const activeTab = ref<Tab>(requestedTab === 'errors' && !isAdmin.value ? 'models' : requestedTab)
 const matrixGroupBy = ref<MonitorMatrixGroupBy>(parseMatrixGroupBy(route.query.group_by))
 const healthMode = ref<HealthMode>(parseHealthMode(route.query.health_mode))
 const trendView = ref<TrendView>(parseTrendView(route.query.trend_view))
@@ -656,11 +658,11 @@ const matrixRows = computed(() => {
   return items
 })
 
-/** Email-backed ranking labels are visible to all channel-status viewers. */
+/** Identity-backed ranking labels are visible to all channel-status viewers. */
 function userRankingLabel(row: MonitorUserRow): string {
-  return row.email && row.display_label === row.email
-    ? maskMonitorEmail(row.email)
-    : row.display_label
+  if (row.email && row.display_label === row.email) return maskMonitorEmail(row.email)
+  if (row.username && row.display_label === row.username) return maskMonitorUsername(row.username)
+  return row.display_label
 }
 
 function csv(value: unknown) {
@@ -908,6 +910,9 @@ watch(matrixGroupBy, () => {
 })
 watch(healthMode, syncQuery)
 watch(trendView, syncQuery)
+watch(isAdmin, (admin) => {
+  if (!admin && activeTab.value === 'errors') activeTab.value = 'models'
+})
 watch(activeTab, () => {
   syncQuery()
   void loadTab()

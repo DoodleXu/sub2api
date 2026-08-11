@@ -134,6 +134,10 @@ func (h *ChannelMonitorV2Handler) matrix(c *gin.Context, admin bool) {
 }
 
 func (h *ChannelMonitorV2Handler) Errors(c *gin.Context) {
+	if !channelMonitorV2IsAdmin(c) {
+		response.Error(c, http.StatusForbidden, "admin access required")
+		return
+	}
 	filter, ok := h.parseFilter(c)
 	if !ok {
 		return

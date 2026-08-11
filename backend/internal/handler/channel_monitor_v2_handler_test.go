@@ -33,3 +33,15 @@ func TestChannelMonitorV2MatrixHandlerRejectsInvalidGroupBy(t *testing.T) {
 	h.Matrix(c)
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
+
+func TestChannelMonitorV2ErrorsHandlerRequiresAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/channel-monitor-v2/errors", nil)
+
+	h := NewChannelMonitorV2Handler(service.NewChannelMonitorV2Service(nil))
+	h.Errors(c)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}

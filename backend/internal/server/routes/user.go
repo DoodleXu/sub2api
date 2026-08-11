@@ -169,7 +169,6 @@ func RegisterUserRoutes(
 			monitorV2.GET("/snapshot", h.ChannelMonitorV2.Snapshot)
 			monitorV2.GET("/models", h.ChannelMonitorV2.Models)
 			monitorV2.GET("/matrix", h.ChannelMonitorV2.Matrix)
-			monitorV2.GET("/errors", h.ChannelMonitorV2.Errors)
 			monitorV2.GET("/users", h.ChannelMonitorV2.Users)
 		}
 	}
