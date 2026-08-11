@@ -328,6 +328,23 @@ func TestDashboardAggregationService_TriggerRecomputeInvalidatesAndRefreshesCost
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestDashboardAggregationService_AccountCostChangeRefreshesCostSnapshot(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{}
+	cache := &dashboardCacheStub{}
+	svc := NewDashboardAggregationService(repo, nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{
+			Retention: config.DashboardAggregationRetentionConfig{UsageLogsDays: 7},
+		},
+	})
+	svc.SetDashboardCache(cache)
+
+	svc.RefreshDashboardCostSnapshotAfterAccountCostChange()
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
+	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCostCalls))
+	require.Equal(t, 1, repo.refreshSnapshotCalls)
+}
+
 func TestDashboardAggregationService_DisabledRecomputeStillInvalidatesCostSnapshot(t *testing.T) {
 	repo := &dashboardAggregationRepoTestStub{}
 	cache := &dashboardCacheStub{}

@@ -890,6 +890,7 @@ var ProviderSet = wire.NewSet(
 	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
+	wire.Bind(new(DashboardCostSnapshotRefresher), new(*DashboardAggregationService)),
 	ProvideUsageCleanupService,
 	ProvideDeferredService,
 	NewAntigravityQuotaFetcher,

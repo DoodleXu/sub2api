@@ -691,6 +691,7 @@ type adminServiceImpl struct {
 	affiliateService     adminRechargeAffiliateAccruer
 	compositeRouteRepo   CompositeModelRouteRepository
 	compositeResolver    *CompositeRouteResolver
+	dashboardCostRefresh DashboardCostSnapshotRefresher
 }
 
 type adminRechargeAffiliateAccruer interface {
@@ -724,6 +725,7 @@ func NewAdminService(
 	affiliateService *AffiliateService,
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
+	dashboardCostRefresh DashboardCostSnapshotRefresher,
 ) AdminService {
 	return &adminServiceImpl{
 		userRepo:             userRepo,
@@ -750,6 +752,7 @@ func NewAdminService(
 		affiliateService:     affiliateService,
 		compositeRouteRepo:   compositeRouteRepo,
 		compositeResolver:    compositeResolver,
+		dashboardCostRefresh: dashboardCostRefresh,
 	}
 }
 
@@ -3662,10 +3665,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		account.RateMultiplier = input.RateMultiplier
 	}
+	accountCostChanged := false
 	if input.TotalCostCNY != nil {
 		if *input.TotalCostCNY < 0 {
 			return nil, errors.New("total_cost_cny must be >= 0")
 		}
+		accountCostChanged = account.TotalCostCNY != *input.TotalCostCNY
 		account.TotalCostCNY = *input.TotalCostCNY
 	}
 	if input.AddCostCNY != nil {
@@ -3674,6 +3679,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		if account.Type != AccountTypeAPIKey {
 			return nil, errors.New("add_cost_cny only supports apikey accounts")
+		}
+		if *input.AddCostCNY != 0 {
+			accountCostChanged = true
 		}
 		account.TotalCostCNY += *input.AddCostCNY
 	}
@@ -3778,6 +3786,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if accountCostChanged && s.dashboardCostRefresh != nil {
+		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
 	}
 	return updated, nil
 }
@@ -4055,6 +4066,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		result.Success++
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
+	}
+	if input.TotalCostCNY != nil && s.dashboardCostRefresh != nil {
+		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
 	}
 
 	return result, nil

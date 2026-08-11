@@ -1675,7 +1675,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
 	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)

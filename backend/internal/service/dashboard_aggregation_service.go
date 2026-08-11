@@ -67,6 +67,14 @@ type dashboardCostSnapshotStaler interface {
 	MarkDashboardCostSnapshotStale(ctx context.Context) error
 }
 
+// DashboardCostSnapshotRefresher is the narrow dependency used by account
+// management after an operator changes an account's CNY cost. The snapshot is
+// derived from accounts plus the already-materialized usage totals, so it can
+// be refreshed directly without re-scanning usage_logs.
+type DashboardCostSnapshotRefresher interface {
+	RefreshDashboardCostSnapshotAfterAccountCostChange()
+}
+
 // AccountCostAggregationState 描述账号累计成本账本的后台进度。
 type AccountCostAggregationState struct {
 	LastProcessedUsageID int64
@@ -333,6 +341,23 @@ func (s *DashboardAggregationService) refreshDashboardCostSnapshot(targetStart, 
 	if !complete {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 成本快照等待完整覆盖 (target_start=%s target_end=%s)", targetStart.UTC().Format(time.RFC3339), targetEnd.UTC().Format(time.RFC3339))
 	}
+}
+
+// RefreshDashboardCostSnapshotAfterAccountCostChange makes an account-cost
+// edit visible on the dashboard immediately. Account cost is part of the
+// snapshot calculation but does not change historical usage aggregates, so a
+// full aggregation recompute would be unnecessary and expensive.
+func (s *DashboardAggregationService) RefreshDashboardCostSnapshotAfterAccountCostChange() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	s.invalidateDashboardCostSnapshot()
+	now := time.Now().UTC()
+	retentionDays := s.cfg.Retention.UsageLogsDays
+	if retentionDays <= 0 {
+		retentionDays = 1
+	}
+	s.refreshDashboardCostSnapshot(truncateToDayUTC(now.AddDate(0, 0, -retentionDays)), now)
 }
 
 func (s *DashboardAggregationService) yieldAccountCostBackfill(ctx context.Context) bool {
