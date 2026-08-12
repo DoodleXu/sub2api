@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-10
+最后更新：2026-08-12
 
 ## 当前对比基线
 
@@ -10,23 +10,32 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `f0466ad7c` | 本次合并 v0.1.173 前的 fork 基线；fork 发布版本保持 `0.1.243` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.173` -> `29009f0b2ea1` | 本次将 v0.1.173 合入本 fork；版本源继续保持 `0.1.243` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.173` -> `29009f0b2ea1` | 2026-08-09 发布的官方最新非草稿 release |
-| 上游 main HEAD | `10a4c6e3a` | 本次刷新时的上游 main；同步范围严格停在 v0.1.173 release 标签，没有越过标签合并 main |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次共处理 45 个冲突路径，其中 16 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义，并迁入上游 Channel Monitor V2、Grok 媒体/音频与搜索计费、注册邮箱域名配额、OpenAI 路由提示、Gemini 图片实际计费和兼容性修复 |
+| Fork 同步前 HEAD | `b6169ae27` | 本次合并 v0.1.175 前的 fork 基线；fork 发布版本为 `0.1.247` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 已合入 2026-08-12 发布的官方最新非草稿 release；版本源继续保持 fork 的 `0.1.247` |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 同步范围严格停在该 release 标签，没有越过标签合并 main |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 15 个冲突路径，其中 8 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/heads/main:refs/remotes/upstream/main --no-tags
-git fetch upstream refs/tags/v0.1.173:refs/tags/upstream/v0.1.173 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.173^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.173^{}..HEAD
+git fetch upstream refs/tags/v0.1.175:refs/tags/upstream/v0.1.175 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.175^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.175^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.175` 合并说明：
+
+- 合入 Codex OAuth 指纹收敛、API Key 有限值/过期天数校验、上游嵌套 usage 解析、空 `response.completed` failover、可见输出 TTFT、图像上游读取中断分类、备份分卷上传/下载和相关管理端展示。
+- 上游新增的 8 个 OpenAI gateway/setting 拆分文件继续保持删除；行为迁入 fork 实际使用的聚合和 `*_v158.go` 实现，避免重复定义或结构回退。
+- fork 继续保留 Responses Lite、字符串 function arguments、图片归档与首图耗时、逐 turn WS 计费、账号成本、归档、Web 创作台和发布约束；`backend/cmd/server/VERSION` 保持 `0.1.247`。
+
+### v0.1.175 合并验证
+
+- 合并前 `git merge-tree --write-tree` 识别 15 个冲突路径；内容冲突与 8 个 modify/delete 冲突均按 fork 聚合结构回迁处理。
+- 定向后端 unit 覆盖 API Key、OpenAI 空终态与图片流、备份、响应模型计费，通过 `go test -tags=unit ./internal/service ./internal/handler -run 'Test(OpenAIResponsesEmptyCompleted|OpenAIImages|APIKey|BackupService|GatewayServiceRecordUsage_ResponseModel)' -count=1`。
 
 本次 `v0.1.173` 合并说明：
 

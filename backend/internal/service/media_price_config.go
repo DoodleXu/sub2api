@@ -44,3 +44,14 @@ func groupSearchPricePer1kFromAPIKey(apiKey *APIKey) *float64 {
 	}
 	return apiKey.Group.GetSearchPricePer1k()
 }
+
+func groupAudioPriceConfigFromAPIKey(apiKey *APIKey) *audioPriceConfig {
+	if apiKey == nil || apiKey.Group == nil {
+		return nil
+	}
+	return &audioPriceConfig{
+		RealtimePerMin: apiKey.Group.AudioRealtimePricePerMin,
+		TTSPerMChars:   apiKey.Group.AudioTTSPricePerMillionChars,
+		STTPerHour:     apiKey.Group.AudioSTTPricePerHour,
+	}
+}

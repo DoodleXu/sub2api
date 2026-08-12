@@ -284,6 +284,7 @@
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.status') }}</th>
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.fileName') }}</th>
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.size') }}</th>
+                <th class="py-2 pr-4">{{ t('admin.backup.columns.parts') }}</th>
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.expiresAt') }}</th>
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.triggeredBy') }}</th>
                 <th class="py-2 pr-4">{{ t('admin.backup.columns.startedAt') }}</th>
@@ -305,6 +306,7 @@
                 </td>
                 <td class="py-3 pr-4 text-xs">{{ record.file_name }}</td>
                 <td class="py-3 pr-4 text-xs">{{ formatSize(record.size_bytes) }}</td>
+                <td class="py-3 pr-4 text-xs">{{ record.parts?.length || (record.status === 'running' ? '-' : 1) }}</td>
                 <td class="py-3 pr-4 text-xs">
                   {{ record.expires_at ? formatDate(record.expires_at) : t('admin.backup.neverExpire') }}
                 </td>
@@ -342,7 +344,7 @@
                 </td>
               </tr>
               <tr v-if="backups.length === 0">
-                <td colspan="8" class="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                <td colspan="9" class="py-6 text-center text-sm text-gray-500 dark:text-gray-400">
                   {{ t('admin.backup.empty') }}
                 </td>
               </tr>
@@ -435,6 +437,24 @@
         </div>
       </transition>
     </teleport>
+    <teleport to="body">
+      <transition name="modal">
+        <div v-if="downloadPartsModalOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4" @mousedown.self="closeDownloadParts">
+          <div class="fixed inset-0 bg-black/50" @click="closeDownloadParts"></div>
+          <div class="relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-2xl dark:bg-dark-800">
+            <h2 class="mb-1 text-lg font-bold text-gray-900 dark:text-white">{{ t('admin.backup.actions.downloadParts') }}</h2>
+            <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.backup.actions.downloadPartsHint') }}</p>
+            <div class="space-y-2">
+              <div v-for="part in downloadParts" :key="part.index" class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-dark-600">
+                <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.backup.actions.partLabel', { index: part.index }) }} <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">{{ formatSize(part.size_bytes) }}</span></span>
+                <a :href="part.url" class="btn btn-secondary btn-xs" rel="noopener">{{ t('admin.backup.actions.download') }}</a>
+              </div>
+            </div>
+            <div class="mt-4 text-right"><button type="button" class="btn btn-primary btn-sm" @click="closeDownloadParts">{{ t('common.close') }}</button></div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
     <TotpStepUpDialog :controller="backupStepUp" />
 </template>
 
@@ -444,7 +464,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api'
 import { isAPIErrorStatus } from '@/api/client'
 import { useAppStore } from '@/stores'
-import type { BackupS3Config, BackupScheduleConfig, BackupRecord } from '@/api/admin/backup'
+import type { BackupS3Config, BackupScheduleConfig, BackupRecord, BackupDownloadPart } from '@/api/admin/backup'
 import type { AdminDataImportResult } from '@/types'
 import type { ImageStorageConfig } from '@/api/admin/backup'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
@@ -523,6 +543,8 @@ const loadingBackups = ref(false)
 const creatingBackup = ref(false)
 const restoringId = ref('')
 const manualExpireDays = ref(14)
+const downloadParts = ref<BackupDownloadPart[]>([])
+const downloadPartsModalOpen = ref(false)
 
 // Polling
 const pollingTimer = ref<ReturnType<typeof setInterval> | null>(null)
@@ -894,6 +916,12 @@ async function createBackup() {
 async function downloadBackup(id: string) {
   try {
     const result = await backupStepUp.run(() => adminAPI.backup.getDownloadURL(id))
+    if (result.parts && result.parts.length > 0) {
+      downloadParts.value = result.parts
+      downloadPartsModalOpen.value = true
+      return
+    }
+    if (!result.url) throw new Error(t('admin.backup.actions.downloadFailed'))
     const link = document.createElement('a')
     link.href = result.url
     link.target = '_blank'
@@ -904,6 +932,11 @@ async function downloadBackup(id: string) {
       appStore.showError((error as { message?: string })?.message || t('errors.networkError'))
     }
   }
+}
+
+function closeDownloadParts() {
+  downloadPartsModalOpen.value = false
+  downloadParts.value = []
 }
 
 async function restoreBackup(id: string) {

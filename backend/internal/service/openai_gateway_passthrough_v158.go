@@ -65,6 +65,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	sawDone := false
 	sawTerminalEvent := false
 	sawFailedEvent := false
+	responsesSemanticOutputSeen := false
 	failedMessage := ""
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
@@ -200,6 +201,15 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 			if openAIStreamEventIsTerminal(trimmedData) {
 				sawTerminalEvent = true
+			}
+			if openAIStreamDataStartsClientOutput(trimmedData, eventType) && !openAIStreamEventTypeIsTerminal(eventType) {
+				responsesSemanticOutputSeen = true
+			}
+			if account != nil && account.Platform == PlatformOpenAI &&
+				(eventType == "response.completed" || eventType == "response.done") &&
+				!sawFailedEvent && !responsesSemanticOutputSeen && !clientOutputStarted &&
+				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
+				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)

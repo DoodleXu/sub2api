@@ -9447,6 +9447,25 @@ type RecordUsageInput struct {
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
 
+const responseModelBillingCostEpsilon = 1e-12
+
+func responseModelBillingDeclaration(source, responseModel string, conflict, mediaBilled bool) string {
+	if source != BillingModelSourceResponse || conflict || mediaBilled {
+		return ""
+	}
+	return strings.TrimSpace(responseModel)
+}
+
+func responseModelBillingAdoptable(baseline, response *CostBreakdown, baselineChannelPriced, responseChannelPriced bool) bool {
+	if baseline == nil || response == nil || response.TotalCost > baseline.TotalCost+responseModelBillingCostEpsilon {
+		return false
+	}
+	if response.TotalCost <= 0 && baseline.TotalCost > 0 {
+		return false
+	}
+	return !baselineChannelPriced || responseChannelPriced
+}
+
 // APIKeyQuotaUpdater defines the interface for updating API Key quota and rate limit usage
 type APIKeyQuotaUpdater interface {
 	UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cost float64) error
@@ -10149,6 +10168,20 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 计算费用
 	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, opts)
+	if responseModel := responseModelBillingDeclaration(
+		input.BillingModelSource,
+		result.UpstreamResponseModel,
+		result.UpstreamResponseModelConflict,
+		result.ImageCount > 0 || result.AudioUsage != nil || result.SearchCount > 0,
+	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+		if identified, responseChannelPriced := s.hasIdentifiedResponseModelPricing(ctx, responseModel, apiKey); identified {
+			responseCost := s.calculateRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, imageMultiplier, opts)
+			baselineChannelPriced := s.resolveChannelPricing(ctx, billingModel, apiKey) != nil
+			if responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
+				cost = responseCost
+			}
+		}
+	}
 
 	// 判断计费方式：订阅模式 vs 余额模式
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
@@ -10263,6 +10296,16 @@ func (s *GatewayService) hasResolvableTokenPricing(ctx context.Context, model st
 	return err == nil
 }
 
+func (s *GatewayService) hasIdentifiedResponseModelPricing(ctx context.Context, model string, apiKey *APIKey) (identified bool, channelPriced bool) {
+	if strings.TrimSpace(model) == "" {
+		return false, false
+	}
+	if s.resolveChannelPricing(ctx, model, apiKey) != nil {
+		return true, true
+	}
+	return s.billingService != nil && s.billingService.HasIdentifiedTokenPricing(model), false
+}
+
 // calculateRecordUsageCost 根据请求类型和选项计算费用。
 func (s *GatewayService) calculateRecordUsageCost(
 	ctx context.Context,
@@ -10280,9 +10323,24 @@ func (s *GatewayService) calculateRecordUsageCost(
 		}
 		return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
 	}
+	if result.AudioUsage != nil {
+		return s.billingService.CalculateAudioCost(result.AudioUsage.Mode, result.AudioUsage.DurationOrUnits, groupAudioPriceConfigFromAPIKey(apiKey), multiplier)
+	}
 
-	// Token 计费
-	return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	// Token 计费；搜索费用作为 surcharge 叠加。
+	tokenCost := s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, opts)
+	if result.SearchCount > 0 {
+		price := groupSearchPricePer1kFromAPIKey(apiKey)
+		searchCost := s.billingService.CalculateSearchCost(result.SearchCount, price, multiplier)
+		if searchCost != nil && (searchCost.TotalCost > 0 || searchCost.ActualCost > 0) {
+			if tokenCost == nil {
+				return searchCost
+			}
+			tokenCost.TotalCost += searchCost.TotalCost
+			tokenCost.ActualCost += searchCost.ActualCost
+		}
+	}
+	return tokenCost
 }
 
 // resolveChannelPricing 检查指定模型是否存在渠道级别定价。

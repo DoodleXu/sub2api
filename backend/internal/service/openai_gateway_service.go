@@ -4699,6 +4699,18 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	return !openAIStreamEventIsPreamble(eventType)
 }
 
+func openAIStreamDataStartsVisibleOutput(data, eventType string) bool {
+	if !openAIStreamDataStartsClientOutput(data, eventType) {
+		return false
+	}
+	switch strings.TrimSpace(eventType) {
+	case "response.created", "response.in_progress", "response.output_item.added", "response.content_part.added":
+		return false
+	default:
+		return true
+	}
+}
+
 func openAIStreamFailedEventErrorCode(payload []byte) string {
 	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
 	if code == "" {
@@ -5818,15 +5830,35 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return OpenAIUsage{}, false
 	}
-	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "usage")); ok {
-		mergeHostedImageGenToolUsage(gjson.GetBytes(body, "tool_usage.image_gen"), &usage)
-		return usage, true
+	candidates := []struct{ usagePath, imageUsagePath string }{
+		{"usage", "tool_usage.image_gen"},
+		{"response.usage", "response.tool_usage.image_gen"},
+		{"data.usage", "data.tool_usage.image_gen"},
+		{"data.response.usage", "data.response.tool_usage.image_gen"},
 	}
-	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "response.usage")); ok {
-		mergeHostedImageGenToolUsage(gjson.GetBytes(body, "response.tool_usage.image_gen"), &usage)
-		return usage, true
+	for _, candidate := range candidates {
+		if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, candidate.usagePath)); ok {
+			mergeHostedImageGenToolUsage(gjson.GetBytes(body, candidate.imageUsagePath), &usage)
+			return usage, true
+		}
 	}
 	return OpenAIUsage{}, false
+}
+
+func openAIResponsesCompletedEventIsEmpty(data []byte, usage *OpenAIUsage) bool {
+	if len(data) == 0 || !gjson.ValidBytes(data) {
+		return false
+	}
+	if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.ImageInputTokens > 0 || usage.ImageOutputTokens > 0 || usage.CacheCreationInputTokens > 0 || usage.CacheReadInputTokens > 0) {
+		return false
+	}
+	if gjson.GetBytes(data, "usage").Exists() || gjson.GetBytes(data, "response.usage").Exists() || gjson.GetBytes(data, "error").Exists() || gjson.GetBytes(data, "response.error").Exists() {
+		return false
+	}
+	if output := gjson.GetBytes(data, "response.output"); output.Exists() && output.IsArray() && len(output.Array()) > 0 {
+		return false
+	}
+	return true
 }
 
 func mergeHostedImageGenToolUsage(imageGen gjson.Result, usage *OpenAIUsage) {

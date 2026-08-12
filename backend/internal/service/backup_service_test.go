@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -22,9 +23,10 @@ import (
 // ─── Mocks ───
 
 type mockSettingRepo struct {
-	mu          sync.Mutex
-	data        map[string]string
-	getValueErr error
+	mu            sync.Mutex
+	data          map[string]string
+	getValueErr   error
+	getValueCalls int
 }
 
 func newMockSettingRepo() *mockSettingRepo {
@@ -44,6 +46,7 @@ func (m *mockSettingRepo) Get(_ context.Context, key string) (*Setting, error) {
 func (m *mockSettingRepo) GetValue(_ context.Context, key string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.getValueCalls++
 	if m.getValueErr != nil {
 		return "", m.getValueErr
 	}
@@ -181,6 +184,15 @@ func (m *mockObjectStore) Upload(_ context.Context, key string, body io.Reader, 
 	m.objects[key] = data
 	m.mu.Unlock()
 	return int64(len(data)), nil
+}
+
+func (m *mockObjectStore) UploadFile(ctx context.Context, key, filePath, contentType string) (int64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = file.Close() }()
+	return m.Upload(ctx, key, file, contentType)
 }
 
 func (m *mockObjectStore) Download(_ context.Context, key string) (io.ReadCloser, error) {
@@ -588,9 +600,9 @@ func TestBackupService_GetDownloadURL(t *testing.T) {
 	record, err := svc.CreateBackup(context.Background(), "manual", 14)
 	require.NoError(t, err)
 
-	url, err := svc.GetBackupDownloadURL(context.Background(), record.ID)
+	download, err := svc.GetBackupDownloadURL(context.Background(), record.ID)
 	require.NoError(t, err)
-	require.Contains(t, url, "https://presigned.example.com/")
+	require.Contains(t, download.URL, "https://presigned.example.com/")
 }
 
 func TestBackupService_ListBackups_Sorted(t *testing.T) {
