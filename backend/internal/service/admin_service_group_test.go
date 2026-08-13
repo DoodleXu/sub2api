@@ -282,6 +282,55 @@ func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	require.InDelta(t, 0.30, *repo.created.ImagePrice4K, 0.0001)
 }
 
+func TestAdminService_CreateGroup_PersistsModelPricingPolicy(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	inputPrice := 0.000001
+	input := &CreateGroupInput{
+		Name:                      "model-pricing-group",
+		Platform:                  PlatformOpenAI,
+		RateMultiplier:            1,
+		LongContextPricingEnabled: true,
+		ModelPricing: []ChannelModelPricing{{
+			Models:      []string{"gpt-5"},
+			BillingMode: BillingModeToken,
+			InputPrice:  &inputPrice,
+		}},
+	}
+
+	_, err := svc.CreateGroup(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, repo.created)
+	require.True(t, repo.created.LongContextPricingEnabled)
+	require.Len(t, repo.created.ModelPricing, 1)
+	require.Equal(t, []string{"gpt-5"}, repo.created.ModelPricing[0].Models)
+}
+
+func TestAdminService_UpdateGroup_AppliesModelPricingPolicyTriState(t *testing.T) {
+	repo := &groupRepoStubForAdmin{getByID: &Group{
+		ID:                        7,
+		Name:                      "model-pricing-group",
+		Platform:                  PlatformOpenAI,
+		RateMultiplier:            1,
+		Status:                    StatusActive,
+		SubscriptionType:          SubscriptionTypeStandard,
+		LongContextPricingEnabled: true,
+		ModelPricing:              []ChannelModelPricing{{Models: []string{"gpt-5"}}},
+	}}
+	svc := &adminServiceImpl{groupRepo: repo}
+	disabled := false
+	emptyPricing := []ChannelModelPricing{}
+
+	_, err := svc.UpdateGroup(context.Background(), 7, &UpdateGroupInput{
+		LongContextPricingEnabled: &disabled,
+		ModelPricing:              &emptyPricing,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, repo.updated)
+	require.False(t, repo.updated.LongContextPricingEnabled)
+	require.Empty(t, repo.updated.ModelPricing)
+}
+
 func TestAdminService_CreateGroup_WithVideoPricing(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}

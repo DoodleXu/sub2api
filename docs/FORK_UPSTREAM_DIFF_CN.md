@@ -31,11 +31,13 @@ git diff --name-status refs/tags/upstream/v0.1.176^{}..HEAD
 - 合入 Grok 4.6 模型/官方价格、JWT 订阅档位识别、Grok 实时配额展示与模型级限流归因，支持独立 `/x_search` 及 Chat/Responses 搜索往返，新增分组逐模型定价与可关闭的长上下文阶梯。
 - 合入分组平台变更后的渠道缓存失效、Responses 探测未完成时保持 unknown、渠道定价模型名归一化，以及多实例定时备份 leader lock，避免重复执行备份。
 - 上游的 `admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_usage.go` 继续保持删除；缓存失效、Grok 用量和计费行为已迁入 fork 实际使用的 `admin_service.go`、`gateway_service.go`、`openai_gateway_service.go` 等聚合模块。`backend/cmd/server/VERSION` 保持 fork 的 `0.1.248`。
+- 合并后审核修复：fork 聚合的管理分组 Create/Update 链路补齐 `long_context_pricing_enabled` 和 `model_pricing` 的 DTO、服务输入与实体写回；更新保持“省略不修改、空数组清空、非空替换”语义，避免前端配置被静默丢弃或新分组错误关闭长上下文阶梯定价。
 
 ### v0.1.176 合并验证
 
 - 合并前 `git merge-tree --write-tree` 识别 11 个冲突路径；内容冲突与 3 个 modify/delete 冲突均按 fork 聚合结构回迁处理。
 - 定向后端 unit 覆盖分组平台缓存失效、搜索/音频默认价卡、Grok 与 OpenAI 网关路径，通过 `go test -tags=unit ./internal/service ./internal/handler/admin ./internal/handler -run 'Test(UpdateGroupInvalidatesChannelCacheOnPlatformChange|CalculateSearchCost|CalculateAudioCost|Grok|OpenAI)' -count=1`。
+- 合并后修复覆盖管理端请求绑定，以及服务层创建、更新和清空分组模型定价的三态语义；`TZ=UTC go test -tags=unit -count=1 ./...` 通过。
 
 本次 `v0.1.175` 合并说明：
 
