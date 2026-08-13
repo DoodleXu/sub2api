@@ -1714,6 +1714,21 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 	}
 }
 
+func TestShouldFailoverOpenAIPassthroughResponseV158_PoolRetryPolicy(t *testing.T) {
+	poolAccount := &Account{Type: AccountTypeAPIKey, Credentials: map[string]any{"pool_mode": true}}
+	retryDisabled := &Account{Type: AccountTypeAPIKey, Credentials: map[string]any{
+		"pool_mode": true, "pool_mode_retry_status_codes": []any{},
+	}}
+	nonPoolAccount := &Account{Type: AccountTypeAPIKey}
+
+	require.True(t, shouldFailoverOpenAIPassthroughResponseV158(poolAccount, http.StatusUnauthorized, nil))
+	require.True(t, shouldFailoverOpenAIPassthroughResponseV158(poolAccount, http.StatusForbidden, nil))
+	require.False(t, shouldFailoverOpenAIPassthroughResponseV158(retryDisabled, http.StatusUnauthorized, nil))
+	require.False(t, shouldFailoverOpenAIPassthroughResponseV158(retryDisabled, http.StatusForbidden, nil))
+	require.False(t, shouldFailoverOpenAIPassthroughResponseV158(nonPoolAccount, http.StatusUnauthorized, nil))
+	require.False(t, shouldFailoverOpenAIPassthroughResponseV158(nonPoolAccount, http.StatusForbidden, nil))
+}
+
 func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailover(t *testing.T) {
 
 	tests := []struct {

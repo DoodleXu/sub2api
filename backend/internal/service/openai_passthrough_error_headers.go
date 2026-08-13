@@ -62,6 +62,9 @@ func shouldFailoverOpenAIPassthroughResponseV158(account *Account, statusCode in
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		return true
+	}
 	switch statusCode {
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
 		http.StatusGatewayTimeout, 520, 521, 522, 523, 524:

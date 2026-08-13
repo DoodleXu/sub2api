@@ -434,6 +434,13 @@ func TestIsTokenEventCoverageBranches(t *testing.T) {
 	require.False(t, isTokenEvent("response.done"))
 }
 
+func TestRelayImageOutputStartsVisibleOutput(t *testing.T) {
+	require.False(t, relayImageOutputStartsVisibleOutput([]byte(`{"type":"response.image_generation_call.partial_image","partial_image_b64":"cGFydGlhbA=="}`)))
+	require.True(t, relayImageOutputStartsVisibleOutput([]byte(`{"type":"response.output_item.done","item":{"type":"image_generation_call","result":"ZmluYWw="}}`)))
+	require.True(t, relayImageOutputStartsVisibleOutput([]byte(`{"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"ZmluYWw="}]}}`)))
+	require.False(t, relayImageOutputStartsVisibleOutput([]byte(`{"type":"response.output_item.done","item":{"type":"message"}}`)))
+}
+
 func TestTerminalAndTokenEventSetsAreDisjoint(t *testing.T) {
 	t.Parallel()
 

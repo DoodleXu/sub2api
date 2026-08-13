@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-12
+最后更新：2026-08-13
 
 ## 当前对比基线
 
@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `b6169ae27` | 本次合并 v0.1.175 前的 fork 基线；fork 发布版本为 `0.1.247` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 已合入 2026-08-12 发布的官方最新非草稿 release；版本源继续保持 fork 的 `0.1.247` |
+| Fork 同步前 HEAD | `b6169ae27` | 本次合并 v0.1.175 前的 fork 基线；当前发布候选版本为 `0.1.248` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 已合入 2026-08-12 发布的官方最新非草稿 release；版本源为 fork 发布候选 `0.1.248` |
 | 上游最新 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 同步范围严格停在该 release 标签，没有越过标签合并 main |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 15 个冲突路径，其中 8 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义 |
 
@@ -28,9 +28,9 @@ git diff --name-status refs/tags/upstream/v0.1.175^{}..HEAD
 
 本次 `v0.1.175` 合并说明：
 
-- 合入 Codex OAuth 指纹收敛、API Key 有限值/过期天数校验、上游嵌套 usage 解析、空 `response.completed` failover、可见输出 TTFT、图像上游读取中断分类、备份分卷上传/下载和相关管理端展示。
+- 合入 Codex OAuth 指纹收敛、API Key 有限值/过期天数校验、上游嵌套 usage 解析、空 `response.completed` failover、可见输出 TTFT、图像上游读取中断分类、备份分卷上传/下载和相关管理端展示；发版前补齐 pool 认证错误 failover 与 WS 最终图片可见输出口径。
 - 上游新增的 8 个 OpenAI gateway/setting 拆分文件继续保持删除；行为迁入 fork 实际使用的聚合和 `*_v158.go` 实现，避免重复定义或结构回退。
-- fork 继续保留 Responses Lite、字符串 function arguments、图片归档与首图耗时、逐 turn WS 计费、账号成本、归档、Web 创作台和发布约束；`backend/cmd/server/VERSION` 保持 `0.1.247`。
+- fork 继续保留 Responses Lite、字符串 function arguments、图片归档与首图耗时、逐 turn WS 计费、账号成本、归档、Web 创作台和发布约束；`backend/cmd/server/VERSION` 保持 `0.1.248`。
 
 ### v0.1.175 合并验证
 
@@ -60,7 +60,8 @@ git diff --name-status refs/tags/upstream/v0.1.175^{}..HEAD
 - 2026-08-11 审核修复：Grok Free 额度软门禁必须使用正缓存 TTL；后台刷新有 5 秒硬超时，陈旧但已确认超限的缓存会在刷新期间继续阻断，未确认或低于阈值的账号保持 fail-open。
 - 2026-08-11 审核修复：Channel Monitor V2 的错误分类表按 `user_id` 同时保存全局（0）与用户维度；用户排名只按自己的 ignored category 精确调整，不再按全局错误比例估算。迁移会清空错误分类派生表并把水位回拨至最长 90 天保留窗口，由既有有界聚合重建，部署后必须观察水位和 PostgreSQL I/O。
 - 2026-08-11：Channel Monitor V2 的“错误原因”仅管理员可见；普通用户页面移除页签、用户路由不注册该接口，handler 也拒绝非管理员直连，避免暴露上游错误分类与原始错误信息。
-- 2026-08-11 审核修复：`usage_logs.succeeded` 为新写入的成功结果事实源，单条、批量和 best-effort 写入均显式落库；正常请求（包括零价/免费成功）写 `TRUE`，计费失败占位行写 `FALSE`。Channel Monitor 不再以 `actual_cost=0` 误判零价成功，也不会把失败占位行计为成功；历史 NULL 行严格保留原有 `actual_cost > 0` 回退口径，避免升级时重写历史统计。
+- 2026-08-13 发版前修复：OpenAI API Key passthrough 的 pool 模式恢复按 `pool_mode_retry_status_codes` 对 401/403 执行同账号重试后再切换账号；显式空列表仍关闭该行为，普通 API Key 和非 pool 账号继续保持原错误透传语义。
+- 2026-08-13 发版前修复：WS v2 direct passthrough 将最终图片输出事件纳入 `first_token_ms` 的可见输出口径，同时保留 `image_first_output_ms` 的首图口径；partial image 只记录首图，不提前伪造普通首 token。相关高重复 handler/relay 回归与全量后端单测已通过。
 
 ### 本次验证
 

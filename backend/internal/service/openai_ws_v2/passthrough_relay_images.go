@@ -57,6 +57,61 @@ func (t *relayImageOutputTracker) Observe(message []byte) bool {
 	}
 }
 
+func relayImageOutputStartsVisibleOutput(message []byte) bool {
+	if len(message) == 0 || !gjson.ValidBytes(message) {
+		return false
+	}
+	root := gjson.ParseBytes(message)
+	if relayImageDataArrayHasContent(root.Get("data")) {
+		return true
+	}
+
+	switch strings.TrimSpace(root.Get("type").String()) {
+	case "response.output_item.done":
+		return relayImageOutputItemHasContent(root.Get("item"))
+	case "response.completed", "response.done":
+		return relayImageOutputArrayHasContent(root.Get("response.output"))
+	case "image_generation.completed":
+		if item := root.Get("item"); item.Exists() {
+			return relayImageOutputItemHasContent(item)
+		}
+		if output := root.Get("output"); output.Exists() {
+			if output.IsArray() {
+				return relayImageOutputArrayHasContent(output)
+			}
+			return relayImageOutputItemHasContent(output)
+		}
+		return relayImageOutputItemHasContent(root)
+	default:
+		return false
+	}
+}
+
+func relayImageDataArrayHasContent(data gjson.Result) bool {
+	if !data.IsArray() {
+		return false
+	}
+	found := false
+	data.ForEach(func(_, item gjson.Result) bool {
+		found = strings.TrimSpace(item.Get("url").String()) != "" ||
+			strings.TrimSpace(item.Get("b64_json").String()) != ""
+		return !found
+	})
+	return found
+}
+
+func relayImageOutputArrayHasContent(output gjson.Result) bool {
+	if !output.IsArray() {
+		return false
+	}
+	found := false
+	output.ForEach(func(_, item gjson.Result) bool {
+		found = relayImageOutputItemHasContent(item)
+		return !found
+	})
+	return found
+}
+
 func (t *relayImageOutputTracker) addDataArray(data gjson.Result) bool {
 	if t == nil || !data.IsArray() {
 		return false

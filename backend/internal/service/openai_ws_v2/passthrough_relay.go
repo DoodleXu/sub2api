@@ -770,7 +770,8 @@ func observeUpstreamMessage(
 		}
 	}
 
-	if state.firstTokenMs == nil && isTokenEvent(eventType) {
+	startsVisibleOutput := isTokenEvent(eventType) || relayImageOutputStartsVisibleOutput(message)
+	if state.firstTokenMs == nil && startsVisibleOutput {
 		ms := int(now.Sub(startAt).Milliseconds())
 		if ms >= 0 {
 			state.firstTokenMs = &ms
@@ -790,7 +791,7 @@ func observeUpstreamMessage(
 		abortedSequence: abortedSequence,
 	}
 	if turnTiming != nil {
-		if turnTiming.firstTokenMs == nil && isTokenEvent(eventType) {
+		if turnTiming.firstTokenMs == nil && startsVisibleOutput {
 			ms := int(now.Sub(turnTiming.startAt).Milliseconds())
 			if ms >= 0 {
 				turnTiming.firstTokenMs = &ms
