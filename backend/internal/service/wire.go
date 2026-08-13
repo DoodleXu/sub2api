@@ -687,8 +687,11 @@ func ProvideBackupService(
 	encryptor SecretEncryptor,
 	storeFactory BackupObjectStoreFactory,
 	dumper DBDumper,
+	lockCache LeaderLockCache,
+	db *sql.DB,
 ) *BackupService {
 	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
+	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
 }
@@ -792,6 +795,10 @@ func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *Batc
 	return &BatchImageModelPricingResolver{Resolver: resolver}
 }
 
+func ProvideChannelCacheInvalidators(channelService *ChannelService) []ChannelCacheInvalidator {
+	return []ChannelCacheInvalidator{channelService}
+}
+
 // ProvideAPIKeyService wires APIKeyService and connects rate-limit cache invalidation.
 func ProvideAPIKeyService(
 	apiKeyRepo APIKeyRepository,
@@ -831,6 +838,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBillingCacheService,
 	NewDailyCheckinService,
 	NewAnnouncementService,
+	ProvideChannelCacheInvalidators,
 	NewAdminService,
 	NewGatewayService,
 	ProvideOpenAIGatewayService,
@@ -914,6 +922,7 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
+	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
 	NewContentModerationService,
 	NewAffiliateService,

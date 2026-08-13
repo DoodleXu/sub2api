@@ -10,21 +10,32 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `b6169ae27` | 本次合并 v0.1.175 前的 fork 基线；当前发布候选版本为 `0.1.248` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 已合入 2026-08-12 发布的官方最新非草稿 release；版本源为 fork 发布候选 `0.1.248` |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.175` -> `93c32fa1a245` | 同步范围严格停在该 release 标签，没有越过标签合并 main |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 15 个冲突路径，其中 8 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `cd3c118d9` | 本次合并 v0.1.176 前的 fork 基线；版本源保持 `0.1.248` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.176` -> `e803e3851c0a` | 已合入 2026-08-13 发布的官方最新非草稿 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.176` -> `e803e3851c0a` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 11 个冲突路径，其中 3 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.175:refs/tags/upstream/v0.1.175 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.175^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.175^{}..HEAD
+git fetch upstream refs/tags/v0.1.176:refs/tags/upstream/v0.1.176 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.176^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.176^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.176` 合并说明：
+
+- 合入 Grok 4.6 模型/官方价格、JWT 订阅档位识别、Grok 实时配额展示与模型级限流归因，支持独立 `/x_search` 及 Chat/Responses 搜索往返，新增分组逐模型定价与可关闭的长上下文阶梯。
+- 合入分组平台变更后的渠道缓存失效、Responses 探测未完成时保持 unknown、渠道定价模型名归一化，以及多实例定时备份 leader lock，避免重复执行备份。
+- 上游的 `admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_usage.go` 继续保持删除；缓存失效、Grok 用量和计费行为已迁入 fork 实际使用的 `admin_service.go`、`gateway_service.go`、`openai_gateway_service.go` 等聚合模块。`backend/cmd/server/VERSION` 保持 fork 的 `0.1.248`。
+
+### v0.1.176 合并验证
+
+- 合并前 `git merge-tree --write-tree` 识别 11 个冲突路径；内容冲突与 3 个 modify/delete 冲突均按 fork 聚合结构回迁处理。
+- 定向后端 unit 覆盖分组平台缓存失效、搜索/音频默认价卡、Grok 与 OpenAI 网关路径，通过 `go test -tags=unit ./internal/service ./internal/handler/admin ./internal/handler -run 'Test(UpdateGroupInvalidatesChannelCacheOnPlatformChange|CalculateSearchCost|CalculateAudioCost|Grok|OpenAI)' -count=1`。
 
 本次 `v0.1.175` 合并说明：
 
