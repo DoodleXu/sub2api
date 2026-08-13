@@ -3878,7 +3878,7 @@ func (s *SettingService) GetAccountSchedulingThresholds(ctx context.Context) map
 			}
 		}
 		ttl := accountSchedulingThresholdsCacheTTL
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
 			ttl = accountSchedulingThresholdsErrorTTL
 		}
 		accountSchedulingThresholdsCache.Store(&cachedAccountSchedulingThresholds{

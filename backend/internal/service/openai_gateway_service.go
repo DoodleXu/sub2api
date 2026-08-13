@@ -2007,10 +2007,10 @@ func (s *OpenAIGatewayService) selectAccountForModelWithLimitMode(ctx context.Co
 
 	// 3. 按优先级 + LRU 选择最佳账号
 	// Select by priority + LRU
-	selected, compactBlocked := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate, limitMode)
+	selected, compactBlocked, filterStats := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate, limitMode)
 
 	if selected == nil {
-		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked)
+		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked, filterStats.summary(""))
 	}
 
 	hydrated, err := s.hydrateSelectedAccount(ctx, selected)
@@ -2104,8 +2104,9 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 // Returns nil if no available account. The second return reports whether at
 // least one candidate was filtered out solely because it lacks compact support
 // (only meaningful when requireCompact=true).
-func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool, limitMode openAILimitContinuationSelectionMode) (*Account, bool) {
+func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *int64, platform string, accounts []Account, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool, limitMode openAILimitContinuationSelectionMode) (*Account, bool, openAISelectionFilterStats) {
 	compactBlocked := false
+	filterStats := openAISelectionFilterStats{pool: len(accounts)}
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 	eligible := make([]*Account, 0, len(accounts))
 	compactTiers := make(map[int64]int, len(accounts))
@@ -2113,27 +2114,39 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	for i := range accounts {
 		acc := &accounts[i]
 		if !openAIAccountMatchesLimitContinuationSelection(acc, limitMode) {
+			filterStats.exclude("limit_continuation_tier")
 			continue
 		}
 
 		// 跳过被排除的账号
 		// Skip excluded accounts
 		if _, excluded := excludedIDs[acc.ID]; excluded {
+			filterStats.exclude("excluded")
 			continue
 		}
 
 		fresh := s.resolveFreshSchedulableOpenAIAccount(ctx, acc, platform, requestedModel, false, requiredCapability)
 		if fresh == nil {
+			if requestedModel != "" && !acc.IsModelSupported(requestedModel) {
+				filterStats.exclude("ineligible")
+			} else if vetoed, reason := openAIProfitControlVetoReason(ctx, acc); vetoed {
+				filterStats.exclude(reason)
+			} else {
+				filterStats.exclude("ineligible")
+			}
 			continue
 		}
 		fresh = s.recheckSelectedOpenAIAccountFromDB(ctx, fresh, groupID, platform, requestedModel, false, requiredCapability)
 		if fresh == nil {
+			filterStats.exclude("ineligible")
 			continue
 		}
 		if !openAIAccountMatchesLimitContinuationSelection(fresh, limitMode) {
+			filterStats.exclude("limit_continuation_tier")
 			continue
 		}
 		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
+			filterStats.exclude("channel_upstream_restricted")
 			continue
 		}
 		compactTier := 0
@@ -2141,6 +2154,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			compactTier = openAICompactSupportTier(fresh)
 			if compactTier == 0 {
 				compactBlocked = true
+				filterStats.exclude("compact_unsupported")
 				continue
 			}
 		}
@@ -2149,7 +2163,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		compactTiers[fresh.ID] = compactTier
 	}
 	if len(eligible) == 0 {
-		return nil, compactBlocked
+		return nil, compactBlocked, filterStats
 	}
 	rateOrder := openAILegacyUpstreamRateOrder{}
 	if preferLowUpstreamRate {
@@ -2170,7 +2184,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 		}
 		return s.isBetterAccount(a, b)
 	})
-	return eligible[0], compactBlocked
+	return eligible[0], compactBlocked, filterStats
 }
 
 // isBetterAccount 判断 candidate 是否比 current 更优。
@@ -4718,12 +4732,27 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 }
 
 func openAIStreamDataStartsVisibleOutput(data, eventType string) bool {
+	trimmed := strings.TrimSpace(data)
+	if trimmed == "" || trimmed == "[DONE]" {
+		return false
+	}
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" && gjson.Valid(trimmed) {
+		eventType = strings.TrimSpace(gjson.Get(trimmed, "type").String())
+	}
 	if !openAIStreamDataStartsClientOutput(data, eventType) {
 		return false
 	}
-	switch strings.TrimSpace(eventType) {
+	switch eventType {
+	case "", "keepalive":
+		return false
 	case "response.created", "response.in_progress", "response.output_item.added", "response.content_part.added":
 		return false
+	case "response.output_text.delta", "response.function_call_arguments.delta":
+		return strings.TrimSpace(gjson.Get(trimmed, "delta").String()) != ""
+	case "response.completed", "response.done":
+		output := gjson.Get(trimmed, "response.output")
+		return output.Exists() && output.IsArray() && len(output.Array()) > 0
 	default:
 		return true
 	}
@@ -5390,6 +5419,15 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 
+	if isOpenAIDeterministicClientError(resp.StatusCode) {
+		MarkResponseCommitted(c)
+		writeOpenAIUpstreamClientError(c, resp.StatusCode, body, upstreamMsg)
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		logger.LegacyPrintf("service.openai_gateway",
 			"OpenAI upstream error %d (account=%d platform=%s type=%s): %s",
@@ -5582,6 +5620,18 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		upstreamMsg = fmt.Sprintf("Upstream error: %d", resp.StatusCode)
 	}
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+	if isOpenAIDeterministicClientError(resp.StatusCode) {
+		MarkResponseCommitted(c)
+		errType := strings.TrimSpace(gjson.GetBytes(body, "error.type").String())
+		if errType == "" {
+			errType = openAIUpstreamClientErrorFallbackType
+		}
+		writeError(c, resp.StatusCode, errType, upstreamMsg)
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
 
 	upstreamDetail := ""
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
@@ -7108,6 +7158,22 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			return fmt.Errorf("%w; persist pricing-pending usage: %v", err, pendingErr)
 		}
 		return err
+	}
+	if responseModel := responseModelBillingDeclaration(
+		input.BillingModelSource,
+		result.UpstreamResponseModel,
+		result.UpstreamResponseModelConflict,
+		result.ImageCount > 0 || result.AudioUsage != nil || result.SearchCount > 0,
+	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+		responseChannelPriced := s.resolveOpenAIChannelPricing(ctx, responseModel, apiKey) != nil
+		identified := responseChannelPriced || (s.billingService != nil && s.billingService.HasIdentifiedTokenPricing(responseModel))
+		if identified {
+			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, []string{responseModel}, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingEnabled)
+			baselineChannelPriced := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey) != nil
+			if responseErr == nil && responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
+				cost = responseCost
+			}
+		}
 	}
 
 	// Determine billing type

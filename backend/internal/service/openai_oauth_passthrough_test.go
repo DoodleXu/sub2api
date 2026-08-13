@@ -1652,7 +1652,6 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeConfigured5xxRetriesSame
 }
 
 func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailover(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	tests := []struct {
 		name        string
 		statusCode  int

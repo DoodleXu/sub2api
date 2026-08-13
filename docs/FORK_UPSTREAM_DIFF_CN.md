@@ -62,10 +62,12 @@ git diff --name-status refs/tags/upstream/v0.1.175^{}..HEAD
 - 2026-08-11：Channel Monitor V2 的“错误原因”仅管理员可见；普通用户页面移除页签、用户路由不注册该接口，handler 也拒绝非管理员直连，避免暴露上游错误分类与原始错误信息。
 - 2026-08-13 发版前修复：OpenAI API Key passthrough 的 pool 模式恢复按 `pool_mode_retry_status_codes` 对 401/403 执行同账号重试后再切换账号；显式空列表仍关闭该行为，普通 API Key 和非 pool 账号继续保持原错误透传语义。
 - 2026-08-13 发版前修复：WS v2 direct passthrough 将最终图片输出事件纳入 `first_token_ms` 的可见输出口径，同时保留 `image_first_output_ms` 的首图口径；partial image 只记录首图，不提前伪造普通首 token。相关高重复 handler/relay 回归与全量后端单测已通过。
+- 2026-08-13 发版前全量 CI 修复：原生与 passthrough Responses 统一只在真实文本、工具参数或最终图片输出时记录 `first_token_ms`，仅含 usage 的终态不再被误记为可见输出；上游确定性 400 在原生与兼容路径均保留 400 和真实错误类型/信息，避免下游按 502 放大重试。
+- 2026-08-13 发版前全量 CI 修复：旧调度入口在无可用账号时补齐与高级调度一致的候选池和过滤原因诊断；OpenAI 响应模型计费复用“只采纳可识别且不高于请求模型成本”的公共保护，配置缺失的账号调度阈值按正常 TTL 缓存默认值。service 测试的 Gin 模式统一由包级 `TestMain` 设置，避免并行测试修改全局状态。
 
 ### 本次验证
 
-- 已重新生成 Wire；`TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...` 和 `git diff --check` 通过。
+- 已重新生成 Wire；`TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...` 和 `git diff --check` 通过；发版前额外覆盖确定性 400、可见输出 TTFT、旧调度诊断、响应模型计费、调度阈值缓存与 Gin 全局状态回归。
 - 二次审修复回归：无 Redis 缓存、同组多账号时仍只选择持久化绑定账号；任务账号不可用保持 503；简易模式 usage log 的批处理与同步兜底均失败时返回错误以释放 claim。`service`、`handler` 完整单元测试、相应 `-race` 用例及 PostgreSQL/Redis 迁移幂等 schema 集成测试均通过。
 
 本次 `v0.1.172` 合并说明：
