@@ -7658,6 +7658,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			Ctx:                       ctx,
 			Model:                     billingModel,
 			GroupID:                   &gid,
+			Group:                     apiKey.Group,
 			Tokens:                    tokens,
 			RequestCount:              1,
 			RateMultiplier:            multiplier,
@@ -7805,7 +7806,7 @@ func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, 
 		return nil
 	}
 	gid := apiKey.Group.ID
-	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid})
+	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid, Group: apiKey.Group})
 	if resolved.Source == PricingSourceChannel {
 		return resolved
 	}
