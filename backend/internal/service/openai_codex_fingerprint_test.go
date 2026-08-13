@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func newTestOAuthAccount(id int64, extra map[string]any) *Account {
@@ -123,6 +125,39 @@ func TestResolveCodexFingerprintIDsFromRequest_DefaultIsSession(t *testing.T) {
 	assert.Equal(t, codexFingerprintSession, ids.mode)
 	assert.NotEmpty(t, ids.sessionID)
 	assert.NotEmpty(t, ids.turnID)
+}
+
+func TestOpenAIGatewayForwardAppliesSharedCodexFingerprintToBodyAndHeaders(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"test","input":"hello"}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"id":"resp_fingerprint","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+	account := newOpenAIOAuthNamespaceTestAccount()
+	account.Extra = map[string]any{codexFingerprintModeExtraKey: "session"}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Request.Header.Set("session-id", "client-session-fingerprint")
+	c.Request.Header.Set("x-codex-turn-metadata", `{"sandbox":"seccomp"}`)
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 1)
+	require.Len(t, upstream.bodies, 1)
+
+	convergedInstall := resolveConvergedInstallationID(account)
+	convergedSession := resolveConvergedSessionID(account)
+	convergedThread := resolveConvergedThreadID(account, "client-session-fingerprint")
+	require.Equal(t, convergedInstall, upstream.requests[0].Header.Get("x-codex-installation-id"))
+	require.Equal(t, convergedSession, upstream.requests[0].Header.Get("session-id"))
+	require.Equal(t, convergedSession, upstream.requests[0].Header.Get("session_id"))
+	require.Equal(t, convergedThread, upstream.requests[0].Header.Get("thread-id"))
+
+	metadata := gjson.GetBytes(upstream.bodies[0], "client_metadata")
+	require.Equal(t, convergedInstall, metadata.Get("x-codex-installation-id").String())
+	require.Equal(t, convergedSession, metadata.Get("session_id").String())
+	require.Equal(t, convergedThread, metadata.Get("thread_id").String())
+	require.Equal(t, "seccomp", gjson.Get(upstream.requests[0].Header.Get("x-codex-turn-metadata"), "sandbox").String())
 }
 
 // --- applyCodexFingerprintHeaders: off 模式 ---
