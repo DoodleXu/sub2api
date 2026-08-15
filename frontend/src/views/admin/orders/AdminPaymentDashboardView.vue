@@ -13,7 +13,9 @@
               :class="days === d
                 ? 'bg-primary-600 text-white'
                 : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
-              @click="days = d"
+              :aria-pressed="days === d"
+              :data-testid="`payment-dashboard-days-${d}`"
+              @click="selectDays(d)"
             >
               {{ d }}{{ t('payment.admin.daySuffix') }}
             </button>
@@ -71,7 +73,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminPaymentAPI } from '@/api/admin/payment'
@@ -90,6 +92,7 @@ const DAYS_OPTIONS = [7, 30, 90] as const
 const days = ref<number>(30)
 const loading = ref(false)
 const stats = ref<DashboardStats | null>(null)
+let latestRequest = 0
 
 function methodColor(type: string): string {
   const c: Record<string, string> = {
@@ -124,17 +127,29 @@ function formatMoney(currency: string, amount: number): string {
 }
 
 async function loadDashboard() {
+  const requestId = ++latestRequest
   loading.value = true
   try {
     const res = await adminPaymentAPI.getDashboard(days.value)
-    stats.value = res.data
+    if (requestId === latestRequest) {
+      stats.value = res.data
+    }
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    if (requestId === latestRequest) {
+      appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    }
   } finally {
-    loading.value = false
+    if (requestId === latestRequest) {
+      loading.value = false
+    }
   }
 }
 
-watch(days, () => loadDashboard())
+function selectDays(value: number) {
+  if (days.value === value) return
+  days.value = value
+  void loadDashboard()
+}
+
 onMounted(() => loadDashboard())
 </script>
