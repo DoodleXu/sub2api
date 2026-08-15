@@ -140,9 +140,10 @@ type MethodFeeSchedule struct {
 // MethodLimitsResponse is the full response for the user-facing /limits API.
 // It includes per-method limits and the global widest range (union of all methods).
 type MethodLimitsResponse struct {
-	Methods   map[string]MethodLimits `json:"methods"`
-	GlobalMin float64                 `json:"global_min"` // 0 = no minimum
-	GlobalMax float64                 `json:"global_max"` // 0 = no maximum
+	Methods     map[string]MethodLimits `json:"methods"`
+	MethodOrder []string                `json:"method_order"`
+	GlobalMin   float64                 `json:"global_min"` // 0 = no minimum
+	GlobalMax   float64                 `json:"global_max"` // 0 = no maximum
 }
 
 type CreateProviderInstanceRequest struct {

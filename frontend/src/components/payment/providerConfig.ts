@@ -47,9 +47,6 @@ export const PROVIDER_SUPPORTED_TYPES: Record<string, string[]> = {
 /** Available payment modes for EasyPay providers. */
 export const EASYPAY_PAYMENT_MODES = ['qrcode', 'popup'] as const
 
-/** Fixed display order for user-facing payment methods */
-export const METHOD_ORDER = ['alipay', 'alipay_direct', 'wxpay', 'wxpay_direct', 'stripe', 'airwallex'] as const
-
 export function isBuiltInAlipayMethod(type: string): boolean {
   return type === 'alipay' || type === 'alipay_direct'
 }
@@ -131,11 +128,13 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'apiBase', label: '', sensitive: false },
     { key: 'cidAlipay', label: '', sensitive: false, optional: true },
     { key: 'cidWxpay', label: '', sensitive: false, optional: true },
+    { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_providerFeeRateHint' },
   ],
   alipay: [
     { key: 'appId', label: 'App ID', sensitive: false },
     { key: 'privateKey', label: '', sensitive: true },
     { key: 'publicKey', label: '', sensitive: true },
+    { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_providerFeeRateHint' },
   ],
   wxpay: [
     { key: 'appId', label: 'App ID', sensitive: false },
@@ -145,6 +144,7 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'certSerial', label: '', sensitive: false },
     { key: 'publicKey', label: '', sensitive: true },
     { key: 'publicKeyId', label: '', sensitive: false },
+    { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_providerFeeRateHint' },
   ],
   stripe: [
     { key: 'secretKey', label: '', sensitive: true },
@@ -162,6 +162,7 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'countryCode', label: '', sensitive: false, defaultValue: 'CN' },
     { key: 'currency', label: '', sensitive: false, defaultValue: 'CNY', hintKey: 'admin.settings.payment.field_paymentCurrencyHint', options: PAYMENT_CURRENCY_OPTIONS },
     { key: 'accountId', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_accountIdHint' },
+    { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_providerFeeRateHint' },
   ],
 }
 

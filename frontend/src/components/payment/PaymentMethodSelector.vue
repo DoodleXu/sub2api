@@ -8,7 +8,7 @@
       class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
     >
       <button
-        v-for="method in sortedMethods"
+        v-for="method in methods"
         :key="method.type"
         type="button"
         :title="methodLabel(method)"
@@ -43,9 +43,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { METHOD_ORDER, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from './providerConfig'
+import { isBuiltInAlipayMethod, isBuiltInWxpayMethod } from './providerConfig'
 import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import stripeIcon from '@/assets/icons/stripe.svg'
@@ -61,7 +60,7 @@ export interface PaymentMethodOption {
   available: boolean
 }
 
-const props = defineProps<{
+defineProps<{
   methods: PaymentMethodOption[]
   selected: string
 }>()
@@ -79,15 +78,6 @@ const METHOD_ICONS: Record<string, string> = {
   airwallex: airwallexIcon,
   credit_card: paymentIcon,
 }
-
-const sortedMethods = computed(() => {
-  const order: readonly string[] = METHOD_ORDER
-  return [...props.methods].sort((a, b) => {
-    const ai = order.indexOf(a.type)
-    const bi = order.indexOf(b.type)
-    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
-  })
-})
 
 function methodIcon(type: string): string {
   if (isBuiltInAlipayMethod(type)) return METHOD_ICONS.alipay

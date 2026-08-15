@@ -55,12 +55,23 @@ type paymentFeeConfig struct {
 }
 
 func paymentFeeConfigForSelection(globalRate float64, sel *payment.InstanceSelection) paymentFeeConfig {
-	if sel == nil || strings.TrimSpace(sel.ProviderKey) != payment.TypeStripe || !stripeFeeConfigOverridesGlobal(sel.Config) {
+	if sel == nil {
+		return paymentFeeConfig{Rate: globalRate}
+	}
+	if strings.TrimSpace(sel.ProviderKey) == payment.TypeStripe {
+		if !stripeFeeConfigOverridesGlobal(sel.Config) {
+			return paymentFeeConfig{Rate: globalRate}
+		}
+		return paymentFeeConfig{
+			Rate: parseProviderFeeFloat(sel.Config[payment.ConfigKeyFeeRate]),
+			Min:  parseProviderFeeFloat(sel.Config[payment.ConfigKeyFeeMin]),
+		}
+	}
+	if strings.TrimSpace(sel.Config[payment.ConfigKeyFeeRate]) == "" {
 		return paymentFeeConfig{Rate: globalRate}
 	}
 	return paymentFeeConfig{
 		Rate: parseProviderFeeFloat(sel.Config[payment.ConfigKeyFeeRate]),
-		Min:  parseProviderFeeFloat(sel.Config[payment.ConfigKeyFeeMin]),
 	}
 }
 

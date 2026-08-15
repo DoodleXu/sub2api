@@ -457,7 +457,21 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 }
 
 func validateProviderFeeConfig(providerKey string, config map[string]string) error {
-	if providerKey != payment.TypeStripe || !stripeFeeConfigHasAnyOverride(config) {
+	if providerKey != payment.TypeStripe {
+		rawRate := strings.TrimSpace(config[payment.ConfigKeyFeeRate])
+		if rawRate == "" {
+			return nil
+		}
+		rate, err := parseOptionalProviderFeeFloat(rawRate)
+		if err != nil || math.IsNaN(rate) || math.IsInf(rate, 0) || rate < 0 || rate > 100 {
+			return infraerrors.BadRequest("INVALID_PROVIDER_FEE_RATE", "provider fee rate must be between 0 and 100")
+		}
+		if math.Round(rate*100) != rate*100 {
+			return infraerrors.BadRequest("INVALID_PROVIDER_FEE_RATE", "provider fee rate allows at most 2 decimal places")
+		}
+		return nil
+	}
+	if !stripeFeeConfigHasAnyOverride(config) {
 		return nil
 	}
 	if !stripeFeeConfigHasCompleteOverride(config) {

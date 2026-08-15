@@ -141,6 +141,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 
 	response.Success(c, checkoutInfoResponse{
 		Methods:                       limitsResp.Methods,
+		MethodOrder:                   limitsResp.MethodOrder,
 		GlobalMin:                     limitsResp.GlobalMin,
 		GlobalMax:                     limitsResp.GlobalMax,
 		Plans:                         planList,
@@ -158,6 +159,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 
 type checkoutInfoResponse struct {
 	Methods                       map[string]service.MethodLimits `json:"methods"`
+	MethodOrder                   []string                        `json:"method_order"`
 	GlobalMin                     float64                         `json:"global_min"`
 	GlobalMax                     float64                         `json:"global_max"`
 	Plans                         []checkoutPlan                  `json:"plans"`

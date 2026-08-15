@@ -41,6 +41,23 @@ func TestShouldUseAlipayMobilePrecreate(t *testing.T) {
 	}
 }
 
+func TestPaymentFeeConfigForSelectionUsesNonStripeOverride(t *testing.T) {
+	t.Parallel()
+
+	requireFee := func(name string, selection *payment.InstanceSelection, wantRate, wantMin float64) {
+		t.Helper()
+		fee := paymentFeeConfigForSelection(2.5, selection)
+		if fee.Rate != wantRate || fee.Min != wantMin {
+			t.Fatalf("%s fee = %+v, want rate=%v min=%v", name, fee, wantRate, wantMin)
+		}
+	}
+
+	requireFee("inherit global", &payment.InstanceSelection{ProviderKey: payment.TypeAlipay, Config: map[string]string{}}, 2.5, 0)
+	requireFee("provider override", &payment.InstanceSelection{ProviderKey: payment.TypeWxpay, Config: map[string]string{payment.ConfigKeyFeeRate: "1.25"}}, 1.25, 0)
+	requireFee("provider waiver", &payment.InstanceSelection{ProviderKey: payment.TypeEasyPay, Config: map[string]string{payment.ConfigKeyFeeRate: "0"}}, 0, 0)
+	requireFee("stripe unchanged", &payment.InstanceSelection{ProviderKey: payment.TypeStripe, Config: map[string]string{payment.ConfigKeyFeeRate: "3", payment.ConfigKeyFeeMin: "0.5"}}, 3, 0.5)
+}
+
 func TestIsOfficialAlipayProviderInstance(t *testing.T) {
 	t.Parallel()
 

@@ -282,6 +282,68 @@ func TestGetAvailableMethodLimitsUsesStripeCustomFee(t *testing.T) {
 	require.Equal(t, []MethodFeeSchedule{{FeeRate: 3, FeeMin: 0.5}}, resp.Methods[payment.TypeStripe].FeeSchedules)
 }
 
+func TestGetAvailableMethodLimitsUsesProviderOrderAndIndependentFees(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	providers := []struct {
+		key       string
+		name      string
+		types     string
+		config    string
+		sortOrder int
+	}{
+		{key: payment.TypeAlipay, name: "Alipay", types: "alipay", config: `{"feeRate":"0"}`, sortOrder: 2},
+		{key: payment.TypeStripe, name: "Stripe", types: "card,link", config: `{"currency":"CNY","feeRate":"3","feeMin":"0.50"}`, sortOrder: 1},
+		{key: payment.TypeWxpay, name: "WeChat Pay", types: "wxpay", config: `{"feeRate":"1.5"}`, sortOrder: 0},
+	}
+	for _, provider := range providers {
+		_, err := client.PaymentProviderInstance.Create().
+			SetProviderKey(provider.key).
+			SetName(provider.name).
+			SetConfig(provider.config).
+			SetSupportedTypes(provider.types).
+			SetSortOrder(provider.sortOrder).
+			SetEnabled(true).
+			Save(ctx)
+		require.NoError(t, err)
+	}
+
+	svc := &PaymentConfigService{
+		entClient: client,
+		settingRepo: &paymentConfigSettingRepoStub{values: map[string]string{
+			SettingRechargeFeeRate: "2.5",
+		}},
+	}
+	resp, err := svc.GetAvailableMethodLimits(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{payment.TypeWxpay, payment.TypeStripe, payment.TypeAlipay}, resp.MethodOrder)
+	require.Equal(t, 1.5, resp.Methods[payment.TypeWxpay].FeeRate)
+	require.Equal(t, 0.0, resp.Methods[payment.TypeAlipay].FeeRate)
+	require.Equal(t, []MethodFeeSchedule{{FeeRate: 0, FeeMin: 0}}, resp.Methods[payment.TypeAlipay].FeeSchedules)
+}
+
+func TestPcBuildMethodOrderUsesSelectedVisibleMethodProvider(t *testing.T) {
+	easyPay := makeInstance(1, payment.TypeEasyPay, "alipay,wxpay", "")
+	easyPay.SortOrder = 0
+	officialAlipay := makeInstance(2, payment.TypeAlipay, "alipay", "")
+	officialAlipay.SortOrder = 1
+
+	methods := map[string]MethodLimits{
+		payment.TypeAlipay: {PaymentType: payment.TypeAlipay},
+		payment.TypeWxpay:  {PaymentType: payment.TypeWxpay},
+	}
+	typeInstances := map[string][]*dbent.PaymentProviderInstance{
+		payment.TypeAlipay: {officialAlipay},
+		payment.TypeWxpay:  {easyPay},
+	}
+
+	require.Equal(t,
+		[]string{payment.TypeWxpay, payment.TypeAlipay},
+		pcBuildMethodOrder([]*dbent.PaymentProviderInstance{easyPay, officialAlipay}, typeInstances, methods),
+	)
+}
+
 func TestGetAvailableMethodLimitsIncludesEasyPayCustomMethodDisplayName(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

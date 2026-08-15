@@ -64,6 +64,7 @@ export interface PaymentFeeSchedule {
 /** Response from /payment/limits API */
 export interface MethodLimitsResponse {
   methods: Record<string, MethodLimit>
+  method_order: string[]
   global_min: number  // widest min across all methods; 0 = no minimum
   global_max: number  // widest max across all methods; 0 = no maximum
 }
@@ -71,6 +72,7 @@ export interface MethodLimitsResponse {
 /** Response from /payment/checkout-info API — single call for the payment page */
 export interface CheckoutInfoResponse {
   methods: Record<string, MethodLimit>
+  method_order: string[]
   global_min: number
   global_max: number
   plans: SubscriptionPlan[]

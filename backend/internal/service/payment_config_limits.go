@@ -17,7 +17,9 @@ import (
 // Stripe sub-types (card, link) are aggregated under "stripe".
 func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*MethodLimitsResponse, error) {
 	instances, err := s.entClient.PaymentProviderInstance.Query().
-		Where(paymentproviderinstance.EnabledEQ(true)).All(ctx)
+		Where(paymentproviderinstance.EnabledEQ(true)).
+		Order(paymentproviderinstance.BySortOrder(), paymentproviderinstance.ByID()).
+		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query provider instances: %w", err)
 	}
@@ -38,6 +40,7 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 		ml.FeeRate, ml.FeeMin, ml.FeeSchedules = s.pcAggregateMethodFee(globalFeeRate, insts)
 		resp.Methods[ml.PaymentType] = ml
 	}
+	resp.MethodOrder = pcBuildMethodOrder(instances, typeInstances, resp.Methods)
 	resp.GlobalMin, resp.GlobalMax = pcComputeGlobalRange(resp.Methods)
 	return resp, nil
 }
@@ -182,13 +185,13 @@ func (s *PaymentConfigService) pcGlobalRechargeFeeRate(ctx context.Context) floa
 }
 
 func (s *PaymentConfigService) pcAggregateMethodFee(globalRate float64, instances []*dbent.PaymentProviderInstance) (float64, float64, []MethodFeeSchedule) {
-	maxRate := globalRate
+	maxRate := 0.0
 	maxMin := 0.0
 	schedules := make([]MethodFeeSchedule, 0)
 	seen := make(map[string]struct{})
-	hasStripe := false
+	hasInstance := false
 	for _, inst := range instances {
-		if inst == nil || inst.ProviderKey != payment.TypeStripe {
+		if inst == nil {
 			continue
 		}
 		cfg := map[string]string{}
@@ -202,7 +205,7 @@ func (s *PaymentConfigService) pcAggregateMethodFee(globalRate float64, instance
 			ProviderKey: inst.ProviderKey,
 			Config:      cfg,
 		})
-		hasStripe = true
+		hasInstance = true
 		if fee.Rate > maxRate {
 			maxRate = fee.Rate
 		}
@@ -218,10 +221,52 @@ func (s *PaymentConfigService) pcAggregateMethodFee(globalRate float64, instance
 			})
 		}
 	}
-	if !hasStripe {
+	if !hasInstance {
 		return globalRate, 0, nil
 	}
 	return maxRate, maxMin, schedules
+}
+
+func pcBuildMethodOrder(instances []*dbent.PaymentProviderInstance, typeInstances map[string][]*dbent.PaymentProviderInstance, methods map[string]MethodLimits) []string {
+	order := make([]string, 0, len(methods))
+	seen := make(map[string]struct{}, len(methods))
+	add := func(method string, inst *dbent.PaymentProviderInstance) {
+		method = NormalizeVisibleMethod(method)
+		if method == "" {
+			return
+		}
+		if _, available := methods[method]; !available {
+			return
+		}
+		selected := false
+		for _, candidate := range typeInstances[method] {
+			if candidate != nil && inst != nil && candidate.ID == inst.ID {
+				selected = true
+				break
+			}
+		}
+		if !selected {
+			return
+		}
+		if _, exists := seen[method]; exists {
+			return
+		}
+		seen[method] = struct{}{}
+		order = append(order, method)
+	}
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		if inst.ProviderKey == payment.TypeStripe {
+			add(payment.TypeStripe, inst)
+			continue
+		}
+		for _, method := range splitTypes(inst.SupportedTypes) {
+			add(method, inst)
+		}
+	}
+	return order
 }
 
 type easyPayCustomMethodDisplayConfig struct {

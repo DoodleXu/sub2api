@@ -770,6 +770,16 @@ func TestValidateProviderFeeConfig(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, "INVALID_STRIPE_FEE_MIN", infraerrors.FromError(err).Reason)
+
+	for _, providerKey := range []string{payment.TypeEasyPay, payment.TypeAlipay, payment.TypeWxpay, payment.TypeAirwallex} {
+		require.NoError(t, validateProviderFeeConfig(providerKey, map[string]string{}))
+		require.NoError(t, validateProviderFeeConfig(providerKey, map[string]string{payment.ConfigKeyFeeRate: "0"}))
+		require.NoError(t, validateProviderFeeConfig(providerKey, map[string]string{payment.ConfigKeyFeeRate: "2.50"}))
+
+		err = validateProviderFeeConfig(providerKey, map[string]string{payment.ConfigKeyFeeRate: "2.501"})
+		require.Error(t, err)
+		require.Equal(t, "INVALID_PROVIDER_FEE_RATE", infraerrors.FromError(err).Reason)
+	}
 }
 
 func boolPtrValue(v bool) *bool {

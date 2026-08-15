@@ -63,6 +63,18 @@ describe('PROVIDER_CONFIG_FIELDS.stripe', () => {
   })
 })
 
+describe('non-Stripe provider fee config', () => {
+  it('allows each provider to override or clear its fee rate independently', () => {
+    for (const providerKey of ['easypay', 'alipay', 'wxpay', 'airwallex']) {
+      const feeRate = findField(providerKey, 'feeRate')
+      expect(feeRate?.optional).toBe(true)
+      expect(feeRate?.clearable).toBe(true)
+      expect(feeRate?.hintKey).toBe('admin.settings.payment.field_providerFeeRateHint')
+      expect(findField(providerKey, 'feeMin')).toBeUndefined()
+    }
+  })
+})
+
 describe('EasyPay custom methods config', () => {
   it('parses customMethods from the JSON string stored in provider config', () => {
     expect(parseEasyPayCustomMethods(

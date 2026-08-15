@@ -778,6 +778,7 @@ export default {
         field_accountId: 'Airwallex 账户 ID',
         field_airwallexApiBaseHint: '必须和 API Key 所属环境一致：沙箱/测试密钥使用 https://api-demo.airwallex.com/api/v1，生产密钥使用 https://api.airwallex.com/api/v1。环境混用会返回 credentials_invalid / Access Denied。',
         field_paymentCurrencyHint: '默认 CNY。Stripe 和 Airwallex 可按账户支持从下拉项选择 HKD、USD 等币种；微信、支付宝、易支付仍按 CNY。',
+        field_providerFeeRateHint: '该服务商独立手续费率，留空继承全局充值手续费率；填写 0 表示该服务商不收取手续费。',
         field_accountIdHint: '不涉及多账户、组织级密钥或连接账户收款时可以不填；单账户 Scoped API Key 会默认使用所选账户。',
         field_cid: '支付渠道 ID',
         field_cidAlipay: '支付宝渠道 ID',

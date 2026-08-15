@@ -103,6 +103,7 @@ function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
     methods: {
       wxpay: wxpayMethod,
     },
+    method_order: ['wxpay'],
     global_min: 0,
     global_max: 0,
     plans: [],
@@ -578,6 +579,37 @@ describe('PaymentView payment recovery', () => {
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
   })
 
+  it('selects the first backend-ordered provider method by default', async () => {
+    const method = checkoutInfoFixture().data.methods.wxpay
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      methods: {
+        alipay: { ...method },
+        wxpay: { ...method },
+        stripe: { ...method },
+      },
+      method_order: ['stripe', 'wxpay', 'alipay'],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          PaymentMethodSelector: {
+            props: ['selected', 'methods'],
+            template: '<div data-test="method-selector" :data-order="methods.map(method => method.type).join(\',\')">{{ selected }}</div>',
+          },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    const selector = wrapper.find('[data-test="method-selector"]')
+    expect(selector.text()).toBe('stripe')
+    expect(selector.attributes('data-order')).toBe('stripe,wxpay,alipay')
+  })
+
   it('restores a custom EasyPay method as the selected payment method', async () => {
     getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
       methods: {
@@ -971,6 +1003,53 @@ describe('PaymentView WeChat JSAPI flow', () => {
 
     expect(wrapper.text()).toContain('¥10.00')
     expect(wrapper.text()).toContain('¥20.00')
+  })
+
+  it('honors an explicit provider zero fee instead of falling back to the global fee', async () => {
+    routeState.query = {}
+    const fixture = checkoutInfoFixture({
+      recharge_fee_rate: 2.5,
+      methods: {
+        easypay: {
+          daily_limit: 0,
+          daily_used: 0,
+          daily_remaining: 0,
+          single_min: 0,
+          single_max: 0,
+          currency: 'CNY',
+          fee_rate: 0,
+          fee_min: 0,
+          fee_schedules: [{ fee_rate: 0, fee_min: 0 }],
+          available: true,
+        },
+      },
+      method_order: ['easypay'],
+    })
+    getCheckoutInfo.mockResolvedValue(fixture)
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          AmountInput: true,
+          Icon: true,
+          PaymentMethodSelector: true,
+          PaymentStatusPanel: true,
+          SubscriptionPlanCard: true,
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).amount = 100
+    ;(wrapper.vm as unknown as { amount: number; selectedMethod: string }).selectedMethod = 'easypay'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('¥100.00')
+    expect(wrapper.text()).not.toContain('¥102.50')
+    expect((wrapper.vm as unknown as { canSubmit: boolean }).canSubmit).toBe(true)
   })
 
   it('disables submit when the estimated payable amount exceeds the method limit', async () => {
