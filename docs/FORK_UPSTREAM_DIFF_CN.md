@@ -28,6 +28,8 @@ git diff --name-status refs/tags/upstream/v0.1.176^{}..HEAD
 
 本次 `v0.1.176` 合并说明：
 
+- 2026-08-15 支付看板的 7/30/90 天筛选改为点击后显式加载，并丢弃过期请求响应，确保快速切换时统计数据不会回写到错误的筛选范围；筛选按钮继续保留 fork 的多币种支付统计展示。
+
 - 合入 Grok 4.6 模型/官方价格、JWT 订阅档位识别、Grok 实时配额展示与模型级限流归因，支持独立 `/x_search` 及 Chat/Responses 搜索往返，新增分组逐模型定价与可关闭的长上下文阶梯。
 - 合入分组平台变更后的渠道缓存失效、Responses 探测未完成时保持 unknown、渠道定价模型名归一化，以及多实例定时备份 leader lock，避免重复执行备份。
 - 上游的 `admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_usage.go` 继续保持删除；缓存失效、Grok 用量和计费行为已迁入 fork 实际使用的 `admin_service.go`、`gateway_service.go`、`openai_gateway_service.go` 等聚合模块。`backend/cmd/server/VERSION` 保持 fork 的 `0.1.248`。
@@ -446,7 +448,7 @@ git diff --name-status refs/tags/upstream/v0.1.176^{}..HEAD
 - 显式 usage 清理采用半开时间范围 `[start, end)`；删除完成后先让数据库成本快照变为未完成并清除 Redis 成本缓存，再异步重算受影响范围并刷新快照，重算期间不会继续展示旧的“已完成”口径。成本核算路径没有删除 `usage_logs` 的行为。
 - 调度器主动同步账号快照时，优先使用账本中的标准成本分母重算当前 `total_cost_cny / total_standard_account_cost`；账本回填未完成或数据库读取失败时才保留旧缓存，避免管理员修改累计成本后继续使用过期的每美元成本比例；恢复旧缓存时也不会把含账号倍率的实际成本误当作标准成本分母。
 - 首次生产切换必须先执行迁移，并让不承接账号列表/Dashboard 流量的固定版本实例完成低速回填；确认 `pending_accounts=0`、抽样账本一致且成本快照已刷新后再切换读流量，避免回填期间展示部分累计值。
-- 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。
+- 支付、订阅、订单金额显示统一为人民币口径，订阅升级抵扣和手续费/限额也有 fork 修正。用户充值支付方式严格跟随服务商管理顺序，第一个可用服务商为默认支付方式；除保持原有 Stripe 成对手续费配置外，其他服务商可独立设置手续费率，留空继承全局费率、显式填写 `0` 表示免手续费。
 
 关键代码：
 
