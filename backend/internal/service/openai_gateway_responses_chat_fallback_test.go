@@ -54,8 +54,6 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 }
 
 func TestForwardResponses_PassthroughFlagWithUnsupportedResponsesUsesAccountMapping(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	for _, path := range []string{"/v1/responses", "/v1/responses/compact"} {
 		path := path
 		t.Run(path, func(t *testing.T) {
