@@ -14,7 +14,8 @@ import (
 )
 
 type dashboardAggregationRepository struct {
-	sql sqlExecutor
+	sql   sqlExecutor
+	clock func() time.Time
 }
 
 const usageBillingDedupCleanupBatchSize = 10000
@@ -32,7 +33,14 @@ func NewDashboardAggregationRepository(sqlDB *sql.DB) service.DashboardAggregati
 }
 
 func newDashboardAggregationRepositoryWithSQL(sqlq sqlExecutor) *dashboardAggregationRepository {
-	return &dashboardAggregationRepository{sql: sqlq}
+	return &dashboardAggregationRepository{sql: sqlq, clock: time.Now}
+}
+
+func (r *dashboardAggregationRepository) now() time.Time {
+	if r.clock != nil {
+		return r.clock()
+	}
+	return time.Now()
 }
 
 func isPostgresDriver(db *sql.DB) bool {
@@ -269,6 +277,14 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 		if err != nil {
 			return err
 		}
+		if err := lockGroupUsageRollupState(ctx, tx); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := invalidateGroupUsageRollupsAt(ctx, tx, start); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 		txRepo := newDashboardAggregationRepositoryWithSQL(tx)
 		accountCostEnd := completedAccountCostBucketEnd(hourEnd)
 		if err := txRepo.recomputeRangeInTx(ctx, hourStart, hourEnd, accountCostEnd, dayStart, dayEnd); err != nil {
@@ -284,6 +300,10 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 			return err
 		}
 		if err := txRepo.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := txRepo.syncGroupUsageRollupsInTx(ctx, service.GroupUsageTodayStart(r.now())); err != nil {
 			_ = tx.Rollback()
 			return err
 		}

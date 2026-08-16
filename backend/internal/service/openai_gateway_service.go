@@ -408,8 +408,8 @@ func (t *accountWriteThrottle) Allow(id int64, now time.Time) bool {
 
 var defaultOpenAICodexSnapshotPersistThrottle = newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval)
 
-// ErrNoAvailableCompactAccounts indicates the request needs /responses/compact
-// support but no compatible account is available.
+// ErrNoAvailableCompactAccounts indicates a legacy /responses/compact request
+// needs compact support but no compatible account is available.
 var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /responses/compact")
 
 // OpenAIGatewayService handles OpenAI API gateway operations
@@ -475,6 +475,11 @@ type OpenAIGatewayService struct {
 	codexModelsManifestCache            codexModelsManifestCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
+	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
+	// 剥离跨账号回带（openai_codex_turn_state.go）。
+	openaiCodexTurnStateOrigins sync.Map
+	openaiCodexTurnStateWrites  atomic.Uint64
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -619,6 +624,10 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
 	if s.channelService == nil {
 		return false
+	}
+	if compactForwardModel, ok := openAIForwardModelFromContext(ctx); ok {
+		requestedModel = compactForwardModel.model
+		requireCompact = compactForwardModel.useCompactModelMapping
 	}
 	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
 	if upstreamModel == "" {
@@ -1930,18 +1939,40 @@ func prioritizeOpenAICompactAccounts(accounts []*Account) []*Account {
 	return out
 }
 
-// resolveOpenAIAccountUpstreamModelForRequest resolves the upstream model that
-// would be sent for a given request, honouring compact-only mappings when the
-// caller is on the /responses/compact path.
+// resolveOpenAIAccountUpstreamModelForRequest resolves the model that the
+// selected forwarding path will actually send upstream.
 func resolveOpenAIAccountUpstreamModelForRequest(account *Account, requestedModel string, requireCompact bool) string {
+	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
+		upstreamModel := resolveOpenAIForwardModel(account, requestedModel, "")
+		return normalizeOpenAIModelForUpstream(account, upstreamModel)
+	}
+	if account != nil && account.IsOpenAIPassthroughEnabled() {
+		upstreamModel := strings.TrimSpace(requestedModel)
+		if upstreamModel == "" {
+			return ""
+		}
+		if requireCompact {
+			return resolveOpenAICompactForwardModel(account, upstreamModel)
+		}
+		return upstreamModel
+	}
 	upstreamModel := resolveOpenAIForwardModel(account, requestedModel, "")
 	if upstreamModel == "" {
 		return ""
 	}
 	if requireCompact {
-		return resolveOpenAICompactForwardModel(account, upstreamModel)
+		compactModel := resolveOpenAICompactForwardModel(account, upstreamModel)
+		if compactModel != upstreamModel {
+			return compactModel
+		}
 	}
-	return upstreamModel
+	return normalizeOpenAIModelForUpstream(account, upstreamModel)
+}
+
+func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
+	return account != nil &&
+		account.Type == AccountTypeAPIKey &&
+		!openai_compat.ShouldUseResponsesAPI(account.Extra)
 }
 
 func (s *OpenAIGatewayService) selectAccountForModelWithLimitContinuationPriority(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, error) {
@@ -3150,7 +3181,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {
@@ -3458,10 +3489,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					markDecodedModified()
 				}
 			}
-			// 将 fpIDs 存入 gin context，供 buildUpstreamRequest 中头改写使用
-			if c != nil && fpIDs != nil {
-				c.Set("codex_fingerprint_ids", fpIDs)
-			}
+			// 将 fpIDs 存入 gin context，供 buildUpstreamRequest 中头改写使用。
+			// 无条件覆写（含 nil）：failover 从收敛账号切到 off 账号时，上一
+			// 账号的 IDs 不得残留（stageCodexFingerprintIDs 注释）。
+			stageCodexFingerprintIDs(c, fpIDs)
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
@@ -4008,6 +4039,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		defer func() { _ = resp.Body.Close() }()
 
 		serviceTier := extractOpenAIServiceTierFromBody(body)
+		if extractOpenAICodexTurnState(resp.Header) != "" {
+			s.noteOpenAICodexTurnStateProvenance(c, account)
+		}
 		// 上游接受后只保留计费需要的标量，避免响应处理期间继续保活完整 input/tools map。
 		reqBody = nil
 
@@ -4144,6 +4178,28 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = normalizedBody
 		}
 		reqStream = gjson.GetBytes(body, "stream").Bool()
+
+		// 指纹收敛：与非透传路径同门控（仅 OAuth、legacy compact 形态跳过）。
+		// 一次性解析收敛 ID：请求体 client_metadata 在此改写（raw 字节外科
+		// 手术，透传热路径禁全量 Unmarshal），出站头改写由请求构造器读取
+		// context 中的同一份 IDs 完成（turn_id 等随机字段两侧必须一致）。
+		if !isOpenAIResponsesCompactPath(c) {
+			var clientHeaders http.Header
+			if c != nil && c.Request != nil {
+				clientHeaders = c.Request.Header
+			}
+			fpIDs := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+			if fpIDs != nil {
+				fpBody, fpChanged, fpErr := applyCodexFingerprintClientMetadataRaw(body, fpIDs)
+				if fpErr != nil {
+					return nil, fpErr
+				}
+				if fpChanged {
+					body = fpBody
+				}
+			}
+			stageCodexFingerprintIDs(c, fpIDs)
+		}
 	}
 
 	sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
@@ -4453,6 +4509,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	}
 
+	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
+	// 剥离后再出站（openai_codex_turn_state.go）。
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
 	req.Header.Del("x-api-key")
@@ -4521,6 +4581,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
+	applyStagedCodexFingerprintHeaders(c, account, req.Header)
 	if account.Type == AccountTypeOAuth {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}
@@ -4531,6 +4592,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
@@ -5184,6 +5246,15 @@ func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, fil
 			dst.Add(key, v)
 		}
 	}
+
+	// x-codex-turn-state：Codex 回合状态头，客户端会在同回合后续请求回带。
+	// 与上面的用量头不同，这里在上游缺失时也主动清除——failover 换号后残留
+	// 上一账号的 blob 会构成跨账号矛盾（openai_codex_turn_state.go）。
+	turnStateKey := http.CanonicalHeaderKey(openAICodexTurnStateHeader)
+	dst.Del(turnStateKey)
+	for _, v := range getCaseInsensitiveValues(src, openAICodexTurnStateHeader) {
+		dst.Add(turnStateKey, v)
+	}
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
@@ -5244,6 +5315,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 			}
 		}
 	}
+	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
+	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 	if account.Type == AccountTypeOAuth {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
@@ -5291,14 +5365,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 
-	// 指纹收敛：使用 Forward() 中预计算的收敛 ID 改写出站头，与请求体使用同一份 IDs。
-	if account.Type == AccountTypeOAuth && c != nil {
-		if fpIDs, ok := c.Get("codex_fingerprint_ids"); ok {
-			if ids, ok := fpIDs.(*codexFingerprintIDs); ok {
-				applyCodexFingerprintHeaders(req.Header, ids)
-			}
-		}
-	}
+	// 指纹收敛：请求体与出站头使用同一份预计算 ID。
+	applyStagedCodexFingerprintHeaders(c, account, req.Header)
 
 	if account.Type == AccountTypeOAuth {
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
@@ -5311,6 +5379,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
@@ -6043,7 +6112,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 	bodyLooksLikeSSE := bodyHasSSEFraming(body)
 
@@ -6053,7 +6122,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 	if account != nil && account.IsGrok() && isOpenAIResponsesCompactPath(c) {
 		body, err = convertGrokResponseToOpenAICompact(body)
@@ -6065,7 +6134,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+			return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
@@ -6085,6 +6154,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	s.relayOpenAICodexTurnState(c, account, resp.Header)
 
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
@@ -6112,7 +6182,7 @@ func isEventStreamResponse(header http.Header) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -6163,6 +6233,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		body = []byte(bodyText)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	s.relayOpenAICodexTurnState(c, account, resp.Header)
 
 	contentType := "application/json; charset=utf-8"
 	if !ok {
@@ -6769,8 +6840,12 @@ func normalizeOpenAIResponsesInputArguments(reqBody map[string]any) bool {
 	return changed
 }
 
-func IsOpenAIResponsesCompactPathForTest(c *gin.Context) bool {
+func IsOpenAIResponsesCompactPath(c *gin.Context) bool {
 	return isOpenAIResponsesCompactPath(c)
+}
+
+func IsOpenAIResponsesCompactPathForTest(c *gin.Context) bool {
+	return IsOpenAIResponsesCompactPath(c)
 }
 
 func OpenAICompactSessionSeedKeyForTest() string {
@@ -7159,8 +7234,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			return err
 		}
 	}
-	longContextBillingEnabled := billingAccount.IsOpenAILongContextBillingEnabled()
-	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingEnabled)
+	longContextBillingGate := openAILongContextBillingGate(billingAccount)
+	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate)
 	if err != nil {
 		// 上游已经完成时不能只返回异步错误，否则既没有扣费，也没有可追溯记录。
 		// 先持久化 pricing_pending 行，保留原始用量和完整路由信息供后续对账；
@@ -7179,7 +7254,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		responseChannelPriced := s.resolveOpenAIChannelPricing(ctx, responseModel, apiKey) != nil
 		identified := responseChannelPriced || (s.billingService != nil && s.billingService.HasIdentifiedTokenPricing(responseModel))
 		if identified {
-			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, []string{responseModel}, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingEnabled)
+			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, []string{responseModel}, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate)
 			baselineChannelPriced := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey) != nil
 			if responseErr == nil && responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
 				cost = responseCost
@@ -7472,6 +7547,14 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 	return nil
 }
 
+func openAILongContextBillingGate(account *Account) *bool {
+	if account == nil || !account.IsOpenAI() {
+		return nil
+	}
+	enabled := account.IsOpenAILongContextBillingEnabled()
+	return &enabled
+}
+
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	ctx context.Context,
 	result *OpenAIForwardResult,
@@ -7483,7 +7566,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	webSearchMultiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
-	longContextBillingEnabled bool,
+	longContextBillingGate *bool,
 ) (*CostBreakdown, error) {
 	billingModel := firstUsageBillingModel(billingModels)
 	if result != nil && result.WebSearchCalls > 0 {
@@ -7511,7 +7594,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			if candidate == "" {
 				continue
 			}
-			cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, tokens, serviceTier, longContextBillingEnabled)
+			cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, tokens, serviceTier, longContextBillingGate)
 			if err == nil {
 				tokenCost = cost
 				break
@@ -7624,7 +7707,7 @@ func (s *OpenAIGatewayService) ValidateOpenAIUsagePricing(
 	}
 
 	var lastErr error
-	longContextBillingEnabled := account != nil && account.IsOpenAILongContextBillingEnabled()
+	longContextBillingGate := openAILongContextBillingGate(account)
 	for _, candidate := range candidates {
 		_, err := s.calculateOpenAIRecordUsageTokenCost(
 			ctx,
@@ -7633,7 +7716,7 @@ func (s *OpenAIGatewayService) ValidateOpenAIUsagePricing(
 			1,
 			UsageTokens{},
 			strings.TrimSpace(serviceTier),
-			longContextBillingEnabled,
+			longContextBillingGate,
 		)
 		if err == nil {
 			return nil
@@ -7650,7 +7733,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 	multiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
-	longContextBillingEnabled bool,
+	longContextBillingGate *bool,
 ) (*CostBreakdown, error) {
 	if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
@@ -7664,10 +7747,16 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			RateMultiplier:            multiplier,
 			ServiceTier:               serviceTier,
 			Resolver:                  s.resolver,
-			LongContextBillingEnabled: &longContextBillingEnabled,
+			LongContextBillingEnabled: longContextBillingGate,
 		})
 	}
-	return s.billingService.calculateCostWithServiceTierPolicy(billingModel, tokens, multiplier, serviceTier, longContextBillingEnabled)
+	return s.billingService.calculateCostWithServiceTierPolicy(
+		billingModel,
+		tokens,
+		multiplier,
+		serviceTier,
+		longContextBillingGate == nil || *longContextBillingGate,
+	)
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIImageCost(

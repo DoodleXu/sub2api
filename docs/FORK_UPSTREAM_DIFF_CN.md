@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-15
+最后更新：2026-08-16
 
 ## 当前对比基线
 
@@ -10,21 +10,37 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `cd3c118d9` | 本次合并 v0.1.176 前的 fork 基线；版本源保持 `0.1.248` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.176` -> `e803e3851c0a` | 已合入 2026-08-13 发布的官方最新非草稿 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.176` -> `e803e3851c0a` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 11 个冲突路径，其中 3 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite 与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `785404547` | 本次合并 v0.1.177 前的 fork 基线；版本源保持 `0.1.252` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.177` -> `073e92d17178a1ccdb0a27017f572f10c9c7ab62` | 已合入 2026-08-15 发布的官方 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.177` -> `073e92d17178a1ccdb0a27017f572f10c9c7ab62` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 17 个冲突路径，其中 6 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.176:refs/tags/upstream/v0.1.176 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.176^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.176^{}..HEAD
+git fetch upstream refs/tags/v0.1.177:refs/tags/upstream/v0.1.177 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.177^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.177` 合并说明：
+
+- 合入分组用量按日汇总及其时区迁移、重算和清理联动；管理端分组列表新增昨日成本摘要，后台启动与定时任务会同步 rollup，并使用独立锁避免多实例重复执行。
+- 合入 Codex 原生 remote compaction v2：能力探测改走原生 `/responses` 流式协议并携带 session beta feature，避免依赖旧 `/responses/compact`；探测请求使用合法 UUID，并继续遵守 fork 的账号选择与调度边界。
+- 合入 `x-codex-turn-state` 的请求暂存、上游转发和响应回传，同时校验账号来源，避免 failover 或跨账号请求错误复用 turn state；Codex 指纹收敛继续保持显式 opt-in。
+- 合入 Grok 长上下文门禁、媒体模型路由与账号刷新偏好修复；长上下文是否启用由分组配置控制，不再被账号级旧状态误拒绝，fork 的成本、利润和计费语义继续保留。
+- 上游 `usage_log_repo_trend.go` 及 5 个 OpenAI gateway 拆分文件继续保持删除，对应行为已迁入 fork 实际使用的 repository/service 聚合模块，避免重复定义和结构回退。
+- 同步前的支付恢复安全收紧与前端依赖升级已单独提交；`backend/cmd/server/VERSION` 保持 fork 的 `0.1.252`，没有跟随上游 release 回退。
+
+### v0.1.177 合并验证
+
+- 合并前 `git merge-tree --write-tree` 识别 17 个冲突路径，其中 11 个内容冲突、6 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。
+- 后端定向 unit 覆盖分组用量 rollup/清理、Dashboard 同步、Codex 原生 compact 探测、turn state、指纹和 Grok 长上下文门禁，相关 package 编译检查通过。
+- 前端 `vue-tsc --noEmit` 通过；分组 API 与列设置定向 Vitest 共 2 个文件、8 个用例通过；`pnpm --dir frontend run build` 通过。
+- 本次未执行 `go test -tags=unit -count=1 ./...` 全量后端套件：该广范围命令因执行策略未获准；已有定向测试均通过，仍将全量套件列为后续 CI 验证项。
 
 本次 `v0.1.176` 合并说明：
 
