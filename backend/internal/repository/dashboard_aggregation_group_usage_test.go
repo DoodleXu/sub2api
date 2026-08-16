@@ -148,14 +148,30 @@ func TestDashboardAggregationRepositoryRecomputeRangeRebuildsGroupRollupsBeforeC
 	for _, query := range []string{
 		`DELETE FROM usage_dashboard_hourly WHERE`,
 		`DELETE FROM usage_dashboard_hourly_users WHERE`,
+		`DELETE FROM usage_dashboard_account_cost_hourly WHERE`,
+		`DELETE FROM usage_dashboard_model_hourly WHERE`,
+		`DELETE FROM usage_dashboard_hourly_user_stats WHERE`,
 		`DELETE FROM usage_dashboard_daily WHERE`,
 		`DELETE FROM usage_dashboard_daily_users WHERE`,
+		`DELETE FROM usage_dashboard_daily_user_stats WHERE`,
+		`DELETE FROM usage_dashboard_account_cost_daily WHERE`,
+		`DELETE FROM usage_dashboard_model_daily WHERE`,
 		`INSERT INTO usage_dashboard_hourly_users`,
 		`INSERT INTO usage_dashboard_daily_users`,
 		`INSERT INTO usage_dashboard_hourly`,
+		`INSERT INTO usage_dashboard_account_cost_hourly`,
+		`INSERT INTO usage_dashboard_model_hourly`,
+		`INSERT INTO usage_dashboard_hourly_user_stats`,
 		`INSERT INTO usage_dashboard_daily`,
+		`INSERT INTO usage_dashboard_account_cost_daily`,
+		`INSERT INTO usage_dashboard_model_daily`,
+		`INSERT INTO usage_dashboard_daily_user_stats`,
 	} {
 		mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	for range 3 {
+		mock.ExpectExec(`INSERT INTO usage_dashboard_aggregation_watermark`).
+			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery(`SELECT closed_before::text, retained_from.*FOR UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"closed_before", "retained_from", "timezone_name"}).

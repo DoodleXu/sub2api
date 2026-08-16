@@ -33,6 +33,7 @@ git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 - 合入 `x-codex-turn-state` 的请求暂存、上游转发和响应回传，同时校验账号来源，避免 failover 或跨账号请求错误复用 turn state；Codex 指纹收敛继续保持显式 opt-in。
 - 合入 Grok 长上下文门禁、媒体模型路由与账号刷新偏好修复；长上下文是否启用由分组配置控制，不再被账号级旧状态误拒绝，fork 的成本、利润和计费语义继续保留。
 - 上游 `usage_log_repo_trend.go` 及 5 个 OpenAI gateway 拆分文件继续保持删除，对应行为已迁入 fork 实际使用的 repository/service 聚合模块，避免重复定义和结构回退。
+- 合并后审核修复：fork 聚合的 `GetAllGroupUsageSummary` 已接入分组日汇总与未发布 raw tail 查询，确保昨日成本正确返回，并实际消除旧实现对 `usage_logs` 的全表累计扫描。
 - 同步前的支付恢复安全收紧与前端依赖升级已单独提交；`backend/cmd/server/VERSION` 保持 fork 的 `0.1.252`，没有跟随上游 release 回退。
 
 ### v0.1.177 合并验证
