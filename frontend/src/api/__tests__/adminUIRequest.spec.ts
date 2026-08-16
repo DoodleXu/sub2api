@@ -90,7 +90,6 @@ describe('User UI request marker', () => {
     '/admin/users',
     '/groups',
     '/channels',
-    '/payment/public/orders/verify',
     '/payment/webhook/stripe',
     '/api/v1/payment/public/orders/resolve',
     '',

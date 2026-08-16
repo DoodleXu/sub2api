@@ -108,7 +108,6 @@ import {
 } from '@/components/payment/paymentFlow'
 import { usePaymentStore } from '@/stores/payment'
 import { paymentAPI } from '@/api/payment'
-import type { PublicOrderVerifyResult } from '@/api/payment'
 import type { OrderStatus, PaymentOrder } from '@/types/payment'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
 import { normalizePaymentMethodForDisplay, paymentMethodI18nKey } from './paymentUx'
@@ -119,7 +118,7 @@ const route = useRoute()
 const router = useRouter()
 const paymentStore = usePaymentStore()
 
-type ResolvedOrder = PaymentOrder | PublicOrderVerifyResult
+type ResolvedOrder = PaymentOrder
 
 const order = ref<ResolvedOrder | null>(null)
 const loading = ref(true)
@@ -298,12 +297,7 @@ async function resolveOrderFromOutTradeNo(outTradeNo: string): Promise<ResolvedO
     const result = await paymentAPI.verifyOrder(outTradeNo)
     return result.data
   } catch (_err: unknown) {
-    try {
-      const result = await paymentAPI.verifyOrderPublic(outTradeNo)
-      return result.data
-    } catch (_innerErr: unknown) {
-      return null
-    }
+    return null
   }
 }
 
@@ -386,17 +380,17 @@ onMounted(async () => {
   }
 
   const hasLegacyFallbackContext = readRouteQueryString('trade_status').trim() !== ''
-  const shouldUsePublicOutTradeNo = outTradeNo !== '' && (hasLegacyFallbackContext || routeOrderId > 0 || orderId > 0)
+  const shouldAttemptOrderNumberLookup = outTradeNo !== '' && (hasLegacyFallbackContext || routeOrderId > 0 || orderId > 0)
 
   if (!order.value && orderId && (!resumeToken || routeOrderId > 0)) {
     try {
       setResolvedOrder(await paymentStore.pollOrderStatus(orderId))
     } catch (_err: unknown) {
-      // Order lookup failed, will try legacy fallback below when possible.
+      // Keep signed-token and authenticated recovery paths only.
     }
   }
 
-  if (!order.value && shouldUsePublicOutTradeNo && (!resumeToken || resumeTokenLookupFailed)) {
+  if (!order.value && shouldAttemptOrderNumberLookup && (!resumeToken || resumeTokenLookupFailed)) {
     const legacyOrder = await resolveOrderFromOutTradeNo(outTradeNo)
     if (legacyOrder) {
       setResolvedOrder(legacyOrder)
@@ -427,11 +421,11 @@ onMounted(async () => {
       try {
         return await paymentStore.pollOrderStatus(orderId)
       } catch (_err: unknown) {
-        // Fall through to legacy public verification when order polling is unavailable.
+        // The authenticated endpoint is the only order-number fallback.
       }
     }
 
-    if (shouldUsePublicOutTradeNo) {
+    if (shouldAttemptOrderNumberLookup) {
       return await resolveOrderFromOutTradeNo(outTradeNo)
     }
 

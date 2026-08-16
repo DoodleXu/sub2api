@@ -67,7 +67,7 @@ func TestServerTimingScopesAndRoleGate(t *testing.T) {
 		{name: "admin prefix boundary", enabled: true, path: "/api/v1/administrator", role: "admin"},
 		{name: "auth me path", enabled: true, path: "/api/v1/auth/me", role: "user", wantHeader: true},
 		{name: "payment user path", enabled: true, path: "/api/v1/payment/plans", role: "user", wantHeader: true},
-		{name: "payment public excluded", enabled: true, path: "/api/v1/payment/public/orders/verify", userMarker: "1", role: "user"},
+		{name: "payment public excluded", enabled: true, path: "/api/v1/payment/public/orders/resolve", userMarker: "1", role: "user"},
 		{name: "payment webhook excluded", enabled: true, path: "/api/v1/payment/webhook/stripe", userMarker: "1", role: "user"},
 		{name: "channel monitors path", enabled: true, path: "/api/v1/channel-monitors/1/status", role: "user", wantHeader: true},
 	}
@@ -117,7 +117,7 @@ func TestIsUserTimingPath(t *testing.T) {
 		{"/api/v1/channel-monitors", true},
 		{"/api/v1/payment/config", true},
 		{"/api/v1/payment/orders/my", true},
-		{"/api/v1/payment/public/orders/verify", false},
+		{"/api/v1/payment/public/orders/resolve", false},
 		{"/api/v1/payment/webhook/easypay", false},
 		{"/api/v1/admin/users", false},
 		{"/api/v1/settings/public", false},

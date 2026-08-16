@@ -31,7 +31,7 @@ func NewPaymentHandler(paymentService *service.PaymentService, configService *se
 // GetDashboard returns payment dashboard statistics.
 // GET /api/v1/admin/payment/dashboard
 func (h *PaymentHandler) GetDashboard(c *gin.Context) {
-	if c.Query("start_date") != "" || c.Query("end_date") != "" || c.Query("timezone") != "" {
+	if paymentDashboardUsesDateRange(c) {
 		start, end, err := parseOperationsDateRange(c, 30)
 		if err != nil {
 			response.BadRequest(c, err.Error())
@@ -57,6 +57,14 @@ func (h *PaymentHandler) GetDashboard(c *gin.Context) {
 		return
 	}
 	response.Success(c, stats)
+}
+
+// paymentDashboardUsesDateRange keeps the generic GET timezone parameter from
+// overriding an explicit relative-day query. The frontend client appends
+// timezone to every GET request, while this endpoint also supports days=7/30/90.
+func paymentDashboardUsesDateRange(c *gin.Context) bool {
+	return c.Query("days") == "" &&
+		(c.Query("start_date") != "" || c.Query("end_date") != "" || c.Query("timezone") != "")
 }
 
 // --- Orders ---

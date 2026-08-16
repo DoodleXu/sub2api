@@ -2,13 +2,38 @@ package admin
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+
+	"github.com/gin-gonic/gin"
 )
+
+func TestPaymentDashboardUsesDateRange(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "relative days wins over injected timezone", url: "/?days=90&timezone=Asia%2FShanghai", want: false},
+		{name: "explicit calendar range uses timezone", url: "/?start_date=2026-07-01&end_date=2026-07-31&timezone=Asia%2FShanghai", want: true},
+		{name: "timezone-only request keeps default range behavior", url: "/?timezone=Asia%2FShanghai", want: true},
+		{name: "days-only request uses relative range", url: "/?days=7", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("GET", tt.url, nil)
+			if got := paymentDashboardUsesDateRange(c); got != tt.want {
+				t.Fatalf("paymentDashboardUsesDateRange(%s) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestSanitizeAdminPaymentOrderForResponseAddsCurrency(t *testing.T) {
 	now := time.Now()

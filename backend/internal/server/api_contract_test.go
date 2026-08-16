@@ -694,31 +694,6 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
-			name: "POST /api/v1/payment/public/orders/verify returns minimal anonymous order state",
-			setup: func(t *testing.T, deps *contractDeps) {
-				t.Helper()
-				deps.seedPaymentUpgradeOrder(t)
-			},
-			method: http.MethodPost,
-			path:   "/api/v1/payment/public/orders/verify",
-			body:   `{"out_trade_no":"sub2_contract_upgrade"}`,
-			headers: map[string]string{
-				"Content-Type": "application/json",
-			},
-			wantStatus: http.StatusOK,
-			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": {
-					"out_trade_no": "sub2_contract_upgrade",
-					"status": "PENDING",
-					"paid": false,
-					"created_at": "2025-01-02T03:04:05Z",
-					"expires_at": "2025-01-02T03:34:05Z"
-				}
-			}`,
-		},
-		{
 			name: "GET /api/v1/admin/settings",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
@@ -1672,9 +1647,6 @@ func newContractDeps(t *testing.T) *contractDeps {
 	checkinDB := newContractDailyCheckinDB(t)
 	dailyCheckinService := service.NewDailyCheckinService(checkinDB, settingService, nil, nil)
 	paymentClient := newContractPaymentClient(t)
-	paymentConfigService := service.NewPaymentConfigService(paymentClient, settingRepo, nil)
-	paymentService := service.NewPaymentService(paymentClient, payment.NewRegistry(), nil, redeemService, subscriptionService, paymentConfigService, userRepo, groupRepo, nil)
-	paymentHandler := handler.NewPaymentHandler(paymentService, paymentConfigService)
 
 	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
@@ -1726,9 +1698,6 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Redeem := v1.Group("")
 	v1Redeem.Use(jwtAuth)
 	v1Redeem.GET("/redeem/history", redeemHandler.GetHistory)
-
-	v1Payment := v1.Group("/payment")
-	v1Payment.POST("/public/orders/verify", paymentHandler.VerifyOrderPublic)
 
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(adminAuth)
