@@ -124,9 +124,10 @@ type ModelStat struct {
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalTokens         int64   `json:"total_tokens"`
-	Cost                float64 `json:"cost"`         // 标准计费
-	ActualCost          float64 `json:"actual_cost"`  // 实际扣除
-	AccountCost         float64 `json:"account_cost"` // 账号成本
+	Cost                float64 `json:"cost"`          // 标准计费
+	ActualCost          float64 `json:"actual_cost"`   // 实际扣除
+	AccountCost         float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
+	RealCostCNY         float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 // EndpointStat represents usage statistics for a single request endpoint.
@@ -152,9 +153,10 @@ type GroupStat struct {
 	GroupName   string  `json:"group_name"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`         // 标准计费
-	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
-	AccountCost float64 `json:"account_cost"` // 账号成本
+	Cost        float64 `json:"cost"`          // 标准计费
+	ActualCost  float64 `json:"actual_cost"`   // 实际扣除
+	AccountCost float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
+	RealCostCNY float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 // UserUsageTrendPoint represents user usage trend data point
@@ -209,7 +211,8 @@ type UserBreakdownItem struct {
 	TotalTokens  int64   `json:"total_tokens"`  // 输入+输出+缓存 token 累计
 	Cost         float64 `json:"cost"`          // 标准计费
 	ActualCost   float64 `json:"actual_cost"`   // 实际扣除
-	AccountCost  float64 `json:"account_cost"`  // 账号成本
+	AccountCost  float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
+	RealCostCNY  float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 // UserBreakdownDimension specifies the dimension to filter for user breakdown.
@@ -333,6 +336,7 @@ type UsageStats struct {
 	TotalCost                float64        `json:"total_cost"`
 	TotalActualCost          float64        `json:"total_actual_cost"`
 	TotalAccountCost         *float64       `json:"total_account_cost,omitempty"`
+	TotalRealCostCNY         *float64       `json:"total_real_cost_cny,omitempty"`
 	AverageDurationMs        float64        `json:"average_duration_ms"`
 	Endpoints                []EndpointStat `json:"endpoints,omitempty"`
 	UpstreamEndpoints        []EndpointStat `json:"upstream_endpoints,omitempty"`

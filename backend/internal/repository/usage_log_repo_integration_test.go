@@ -1192,6 +1192,42 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 	s.Require().NotEqual(costedTotalCNY/costedTotalAccountCost, stats.AverageCostCNYPerUSD, "dashboard average uses the separate standard-cost denominator")
 	s.Require().InEpsilon(5.0, stats.OpenAICostCNYPerUSD, 0.0001)
 	s.Require().InEpsilon(2.5, stats.AnthropicCostCNYPerUSD, 0.0001)
+
+	// Admin usage orange-cost projections must use the same per-account CNY
+	// rate as the dashboard card, multiplied by standard billing in the selected
+	// range. The uncosted account contributes zero instead of borrowing a global
+	// average rate.
+	usageStats, err := s.repo.GetStatsWithFilters(s.ctx, usagestats.UsageLogFilters{
+		UserID:    user.ID,
+		StartTime: &todayStart,
+		EndTime:   &coverageEnd,
+	})
+	s.Require().NoError(err)
+	s.Require().NotNil(usageStats.TotalRealCostCNY)
+	s.Require().InEpsilon(30.0, *usageStats.TotalRealCostCNY, 0.0001)
+
+	modelStats, err := s.repo.GetModelStatsWithFilters(
+		s.ctx, todayStart, coverageEnd, user.ID, 0, 0, 0, nil, nil, nil,
+	)
+	s.Require().NoError(err)
+	s.Require().Len(modelStats, 2)
+	realCostByModel := make(map[string]float64, len(modelStats))
+	for _, item := range modelStats {
+		realCostByModel[item.Model] = item.RealCostCNY
+	}
+	s.Require().InEpsilon(10.0, realCostByModel["gpt-4o"], 0.0001)
+	s.Require().InEpsilon(20.0, realCostByModel["claude-3"], 0.0001)
+
+	breakdown, err := s.repo.GetUserBreakdownStats(
+		s.ctx,
+		todayStart,
+		coverageEnd,
+		usagestats.UserBreakdownDimension{Model: "gpt-4o", ModelType: usagestats.ModelSourceRequested},
+		10,
+	)
+	s.Require().NoError(err)
+	s.Require().Len(breakdown, 1)
+	s.Require().InEpsilon(10.0, breakdown[0].RealCostCNY, 0.0001)
 }
 
 func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts() {

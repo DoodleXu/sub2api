@@ -414,8 +414,8 @@ git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 - 概览明确区分“区间最后一天 DAU”和“区间请求用户”，提供上一周期对比；页面按 Tab 懒加载，查询失败会保留分区错误状态并提示旧数据风险。
 - 签到资格规则以 append-only 快照保存，历史达标率按当时门槛和消费范围计算；在线明细默认脱敏邮箱，完整导出继续要求 step-up。
 - 签到日/月预算与 `user_checkins.checkin_date` 始终使用服务端签到时区；浏览器时区只用于独立的观察性运营区间，不能改变签到资格或预算口径。规则历史同时覆盖专用签到更新与管理后台系统设置写入入口，无关设置更新不读取或追加历史。
-- 经营分析聚合用户增长、D1/D7/D30 API 留存、支付收入、实际扣费、上游账号成本、签到奖励成本、模型与分组贡献，并明确贡献毛利口径。
-- 经营分析的模型统计和用户消费排行显式返回 `data_available`、`aggregation_complete` 与 coverage；未覆盖时禁止把空聚合显示成 `$0` 或计算贡献毛利。超过 31 天时只降级隐藏分组明细，其他长周期指标继续加载。
+- 经营分析聚合用户增长、D1/D7/D30 API 留存、在线支付收入、管理员手动充值、实际扣费、上游账号成本、签到奖励成本、模型与分组贡献；在线支付按 ISO 币种拆分，贡献利润以 USD 实际扣费减去 USD 账号账面成本和奖励计算，CNY 真实上游成本仅独立展示。
+- 经营分析的模型统计和用户消费排行显式返回 `data_available`、`aggregation_complete` 与 coverage；未覆盖时禁止把空聚合显示成 `0` 或计算贡献毛利。超过 31 天时只降级隐藏分组明细，其他长周期指标继续加载。
 - 日预算与月预算预测分开：日预算展示今日剩余比例和预计可发放人次，只有月预算才展示预计耗尽天数。
 - 导航中需要和官方 `/admin/ops` 区分：`ops` 更偏系统运维，`operations` 更偏业务运营。
 
@@ -461,6 +461,8 @@ git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 - 手动范围重算在重建账号、用户和模型聚合后同步推进三类覆盖水位，避免模型表已重建但模型 coverage 仍停留在旧位置。
 - `snapshot-v2` 对趋势、模型、分组、用户趋势和排行实行 3 秒独立预算，允许部分成功并返回 `partial_errors` / `section_durations_ms`；核心统计使用 1 秒预算。Redis 统计缓存默认调整为 2 分钟新鲜、30 分钟兜底。
 - 管理后台 dashboard 展示人民币总成本、今日实际人民币成本、平台维度每美元人民币成本。
+- 运营中心经营指标严格保留币种边界：在线支付收入按支付 ISO 币种分别展示，后台手工充值、实际扣费、账号账面成本与奖励按 USD 口径展示，真实上游成本按 CNY 展示；贡献利润仅使用同为 USD 的实际扣费、账号账面成本与奖励计算，禁止把多币种支付额或人民币真实成本直接相加。
+- 管理后台用量总览、模型分布、分组分布及展开的用户明细中，橙色“实际成本”统一按账号逐条核算：`账号累计人民币成本 / 已发布累计标准计费 × 筛选范围内标准计费`，金额单位为 `¥`。未录入人民币成本或尚无有效标准计费分母的账号贡献为 `0`，禁止套用全局平均每刀成本；默认模型统计即使复用 Token 聚合表，也会按当前账号每刀成本重新计算该列。
 - 账号及 dashboard 的“每刀成本”分母统一使用标准成本账本（等价于 `SUM(usage_logs.total_cost)`），不受 `account_rate_multiplier` 或 `account_stats_cost` 影响；账号实际累计成本和今日实际成本仍保留倍率口径。账号级 dashboard 聚合额外维护标准计费列，避免快照请求回扫 `usage_logs`。
 - 2026-08-11 成本展示与调度降频：账号累计成本账本额外保存最近一次完整发布值；普通增量或精确重算完成前，管理端与成本调度继续使用该发布值，只有首次尚无完整结果时显示为空。Dashboard 成本快照也改读发布值；普通增量 pending 不阻塞快照，精确重建则必须等工作账本完整追平后才能重新发布 complete。账本增量与历史账号成本 coverage 回填拆成独立预算，由独立的集群单实例 leader 每 10 分钟固定触发一次维护：账本每轮最多 128 个账号批次但受 2 分钟预算约束，且不占用实时 Dashboard 聚合锁；历史回填保留 128 块预算，只在写入单个范围时短暂竞争共享聚合锁。常规 Dashboard 聚合不再刷新成本快照，避免跟随高频聚合周期或副本数持续追算。
 - 归档账号不删除累计账本；归档且无新增 usage 的账号不会再次扫描，晚到 usage 由数据库触发器重新标记待核算。成本聚合和 Dashboard retention 对原始 `usage_logs` 严格只读，不会因为核算、回填或成本快照刷新而清理历史明细。管理员显式清理、单条删除或成本字段修正仍是独立数据管理流程；数据库触发器会将受影响账号标记为精确重算，仅重扫该账号。后台普通账号删除沿用 `SoftDeleteMixin`，保留该账号的 usage 与累计账本，确保历史成本不丢失；只有绕过软删除的显式物理删除才由外键级联清理 usage 与账本。
@@ -492,6 +494,7 @@ git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 - `backend/migrations/196_usage_account_cost_totals.sql`
 - `backend/migrations/197_usage_account_cost_lookup_index_notx.sql`
 - `backend/migrations/224_account_cost_last_published_totals.sql`
+- `backend/migrations/226_dashboard_account_model_standard_cost.sql`
 - `backend/migrations/150_restore_dashboard_account_cost_columns.sql`
 - `backend/migrations/152_usage_dashboard_user_stats.sql`
 - `backend/migrations/174_dashboard_account_cost_hourly.sql`
@@ -737,6 +740,8 @@ git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
 ### 通知、风控与内容审计增强
 
 差异包括渠道监控全局通知、Bark 通知模板、通知免打扰、风控 hash 白名单、内容审计用户处置、邮件群发和退订。
+
+- 邮件群发已从 settings JSON 任务状态升级为专用任务/收件人表：逐收件人原子状态、稳定 Message-ID、数据库租约恢复、SMTP 上下文取消、有限重试、未知投递隔离、90 天保留清理、发送前预检、服务端分页脱敏收件人明细均为 fork 定制能力；收件人 claim/终态写入失败时任务必须释放租约并保持可恢复，失去租约的 worker 禁止继续标记完成，最终完成写入不得覆盖并发到达的取消请求。同步上游时必须保留迁移 `225_notification_email_broadcast_jobs.sql`、群发仓储和管理页 API/UI。
 
 关键代码：
 

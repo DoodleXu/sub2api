@@ -182,8 +182,8 @@
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span
                     class="text-orange-500 dark:text-orange-400"
-                    :title="t('admin.dashboard.accountCost')"
-                    >${{ formatCost(stats.total_account_cost) }}</span
+                    :title="t('admin.dashboard.realCostCny')"
+                    >{{ formatMaterializedCny(stats.total_cost_cny) }}</span
                   >
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span

@@ -10,7 +10,7 @@ const messages: Record<string, string> = {
   'admin.dashboard.requests': 'Requests',
   'admin.dashboard.tokens': 'Tokens',
   'admin.dashboard.actual': 'Actual',
-  'admin.dashboard.accountCost': 'Account Cost',
+  'admin.dashboard.realCostCny': 'Real Cost',
   'admin.dashboard.standard': 'Standard',
   'admin.dashboard.metricTokens': 'By Tokens',
   'admin.dashboard.metricActualCost': 'By Actual Cost',
@@ -126,7 +126,7 @@ describe('GroupDistributionChart', () => {
       },
     })
 
-    expect(wrapper.text()).not.toContain('Account Cost')
+    expect(wrapper.text()).not.toContain('Real Cost')
     expect(wrapper.findAll('thead th')).toHaveLength(5)
     expect(wrapper.findAll('tbody tr')[0].findAll('td')).toHaveLength(5)
   })

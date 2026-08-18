@@ -44,13 +44,17 @@
         </div>
         <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.paymentRevenue') }}</div>
-          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatAmounts(payment?.total_amount) }}</div>
+          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCurrencyAmounts(payment?.total_amount) }}</div>
+          <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.adminRechargeCredits') }}</div>
+          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(adminRechargeCredits) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.paidOrders') }}</div>
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(payment?.total_count) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.actualCharges') }}</div>
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessUSD(actualCharges) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.upstreamCost') }}</div>
-          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessUSD(upstreamCost) }}</div>
+          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessCNY(realUpstreamCostCNY) }}</div>
+          <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.accountCostUsdBasis') }}</div>
+          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessUSD(accountCostUSD) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.rewardCost') }}</div>
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatUSD(rewardCost) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.contributionMargin') }}</div>
@@ -146,8 +150,10 @@ const RankingList = defineComponent({
 })
 
 const actualCharges = computed(() => Number(props.ranking?.total_actual_cost || 0))
-const upstreamCost = computed(() => props.models.reduce((sum, item) => sum + Number(item.account_cost || 0), 0))
-const contributionMargin = computed(() => actualCharges.value - upstreamCost.value - Number(props.rewardCost || 0))
+const realUpstreamCostCNY = computed(() => props.models.reduce((sum, item) => sum + Number(item.real_cost_cny || 0), 0))
+const accountCostUSD = computed(() => props.models.reduce((sum, item) => sum + Number(item.account_cost || 0), 0))
+const adminRechargeCredits = computed(() => Number(props.payment?.admin_recharge_amount || 0))
+const contributionMargin = computed(() => actualCharges.value - accountCostUSD.value - Number(props.rewardCost || 0))
 const contributionMarginRate = computed(() => actualCharges.value > 0 ? contributionMargin.value / actualCharges.value : 0)
 const averageChargePerUser = computed(() => {
   const users = Number(props.periodRequestUsers || 0)
@@ -161,11 +167,15 @@ function formatCount(value: number | undefined | null): string {
 }
 
 function formatUSD(value: number | undefined | null): string {
-  return `$${Number(value || 0).toFixed(2)}`
+  return `USD ${Number(value || 0).toFixed(2)}`
 }
 
 function formatBusinessUSD(value: number | undefined | null): string {
   return props.dataAvailable ? formatUSD(value) : '-'
+}
+
+function formatBusinessCNY(value: number | undefined | null): string {
+  return props.dataAvailable ? `CNY ${Number(value || 0).toFixed(2)}` : '-'
 }
 
 function formatBusinessCount(value: number | undefined | null): string {
@@ -180,7 +190,7 @@ function formatDecimal(value: number | undefined | null): string {
   return Number(value || 0).toFixed(1)
 }
 
-function formatAmounts(amounts: CurrencyAmounts | undefined): string {
+function formatCurrencyAmounts(amounts: CurrencyAmounts | undefined): string {
   const entries = Object.entries(amounts || {}).filter(([, amount]) => Number(amount) !== 0)
   if (!entries.length) return '-'
   return entries
@@ -188,4 +198,5 @@ function formatAmounts(amounts: CurrencyAmounts | undefined): string {
     .map(([currency, amount]) => `${currency} ${Number(amount).toFixed(2)}`)
     .join(' / ')
 }
+
 </script>

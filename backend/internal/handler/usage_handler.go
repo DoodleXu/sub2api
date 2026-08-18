@@ -406,6 +406,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		return
 	}
 	stats.TotalAccountCost = nil
+	stats.TotalRealCostCNY = nil
 	stats.UpstreamEndpoints = nil
 	stats.EndpointPaths = nil
 

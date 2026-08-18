@@ -45,7 +45,7 @@ describe('OperationsBusinessInsights', () => {
     })
 
     expect(wrapper.text()).toContain('admin.operations.businessDataUnavailable')
-    expect(wrapper.text()).not.toContain('$12.00')
+    expect(wrapper.text()).not.toContain('USD 12.00')
   })
 
   it('marks current aggregate prefixes as partial while keeping usable values', () => {
@@ -54,7 +54,7 @@ describe('OperationsBusinessInsights', () => {
     })
 
     expect(wrapper.text()).toContain('admin.operations.businessDataPartial')
-    expect(wrapper.text()).toContain('$12.00')
+    expect(wrapper.text()).toContain('USD 12.00')
   })
 
   it('explains why group details are absent for long ranges', () => {
@@ -63,5 +63,25 @@ describe('OperationsBusinessInsights', () => {
     })
 
     expect(wrapper.text()).toContain('admin.operations.groupDetailsRangeLimited')
+  })
+
+  it('keeps payment currencies separate and computes contribution margin on the USD basis', () => {
+    const wrapper = mount(OperationsBusinessInsights, {
+      props: {
+        ...baseProps,
+        payment: {
+          total_amount: { CNY: 10, USD: 20 },
+          admin_recharge_amount: 5,
+          total_count: 2,
+        },
+        models: [{ model: 'test-model', requests: 1, actual_cost: 8, account_cost: 8, real_cost_cny: 4 }],
+      },
+    })
+
+    expect(wrapper.text()).toContain('CNY 10.00 / USD 20.00')
+    expect(wrapper.text()).toContain('USD 5.00')
+    expect(wrapper.text()).toContain('CNY 4.00')
+    expect(wrapper.text()).toContain('USD 8.00')
+    expect(wrapper.text()).toContain('USD 3.00 / 25.0%')
   })
 })

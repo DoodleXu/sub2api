@@ -19,7 +19,8 @@ export interface AdminUsageStatsResponse {
   total_tokens: number
   total_cost: number
   total_actual_cost: number
-  total_account_cost: number
+  total_account_cost: number // 账号计费（美元，含账号倍率）
+  total_real_cost_cny: number // 实际人民币成本（账号每刀成本 × 本范围标准计费）
   average_duration_ms: number
   endpoints?: EndpointStat[]
   upstream_endpoints?: EndpointStat[]

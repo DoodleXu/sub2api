@@ -1911,7 +1911,8 @@ export interface ModelStat {
   total_tokens: number
   cost: number // 标准计费
   actual_cost: number // 实际扣除
-  account_cost?: number // 账号成本（仅管理员接口返回）
+  account_cost?: number // 账号计费（美元，含账号倍率，仅管理员接口返回）
+  real_cost_cny?: number // 实际人民币成本（账号每刀成本 × 本范围标准计费，仅管理员接口返回）
 }
 
 export interface EndpointStat {
@@ -1929,7 +1930,8 @@ export interface GroupStat {
   total_tokens: number
   cost: number // 标准计费
   actual_cost: number // 实际扣除
-  account_cost?: number // 账号成本（仅管理员接口返回）
+  account_cost?: number // 账号计费（美元，含账号倍率，仅管理员接口返回）
+  real_cost_cny?: number // 实际人民币成本（账号每刀成本 × 本范围标准计费，仅管理员接口返回）
 }
 
 export interface UserBreakdownItem {
@@ -1942,7 +1944,8 @@ export interface UserBreakdownItem {
   total_tokens: number
   cost: number
   actual_cost: number
-  account_cost: number
+  account_cost: number // 账号计费（美元，含账号倍率）
+  real_cost_cny: number // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 export interface UserUsageTrendPoint {
