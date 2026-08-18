@@ -92,6 +92,15 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireIndex(t, tx, "usage_account_cost_totals", "idx_usage_account_cost_totals_pending")
 	requireForeignKeyOnDelete(t, tx, "usage_account_cost_totals", "account_id", "accounts", "CASCADE")
 
+	requireColumn(t, tx, "usage_dashboard_account_model_hourly", "account_id", "bigint", 0, false)
+	requireColumn(t, tx, "usage_dashboard_account_model_hourly", "model", "text", 0, false)
+	requireColumn(t, tx, "usage_dashboard_account_model_hourly", "standard_cost", "numeric", 0, false)
+	requireIndex(t, tx, "usage_dashboard_account_model_hourly", "idx_usage_dashboard_account_model_hourly_bucket")
+	requireColumn(t, tx, "usage_dashboard_account_model_daily", "account_id", "bigint", 0, false)
+	requireColumn(t, tx, "usage_dashboard_account_model_daily", "model", "text", 0, false)
+	requireColumn(t, tx, "usage_dashboard_account_model_daily", "standard_cost", "numeric", 0, false)
+	requireIndex(t, tx, "usage_dashboard_account_model_daily", "idx_usage_dashboard_account_model_daily_bucket")
+
 	var mismatchIndexDef string
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
 SELECT pg_get_indexdef(i.indexrelid)
@@ -164,6 +173,19 @@ WHERE ns.nspname = 'public'
 	var settingsRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.settings')").Scan(&settingsRegclass))
 	require.True(t, settingsRegclass.Valid, "expected settings table to exist")
+
+	// notification email broadcasts: durable jobs, recipient state machine, and drafts.
+	var emailBroadcastJobsRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.notification_email_broadcast_jobs')").Scan(&emailBroadcastJobsRegclass))
+	require.True(t, emailBroadcastJobsRegclass.Valid, "expected notification_email_broadcast_jobs table to exist")
+	requireColumn(t, tx, "notification_email_broadcast_jobs", "lease_expires_at", "timestamp with time zone", 0, true)
+	requireIndex(t, tx, "notification_email_broadcast_jobs", "idx_notification_email_broadcast_jobs_recovery")
+	requireIndex(t, tx, "notification_email_broadcast_jobs", "idx_notification_email_broadcast_one_active")
+	requireConstraintDefinitionContains(t, tx, "notification_email_broadcast_jobs", "chk_notification_email_broadcast_job_status", "running", "canceling", "completed", "canceled", "interrupted")
+	requireConstraintDefinitionContains(t, tx, "notification_email_broadcast_jobs", "chk_notification_email_broadcast_counts", "target_count", "sent_count", "skipped_count", "failure_count", "uncertain_count", "unsubscribed_count")
+	requireColumn(t, tx, "notification_email_broadcast_recipients", "message_id", "character varying", 255, false)
+	requireConstraintDefinitionContains(t, tx, "notification_email_broadcast_recipients", "chk_notification_email_broadcast_recipient_status", "pending", "sending", "sent", "skipped", "retry", "failed", "uncertain")
+	requireColumn(t, tx, "notification_email_broadcast_drafts", "payload", "jsonb", 0, false)
 
 	// web console image tasks: user-side deletion marker should not remove admin image archives
 	var webConsoleImageTasksRegclass sql.NullString

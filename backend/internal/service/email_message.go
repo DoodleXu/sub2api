@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"net/textproto"
 	"strings"
 	"time"
+
+	xhtml "golang.org/x/net/html"
 )
 
 type smtpMessage struct {
@@ -36,9 +40,14 @@ func buildSMTPMessageWithHeaders(config *SMTPConfig, to, subject, body string, h
 	if err != nil {
 		return smtpMessage{}, err
 	}
-	messageID, err := generateEmailMessageID(fromAddress.Address, config.Host)
-	if err != nil {
-		return smtpMessage{}, fmt.Errorf("generate message ID: %w", err)
+	messageID := notificationEmailHeaderValue(headers, "Message-ID")
+	if messageID == "" {
+		messageID, err = generateEmailMessageID(fromAddress.Address, config.Host)
+		if err != nil {
+			return smtpMessage{}, fmt.Errorf("generate message ID: %w", err)
+		}
+	} else if !validSMTPMessageID(messageID) {
+		return smtpMessage{}, errors.New("invalid Message-ID header")
 	}
 
 	fromName := sanitizeEmailHeader(config.FromName)
@@ -62,16 +71,16 @@ func buildSMTPMessageWithHeaders(config *SMTPConfig, to, subject, body string, h
 	fmt.Fprintf(&message, "Message-ID: %s\r\n", messageID)
 	fmt.Fprintf(&message, "Subject: %s\r\n", subjectHeader)
 	fmt.Fprint(&message, formatEmailHeaders(headers))
-	fmt.Fprint(&message, "MIME-Version: 1.0\r\n"+
-		"Content-Type: text/html; charset=UTF-8\r\n"+
-		"Content-Transfer-Encoding: quoted-printable\r\n\r\n")
-
-	bodyWriter := quotedprintable.NewWriter(&message)
-	if _, err := bodyWriter.Write([]byte(body)); err != nil {
-		return smtpMessage{}, fmt.Errorf("encode email body: %w", err)
+	alternative := multipart.NewWriter(&message)
+	fmt.Fprintf(&message, "MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=%q\r\n\r\n", alternative.Boundary())
+	if err := writeSMTPAlternativePart(alternative, "text/plain; charset=UTF-8", notificationEmailHTMLToText(body)); err != nil {
+		return smtpMessage{}, err
 	}
-	if err := bodyWriter.Close(); err != nil {
-		return smtpMessage{}, fmt.Errorf("close email body encoder: %w", err)
+	if err := writeSMTPAlternativePart(alternative, "text/html; charset=UTF-8", body); err != nil {
+		return smtpMessage{}, err
+	}
+	if err := alternative.Close(); err != nil {
+		return smtpMessage{}, fmt.Errorf("close multipart email body: %w", err)
 	}
 
 	return smtpMessage{
@@ -79,6 +88,65 @@ func buildSMTPMessageWithHeaders(config *SMTPConfig, to, subject, body string, h
 		envelopeTo:   recipientAddress.Address,
 		data:         message.Bytes(),
 	}, nil
+}
+
+func writeSMTPAlternativePart(writer *multipart.Writer, contentType, body string) error {
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Type", contentType)
+	header.Set("Content-Transfer-Encoding", "quoted-printable")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return fmt.Errorf("create email body part: %w", err)
+	}
+	encoded := quotedprintable.NewWriter(part)
+	if _, err := encoded.Write([]byte(body)); err != nil {
+		return fmt.Errorf("encode email body part: %w", err)
+	}
+	if err := encoded.Close(); err != nil {
+		return fmt.Errorf("close email body part: %w", err)
+	}
+	return nil
+}
+
+func notificationEmailHTMLToText(body string) string {
+	doc, err := xhtml.Parse(strings.NewReader(body))
+	if err != nil {
+		return strings.TrimSpace(body)
+	}
+	var builder strings.Builder
+	var walk func(*xhtml.Node)
+	walk = func(node *xhtml.Node) {
+		if node.Type == xhtml.TextNode {
+			text := strings.Join(strings.Fields(node.Data), " ")
+			if text != "" {
+				if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "\n") {
+					builder.WriteByte(' ')
+				}
+				builder.WriteString(text)
+			}
+		}
+		if node.Type == xhtml.ElementNode && node.Data == "br" {
+			builder.WriteByte('\n')
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+		if node.Type == xhtml.ElementNode {
+			switch node.Data {
+			case "p", "div", "li", "tr", "section", "h1", "h2", "h3", "h4":
+				builder.WriteByte('\n')
+			}
+		}
+	}
+	walk(doc)
+	lines := strings.Split(builder.String(), "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			clean = append(clean, line)
+		}
+	}
+	return strings.Join(clean, "\n")
 }
 
 func parseSMTPAddress(value, field string) (*mail.Address, error) {
@@ -95,6 +163,21 @@ func parseSMTPAddress(value, field string) (*mail.Address, error) {
 		return nil, fmt.Errorf("invalid SMTP %s address: %w", field, err)
 	}
 	return address, nil
+}
+
+func notificationEmailHeaderValue(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func validSMTPMessageID(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) >= 5 && strings.HasPrefix(value, "<") && strings.HasSuffix(value, ">") &&
+		strings.Contains(value, "@") && !strings.ContainsAny(value, "\r\n\t ")
 }
 
 func generateEmailMessageID(fromAddress, smtpHost string) (string, error) {

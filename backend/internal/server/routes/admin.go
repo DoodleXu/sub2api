@@ -68,7 +68,7 @@ func RegisterAdminRoutes(
 		registerPromoCodeRoutes(admin, h)
 
 		// 系统设置
-		registerSettingsRoutes(admin, h)
+		registerSettingsRoutes(admin, h, stepUpAuth)
 
 		// 数据管理
 		registerDataManagementRoutes(admin, h, stepUpAuth)
@@ -571,7 +571,7 @@ func registerPromoCodeRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	adminSettings := admin.Group("/settings")
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
@@ -584,14 +584,16 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.GET("/email-templates/:event/:locale", h.Admin.Setting.GetEmailTemplate)
 		adminSettings.PUT("/email-templates/:event/:locale", h.Admin.Setting.UpdateEmailTemplate)
 		adminSettings.POST("/email-templates/:event/:locale/restore-official", h.Admin.Setting.RestoreOfficialEmailTemplate)
-		adminSettings.POST("/email-broadcasts", h.Admin.Setting.SendEmailBroadcast)
+		adminSettings.POST("/email-broadcasts", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.SendEmailBroadcast)
+		adminSettings.POST("/email-broadcasts/preflight", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.PreflightEmailBroadcast)
 		adminSettings.GET("/email-broadcasts", h.Admin.Setting.ListEmailBroadcasts)
 		adminSettings.GET("/email-broadcasts/draft", h.Admin.Setting.GetEmailBroadcastDraft)
 		adminSettings.PUT("/email-broadcasts/draft", h.Admin.Setting.SaveEmailBroadcastDraft)
 		adminSettings.DELETE("/email-broadcasts/draft", h.Admin.Setting.DeleteEmailBroadcastDraft)
-		adminSettings.POST("/email-broadcasts/:batch_id/cancel", h.Admin.Setting.CancelEmailBroadcast)
-		adminSettings.POST("/email-broadcasts/:batch_id/resume", h.Admin.Setting.ResumeEmailBroadcast)
+		adminSettings.POST("/email-broadcasts/:batch_id/cancel", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.CancelEmailBroadcast)
+		adminSettings.POST("/email-broadcasts/:batch_id/resume", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.ResumeEmailBroadcast)
 		adminSettings.GET("/email-broadcasts/:batch_id", h.Admin.Setting.GetEmailBroadcastStatus)
+		adminSettings.GET("/email-broadcasts/:batch_id/recipients", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.ListEmailBroadcastRecipients)
 		adminSettings.GET("/notifications", h.Admin.Setting.GetNotificationConfig)
 		adminSettings.PUT("/notifications", h.Admin.Setting.UpdateNotificationConfig)
 		adminSettings.POST("/notifications/test", h.Admin.Setting.TestNotificationTransport)

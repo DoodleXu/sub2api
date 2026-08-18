@@ -181,7 +181,7 @@ func (s *EmailService) SendEmail(ctx context.Context, to, subject, body string) 
 	if err != nil {
 		return err
 	}
-	return s.SendEmailWithConfig(config, to, subject, body)
+	return s.SendEmailWithConfigContext(ctx, config, to, subject, body)
 }
 
 func (s *EmailService) SendEmailWithHeaders(ctx context.Context, to, subject, body string, headers map[string]string) error {
@@ -189,7 +189,7 @@ func (s *EmailService) SendEmailWithHeaders(ctx context.Context, to, subject, bo
 	if err != nil {
 		return err
 	}
-	return s.SendEmailWithConfigAndHeaders(config, to, subject, body, headers)
+	return s.SendEmailWithConfigAndHeadersContext(ctx, config, to, subject, body, headers)
 }
 
 const smtpDialTimeout = 10 * time.Second
@@ -197,10 +197,21 @@ const smtpIOTimeout = 20 * time.Second
 
 // SendEmailWithConfig 使用指定配置发送邮件
 func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body string) error {
-	return s.SendEmailWithConfigAndHeaders(config, to, subject, body, nil)
+	return s.SendEmailWithConfigContext(context.Background(), config, to, subject, body)
 }
 
 func (s *EmailService) SendEmailWithConfigAndHeaders(config *SMTPConfig, to, subject, body string, headers map[string]string) error {
+	return s.SendEmailWithConfigAndHeadersContext(context.Background(), config, to, subject, body, headers)
+}
+
+func (s *EmailService) SendEmailWithConfigContext(ctx context.Context, config *SMTPConfig, to, subject, body string) error {
+	return s.SendEmailWithConfigAndHeadersContext(ctx, config, to, subject, body, nil)
+}
+
+func (s *EmailService) SendEmailWithConfigAndHeadersContext(ctx context.Context, config *SMTPConfig, to, subject, body string, headers map[string]string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var (
 		message smtpMessage
 		err     error
@@ -213,7 +224,7 @@ func (s *EmailService) SendEmailWithConfigAndHeaders(config *SMTPConfig, to, sub
 	if err != nil {
 		return err
 	}
-	client, err := s.connectSMTP(config)
+	client, err := s.connectSMTPContext(ctx, config)
 	if err != nil {
 		return err
 	}
@@ -250,6 +261,9 @@ func formatEmailHeaders(headers map[string]string) string {
 	}
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), "Message-ID") {
+			continue
+		}
 		if isSafeEmailHeaderName(key) && strings.TrimSpace(headers[key]) != "" {
 			keys = append(keys, key)
 		}
@@ -295,15 +309,52 @@ func smtpTLSConfig(host string) *tls.Config {
 //     两种方式都无法建立加密连接时报错，绝不明文继续。
 //   - UseTLS=false：明文连接后若服务器支持 STARTTLS 则机会式升级，
 //     与 smtp.SendMail 的默认行为一致。
-func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
+type smtpConnection struct {
+	*smtp.Client
+	conn         net.Conn
+	ctx          context.Context
+	stopOnCancel func() bool
+}
+
+func (c *smtpConnection) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.stopOnCancel != nil {
+		c.stopOnCancel()
+	}
+	if c.ctx != nil && c.ctx.Err() != nil {
+		if c.conn != nil {
+			return c.conn.Close()
+		}
+		return nil
+	}
+	if c.Client != nil {
+		_ = c.Client.Close()
+	}
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtpConnection, error) {
+	return s.connectSMTPContext(context.Background(), config)
+}
+
+func (s *EmailService) connectSMTPContext(ctx context.Context, config *SMTPConfig) (*smtpConnection, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	dialer := &net.Dialer{Timeout: smtpDialTimeout}
 	tlsConfig := smtpTLSConfig(config.Host)
 
 	if config.UseTLS {
-		conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
+		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: tlsConfig}
+		conn, err := tlsDialer.DialContext(ctx, "tcp", addr)
 		if err == nil {
-			return newSMTPClient(conn, config.Host)
+			return newSMTPClient(ctx, conn, config.Host)
 		}
 		var recordErr tls.RecordHeaderError
 		if !errors.As(err, &recordErr) {
@@ -311,20 +362,20 @@ func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
 		}
 		// SMTP 服务器先发问候语：明文问候会让 TLS 握手立刻返回
 		// RecordHeaderError，据此可靠判定对端期望 STARTTLS。
-		return s.connectSMTPStartTLS(dialer, addr, config.Host, tlsConfig, true)
+		return s.connectSMTPStartTLS(ctx, dialer, addr, config.Host, tlsConfig, true)
 	}
 
-	return s.connectSMTPStartTLS(dialer, addr, config.Host, tlsConfig, false)
+	return s.connectSMTPStartTLS(ctx, dialer, addr, config.Host, tlsConfig, false)
 }
 
 // connectSMTPStartTLS 建立明文连接并按需升级 STARTTLS。
 // mandatory 为 true 时服务器必须支持 STARTTLS，否则报错。
-func (s *EmailService) connectSMTPStartTLS(dialer *net.Dialer, addr, host string, tlsConfig *tls.Config, mandatory bool) (*smtp.Client, error) {
-	conn, err := dialer.Dial("tcp", addr)
+func (s *EmailService) connectSMTPStartTLS(ctx context.Context, dialer *net.Dialer, addr, host string, tlsConfig *tls.Config, mandatory bool) (*smtpConnection, error) {
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial: %w", err)
 	}
-	client, err := newSMTPClient(conn, host)
+	client, err := newSMTPClient(ctx, conn, host)
 	if err != nil {
 		return nil, err
 	}
@@ -342,14 +393,19 @@ func (s *EmailService) connectSMTPStartTLS(dialer *net.Dialer, addr, host string
 	return client, nil
 }
 
-func newSMTPClient(conn net.Conn, host string) (*smtp.Client, error) {
+func newSMTPClient(ctx context.Context, conn net.Conn, host string) (*smtpConnection, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	_ = conn.SetDeadline(time.Now().Add(smtpIOTimeout))
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
+		stopOnCancel()
 		_ = conn.Close()
 		return nil, fmt.Errorf("new smtp client: %w", err)
 	}
-	return client, nil
+	return &smtpConnection{Client: client, conn: conn, ctx: ctx, stopOnCancel: stopOnCancel}, nil
 }
 
 // GenerateVerifyCode 生成6位数字验证码

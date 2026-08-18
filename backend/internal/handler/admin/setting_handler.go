@@ -5360,12 +5360,55 @@ func (h *SettingHandler) SendEmailBroadcast(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if subject, ok := middleware.GetAuthSubjectFromContext(c); ok {
+		req.CreatedByUserID = subject.UserID
+	}
+	req.CreatedByEmail = c.GetString(middleware.ContextKeyAuthEmail)
 	result, err := h.notificationEmailService.StartBroadcast(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 	response.Success(c, dto.SendEmailBroadcastResponse(result))
+}
+
+func (h *SettingHandler) PreflightEmailBroadcast(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	var req dto.SendEmailBroadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.notificationEmailService.PreflightBroadcast(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastPreflightResponse(result))
+}
+
+func (h *SettingHandler) ListEmailBroadcastRecipients(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		page = 1
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "100"))
+	if err != nil {
+		pageSize = 100
+	}
+	result, err := h.notificationEmailService.ListBroadcastRecipients(c.Request.Context(), c.Param("batch_id"), c.Query("status"), page, pageSize)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastRecipientPageResponse(result))
 }
 
 // GetEmailBroadcastDraft returns the saved admin email broadcast draft.

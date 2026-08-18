@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"io"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
 	"regexp"
@@ -49,14 +50,23 @@ func TestBuildSMTPMessageProducesStandardsCompliantMIME(t *testing.T) {
 	require.NoError(t, err)
 	require.Regexp(t, regexp.MustCompile(`^<[0-9a-f]{32}@example\.com>$`), parsed.Header.Get("Message-ID"))
 	require.Equal(t, "1.0", parsed.Header.Get("MIME-Version"))
-	require.Equal(t, "quoted-printable", parsed.Header.Get("Content-Transfer-Encoding"))
-
 	mediaType, params, err := mime.ParseMediaType(parsed.Header.Get("Content-Type"))
 	require.NoError(t, err)
-	require.Equal(t, "text/html", mediaType)
-	require.Equal(t, "UTF-8", params["charset"])
+	require.Equal(t, "multipart/alternative", mediaType)
+	require.NotEmpty(t, params["boundary"])
 
-	decodedBody, err := io.ReadAll(quotedprintable.NewReader(parsed.Body))
+	reader := multipart.NewReader(parsed.Body, params["boundary"])
+	plainPart, err := reader.NextPart()
+	require.NoError(t, err)
+	require.Equal(t, "text/plain; charset=UTF-8", plainPart.Header.Get("Content-Type"))
+	plainBody, err := io.ReadAll(quotedprintable.NewReader(plainPart))
+	require.NoError(t, err)
+	require.Contains(t, string(plainBody), "验证码：123456")
+
+	htmlPart, err := reader.NextPart()
+	require.NoError(t, err)
+	require.Equal(t, "text/html; charset=UTF-8", htmlPart.Header.Get("Content-Type"))
+	decodedBody, err := io.ReadAll(quotedprintable.NewReader(htmlPart))
 	require.NoError(t, err)
 	require.Equal(t, strings.ReplaceAll(body, "\n", "\r\n"), string(decodedBody))
 }
@@ -114,4 +124,22 @@ func TestBuildSMTPMessageUsesUniqueMessageIDs(t *testing.T) {
 	secondParsed, err := mail.ReadMessage(bytes.NewReader(second.data))
 	require.NoError(t, err)
 	require.NotEqual(t, firstParsed.Header.Get("Message-ID"), secondParsed.Header.Get("Message-ID"))
+}
+
+func TestBuildSMTPMessageUsesStableValidatedMessageIDHeader(t *testing.T) {
+	config := &SMTPConfig{Host: "smtp.example.com", From: "reply@example.com"}
+	stable := "<broadcast.abc123@example.com>"
+	message, err := buildSMTPMessageWithHeaders(config, "user@example.net", "subject", "body", map[string]string{
+		"Message-ID": stable,
+	})
+	require.NoError(t, err)
+	parsed, err := mail.ReadMessage(bytes.NewReader(message.data))
+	require.NoError(t, err)
+	require.Equal(t, stable, parsed.Header.Get("Message-ID"))
+	require.Len(t, parsed.Header["Message-Id"], 1)
+
+	_, err = buildSMTPMessageWithHeaders(config, "user@example.net", "subject", "body", map[string]string{
+		"Message-ID": "bad\r\nBcc: hidden@example.com",
+	})
+	require.ErrorContains(t, err, "invalid Message-ID")
 }

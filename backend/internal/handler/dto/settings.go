@@ -614,6 +614,9 @@ type EmailBroadcastDraftResponse = service.NotificationEmailBroadcastDraft
 // ResumeEmailBroadcastRequest selects which recipients to send when resuming a job.
 type ResumeEmailBroadcastRequest = service.NotificationEmailBroadcastResumeInput
 
+type EmailBroadcastPreflightResponse = service.NotificationEmailBroadcastPreflight
+type EmailBroadcastRecipientPageResponse = service.NotificationEmailBroadcastRecipientPage
+
 // NotificationConfig is the lightweight global notification dispatcher config.
 type NotificationConfig = service.NotificationConfig
 

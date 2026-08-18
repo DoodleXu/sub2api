@@ -1322,6 +1322,34 @@ export interface SendEmailBroadcastRequest {
   rpm: number;
 }
 
+export interface EmailBroadcastPreflightResponse {
+  target_count: number;
+  valid_count: number;
+  invalid_count: number;
+  unsubscribed_count: number;
+  estimated_duration_seconds: number;
+  sample_emails: string[];
+  domains: Record<string, number>;
+}
+
+export interface EmailBroadcastRecipientPageResponse {
+  recipients: Array<{
+    email: string;
+    normalized_email: string;
+    user_id?: number;
+    name?: string;
+    locale: string;
+    status: string;
+    attempt_count: number;
+    error_code?: string;
+    last_error?: string;
+    message_id: string;
+    accepted_at?: string;
+    updated_at: string;
+  }>;
+  total: number;
+}
+
 export interface SendEmailBroadcastResponse {
   batch_id: string;
   target_count: number;
@@ -1341,6 +1369,9 @@ export interface EmailBroadcastStatusResponse {
   skipped_count: number;
   unsubscribed_count: number;
   failure_count: number;
+  uncertain_count: number;
+  created_by_user_id?: number;
+  created_by_email?: string;
   rpm: number;
   started_at: string;
   updated_at: string;
@@ -1351,6 +1382,7 @@ export interface EmailBroadcastStatusResponse {
 export interface EmailBroadcastListResponse {
   jobs: EmailBroadcastStatusResponse[];
   active_batch_id?: string;
+  total?: number;
 }
 
 export interface EmailBroadcastDraftResponse extends SendEmailBroadcastRequest {
@@ -1358,7 +1390,7 @@ export interface EmailBroadcastDraftResponse extends SendEmailBroadcastRequest {
 }
 
 export interface ResumeEmailBroadcastRequest {
-  mode?: "remaining" | "failed";
+  mode?: "remaining" | "failed" | "uncertain";
 }
 
 export async function getEmailTemplates(): Promise<EmailTemplateListResponse> {
@@ -1443,6 +1475,30 @@ export async function sendEmailBroadcast(
   const { data } = await apiClient.post<SendEmailBroadcastResponse>(
     "/admin/settings/email-broadcasts",
     request,
+  );
+  return data;
+}
+
+export async function preflightEmailBroadcast(
+  request: SendEmailBroadcastRequest,
+): Promise<EmailBroadcastPreflightResponse> {
+  const { data } = await apiClient.post<EmailBroadcastPreflightResponse>(
+    "/admin/settings/email-broadcasts/preflight",
+    request,
+  );
+  return data;
+}
+
+export async function listEmailBroadcastRecipients(
+  batchId: string,
+  status = "",
+  page = 1,
+  pageSize = 100,
+): Promise<EmailBroadcastRecipientPageResponse> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (status) params.set("status", status);
+  const { data } = await apiClient.get<EmailBroadcastRecipientPageResponse>(
+    `/admin/settings/email-broadcasts/${encodeURIComponent(batchId)}/recipients?${params.toString()}`,
   );
   return data;
 }
@@ -1856,6 +1912,7 @@ export const settingsAPI = {
   updateNotificationConfig,
   testNotificationTransport,
   sendEmailBroadcast,
+  preflightEmailBroadcast,
   getEmailBroadcastDraft,
   saveEmailBroadcastDraft,
   deleteEmailBroadcastDraft,
@@ -1863,6 +1920,7 @@ export const settingsAPI = {
   listEmailBroadcasts,
   cancelEmailBroadcast,
   resumeEmailBroadcast,
+  listEmailBroadcastRecipients,
   getAdminApiKey,
   regenerateAdminApiKey,
   deleteAdminApiKey,

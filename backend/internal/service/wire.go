@@ -54,9 +54,11 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 
 // ProvideNotificationEmailService creates NotificationEmailService with user lookup
 // support for admin broadcast recipient ranges.
-func ProvideNotificationEmailService(settingRepo SettingRepository, emailService *EmailService, userRepo UserRepository) *NotificationEmailService {
+func ProvideNotificationEmailService(settingRepo SettingRepository, emailService *EmailService, userRepo UserRepository, broadcastRepo NotificationEmailBroadcastRepository) *NotificationEmailService {
 	svc := NewNotificationEmailService(settingRepo, emailService)
 	svc.SetUserRepository(userRepo)
+	svc.SetBroadcastRepository(broadcastRepo)
+	svc.StartBroadcastWorker()
 	return svc
 }
 

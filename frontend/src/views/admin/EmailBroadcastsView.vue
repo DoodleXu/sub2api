@@ -323,6 +323,7 @@
                             skipped: task.skipped_count,
                             unsubscribed: task.unsubscribed_count,
                             failed: task.failure_count,
+                            uncertain: task.uncertain_count || 0,
                             total: task.target_count,
                           })
                         }}
@@ -375,11 +376,78 @@
                         <Icon name="refresh" size="sm" />
                         {{ t("admin.settings.emailBroadcast.resendFailed") }}
                       </button>
+                      <button
+                        v-if="canResendUncertainEmailBroadcast(task)"
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        :disabled="emailBroadcastOperatingBatch === task.batch_id"
+                        @click="resumeEmailBroadcastTask(task.batch_id, 'uncertain')"
+                      >
+                        <Icon name="infoCircle" size="sm" />
+                        {{ t("admin.settings.emailBroadcast.resendUncertain") }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        :disabled="emailBroadcastRecipientLoading"
+                        @click="loadEmailBroadcastRecipients(task.batch_id)"
+                      >
+                        <Icon name="document" size="sm" />
+                        {{ t("admin.settings.emailBroadcast.details") }}
+                      </button>
                     </div>
                   </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div
+            v-if="emailBroadcastRecipientBatch && emailBroadcastRecipientDetails"
+            class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+          >
+            <div class="mb-3 flex items-center justify-between gap-3">
+              <div class="text-sm font-medium text-gray-800 dark:text-gray-200">
+                {{
+                  t("admin.settings.emailBroadcast.recipientDetails", {
+                    count: emailBroadcastRecipientDetails.total,
+                  })
+                }}
+              </div>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                @click="emailBroadcastRecipientBatch = ''; emailBroadcastRecipientDetails = null"
+              >
+                <Icon name="x" size="sm" />
+              </button>
+            </div>
+            <div class="max-h-72 overflow-auto">
+              <table class="min-w-full text-sm">
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr
+                    v-for="recipient in emailBroadcastRecipientDetails.recipients"
+                    :key="recipient.message_id"
+                  >
+                    <td class="px-3 py-2 font-mono text-xs">
+                      {{ recipient.email }}
+                    </td>
+                    <td class="px-3 py-2">{{ recipient.locale }}</td>
+                    <td class="px-3 py-2">{{ recipient.status }}</td>
+                    <td class="px-3 py-2 text-xs text-red-600 dark:text-red-300">
+                      {{ recipient.last_error || "-" }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              v-if="emailBroadcastRecipientPagination.total > 0"
+              :page="emailBroadcastRecipientPagination.page"
+              :total="emailBroadcastRecipientPagination.total"
+              :page-size="emailBroadcastRecipientPagination.page_size"
+              @update:page="handleEmailBroadcastRecipientPageChange"
+              @update:pageSize="handleEmailBroadcastRecipientPageSizeChange"
+            />
           </div>
         </div>
       </div>
@@ -418,6 +486,8 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api/admin";
 import type {
+  EmailBroadcastPreflightResponse,
+  EmailBroadcastRecipientPageResponse,
   EmailBroadcastScope,
   EmailBroadcastDraftResponse,
   EmailBroadcastStatusResponse,
@@ -427,6 +497,7 @@ import type {
 import AppLayout from "@/components/layout/AppLayout.vue";
 import Select from "@/components/common/Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
+import Pagination from "@/components/common/Pagination.vue";
 import Icon from "@/components/icons/Icon.vue";
 import { useAppStore } from "@/stores";
 import { extractApiErrorMessage } from "@/utils/apiError";
@@ -443,6 +514,12 @@ const emailBroadcastDraftSaving = ref(false);
 const emailBroadcastDraftClearing = ref(false);
 const emailBroadcastDraftSavedAt = ref("");
 const emailBroadcastOperatingBatch = ref<string | null>(null);
+const emailBroadcastPreflighting = ref(false);
+const emailBroadcastPreflight = ref<EmailBroadcastPreflightResponse | null>(null);
+const emailBroadcastRecipientDetails = ref<EmailBroadcastRecipientPageResponse | null>(null);
+const emailBroadcastRecipientBatch = ref("");
+const emailBroadcastRecipientLoading = ref(false);
+const emailBroadcastRecipientPagination = reactive({ page: 1, page_size: 100, total: 0 });
 const emailBroadcastCustomEmailsInput = ref("");
 const emailBroadcastCustomUserIDsInput = ref("");
 let emailBroadcastStatusTimer: number | null = null;
@@ -508,6 +585,7 @@ const emailBroadcastScopeOptions = computed(() => [
 ]);
 
 const emailBroadcastLocaleOptions = computed(() => [
+  { value: "auto", label: t("admin.settings.emailBroadcast.locales.auto") },
   { value: "zh", label: t("admin.settings.emailBroadcast.locales.zh") },
   { value: "en", label: t("admin.settings.emailBroadcast.locales.en") },
 ]);
@@ -527,8 +605,10 @@ const canSendEmailBroadcast = computed(
 
 const canConfirmEmailBroadcast = computed(
   () =>
-    !emailBroadcastConfirmDialog.requiresPhrase ||
-    emailBroadcastConfirmDialog.phrase.trim() === emailBroadcastConfirmPhrase,
+    !emailBroadcastPreflighting.value &&
+    emailBroadcastPreflight.value !== null &&
+    (!emailBroadcastConfirmDialog.requiresPhrase ||
+      emailBroadcastConfirmDialog.phrase.trim() === emailBroadcastConfirmPhrase),
 );
 
 function splitNotificationInput(value: string): string[] {
@@ -607,7 +687,7 @@ function emailBroadcastScopeLabel(scope: EmailBroadcastScope): string {
   return option?.label || scope;
 }
 
-function requestEmailBroadcastConfirmation(): void {
+async function requestEmailBroadcastConfirmation(): Promise<void> {
   const payload = buildEmailBroadcastPayload();
   if (!payload.message_title || !payload.message_html) {
     appStore.showError(t("admin.settings.emailBroadcast.required"));
@@ -621,15 +701,32 @@ function requestEmailBroadcastConfirmation(): void {
     appStore.showError(t("admin.settings.emailBroadcast.customRequired"));
     return;
   }
-  const requiresPhrase = payload.scope !== "custom";
+  emailBroadcastPreflighting.value = true;
+  emailBroadcastPreflight.value = null;
+  let preflight: EmailBroadcastPreflightResponse;
+  try {
+    preflight = await adminAPI.settings.preflightEmailBroadcast(payload);
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.preflightFailed")),
+    );
+    emailBroadcastPreflighting.value = false;
+    return;
+  }
+  emailBroadcastPreflighting.value = false;
+  emailBroadcastPreflight.value = preflight;
+  const requiresPhrase = payload.scope !== "custom" || preflight.valid_count >= 20;
   emailBroadcastConfirmDialog.payload = payload;
   emailBroadcastConfirmDialog.requiresPhrase = requiresPhrase;
   emailBroadcastConfirmDialog.phrase = "";
   emailBroadcastConfirmDialog.message = t("admin.settings.emailBroadcast.confirmMessage");
-  emailBroadcastConfirmDialog.summary = t("admin.settings.emailBroadcast.confirmSummary", {
+  emailBroadcastConfirmDialog.summary = t("admin.settings.emailBroadcast.confirmPreflightSummary", {
     scope: emailBroadcastScopeLabel(payload.scope),
     rpm: payload.rpm,
-    seconds: Math.ceil(60 / payload.rpm),
+    valid: preflight.valid_count,
+    invalid: preflight.invalid_count,
+    unsubscribed: preflight.unsubscribed_count,
+    duration: formatEmailBroadcastDuration(preflight.estimated_duration_seconds),
   });
   emailBroadcastConfirmDialog.show = true;
 }
@@ -656,6 +753,7 @@ async function handleEmailBroadcastConfirm(): Promise<void> {
 function cancelEmailBroadcastConfirm(): void {
   emailBroadcastConfirmDialog.show = false;
   emailBroadcastConfirmDialog.payload = null;
+  emailBroadcastPreflight.value = null;
 }
 
 async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<void> {
@@ -778,12 +876,59 @@ function canCancelEmailBroadcast(task: EmailBroadcastStatusResponse): boolean {
 
 function canResumeEmailBroadcast(task: EmailBroadcastStatusResponse): boolean {
   if (isEmailBroadcastActive(task.status)) return false;
-  const done = task.sent_count + task.skipped_count;
+  const done = task.sent_count + task.skipped_count + (task.uncertain_count || 0);
   return done < task.target_count;
 }
 
 function canResendFailedEmailBroadcast(task: EmailBroadcastStatusResponse): boolean {
   return !isEmailBroadcastActive(task.status) && task.failure_count > 0;
+}
+
+function canResendUncertainEmailBroadcast(task: EmailBroadcastStatusResponse): boolean {
+  return !isEmailBroadcastActive(task.status) && (task.uncertain_count || 0) > 0;
+}
+
+async function loadEmailBroadcastRecipients(
+  batchId: string,
+  page = 1,
+  toggle = true,
+): Promise<void> {
+  if (toggle && emailBroadcastRecipientBatch.value === batchId && emailBroadcastRecipientDetails.value) {
+    emailBroadcastRecipientBatch.value = "";
+    emailBroadcastRecipientDetails.value = null;
+    emailBroadcastRecipientPagination.page = 1;
+    emailBroadcastRecipientPagination.total = 0;
+    return;
+  }
+  emailBroadcastRecipientLoading.value = true;
+  try {
+    emailBroadcastRecipientDetails.value = await adminAPI.settings.listEmailBroadcastRecipients(
+      batchId,
+      "",
+      page,
+      emailBroadcastRecipientPagination.page_size,
+    );
+    emailBroadcastRecipientBatch.value = batchId;
+    emailBroadcastRecipientPagination.page = page;
+    emailBroadcastRecipientPagination.total = emailBroadcastRecipientDetails.value.total;
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.recipientLoadFailed")),
+    );
+  } finally {
+    emailBroadcastRecipientLoading.value = false;
+  }
+}
+
+function handleEmailBroadcastRecipientPageChange(page: number): void {
+  if (!emailBroadcastRecipientBatch.value) return;
+  void loadEmailBroadcastRecipients(emailBroadcastRecipientBatch.value, page, false);
+}
+
+function handleEmailBroadcastRecipientPageSizeChange(pageSize: number): void {
+  if (!emailBroadcastRecipientBatch.value) return;
+  emailBroadcastRecipientPagination.page_size = pageSize;
+  void loadEmailBroadcastRecipients(emailBroadcastRecipientBatch.value, 1, false);
 }
 
 async function cancelEmailBroadcastTask(batchId: string): Promise<void> {
@@ -827,7 +972,8 @@ async function resumeEmailBroadcastTask(
 
 function emailBroadcastProgress(task: EmailBroadcastStatusResponse): number {
   if (!task.target_count) return 0;
-  const done = task.sent_count + task.skipped_count + task.failure_count;
+  const done =
+    task.sent_count + task.skipped_count + task.failure_count + (task.uncertain_count || 0);
   return Math.max(0, Math.min(100, Math.round((done / task.target_count) * 100)));
 }
 
@@ -858,6 +1004,17 @@ function formatEmailBroadcastDate(value?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatEmailBroadcastDuration(seconds: number): string {
+  if (seconds < 60) {
+    return t("admin.settings.emailBroadcast.durationSeconds", { count: seconds });
+  }
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) {
+    return t("admin.settings.emailBroadcast.durationMinutes", { count: minutes });
+  }
+  return t("admin.settings.emailBroadcast.durationHours", { count: Math.ceil(minutes / 60) });
 }
 
 onMounted(() => {

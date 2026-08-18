@@ -2,6 +2,12 @@ package service
 
 import (
 	"context"
+	"io"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net/mail"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,9 +137,32 @@ func TestOpsScheduledReportLegacyTemplateReceivesSummaryHTML(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, attempts)
 	require.Equal(t, int64(1), smtpServer.messageCount())
-	messageBody := smtpServer.lastMessageBody(t)
-	require.Contains(t, messageBody, `<section data-template="legacy">`)
-	require.Contains(t, messageBody, `<h2>日报</h2>`)
+	message, err := mail.ReadMessage(strings.NewReader(smtpServer.lastMessage()))
+	require.NoError(t, err)
+	mediaType, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+	require.NoError(t, err)
+	require.Equal(t, "multipart/alternative", mediaType)
+
+	parts := multipart.NewReader(message.Body, params["boundary"])
+	var htmlBody string
+	for {
+		part, partErr := parts.NextPart()
+		if partErr == io.EOF {
+			break
+		}
+		require.NoError(t, partErr)
+		partType, _, parseErr := mime.ParseMediaType(part.Header.Get("Content-Type"))
+		require.NoError(t, parseErr)
+		if partType != "text/html" {
+			continue
+		}
+		decoded, readErr := io.ReadAll(quotedprintable.NewReader(part))
+		require.NoError(t, readErr)
+		htmlBody = string(decoded)
+		break
+	}
+	require.Contains(t, htmlBody, `<section data-template="legacy">`)
+	require.Contains(t, htmlBody, `<h2>日报</h2>`)
 }
 
 func TestFormatOpsReportIntegerGroupsDigits(t *testing.T) {

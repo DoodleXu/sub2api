@@ -12,6 +12,8 @@ const {
   saveEmailBroadcastDraft,
   cancelEmailBroadcast,
   resumeEmailBroadcast,
+  preflightEmailBroadcast,
+  listEmailBroadcastRecipients,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -22,6 +24,8 @@ const {
   saveEmailBroadcastDraft: vi.fn(),
   cancelEmailBroadcast: vi.fn(),
   resumeEmailBroadcast: vi.fn(),
+  preflightEmailBroadcast: vi.fn(),
+  listEmailBroadcastRecipients: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }));
@@ -36,6 +40,8 @@ vi.mock("@/api/admin", () => ({
       saveEmailBroadcastDraft,
       cancelEmailBroadcast,
       resumeEmailBroadcast,
+      preflightEmailBroadcast,
+      listEmailBroadcastRecipients,
     },
   },
 }));
@@ -93,6 +99,8 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.emailBroadcast.draftCleared": "草稿已清空",
     "admin.settings.emailBroadcast.confirmTitle": "确认发送",
     "admin.settings.emailBroadcast.confirmSend": "确认发送",
+    "admin.settings.emailBroadcast.details": "明细",
+    "admin.settings.emailBroadcast.recipientDetails": "收件人明细（共 {count} 条）",
     "common.actions": "操作",
   };
 
@@ -151,6 +159,18 @@ const ConfirmDialogStub = {
   template: '<div v-if="show" data-testid="confirm-dialog"><slot /></div>',
 };
 
+const PaginationStub = defineComponent({
+  props: ["page", "total", "pageSize"],
+  emits: ["update:page", "update:pageSize"],
+  setup(_props, { emit }) {
+    return () =>
+      h("div", { "data-testid": "recipient-pagination" }, [
+        h("button", { "data-testid": "recipient-next", onClick: () => emit("update:page", 2) }, "next"),
+        h("button", { "data-testid": "recipient-page-size", onClick: () => emit("update:pageSize", 50) }, "size"),
+      ]);
+  },
+});
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -169,6 +189,7 @@ function mountView() {
         AppLayout: AppLayoutStub,
         Select: SelectStub,
         ConfirmDialog: ConfirmDialogStub,
+        Pagination: PaginationStub,
         Icon: true,
       },
     },
@@ -202,6 +223,29 @@ describe("EmailBroadcastsView", () => {
     saveEmailBroadcastDraft.mockResolvedValue({});
     cancelEmailBroadcast.mockResolvedValue({});
     resumeEmailBroadcast.mockResolvedValue({});
+    preflightEmailBroadcast.mockResolvedValue({
+      target_count: 1,
+      valid_count: 1,
+      invalid_count: 0,
+      unsubscribed_count: 0,
+      estimated_duration_seconds: 0,
+      sample_emails: [],
+      domains: {},
+    });
+    listEmailBroadcastRecipients.mockResolvedValue({
+      recipients: [
+        {
+          email: "first@example.com",
+          normalized_email: "first@example.com",
+          locale: "en",
+          status: "sent",
+          attempt_count: 1,
+          message_id: "message-1",
+          updated_at: "2026-06-16T08:01:00Z",
+        },
+      ],
+      total: 250,
+    });
   });
 
   it("resets the compose form, custom inputs, saved hint and button states after clearing a draft", async () => {
@@ -300,5 +344,45 @@ describe("EmailBroadcastsView", () => {
 
     expect(wrapper.text()).toContain("暂无草稿");
     expect(sendButton()?.attributes("disabled")).toBeDefined();
+  });
+
+  it("loads every recipient page instead of exposing only the first 100 rows", async () => {
+    listEmailBroadcasts.mockResolvedValueOnce({
+      jobs: [
+        {
+          batch_id: "batch-many",
+          status: "completed",
+          scope: "all_users",
+          locale: "auto",
+          message_title: "Notice",
+          target_count: 250,
+          sent_count: 250,
+          skipped_count: 0,
+          unsubscribed_count: 0,
+          failure_count: 0,
+          uncertain_count: 0,
+          rpm: 30,
+          started_at: "2026-06-16T08:00:00Z",
+          updated_at: "2026-06-16T08:10:00Z",
+        },
+      ],
+    });
+    const wrapper = mountView();
+    await flushPromises();
+
+    const details = wrapper.findAll("button").find((button) => button.text().includes("明细"));
+    await details?.trigger("click");
+    await flushPromises();
+
+    expect(listEmailBroadcastRecipients).toHaveBeenLastCalledWith("batch-many", "", 1, 100);
+    expect(wrapper.text()).toContain("收件人明细（共 250 条）");
+
+    await wrapper.get('[data-testid="recipient-next"]').trigger("click");
+    await flushPromises();
+    expect(listEmailBroadcastRecipients).toHaveBeenLastCalledWith("batch-many", "", 2, 100);
+
+    await wrapper.get('[data-testid="recipient-page-size"]').trigger("click");
+    await flushPromises();
+    expect(listEmailBroadcastRecipients).toHaveBeenLastCalledWith("batch-many", "", 1, 50);
   });
 });

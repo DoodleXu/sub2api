@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -96,10 +98,12 @@ var (
 )
 
 type NotificationEmailService struct {
-	settingRepo  SettingRepository
-	emailService *EmailService
-	userRepo     UserRepository
-	now          func() time.Time
+	settingRepo         SettingRepository
+	emailService        *EmailService
+	userRepo            UserRepository
+	broadcastRepo       NotificationEmailBroadcastRepository
+	broadcastWorkerOnce sync.Once
+	now                 func() time.Time
 }
 
 type NotificationEmailEventInfo struct {
@@ -145,18 +149,21 @@ type NotificationEmailSendInput struct {
 	ReminderKey      string
 	Variables        map[string]string
 	RawHTMLVariables map[string]string
+	Headers          map[string]string
 }
 
 type NotificationEmailBroadcastInput struct {
-	Scope        string   `json:"scope"`
-	Locale       string   `json:"locale"`
-	MessageTitle string   `json:"message_title"`
-	MessageHTML  string   `json:"message_html"`
-	ActionLabel  string   `json:"action_label,omitempty"`
-	ActionURL    string   `json:"action_url,omitempty"`
-	UserIDs      []int64  `json:"user_ids,omitempty"`
-	Emails       []string `json:"emails,omitempty"`
-	RPM          int      `json:"rpm"`
+	Scope           string   `json:"scope"`
+	Locale          string   `json:"locale"`
+	MessageTitle    string   `json:"message_title"`
+	MessageHTML     string   `json:"message_html"`
+	ActionLabel     string   `json:"action_label,omitempty"`
+	ActionURL       string   `json:"action_url,omitempty"`
+	UserIDs         []int64  `json:"user_ids,omitempty"`
+	Emails          []string `json:"emails,omitempty"`
+	RPM             int      `json:"rpm"`
+	CreatedByUserID int64    `json:"-"`
+	CreatedByEmail  string   `json:"-"`
 }
 
 type NotificationEmailBroadcastResult struct {
@@ -178,6 +185,9 @@ type NotificationEmailBroadcastStatus struct {
 	SkippedCount      int    `json:"skipped_count"`
 	UnsubscribedCount int    `json:"unsubscribed_count"`
 	FailureCount      int    `json:"failure_count"`
+	UncertainCount    int    `json:"uncertain_count"`
+	CreatedByUserID   int64  `json:"created_by_user_id,omitempty"`
+	CreatedByEmail    string `json:"created_by_email,omitempty"`
 	RPM               int    `json:"rpm"`
 	StartedAt         string `json:"started_at"`
 	UpdatedAt         string `json:"updated_at"`
@@ -188,6 +198,7 @@ type NotificationEmailBroadcastStatus struct {
 type NotificationEmailBroadcastList struct {
 	Jobs          []NotificationEmailBroadcastStatus `json:"jobs"`
 	ActiveBatchID string                             `json:"active_batch_id,omitempty"`
+	Total         int                                `json:"total"`
 }
 
 type NotificationEmailBroadcastDraft struct {
@@ -292,6 +303,10 @@ func NewNotificationEmailService(settingRepo SettingRepository, emailService *Em
 
 func (s *NotificationEmailService) SetUserRepository(userRepo UserRepository) {
 	s.userRepo = userRepo
+}
+
+func (s *NotificationEmailService) SetBroadcastRepository(repo NotificationEmailBroadcastRepository) {
+	s.broadcastRepo = repo
 }
 
 func (s *NotificationEmailService) nowUTC() time.Time {
@@ -541,6 +556,9 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 }
 
 func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input NotificationEmailBroadcastInput) (NotificationEmailBroadcastResult, error) {
+	if s != nil && s.broadcastRepo != nil {
+		return s.startDurableBroadcast(ctx, input)
+	}
 	if s == nil {
 		return NotificationEmailBroadcastResult{}, errors.New("notification email service is not configured")
 	}
@@ -635,6 +653,15 @@ func (s *NotificationEmailService) StartBroadcast(ctx context.Context, input Not
 }
 
 func (s *NotificationEmailService) GetBroadcastDraft(ctx context.Context) (NotificationEmailBroadcastDraft, error) {
+	if s != nil && s.broadcastRepo != nil {
+		draft, err := s.getDurableBroadcastDraft(ctx)
+		if err == nil {
+			return draft, nil
+		}
+		if !errors.Is(err, ErrSettingNotFound) {
+			return NotificationEmailBroadcastDraft{}, err
+		}
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastDraft{}, errors.New("notification email service is not configured")
 	}
@@ -655,6 +682,9 @@ func (s *NotificationEmailService) GetBroadcastDraft(ctx context.Context) (Notif
 }
 
 func (s *NotificationEmailService) SaveBroadcastDraft(ctx context.Context, input NotificationEmailBroadcastInput) (NotificationEmailBroadcastDraft, error) {
+	if s != nil && s.broadcastRepo != nil {
+		return s.saveDurableBroadcastDraft(ctx, input)
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastDraft{}, errors.New("notification email service is not configured")
 	}
@@ -677,6 +707,15 @@ func (s *NotificationEmailService) SaveBroadcastDraft(ctx context.Context, input
 }
 
 func (s *NotificationEmailService) DeleteBroadcastDraft(ctx context.Context) error {
+	if s != nil && s.broadcastRepo != nil {
+		if err := s.broadcastRepo.DeleteDraft(ctx, "admin"); err != nil {
+			return err
+		}
+		if err := s.settingRepo.Delete(ctx, notificationEmailBroadcastDraftKey); err != nil && !errors.Is(err, ErrSettingNotFound) {
+			return err
+		}
+		return nil
+	}
 	if s == nil || s.settingRepo == nil {
 		return errors.New("notification email service is not configured")
 	}
@@ -687,6 +726,15 @@ func (s *NotificationEmailService) DeleteBroadcastDraft(ctx context.Context) err
 }
 
 func (s *NotificationEmailService) GetBroadcastStatus(ctx context.Context, batchID string) (NotificationEmailBroadcastStatus, error) {
+	if s != nil && s.broadcastRepo != nil {
+		job, err := s.broadcastRepo.Get(ctx, strings.TrimSpace(batchID))
+		if err == nil {
+			return notificationEmailBroadcastStatusFromJob(job), nil
+		}
+		if !errors.Is(err, ErrNotificationEmailBroadcastNotFound) {
+			return NotificationEmailBroadcastStatus{}, err
+		}
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastStatus{}, errors.New("notification email service is not configured")
 	}
@@ -703,6 +751,36 @@ func (s *NotificationEmailService) GetBroadcastStatus(ctx context.Context, batch
 }
 
 func (s *NotificationEmailService) ListBroadcasts(ctx context.Context) (NotificationEmailBroadcastList, error) {
+	if s != nil && s.broadcastRepo != nil {
+		durable, err := s.listDurableBroadcasts(ctx, 50, 0)
+		if err != nil {
+			return NotificationEmailBroadcastList{}, err
+		}
+		// Durable jobs are already paged from SQL. Only consult the legacy index
+		// here; scanning the entire settings table defeats the durable path's
+		// bounded read behavior.
+		legacy, err := s.listIndexedBroadcastStatuses(ctx, s.nowUTC())
+		if err != nil {
+			return NotificationEmailBroadcastList{}, err
+		}
+		if len(legacy) == 0 {
+			return durable, nil
+		}
+		durable.Jobs = append(durable.Jobs, legacy...)
+		sort.SliceStable(durable.Jobs, func(i, j int) bool {
+			return notificationEmailBroadcastSortTime(durable.Jobs[i]).After(notificationEmailBroadcastSortTime(durable.Jobs[j]))
+		})
+		if len(durable.Jobs) > notificationEmailBroadcastMaxListed {
+			durable.Jobs = durable.Jobs[:notificationEmailBroadcastMaxListed]
+		}
+		durable.Total += len(legacy)
+		if durable.ActiveBatchID == "" {
+			if active, activeErr := s.settingRepo.GetValue(ctx, notificationEmailBroadcastActiveKey); activeErr == nil {
+				durable.ActiveBatchID = strings.TrimSpace(active)
+			}
+		}
+		return durable, nil
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastList{}, errors.New("notification email service is not configured")
 	}
@@ -721,6 +799,15 @@ func (s *NotificationEmailService) ListBroadcasts(ctx context.Context) (Notifica
 }
 
 func (s *NotificationEmailService) CancelBroadcast(ctx context.Context, batchID string) (NotificationEmailBroadcastStatus, error) {
+	if s != nil && s.broadcastRepo != nil {
+		status, err := s.cancelDurableBroadcast(ctx, batchID)
+		if err == nil {
+			return status, nil
+		}
+		if !errors.Is(err, ErrNotificationEmailBroadcastNotFound) {
+			return NotificationEmailBroadcastStatus{}, err
+		}
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastStatus{}, errors.New("notification email service is not configured")
 	}
@@ -747,6 +834,15 @@ func (s *NotificationEmailService) CancelBroadcast(ctx context.Context, batchID 
 }
 
 func (s *NotificationEmailService) ResumeBroadcast(ctx context.Context, batchID string, input NotificationEmailBroadcastResumeInput) (NotificationEmailBroadcastResult, error) {
+	if s != nil && s.broadcastRepo != nil {
+		result, err := s.resumeDurableBroadcast(ctx, batchID, input)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, ErrNotificationEmailBroadcastNotFound) {
+			return NotificationEmailBroadcastResult{}, err
+		}
+	}
 	if s == nil || s.settingRepo == nil {
 		return NotificationEmailBroadcastResult{}, errors.New("notification email service is not configured")
 	}
@@ -758,7 +854,7 @@ func (s *NotificationEmailService) ResumeBroadcast(ctx context.Context, batchID 
 	if mode == "" {
 		mode = "remaining"
 	}
-	if mode != "remaining" && mode != "failed" {
+	if mode != "remaining" && mode != "failed" && mode != "uncertain" {
 		return NotificationEmailBroadcastResult{}, fmt.Errorf("unsupported broadcast resume mode: %s", input.Mode)
 	}
 	if err := s.releaseInterruptedActiveBroadcast(ctx, s.nowUTC()); err != nil {
@@ -866,6 +962,9 @@ func (s *NotificationEmailService) resolveBroadcastRecipients(ctx context.Contex
 		recipient.Email = strings.TrimSpace(recipient.Email)
 		if recipient.Email == "" {
 			return
+		}
+		if parsed, err := mail.ParseAddress(recipient.Email); err == nil && parsed.Address != "" {
+			recipient.Email = strings.TrimSpace(parsed.Address)
 		}
 		key := strings.ToLower(recipient.Email)
 		if _, ok := seen[key]; ok {
@@ -1154,6 +1253,27 @@ func (s *NotificationEmailService) listBroadcastStatuses(ctx context.Context, no
 	return statuses, nil
 }
 
+func (s *NotificationEmailService) listIndexedBroadcastStatuses(ctx context.Context, now time.Time) ([]NotificationEmailBroadcastStatus, error) {
+	statuses := make([]NotificationEmailBroadcastStatus, 0)
+	for _, batchID := range s.getBroadcastIndex(ctx) {
+		status, err := s.getBroadcastStatusRaw(ctx, batchID)
+		if errors.Is(err, ErrSettingNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, s.interruptBroadcastStatusIfStale(ctx, status, now))
+	}
+	sort.SliceStable(statuses, func(i, j int) bool {
+		return notificationEmailBroadcastSortTime(statuses[i]).After(notificationEmailBroadcastSortTime(statuses[j]))
+	})
+	if len(statuses) > notificationEmailBroadcastMaxListed {
+		statuses = statuses[:notificationEmailBroadcastMaxListed]
+	}
+	return statuses, nil
+}
+
 func (s *NotificationEmailService) getBroadcastIndex(ctx context.Context) []string {
 	if s == nil || s.settingRepo == nil {
 		return nil
@@ -1239,7 +1359,11 @@ func normalizeNotificationEmailBroadcastDraftInput(input NotificationEmailBroadc
 	default:
 		return NotificationEmailBroadcastInput{}, fmt.Errorf("unsupported broadcast scope: %s", input.Scope)
 	}
-	input.Locale = normalizeNotificationLocale(input.Locale)
+	if strings.EqualFold(strings.TrimSpace(input.Locale), "auto") {
+		input.Locale = "auto"
+	} else {
+		input.Locale = normalizeNotificationLocale(input.Locale)
+	}
 	input.MessageTitle = strings.TrimSpace(input.MessageTitle)
 	input.MessageHTML = strings.TrimSpace(input.MessageHTML)
 	input.ActionLabel = strings.TrimSpace(input.ActionLabel)
@@ -1738,6 +1862,14 @@ func (s *NotificationEmailService) runtimeVariables(ctx context.Context, event, 
 		}
 		variables["unsubscribe_url"] = s.buildUnsubscribePageURL(ctx, token)
 		headers = s.buildUnsubscribeHeaders(ctx, token)
+	}
+	if len(input.Headers) > 0 {
+		if headers == nil {
+			headers = make(map[string]string, len(input.Headers))
+		}
+		for key, value := range input.Headers {
+			headers[key] = value
+		}
 	}
 	return variables, headers, nil
 }
