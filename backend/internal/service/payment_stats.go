@@ -12,6 +12,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
 )
 
 // --- Dashboard & Analytics ---
@@ -58,6 +59,10 @@ func (s *PaymentService) getDashboardStatsBetween(ctx context.Context, since, un
 
 	st := &DashboardStats{}
 	computeBasicStats(st, orders, todayStart)
+	st.AdminRechargeAmount, err = s.getAdminRechargeAmount(ctx, since, until)
+	if err != nil {
+		return nil, err
+	}
 
 	st.PendingOrders, err = s.entClient.PaymentOrder.Query().
 		Where(paymentorder.StatusEQ(OrderStatusPending)).
@@ -71,6 +76,36 @@ func (s *PaymentService) getDashboardStatsBetween(ctx context.Context, since, un
 	st.TopUsers = buildTopUsers(orders)
 
 	return st, nil
+}
+
+// getAdminRechargeAmount sums positive balance adjustments made by an
+// administrator in the reporting range. Negative adjustments and the legacy
+// sign-in reward records stored as admin_balance are not business income.
+func (s *PaymentService) getAdminRechargeAmount(ctx context.Context, since, until time.Time) (float64, error) {
+	var result []struct {
+		Sum float64 `json:"sum"`
+	}
+	err := s.entClient.RedeemCode.Query().
+		Where(
+			redeemcode.TypeEQ(AdjustmentTypeAdminBalance),
+			redeemcode.StatusEQ(StatusUsed),
+			redeemcode.ValueGT(0),
+			redeemcode.UsedAtGTE(since),
+			redeemcode.UsedAtLT(until),
+			redeemcode.Or(
+				redeemcode.NotesIsNil(),
+				redeemcode.NotesNEQ(RedeemNotesDailyCheckinReward),
+			),
+		).
+		Aggregate(dbent.As(dbent.Sum(redeemcode.FieldValue), "sum")).
+		Scan(ctx, &result)
+	if err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, nil
+	}
+	return roundAmount(result[0].Sum), nil
 }
 
 func computeBasicStats(st *DashboardStats, orders []*dbent.PaymentOrder, todayStart time.Time) {

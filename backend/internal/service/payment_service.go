@@ -166,12 +166,13 @@ type RefundPreview struct {
 }
 
 type DashboardStats struct {
-	TodayAmount   CurrencyAmounts `json:"today_amount"`
-	TotalAmount   CurrencyAmounts `json:"total_amount"`
-	TodayCount    int             `json:"today_count"`
-	TotalCount    int             `json:"total_count"`
-	AvgAmount     CurrencyAmounts `json:"avg_amount"`
-	PendingOrders int             `json:"pending_orders"`
+	TodayAmount         CurrencyAmounts `json:"today_amount"`
+	TotalAmount         CurrencyAmounts `json:"total_amount"`
+	TodayCount          int             `json:"today_count"`
+	TotalCount          int             `json:"total_count"`
+	AvgAmount           CurrencyAmounts `json:"avg_amount"`
+	PendingOrders       int             `json:"pending_orders"`
+	AdminRechargeAmount float64         `json:"admin_recharge_amount"`
 
 	DailySeries    []DailyStats        `json:"daily_series"`
 	PaymentMethods []PaymentMethodStat `json:"payment_methods"`

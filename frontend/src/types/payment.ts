@@ -279,6 +279,7 @@ export interface TopUserPaymentStats {
 export interface DashboardStats {
   today_amount: CurrencyAmounts
   total_amount: CurrencyAmounts
+  admin_recharge_amount: number
   today_count: number
   total_count: number
   avg_amount: CurrencyAmounts
