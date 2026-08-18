@@ -60,9 +60,9 @@ func startPassthroughHookRecordingServer(
 	return server, serverErr
 }
 
-// TestPassthroughIngressCallsBeforeTurn 保证 ws_v2 透传入口在每个 turn 开始时
-// 触发定价、利润和计费资格复核，并在终态后提交对应 turn 的用量。
-func TestPassthroughIngressCallsBeforeTurn(t *testing.T) {
+// TestPassthroughIngressCallsBeforeTurnAndReportsStart 保证 ws_v2 透传入口在
+// 每个 turn 开始时复核定价与利润，并在 AfterTurn 前报告同一 turn 的开始时刻。
+func TestPassthroughIngressCallsBeforeTurnAndReportsStart(t *testing.T) {
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
 
@@ -71,17 +71,29 @@ func TestPassthroughIngressCallsBeforeTurn(t *testing.T) {
 
 	var hooksMu sync.Mutex
 	beforeTurnCalls := 0
-	afterTurnCalls := 0
+	expectedTurnStartedAt := time.Date(2026, time.August, 17, 9, 59, 59, 0, time.UTC)
+	type hookEvent struct {
+		name      string
+		turn      int
+		startedAt time.Time
+	}
+	var hookEvents []hookEvent
 	hooks := &OpenAIWSIngressHooks{
+		InitialTurnStartedAt: expectedTurnStartedAt,
+		TurnStarted: func(turn int, startedAt time.Time) {
+			hooksMu.Lock()
+			hookEvents = append(hookEvents, hookEvent{name: "TurnStarted", turn: turn, startedAt: startedAt})
+			hooksMu.Unlock()
+		},
 		BeforeTurn: func(int) error {
 			hooksMu.Lock()
 			beforeTurnCalls++
 			hooksMu.Unlock()
 			return nil
 		},
-		AfterTurn: func(int, *OpenAIForwardResult, error) {
+		AfterTurn: func(turn int, _ *OpenAIForwardResult, _ error) {
 			hooksMu.Lock()
-			afterTurnCalls++
+			hookEvents = append(hookEvents, hookEvent{name: "AfterTurn", turn: turn})
 			hooksMu.Unlock()
 		},
 	}
@@ -110,9 +122,108 @@ func TestPassthroughIngressCallsBeforeTurn(t *testing.T) {
 	}
 
 	hooksMu.Lock()
-	gotBefore, gotAfter := beforeTurnCalls, afterTurnCalls
+	gotBefore := beforeTurnCalls
+	gotEvents := append([]hookEvent(nil), hookEvents...)
 	hooksMu.Unlock()
 
 	require.Positive(t, gotBefore, "透传 ingress 应在 turn 开始时调用 BeforeTurn")
-	require.Positive(t, gotAfter, "透传 ingress 仍应回调 AfterTurn 提交用量")
+	require.GreaterOrEqual(t, len(gotEvents), 2, "透传 ingress 应报告 TurnStarted 和 AfterTurn")
+	require.Equal(t, "TurnStarted", gotEvents[0].name)
+	require.Equal(t, expectedTurnStartedAt, gotEvents[0].startedAt, "TurnStarted 必须携带入口冻结的首轮开始时刻")
+	require.Equal(t, "AfterTurn", gotEvents[1].name)
+	require.Equal(t, gotEvents[0].turn, gotEvents[1].turn, "TurnStarted 后应提交同一 turn 的 AfterTurn")
+}
+
+func TestPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T) {
+	testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t, coderws.MessageText)
+}
+
+func TestPassthroughIngressFreezesBinarySubsequentTurnBeforeRequestPolicy(t *testing.T) {
+	testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t, coderws.MessageBinary)
+}
+
+func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T, secondMessageType coderws.MessageType) {
+	t.Helper()
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+
+	upstream := newStagedPassthroughConn()
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_first","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+
+	type turnStart struct {
+		turn      int
+		startedAt time.Time
+	}
+	turnStarts := make(chan turnStart, 2)
+	beforeRequestEntered := make(chan time.Time, 1)
+	releaseBeforeRequest := make(chan struct{})
+	hooks := &OpenAIWSIngressHooks{
+		InitialTurnStartedAt: time.Now(),
+		TurnStarted: func(turn int, startedAt time.Time) {
+			turnStarts <- turnStart{turn: turn, startedAt: startedAt}
+		},
+		BeforeRequest: func(turn int, _ []byte, _ string) error {
+			if turn == 2 {
+				beforeRequestEntered <- time.Now()
+				<-releaseBeforeRequest
+			}
+			return nil
+		},
+	}
+
+	server, serverErr := startPassthroughHookRecordingServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		passthroughLifecycleAccount(),
+		hooks,
+	)
+	defer server.Close()
+	clientConn := dialPassthroughLifecycleClient(t, server)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	require.Equal(t, "response.create", gjson.GetBytes(requirePassthroughUpstreamWrite(t, upstream, 3*time.Second), "type").String())
+	firstCompleted, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "resp_first", gjson.GetBytes(firstCompleted, "response.id").String())
+	select {
+	case first := <-turnStarts:
+		require.Equal(t, 1, first.turn)
+	case <-time.After(time.Second):
+		t.Fatal("first turn start was not reported")
+	}
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, secondMessageType, []byte(`{"type":"response.create","model":"gpt-5.1","previous_response_id":"resp_first"}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	var policyEnteredAt time.Time
+	select {
+	case policyEnteredAt = <-beforeRequestEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second turn did not enter BeforeRequest")
+	}
+	close(releaseBeforeRequest)
+	require.Equal(t, "response.create", gjson.GetBytes(requirePassthroughUpstreamWrite(t, upstream, 3*time.Second), "type").String())
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_second","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	secondCompleted, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "resp_second", gjson.GetBytes(secondCompleted, "response.id").String())
+
+	select {
+	case second := <-turnStarts:
+		require.Equal(t, 2, second.turn)
+		require.False(t, second.startedAt.After(policyEnteredAt), "第二轮开始时刻必须在 BeforeRequest 策略执行前冻结")
+	case <-time.After(time.Second):
+		t.Fatal("second turn start was not reported")
+	}
+
+	_ = clientConn.CloseNow()
+	cancelControl(context.Canceled)
+	select {
+	case <-serverErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("passthrough ingress did not exit")
+	}
 }

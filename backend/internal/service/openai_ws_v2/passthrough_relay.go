@@ -53,6 +53,7 @@ type RelayTurnResult struct {
 	Usage                 Usage
 	RequestID             string
 	TerminalEventType     string
+	StartedAt             time.Time
 	Duration              time.Duration
 	FirstTokenMs          *int
 	ImageFirstOutputMs    *int
@@ -70,6 +71,8 @@ type RelayOptions struct {
 	WriteTimeout                    time.Duration
 	IdleTimeout                     time.Duration
 	UpstreamDrainTimeout            time.Duration
+	FirstTurnStartedAt              time.Time
+	TakeNextTurnStartedAt           func() time.Time
 	FirstMessageType                coderws.MessageType
 	FirstMessageSent                bool
 	FirstMessageWrittenAt           time.Time
@@ -130,6 +133,7 @@ type observedUpstreamEvent struct {
 	eventType        string
 	responseID       string
 	usage            Usage
+	startedAt        time.Time
 	responseModel    string
 	responseConflict bool
 	duration         time.Duration
@@ -201,7 +205,7 @@ func Relay(
 		return upstreamConn.WriteFrame(writeCtx, msgType, payload)
 	}
 	writeClientFrameUpstream := func(msgType coderws.MessageType, payload []byte) error {
-		if msgType == coderws.MessageText && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
+		if isClientResponseCreateFrame(msgType, payload) {
 			state.setRequestModel(strings.TrimSpace(gjson.GetBytes(payload, "model").String()))
 		}
 		return writeUpstream(msgType, payload)
@@ -229,7 +233,10 @@ func Relay(
 
 	firstMessageWrittenAt := options.FirstMessageWrittenAt
 	if firstMessageWrittenAt.IsZero() {
-		firstMessageWrittenAt = nowFn()
+		firstMessageWrittenAt = startAt
+	}
+	if !options.FirstTurnStartedAt.IsZero() {
+		firstMessageWrittenAt = options.FirstTurnStartedAt
 	}
 	firstSequence, firstRegistered := openAIWSRelayRegisterPendingTurn(state, firstClientMessage, firstMessageWrittenAt)
 	if firstRegistered && options.OnResponseCreateRegistered != nil {
@@ -277,7 +284,7 @@ func Relay(
 		if !clientReaderStarted.CompareAndSwap(false, true) {
 			return
 		}
-		go runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeClientFrameUpstream, markActivity, clientToUpstreamFrames, state, nowFn, options.OnResponseCreateRegistered, options.OnResponseCreateAborted, onTrace, exitCh)
+		go runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeClientFrameUpstream, markActivity, clientToUpstreamFrames, state, nowFn, options.TakeNextTurnStartedAt, options.OnResponseCreateRegistered, options.OnResponseCreateAborted, onTrace, exitCh)
 	}
 	if !options.StartClientAfterFirstDownstream {
 		startClientReader()
@@ -449,6 +456,13 @@ func Relay(
 	return result, nil
 }
 
+func isClientResponseCreateFrame(msgType coderws.MessageType, payload []byte) bool {
+	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+		return false
+	}
+	return strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create"
+}
+
 func runClientToUpstream(
 	ctx context.Context,
 	clientConn FrameConn,
@@ -458,6 +472,7 @@ func runClientToUpstream(
 	forwardedFrames *atomic.Int64,
 	state *relayState,
 	nowFn func() time.Time,
+	takeNextTurnStartedAt func() time.Time,
 	onResponseCreateRegistered func(sequence uint64, payload []byte),
 	onResponseCreateAborted func(sequence uint64),
 	onTrace func(event RelayTraceEvent),
@@ -484,6 +499,11 @@ func runClientToUpstream(
 		writtenAt := time.Now()
 		if nowFn != nil {
 			writtenAt = nowFn()
+		}
+		if isClientResponseCreateFrame(msgType, payload) && takeNextTurnStartedAt != nil {
+			if startedAt := takeNextTurnStartedAt(); !startedAt.IsZero() {
+				writtenAt = startedAt
+			}
 		}
 		sequence, registered := openAIWSRelayRegisterPendingTurn(state, payload, writtenAt)
 		if registered && onResponseCreateRegistered != nil {
@@ -814,6 +834,7 @@ func observeUpstreamMessage(
 			if duration < 0 {
 				duration = 0
 			}
+			observed.startedAt = turnTiming.startAt
 			observed.duration = duration
 			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
 			observed.imageFirstOutput = openAIWSRelayCloneIntPtr(turnTiming.imageFirstOutputMs)
@@ -849,6 +870,7 @@ func emitTurnComplete(
 		Usage:                 observed.usage,
 		RequestID:             responseID,
 		TerminalEventType:     observed.eventType,
+		StartedAt:             observed.startedAt,
 		Duration:              observed.duration,
 		FirstTokenMs:          openAIWSRelayCloneIntPtr(observed.firstToken),
 		ImageFirstOutputMs:    openAIWSRelayCloneIntPtr(observed.imageFirstOutput),

@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-16
+最后更新：2026-08-18
 
 ## 当前对比基线
 
@@ -10,21 +10,36 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `785404547` | 本次合并 v0.1.177 前的 fork 基线；版本源保持 `0.1.252` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.177` -> `073e92d17178a1ccdb0a27017f572f10c9c7ab62` | 已合入 2026-08-15 发布的官方 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.177` -> `073e92d17178a1ccdb0a27017f572f10c9c7ab62` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 17 个冲突路径，其中 6 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `8d4820e55` | 本次合并 v0.1.178 前的 fork 基线；版本源保持 `0.1.255` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.178` -> `e0c48a19ed794a565e3858662520afe0a1f9f0ba` | 合入 2026-08-18 发布的官方 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.178` -> `e0c48a19ed794a565e3858662520afe0a1f9f0ba` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 33 个冲突路径，其中 17 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.177:refs/tags/upstream/v0.1.177 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.177^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.177^{}..HEAD
+git fetch upstream refs/tags/v0.1.178:refs/tags/upstream/v0.1.178 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.178^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.178^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.178` 合并说明：
+
+- 合入 Kimi、智谱和 DeepSeek 一等供应商支持，包括多协议路由、分组/渠道定价、余额与配额探测、管理端账号能力，以及 OpenAI 兼容请求的平台精确归一化。国产供应商的 `claude-*` 计费候选只有在管理员显式配置分组或渠道价格时才保留，避免误套 Claude 目录价。
+- 合入 Channel Monitor 的 `quota` / `quota_probe` 检查模式、公开显示开关、配额快照、服务端搜索账号选择器和 60 秒失败负缓存；保留 fork 已有的监控状态通知，并由重新生成的 Wire 图注入新增 fetcher 和国产供应商余额检查服务。
+- 合入渠道模型分时倍率、Codex 指纹随机种子全生命周期、OpenAI 客户端工具恢复、国产供应商原生 Anthropic 转发、OpenAI Team 联动熔断、Gemini 工具配置兼容和邀请码原子消费等修复。
+- 上游 17 个 handler/service 拆分文件继续保持删除，新增行为已迁入 fork 实际使用的聚合文件。OpenAI 计费继续保留 fork 的缺价 `pricing_pending` 审计记录与禁止零成本伪结算策略，同时传递请求级 `PricingAt` 以保证跨峰谷请求定价一致。
+- 上游迁移 `224_user_platform_quotas_add_cn_providers.sql`、`225_backfill_codex_fingerprint_seed.sql`、`225_channel_model_time_pricing.sql` 和 `226_channel_monitor_quota_mode.sql` 与 fork 同编号迁移并存；迁移器按完整文件名和校验和记录，不能因编号重复改名、覆盖或删除历史迁移。
+- `backend/cmd/server/VERSION` 保持 fork 的 `0.1.255`，没有跟随上游源码版本回退；本次只同步上游 release，不执行 push、tag 或发布。
+
+### v0.1.178 合并验证
+
+- 合并前 `git merge-tree --write-tree` 识别 33 个冲突路径，其中 16 个内容冲突、17 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。
+- 已重新生成 Wire；Gin 模式 AST 守卫、Codex 指纹种子、国产供应商定价候选和 WS 跨峰谷首轮时间边界等定向后端单元测试通过。
+- 后端 `TZ=UTC GOCACHE=/private/tmp/sub2api-go-build go test -tags=unit -count=1 ./...` 全量通过；前端 `vue-tsc --noEmit`、`pnpm exec vitest run --reporter=dot`（251 个测试文件、1792 个用例）、`pnpm run lint:check` 和 `pnpm run build` 全部通过。仅有既有 Browserslist 数据过期提示及测试中预期的 jsdom/intlfy stderr。
 
 本次 `v0.1.177` 合并说明：
 

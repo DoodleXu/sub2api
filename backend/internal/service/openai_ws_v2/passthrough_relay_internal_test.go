@@ -54,6 +54,7 @@ func TestRunClientToUpstream_ErrorPaths(t *testing.T) {
 			nil,
 			nil,
 			nil,
+			nil,
 			exitCh,
 		)
 		sig := <-exitCh
@@ -73,6 +74,7 @@ func TestRunClientToUpstream_ErrorPaths(t *testing.T) {
 			nil,
 			func(_ coderws.MessageType, _ []byte) error { return errors.New("boom") },
 			func() {},
+			nil,
 			nil,
 			nil,
 			nil,
@@ -101,6 +103,7 @@ func TestRunClientToUpstream_ErrorPaths(t *testing.T) {
 			func(_ coderws.MessageType, _ []byte) error { return nil },
 			func() {},
 			forwarded,
+			nil,
 			nil,
 			nil,
 			nil,

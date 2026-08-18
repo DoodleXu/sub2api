@@ -243,6 +243,11 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.upstreamBillingProbe.intervalHint": "范围 5–1440 分钟。",
     "admin.settings.upstreamBillingProbe.saved": "上游倍率自动探测设置已保存",
     "admin.settings.upstreamBillingProbe.saveFailed": "保存上游倍率自动探测设置失败",
+    "admin.settings.openaiFastPolicy.summaryTargetModels": "目标模型",
+    "admin.settings.openaiFastPolicy.summaryAllModels": "全部模型",
+    "admin.settings.openaiFastPolicy.summaryOtherModels": "其他模型",
+    "admin.settings.openaiFastPolicy.summaryAction.filter": "过滤",
+    "admin.settings.openaiFastPolicy.summaryAction.pass": "透传",
     "admin.settings.security.passkeyDeploymentHint":
       "请由服务器运维在部署配置中将 webauthn.enabled 设为 true，填写 webauthn.rp_id（仅域名）与 webauthn.rp_origins（完整 HTTPS 来源），然后重启服务。",
     "admin.settings.site.uploadImage": "上传图片",
@@ -1365,6 +1370,76 @@ describe("admin SettingsView payment visible method controls", () => {
       "保留原版高级调度开关。仅在老调度方案下启用原有的高级调度行为",
     );
     expect(wrapper.text()).not.toContain("OpenAI 实验调度策略");
+    expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("summarizes target and other-model actions, then switches to all models", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_fast_policy_settings: {
+        rules: [
+          {
+            service_tier: "all",
+            action: "filter",
+            scope: "all",
+            model_whitelist: ["gpt-5.6-sol"],
+            fallback_action: "pass",
+          },
+        ],
+      },
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const summary = wrapper.get('[data-testid="openai-fast-policy-summary-0"]');
+    expect(summary.text()).toContain("目标模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).toContain("其他模型");
+    expect(summary.text()).toContain("透传");
+
+    await wrapper
+      .get(
+        '[role="group"][aria-labelledby="openai-fast-policy-models-label-0"] input[type="text"]',
+      )
+      .setValue("");
+    expect(summary.text()).toContain("全部模型");
+    expect(summary.text()).toContain("过滤");
+    expect(summary.text()).not.toContain("其他模型");
+    expect(summary.text()).not.toContain("透传");
+  });
+
+  it("loads and saves upstream billing probe settings from the gateway tab", async () => {
+    getUpstreamBillingProbeSettings.mockResolvedValueOnce({
+      enabled: false,
+      interval_minutes: 45,
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const card = wrapper.get('[data-testid="upstream-billing-probe-settings"]');
+    expect(card.isVisible()).toBe(true);
+    expect(card.text()).toContain("上游倍率自动探测");
+    expect(
+      (card.get('[data-testid="upstream-billing-probe-enabled"]').element as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+    expect(card.find('[data-testid="upstream-billing-probe-interval"]').exists()).toBe(false);
+
+    await card.get('[data-testid="upstream-billing-probe-enabled"]').setValue(true);
+    await card.get('[data-testid="upstream-billing-probe-interval"]').setValue(60);
+    await card.get('[data-testid="upstream-billing-probe-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateUpstreamBillingProbeSettings).toHaveBeenCalledWith({
+      enabled: true,
+      interval_minutes: 60,
+    });
+    expect(showSuccess).toHaveBeenCalledWith("上游倍率自动探测设置已保存");
   });
 
   it("loads and saves configurable Grok cross-client model mapping", async () => {
