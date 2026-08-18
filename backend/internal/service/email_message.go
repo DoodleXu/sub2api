@@ -120,13 +120,13 @@ func notificationEmailHTMLToText(body string) string {
 			text := strings.Join(strings.Fields(node.Data), " ")
 			if text != "" {
 				if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "\n") {
-					builder.WriteByte(' ')
+					_ = builder.WriteByte(' ')
 				}
-				builder.WriteString(text)
+				_, _ = builder.WriteString(text)
 			}
 		}
 		if node.Type == xhtml.ElementNode && node.Data == "br" {
-			builder.WriteByte('\n')
+			_ = builder.WriteByte('\n')
 		}
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			walk(child)
@@ -134,7 +134,7 @@ func notificationEmailHTMLToText(body string) string {
 		if node.Type == xhtml.ElementNode {
 			switch node.Data {
 			case "p", "div", "li", "tr", "section", "h1", "h2", "h3", "h4":
-				builder.WriteByte('\n')
+				_ = builder.WriteByte('\n')
 			}
 		}
 	}

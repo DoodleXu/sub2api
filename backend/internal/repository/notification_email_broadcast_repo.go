@@ -12,8 +12,6 @@ import (
 	"github.com/lib/pq"
 )
 
-const notificationEmailBroadcastDraftKey = "admin"
-
 type notificationEmailBroadcastRepository struct{ db *sql.DB }
 
 func NewNotificationEmailBroadcastRepository(db *sql.DB) service.NotificationEmailBroadcastRepository {
@@ -57,7 +55,7 @@ func (r *notificationEmailBroadcastRepository) Create(ctx context.Context, job s
 	if err != nil {
 		return fmt.Errorf("prepare email broadcast recipients: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, recipient := range recipients {
 		if _, err := stmt.ExecContext(ctx, job.BatchID, recipient.Email, recipient.NormalizedEmail, recipient.UserID, recipient.Name,
 			recipient.Locale, recipient.Status, recipient.MessageID); err != nil {
@@ -125,7 +123,7 @@ func (r *notificationEmailBroadcastRepository) List(ctx context.Context, limit, 
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	jobs := make([]service.NotificationEmailBroadcastJob, 0, limit)
 	for rows.Next() {
 		var id string
@@ -169,7 +167,7 @@ func (r *notificationEmailBroadcastRepository) ListRecipients(ctx context.Contex
 	if err != nil {
 		return service.NotificationEmailBroadcastRecipientPage{}, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	page := service.NotificationEmailBroadcastRecipientPage{Recipients: make([]service.NotificationEmailBroadcastRecipientRecord, 0, limit), Total: total}
 	for rows.Next() {
 		var item service.NotificationEmailBroadcastRecipientRecord
@@ -194,7 +192,7 @@ func (r *notificationEmailBroadcastRepository) ListRunnableRecipients(ctx contex
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	result := make([]service.NotificationEmailBroadcastRecipientRecord, 0)
 	for rows.Next() {
 		var item service.NotificationEmailBroadcastRecipientRecord
