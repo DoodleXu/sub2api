@@ -5442,6 +5442,9 @@ func (h *SettingHandler) SaveEmailBroadcastDraft(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if subject, ok := middleware.GetAuthSubjectFromContext(c); ok {
+		req.CreatedByUserID = subject.UserID
+	}
 	draft, err := h.notificationEmailService.SaveBroadcastDraft(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
 	if err != nil {
 		response.BadRequest(c, err.Error())
