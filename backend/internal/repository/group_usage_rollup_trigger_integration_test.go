@@ -227,14 +227,14 @@ func TestGroupUsageRollupTriggerKeepsWatermarkForTodayInsert(t *testing.T) {
 	require.True(t, unchanged)
 }
 
-func TestGroupUsageRollupTriggerUsesSessionTimezoneAcrossDST(t *testing.T) {
+func TestGroupUsageRollupTriggerUsesPersistedTimezoneAcrossDST(t *testing.T) {
 	ctx := context.Background()
 	schema := createGroupUsageRollupTriggerTestSchema(t, ctx, false)
 
 	tx := beginGroupUsageRollupTriggerTestTx(t, ctx, schema)
 	defer func() { _ = tx.Rollback() }()
 	_, err := tx.ExecContext(ctx, `
-		SET LOCAL TIME ZONE 'America/New_York';
+		SET LOCAL TIME ZONE 'UTC';
 		INSERT INTO groups (id) VALUES (10);
 		INSERT INTO users (id) VALUES (1);
 		UPDATE usage_group_rollup_state
@@ -449,6 +449,7 @@ func createGroupUsageRollupTriggerTestSchema(t *testing.T, ctx context.Context, 
 	for _, migrationName := range []string{
 		"222_group_usage_daily_rollups.sql",
 		"223_group_usage_rollup_timezone.sql",
+		"227_fix_group_usage_rollup_trigger_timezone.sql",
 	} {
 		migrationSQL, readErr := migrations.FS.ReadFile(migrationName)
 		require.NoError(t, readErr)

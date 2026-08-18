@@ -334,6 +334,7 @@
                       {{ restoringId === record.id ? t('common.loading') : t('admin.backup.actions.restore') }}
                     </button>
                     <button
+                      v-if="record.status === 'completed' || record.status === 'failed'"
                       type="button"
                       class="btn btn-danger btn-xs"
                       @click="removeBackup(record.id)"

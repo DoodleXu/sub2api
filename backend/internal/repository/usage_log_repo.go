@@ -136,11 +136,10 @@ const accountRealCostCNYRatesCTE = `account_real_cost_rates AS (
 	SELECT
 		a.id AS account_id,
 		a.total_cost_cny / NULLIF(l.published_standard_account_cost, 0) AS cost_cny_per_usd
-	FROM accounts a
-	JOIN usage_account_cost_totals l ON l.account_id = a.id
-	WHERE a.deleted_at IS NULL
-	  AND a.total_cost_cny > 0
-	  AND l.published_standard_account_cost > 0
+		FROM accounts a
+		JOIN usage_account_cost_totals l ON l.account_id = a.id
+		WHERE a.total_cost_cny > 0
+		  AND l.published_standard_account_cost > 0
 )`
 
 const usageRealCostCNYSumExpr = "COALESCE(SUM(ul.total_cost * COALESCE(account_cost_rate.cost_cny_per_usd, 0)), 0)"
