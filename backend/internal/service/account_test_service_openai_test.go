@@ -87,6 +87,29 @@ func TestAccountTestService_TestAccountConnectionRejectsArchivedAccount(t *testi
 	require.Empty(t, upstream.requests)
 }
 
+func TestAccountTestService_CNChatCompletionsRoutesToOpenAICompatibleEndpoint(t *testing.T) {
+	ctx, recorder := newTestContext()
+	account := &Account{
+		ID:          2,
+		Platform:    PlatformDeepseek,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-deepseek", "base_url": "https://api.example.test/v1", "api_protocol": APIProtocolChatCompletions},
+	}
+	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{newJSONResponse(http.StatusOK,
+		"data: {\"id\":\"chatcmpl_test\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"+
+			"data: {\"id\":\"chatcmpl_test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+"data: [DONE]\n\n")}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}}}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "deepseek-chat", "", AccountTestModeDefault)
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "https://api.example.test/v1/chat/completions", upstream.requests[0].URL.String())
+	require.Equal(t, "Bearer sk-deepseek", upstream.requests[0].Header.Get("Authorization"))
+	require.Contains(t, recorder.Body.String(), "test_complete")
+}
+
 type openAIAccountTestRepo struct {
 	mockAccountRepoForGemini
 	updatedExtra       map[string]any
