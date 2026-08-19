@@ -7786,17 +7786,6 @@ func isGrokVideoUsageResult(result *OpenAIForwardResult, billingModels []string)
 	return false
 }
 
-func isUsagePricingUnavailableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ErrModelPricingUnavailable) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no pricing available") || strings.Contains(msg, "pricing not found")
-}
-
 // ValidateOpenAIUsagePricing 在请求发往上游前确认至少一个可能的计费模型可定价。
 // 这是 RecordUsage 价格校验的前置防线：动态价格源或渠道价格不可用时应拒绝
 // 请求，而不是在收到成功响应后生成零费用账单。
