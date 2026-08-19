@@ -334,11 +334,15 @@ func (f *ChannelMonitorQuotaFetcher) fetchCNQuota(ctx context.Context, accountID
 			FetchedAt:         now,
 		}
 	}
+	if result == nil {
+		return quotaErrorSnapshot("cn_quota", "cn quota service returned no data", now)
+	}
+	errorMessage := truncateMessage(sanitizeErrorMessage(result.Error))
 	snapshot := &domain.MonitorQuotaSnapshot{
 		Source:    "cn_quota",
 		Success:   result.Success,
 		PlanLevel: result.PlanLevel,
-		Error:     result.Error,
+		Error:     errorMessage,
 		FetchedAt: now,
 	}
 	if !result.Success && !result.CredentialValid {
@@ -376,11 +380,15 @@ func (f *ChannelMonitorQuotaFetcher) fetchCNBalance(ctx context.Context, account
 			FetchedAt:         now,
 		}
 	}
+	if result == nil {
+		return quotaErrorSnapshot("cn_balance", "cn balance service returned no data", now)
+	}
+	errorMessage := truncateMessage(sanitizeErrorMessage(result.Error))
 	snapshot := &domain.MonitorQuotaSnapshot{
 		Source:    "cn_balance",
 		Success:   result.Success,
 		Currency:  result.Currency,
-		Error:     result.Error,
+		Error:     errorMessage,
 		FetchedAt: now,
 	}
 	if result.Success {

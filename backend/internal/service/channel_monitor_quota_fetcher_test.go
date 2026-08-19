@@ -130,6 +130,44 @@ func TestQuotaFetcher_OverseasAccountUsesUsageService(t *testing.T) {
 	require.Equal(t, 0, cnQuota.calls)
 }
 
+func TestQuotaFetcher_CNQuotaNilResultFailsClosed(t *testing.T) {
+	fetcher, _, cnQuota, _, accounts := newQuotaFetcherTestSetup(t)
+	accounts.accounts[8] = &Account{ID: 8, Platform: domain.PlatformKimi, Credentials: map[string]any{"account_mode": AccountModeCoding}}
+	cnQuota.result = nil
+
+	snapshot := fetcher.Fetch(context.Background(), 8)
+
+	require.False(t, snapshot.Success)
+	require.Equal(t, "cn_quota", snapshot.Source)
+	require.Equal(t, "cn quota service returned no data", snapshot.Error)
+}
+
+func TestQuotaFetcher_CNBalanceNilResultFailsClosed(t *testing.T) {
+	fetcher, _, _, cnBalance, accounts := newQuotaFetcherTestSetup(t)
+	accounts.accounts[9] = &Account{ID: 9, Platform: domain.PlatformDeepseek}
+	cnBalance.result = nil
+
+	snapshot := fetcher.Fetch(context.Background(), 9)
+
+	require.False(t, snapshot.Success)
+	require.Equal(t, "cn_balance", snapshot.Source)
+	require.Equal(t, "cn balance service returned no data", snapshot.Error)
+}
+
+func TestQuotaFetcher_CNResultErrorsAreSanitized(t *testing.T) {
+	fetcher, _, cnQuota, _, accounts := newQuotaFetcherTestSetup(t)
+	accounts.accounts[10] = &Account{ID: 10, Platform: domain.PlatformKimi, Credentials: map[string]any{"account_mode": AccountModeCoding}}
+	cnQuota.result = &CNProviderQuotaProbeResult{
+		Success: false,
+		Error:   "upstream rejected api_key=sk-abcdefghijklmnopqrstuvwxyz authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz",
+	}
+
+	snapshot := fetcher.Fetch(context.Background(), 10)
+
+	require.False(t, snapshot.Success)
+	require.NotContains(t, snapshot.Error, "sk-abcdefghijklmnopqrstuvwxyz")
+}
+
 func TestQuotaFetcher_CodingPlanAccountUsesCNQuota(t *testing.T) {
 	fetcher, _, cnQuota, cnBalance, accounts := newQuotaFetcherTestSetup(t)
 	accounts.accounts[9] = &Account{
