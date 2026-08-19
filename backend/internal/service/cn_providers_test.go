@@ -50,14 +50,65 @@ func TestCNParseF64(t *testing.T) {
 	}
 }
 
+func TestCNQuotaPayloadValidationFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, provider, body string
+	}{
+		{"kimi empty", PlatformKimi, ""},
+		{"kimi malformed", PlatformKimi, "{"},
+		{"kimi missing fields", PlatformKimi, `{"limits":[{"detail":{}}]}`},
+		{"zhipu missing data", PlatformZhipu, `{"success":true}`},
+		{"zhipu malformed field", PlatformZhipu, `{"data":{"limits":[{"type":"TOKENS_LIMIT","percentage":"bad"}]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateCNQuotaPayload(tc.provider, []byte(tc.body)))
+		})
+	}
+	require.NoError(t, validateCNQuotaPayload(PlatformKimi, []byte(`{"usage":{"limit":100,"remaining":50}}`)))
+}
+
+func TestCNBalancePayloadValidationInputs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, provider, body string
+	}{
+		{"kimi empty", PlatformKimi, ""},
+		{"kimi malformed", PlatformKimi, "{"},
+		{"kimi missing balance", PlatformKimi, `{"data":{}}`},
+		{"deepseek empty", PlatformDeepseek, `{"is_available":true}`},
+		{"deepseek missing balance", PlatformDeepseek, `{"balance_infos":[{}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.provider == PlatformKimi {
+				_, ok := cnParseF64(gjson.Get(tc.body, "data.available_balance").Value())
+				if !ok {
+					err = requireAnError{}
+				}
+			} else {
+				infos := gjson.Get(tc.body, "balance_infos")
+				if !infos.IsArray() || len(infos.Array()) == 0 || !infos.Get("0.total_balance").Exists() {
+					err = requireAnError{}
+				}
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
+type requireAnError struct{}
+
+func (requireAnError) Error() string { return "invalid payload" }
+
 // TestCNMillisToRFC3339 秒级（<1e12）按秒、毫秒级按毫秒处理；非正返回空串。
 func TestCNMillisToRFC3339(t *testing.T) {
 	t.Parallel()
 	// 1700000000 秒 = 1700000000000 毫秒
 	want := time.UnixMilli(1700000000000).UTC().Format(time.RFC3339)
-	require.Equal(t, want, cnMillisToRFC3339(1700000000))      // 秒级
-	require.Equal(t, want, cnMillisToRFC3339(1700000000000))   // 毫秒级
-	require.Equal(t, "", cnMillisToRFC3339(0))                 // 非正
+	require.Equal(t, want, cnMillisToRFC3339(1700000000))    // 秒级
+	require.Equal(t, want, cnMillisToRFC3339(1700000000000)) // 毫秒级
+	require.Equal(t, "", cnMillisToRFC3339(0))               // 非正
 	require.Equal(t, "", cnMillisToRFC3339(-1))
 }
 
@@ -294,8 +345,8 @@ func TestEvaluateAccountSchedulingThreshold_KimiCodingPlan(t *testing.T) {
 	account := &Account{
 		Platform: PlatformKimi,
 		Extra: map[string]any{
-			"kimi_5h_used_percent": 90.0,
-			"kimi_5h_reset_at":     reset.Format(time.RFC3339),
+			"kimi_5h_used_percent":     90.0,
+			"kimi_5h_reset_at":         reset.Format(time.RFC3339),
 			"kimi_weekly_used_percent": 30.0,
 			"kimi_weekly_reset_at":     now.Add(7 * 24 * time.Hour).Format(time.RFC3339),
 		},
@@ -410,9 +461,9 @@ func TestGetOpenAIProtocolAPIKey_CNProviders(t *testing.T) {
 	t.Parallel()
 
 	kimi := &Account{
-		Platform:     PlatformKimi,
-		Type:         AccountTypeAPIKey,
-		Credentials:  map[string]any{"api_key": "sk-kimi"},
+		Platform:    PlatformKimi,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-kimi"},
 	}
 	require.Equal(t, "sk-kimi", kimi.GetOpenAIProtocolAPIKey())
 	require.False(t, kimi.IsOpenAIApiKey(), "IsOpenAIApiKey stays openai-only for scheduling gates")

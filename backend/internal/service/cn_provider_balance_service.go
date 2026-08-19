@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -148,14 +149,21 @@ func (s *CNProviderBalanceService) queryBalance(ctx context.Context, accountID i
 		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_BALANCE_REQUEST_FAILED", "upstream request failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, cnBalanceMaxBodyBytes))
-
 	now := time.Now().UTC()
 	result := &CNProviderBalanceResult{
 		Provider:   provider,
 		FetchedAt:  now.Unix(),
 		StatusCode: resp.StatusCode,
 		Available:  true,
+	}
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, cnBalanceMaxBodyBytes+1))
+	if readErr != nil {
+		result.Error = "failed to read balance response body"
+		return result, nil
+	}
+	if len(bodyBytes) > cnBalanceMaxBodyBytes {
+		result.Error = "balance response body exceeds size limit"
+		return result, nil
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -167,32 +175,10 @@ func (s *CNProviderBalanceService) queryBalance(ctx context.Context, accountID i
 		return result, nil
 	}
 
-	var entries []CNProviderBalanceEntry
-	available := true
-	switch provider {
-	case PlatformKimi:
-		// Moonshot：code==0 成功；data.available_balance（number），单币种 CNY。
-		balance, _ := cnParseF64(gjson.GetBytes(bodyBytes, "data.available_balance").Value())
-		entries = append(entries, CNProviderBalanceEntry{Currency: "CNY", Balance: balance})
-	case PlatformDeepseek:
-		// is_available 缺省视为 true（健康）；显式存在时取其值。
-		if v := gjson.GetBytes(bodyBytes, "is_available"); v.Exists() {
-			available = v.Bool()
-		}
-		// balance_infos 逐条解析：双币种账号同时返回 CNY + USD（数组顺序即
-		// 主次序，首条为主币种）。
-		gjson.GetBytes(bodyBytes, "balance_infos").ForEach(func(_, info gjson.Result) bool {
-			currency := strings.ToUpper(strings.TrimSpace(info.Get("currency").String()))
-			balance, _ := cnParseF64(info.Get("total_balance").Value())
-			if currency == "" {
-				currency = "CNY"
-			}
-			entries = append(entries, CNProviderBalanceEntry{Currency: currency, Balance: balance})
-			return true
-		})
-		if len(entries) == 0 {
-			entries = append(entries, CNProviderBalanceEntry{Currency: "CNY"})
-		}
+	entries, available, err := parseCNBalancePayload(provider, bodyBytes)
+	if err != nil {
+		result.Error = err.Error()
+		return result, nil
 	}
 	result.Balances = entries
 	result.Balance = entries[0].Balance
@@ -222,6 +208,58 @@ func (s *CNProviderBalanceService) queryBalance(ctx context.Context, accountID i
 		result.Persisted = true
 	}
 	return result, nil
+}
+
+func parseCNBalancePayload(provider string, bodyBytes []byte) ([]CNProviderBalanceEntry, bool, error) {
+	if root := gjson.ParseBytes(bodyBytes); !root.Exists() || !root.IsObject() {
+		return nil, false, fmt.Errorf("invalid balance response: expected JSON object")
+	}
+	var entries []CNProviderBalanceEntry
+	available := true
+	switch provider {
+	case PlatformKimi:
+		// Moonshot：code==0 成功；data.available_balance（number），单币种 CNY。
+		if code := gjson.GetBytes(bodyBytes, "code"); code.Exists() && code.Int() != 0 {
+			return nil, false, fmt.Errorf("API error (code %d)", code.Int())
+		}
+		balance, ok := cnParseF64(gjson.GetBytes(bodyBytes, "data.available_balance").Value())
+		if !ok || math.IsNaN(balance) || math.IsInf(balance, 0) {
+			return nil, false, fmt.Errorf("invalid Kimi balance response: data.available_balance is missing or non-numeric")
+		}
+		entries = append(entries, CNProviderBalanceEntry{Currency: "CNY", Balance: balance})
+	case PlatformDeepseek:
+		// balance_infos 是必需数组；缺失/空数组或条目字段畸形均失败关闭。
+		infos := gjson.GetBytes(bodyBytes, "balance_infos")
+		if !infos.Exists() || !infos.IsArray() || len(infos.Array()) == 0 {
+			return nil, false, fmt.Errorf("invalid DeepSeek balance response: balance_infos is missing or empty")
+		}
+		// is_available 缺省视为 true（健康）；显式存在时取其值。
+		if v := gjson.GetBytes(bodyBytes, "is_available"); v.Exists() {
+			if v.Type != gjson.True && v.Type != gjson.False {
+				return nil, false, fmt.Errorf("invalid DeepSeek balance response: is_available is not boolean")
+			}
+			available = v.Bool()
+		}
+		// balance_infos 逐条解析：双币种账号同时返回 CNY + USD（数组顺序即
+		// 主次序，首条为主币种）。
+		valid := true
+		infos.ForEach(func(_, info gjson.Result) bool {
+			currency := strings.ToUpper(strings.TrimSpace(info.Get("currency").String()))
+			balance, ok := cnParseF64(info.Get("total_balance").Value())
+			if currency == "" || !ok || math.IsNaN(balance) || math.IsInf(balance, 0) {
+				valid = false
+				return false
+			}
+			entries = append(entries, CNProviderBalanceEntry{Currency: currency, Balance: balance})
+			return true
+		})
+		if !valid || len(entries) == 0 {
+			return nil, false, fmt.Errorf("invalid DeepSeek balance response: balance_infos contains missing or non-numeric fields")
+		}
+	default:
+		return nil, false, fmt.Errorf("invalid balance response: unsupported provider")
+	}
+	return entries, available, nil
 }
 
 // loadPayGAccount 加载 payg 模式的国产供应商账号（余额仅对 payg 有意义；coding 走额度）。

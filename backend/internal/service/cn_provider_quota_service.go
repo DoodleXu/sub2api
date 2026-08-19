@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -173,14 +174,21 @@ func (s *CNProviderQuotaService) queryUsage(ctx context.Context, accountID int64
 		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_QUOTA_REQUEST_FAILED", "upstream request failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, cnQuotaMaxBodyBytes))
-
 	now := time.Now().UTC()
 	result := &CNProviderQuotaProbeResult{
 		Provider:   provider,
 		Source:     "coding_plan",
 		FetchedAt:  now.Unix(),
 		StatusCode: resp.StatusCode,
+	}
+	bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, cnQuotaMaxBodyBytes+1))
+	if readErr != nil {
+		result.Error = "failed to read quota response body"
+		return result, nil
+	}
+	if len(bodyBytes) > cnQuotaMaxBodyBytes {
+		result.Error = "quota response body exceeds size limit"
+		return result, nil
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -204,6 +212,10 @@ func (s *CNProviderQuotaService) queryUsage(ctx context.Context, accountID int64
 			return result, nil
 		}
 	}
+	if err := validateCNQuotaPayload(provider, bodyBytes); err != nil {
+		result.Error = err.Error()
+		return result, nil
+	}
 
 	var tiers []CNQuotaTier
 	switch provider {
@@ -224,6 +236,50 @@ func (s *CNProviderQuotaService) queryUsage(ctx context.Context, accountID int64
 		result.Persisted = true
 	}
 	return result, nil
+}
+
+// validateCNQuotaPayload rejects successful HTTP responses that are empty,
+// malformed, or missing the fields needed to derive at least one quota window.
+// A 2xx status alone is not evidence of a valid upstream quota response.
+func validateCNQuotaPayload(provider string, body []byte) error {
+	root := gjson.ParseBytes(body)
+	if !root.Exists() || !root.IsObject() {
+		return errors.New("invalid quota response: expected JSON object")
+	}
+	switch provider {
+	case PlatformKimi:
+		valid := false
+		root.Get("limits").ForEach(func(_, item gjson.Result) bool {
+			detail := item.Get("detail")
+			_, limitOK := cnParseF64(detail.Get("limit").Value())
+			_, remainingOK := cnParseF64(detail.Get("remaining").Value())
+			valid = detail.IsObject() && limitOK && remainingOK
+			return !valid
+		})
+		if !valid {
+			usage := root.Get("usage")
+			_, limitOK := cnParseF64(usage.Get("limit").Value())
+			_, remainingOK := cnParseF64(usage.Get("remaining").Value())
+			valid = usage.IsObject() && limitOK && remainingOK
+		}
+		if !valid {
+			return errors.New("invalid Kimi quota response: no complete quota window")
+		}
+	case PlatformZhipu:
+		valid := false
+		root.Get("data.limits").ForEach(func(_, item gjson.Result) bool {
+			typ := strings.ToUpper(strings.TrimSpace(item.Get("type").String()))
+			_, ok := cnParseF64(item.Get("percentage").Value())
+			valid = (typ == "TOKENS_LIMIT" || typ == "CREDIT_LIMIT") && ok
+			return !valid
+		})
+		if !valid {
+			return errors.New("invalid Zhipu quota response: no complete quota window")
+		}
+	default:
+		return errors.New("invalid quota response: unsupported provider")
+	}
+	return nil
 }
 
 func (s *CNProviderQuotaService) loadCodingPlanAccount(ctx context.Context, accountID int64) (*Account, error) {

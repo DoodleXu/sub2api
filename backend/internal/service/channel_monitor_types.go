@@ -149,6 +149,7 @@ type UserMonitorView struct {
 	ID                   int64
 	Name                 string
 	Provider             string
+	CheckMode            string
 	GroupName            string
 	PrimaryModel         string
 	PrimaryStatus        string
