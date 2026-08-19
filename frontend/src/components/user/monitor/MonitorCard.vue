@@ -24,7 +24,7 @@
             {{ providerLabel(item.provider) }}
           </span>
           <span class="font-mono text-xs truncate text-gray-500 dark:text-gray-400">
-            {{ item.primary_model }}
+            {{ primaryLabel }}
           </span>
           <span
             v-if="item.group_name"
@@ -44,6 +44,7 @@
 
     <!-- Metrics -->
     <MonitorMetricPair
+      v-if="item.check_mode !== 'quota'"
       primary-icon="bolt"
       :primary-label="t('monitorCommon.dialogLatency')"
       :primary-value="formatLatency(item.primary_latency_ms)"
@@ -128,6 +129,12 @@ const providerTintClass = computed(() =>
 
 const quotaVisible = computed(
   () => isChannelMonitorQuotaVisible() && !!props.item.latest_quota
+)
+
+const primaryLabel = computed(() =>
+  props.item.check_mode === 'quota'
+    ? t('monitorCommon.quota.monitorLabel')
+    : props.item.primary_model
 )
 
 const availabilityLabel = computed(() => {

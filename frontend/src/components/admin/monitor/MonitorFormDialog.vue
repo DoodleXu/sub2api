@@ -613,8 +613,8 @@ async function ensureSelectedAccountHydrated() {
   if (id == null || !usesQuotaMode.value) return
   if (linkedAccounts.value.some((a) => a.id === id) || pinnedAccount.value?.id === id) return
   if (hydrationAttempted.has(id)) return
-  hydrationAttempted.add(id)
   try {
+    hydrationAttempted.add(id)
     const account = await adminAPI.accounts.getById(id)
     if (form.account_id !== id) return
     if (String(account.platform) !== form.provider) {
@@ -624,10 +624,14 @@ async function ensureSelectedAccountHydrated() {
       return
     }
     pinnedAccount.value = { id: account.id, name: account.name }
-  } catch {
-    if (form.account_id === id) {
+  } catch (err: unknown) {
+    hydrationAttempted.delete(id)
+    const status = (err as { response?: { status?: number } })?.response?.status
+    if (form.account_id === id && status === 404) {
       form.account_id = null
       pinnedAccount.value = null
+      accountHydrationFailed.value = true
+    } else if (form.account_id === id) {
       accountHydrationFailed.value = true
     }
   }

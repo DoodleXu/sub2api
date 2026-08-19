@@ -25,6 +25,7 @@ function makeItem(overrides: Partial<UserMonitorView> = {}): UserMonitorView {
     id: 1,
     name: 'claude-main',
     provider: 'kimi',
+    check_mode: 'quota',
     group_name: '',
     primary_model: 'quota',
     primary_status: 'operational',
@@ -87,5 +88,12 @@ describe('MonitorCard quota snapshot visibility', () => {
     isQuotaVisible.mockReturnValue(true)
     const wrapper = mountCard(makeItem())
     expect(wrapper.find('[data-testid="monitor-quota-view"]').exists()).toBe(false)
+  })
+
+  it('uses a localized quota label and hides probe metrics for quota-only monitors', () => {
+    isQuotaVisible.mockReturnValue(false)
+    const wrapper = mountCard(makeItem({ primary_model: 'quota', check_mode: 'quota' }))
+    expect(wrapper.text()).toContain('monitorCommon.quota.monitorLabel')
+    expect(wrapper.findComponent({ name: 'MonitorMetricPair' }).exists()).toBe(false)
   })
 })

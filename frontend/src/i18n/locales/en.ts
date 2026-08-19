@@ -1100,6 +1100,9 @@ export default {
     now: 'NOW',
     maintenancePaused: 'Maintenance · timeline paused',
     extraModelsCount: '+ {n} models',
+    quota: {
+      monitorLabel: 'Quota monitoring'
+    },
     pollEvery: '{n}s polling',
     updatedAt: 'Updated {time}',
     relativeSecondsAgo: '{n}s ago',

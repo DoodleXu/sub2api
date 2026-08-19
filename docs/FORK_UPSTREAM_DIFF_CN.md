@@ -41,6 +41,7 @@ git diff --name-status refs/tags/upstream/v0.1.178^{}..HEAD
 - 已重新生成 Wire；Gin 模式 AST 守卫、Codex 指纹种子、国产供应商定价候选和 WS 跨峰谷首轮时间边界等定向后端单元测试通过。
 - 后端 `TZ=UTC GOCACHE=/private/tmp/sub2api-go-build go test -tags=unit -count=1 ./...` 全量通过；前端 `vue-tsc --noEmit`、`pnpm exec vitest run --reporter=dot`（251 个测试文件、1792 个用例）、`pnpm run lint:check` 和 `pnpm run build` 全部通过。仅有既有 Browserslist 数据过期提示及测试中预期的 jsdom/intlfy stderr。
 - 合并后全面审核修复：国产 Coding Plan 与 payg 配额抓取器对违反服务契约的空结果 fail-closed，避免调度 goroutine 因空指针终止；来自国产探测结果的错误摘要在写入历史或公开配额视图前复用既有密钥脱敏和长度限制。新增空结果与脱敏回归覆盖；`GOCACHE=/private/tmp/sub2api-go-build go vet -tags=unit ./...` 和允许本机 `httptest`/`miniredis` 临时端口的完整后端 unit 套件均通过。
+- 后续修复：国产配额/余额探测对空、畸形、截断及缺字段 2xx 响应统一 fail-closed，失败不落无效快照、不清除低余额标记；用户监控 API 补充 `check_mode`，纯配额卡片隐藏探活指标；远程账号搜索关闭时重置结果，账号回填临时失败保留既有绑定并允许重试。
 
 本次 `v0.1.177` 合并说明：
 

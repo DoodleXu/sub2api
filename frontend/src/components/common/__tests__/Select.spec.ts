@@ -167,7 +167,7 @@ describe('Select remote search', () => {
     expect(labels).toContain('Beta account')
   })
 
-  it('does not emit search when the dropdown closes and the query resets', async () => {
+  it('emits an empty remote search when closing after a query', async () => {
     vi.useFakeTimers()
     const wrapper = mountRemoteSelect()
     await wrapper.get('button').trigger('click')
@@ -180,7 +180,7 @@ describe('Select remote search', () => {
     await nextTick()
     await vi.advanceTimersByTimeAsync(300)
 
-    expect(wrapper.emitted('search')).toBeUndefined()
+    expect(wrapper.emitted('search')).toEqual([['']])
   })
 
   it('shows the loading text instead of empty text while loading with no options', async () => {

@@ -1104,6 +1104,9 @@ export default {
     now: 'NOW',
     maintenancePaused: '维护中 · 已暂停时间线采集',
     extraModelsCount: '+ {n} 模型',
+    quota: {
+      monitorLabel: '配额监控'
+    },
     pollEvery: '{n}s 轮询',
     updatedAt: '更新于 {time}',
     relativeSecondsAgo: '{n} 秒前',

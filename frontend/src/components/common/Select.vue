@@ -389,6 +389,7 @@ watch(isOpen, (open) => {
     window.addEventListener('scroll', updateTriggerRect, { capture: true, passive: true })
     window.addEventListener('resize', calculateDropdownPosition)
   } else {
+    const shouldResetRemoteSearch = props.remote && searchQuery.value.trim() !== ''
     searchQuery.value = ''
     focusedIndex.value = -1
     // 关闭时取消仍在排队的远程搜索（避免关闭后尾随 emit 一次 search(''))。
@@ -396,12 +397,13 @@ watch(isOpen, (open) => {
       clearTimeout(remoteSearchTimer)
       remoteSearchTimer = null
     }
+    if (shouldResetRemoteSearch) emit('search', '')
     window.removeEventListener('scroll', updateTriggerRect, { capture: true })
     window.removeEventListener('resize', calculateDropdownPosition)
   }
 })
 
-// 远程搜索：输入防抖后交给父组件请求（!isOpen 抑制关闭重置 searchQuery 触发的空 query）。
+// 远程搜索：输入防抖后交给父组件请求；关闭时由 isOpen watcher 立即重置父级结果。
 watch(searchQuery, (query) => {
   if (!props.remote || !isOpen.value) return
   if (remoteSearchTimer) clearTimeout(remoteSearchTimer)

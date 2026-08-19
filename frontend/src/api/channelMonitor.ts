@@ -25,6 +25,7 @@ export interface UserMonitorView {
   id: number
   name: string
   provider: Provider
+  check_mode: 'probe' | 'quota' | 'quota_probe'
   group_name: string
   primary_model: string
   primary_status: MonitorStatus

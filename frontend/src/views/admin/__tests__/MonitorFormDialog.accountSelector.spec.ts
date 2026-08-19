@@ -227,7 +227,7 @@ describe('MonitorFormDialog linked account selector', () => {
     expect(monitorUpdate).toHaveBeenCalledWith(42, expect.objectContaining({ account_id: 999 }))
   })
 
-  it('clears the binding with a visible hint when the bound account cannot be loaded', async () => {
+  it('keeps the binding and allows retry after a transient hydration failure', async () => {
     accountsGetById.mockRejectedValue(new Error('gone'))
     const wrapper = mountDialog(makeMonitor({
       provider: 'anthropic',
@@ -239,11 +239,11 @@ describe('MonitorFormDialog linked account selector', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.channelMonitor.form.linkedAccountMissing')
-    expect(accountTrigger(wrapper).text()).not.toContain('hidden gem')
+    expect(accountTrigger(wrapper).text()).toContain('linkedAccountPlaceholder')
 
     await wrapper.get('#channel-monitor-form').trigger('submit')
     await flushPromises()
-    expect(monitorUpdate).not.toHaveBeenCalled()
+    expect(monitorUpdate).toHaveBeenCalledWith(42, expect.objectContaining({ account_id: 999 }))
   })
 
   it('shows the OpenAI codex probe hint only in quota mode on openai', async () => {
