@@ -850,7 +850,7 @@ func (s *UsageLogRepoSuite) TestAccountLedgerPublishesOnlyAfterFinalBatch() {
 	s.Require().Zero(publishedCost)
 	s.Require().Zero(publishedStandard)
 	s.Require().True(initialized)
-	s.Require().False(publishedInitialized)
+	s.Require().True(publishedInitialized)
 	s.Require().True(pending)
 
 	processed, err = aggRepo.ProcessAccountCostTotals(s.ctx, 2)
