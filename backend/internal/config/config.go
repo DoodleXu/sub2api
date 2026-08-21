@@ -882,7 +882,7 @@ func normalizeProxyProbeURLs(targets []ProbeURLConfig) ([]ProbeURLConfig, error)
 		if !proxyProbeHostAllowed(parser, host) {
 			return nil, fmt.Errorf("entry %d: host %q is not allowed for parser %q", i, host, parser)
 		}
-		if parsed.Scheme != "https" && !(parser == "ip-api" && host == "ip-api.com") {
+		if parsed.Scheme != "https" && (parser != "ip-api" || host != "ip-api.com") {
 			return nil, fmt.Errorf("entry %d: https is required for host %q", i, host)
 		}
 

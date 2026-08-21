@@ -45,6 +45,7 @@ git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
 - 代理探测安全边界新增配置拒绝、生产构造器 fail-closed 和跨主机重定向回归测试；定向 `internal/config` 与 `internal/repository` unit 套件通过。
 - 国产协议定向回归覆盖固定 Chat/Responses 协议相互覆盖旧探测标记的三种入站路径；修复后通过。
 - 全量服务层门禁同步修正测试基础设施：Gin 全局模式只由 `TestMain` 初始化，并发国产配额探测夹具使用互斥保护，计费倍率同步仓库夹具实现当前带倍率 CAS 的接口，避免竞态、陈旧接口与进程级状态污染掩盖真实失败。
+- 首个 `v0.1.261` 候选的远端 golangci-lint 发现代理探测条件可读性告警及上游单次 `GROUPING SETS` 聚合替代后遗留的未使用 endpoint-path 查询；采用 fix-forward 改写条件并删除不可达旧查询，未复用失败候选打 tag。
 
 本次 `v0.1.178` 合并说明：
 
