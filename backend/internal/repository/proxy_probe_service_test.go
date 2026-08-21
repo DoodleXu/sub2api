@@ -6,11 +6,26 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+func TestNewProxyExitInfoProberAlwaysRejectsPrivateResolvedTargets(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowPrivateHosts = true
+
+	prober, ok := NewProxyExitInfoProber(cfg).(*proxyProbeService)
+	require.True(t, ok)
+	require.True(t, prober.validateResolvedIP)
+	require.False(t, prober.allowPrivateHosts)
+}
 
 type ProxyProbeServiceSuite struct {
 	suite.Suite
@@ -101,6 +116,21 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_AllFailed() {
 	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
 	require.Error(s.T(), err)
 	require.ErrorContains(s.T(), err, "all probe URLs failed")
+}
+
+func (s *ProxyProbeServiceSuite) TestProbeProxy_RejectsRedirectOutsideTrustedTarget() {
+	var requests atomic.Int32
+	s.setupProxyServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Redirect(w, r, "http://example.com/ip", http.StatusFound)
+	}))
+	s.prober.configuredProbeURLs = []configuredProbeTarget{
+		{url: "http://ip-api.com/json", parser: "ip-api"},
+	}
+
+	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
+	require.ErrorContains(s.T(), err, "redirect target is not allowed")
+	require.Equal(s.T(), int32(1), requests.Load())
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {

@@ -17,13 +17,9 @@ import (
 
 func NewProxyExitInfoProber(cfg *config.Config) service.ProxyExitInfoProber {
 	insecure := false
-	allowPrivate := false
-	validateResolvedIP := true
 	maxResponseBytes := defaultProxyProbeResponseMaxBytes
 	if cfg != nil {
 		insecure = cfg.Security.ProxyProbe.InsecureSkipVerify
-		allowPrivate = cfg.Security.URLAllowlist.AllowPrivateHosts
-		validateResolvedIP = cfg.Security.URLAllowlist.Enabled
 		if cfg.Gateway.ProxyProbeResponseReadMaxBytes > 0 {
 			maxResponseBytes = cfg.Gateway.ProxyProbeResponseReadMaxBytes
 		}
@@ -44,9 +40,11 @@ func NewProxyExitInfoProber(cfg *config.Config) service.ProxyExitInfoProber {
 	}
 
 	return &proxyProbeService{
-		insecureSkipVerify:  insecure,
-		allowPrivateHosts:   allowPrivate,
-		validateResolvedIP:  validateResolvedIP,
+		insecureSkipVerify: insecure,
+		// Proxy probe targets have an independent fail-closed SSRF boundary.
+		// Never inherit the general allowlist's permissive defaults.
+		allowPrivateHosts:   false,
+		validateResolvedIP:  true,
 		maxResponseBytes:    maxResponseBytes,
 		configuredProbeURLs: configuredTargets,
 	}
@@ -122,7 +120,23 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 		return nil, 0, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := client.Do(req)
+	// Clone the shared client before installing a per-target redirect policy.
+	// Redirects must not escape the validated host or downgrade HTTPS; otherwise
+	// a trusted probe endpoint could become an allowlist bypass.
+	probeClient := *client
+	probeClient.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if next == nil || next.URL == nil ||
+			!strings.EqualFold(next.URL.Hostname(), req.URL.Hostname()) ||
+			!strings.EqualFold(next.URL.Scheme, req.URL.Scheme) {
+			return fmt.Errorf("proxy probe redirect target is not allowed")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("proxy probe stopped after 10 redirects")
+		}
+		return nil
+	}
+
+	resp, err := probeClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("proxy connection failed: %w", err)
 	}

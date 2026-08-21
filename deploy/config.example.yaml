@@ -181,9 +181,11 @@ security:
     # 允许代理探测时跳过 TLS 证书验证（仅用于调试）
     insecure_skip_verify: false
     # Optional ordered probe targets. Leave empty to use the built-in ip-api/ipify fallback.
-    # parser supports: ip-api, ipify, chatgpt-trace
+    # Targets are restricted to parser-specific trusted hosts and always reject private/resolved-private IPs.
+    # parser/host pairs: ip-api/ip-api.com, ipify/api64.ipify.org, chatgpt-trace/chatgpt.com
     # 可选的有序探测目标。留空时使用内置 ip-api/ipify 回退。
-    # parser 支持：ip-api、ipify、chatgpt-trace
+    # 目标仅允许对应的可信主机，并始终拒绝私网及解析到私网的地址。
+    # parser/host 对：ip-api/ip-api.com、ipify/api64.ipify.org、chatgpt-trace/chatgpt.com
     urls: []
     # urls:
     #   - url: "https://chatgpt.com/cdn-cgi/trace"

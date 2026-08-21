@@ -35,6 +35,10 @@ func TestNormalizeProxyProbeURLsRejectsInvalidEntries(t *testing.T) {
 		{name: "unknown parser", target: ProbeURLConfig{URL: "https://example.com", Parser: "ip_api"}, wantErr: "unsupported parser"},
 		{name: "relative URL", target: ProbeURLConfig{URL: "/cdn-cgi/trace", Parser: "chatgpt-trace"}, wantErr: "invalid url"},
 		{name: "unsupported scheme", target: ProbeURLConfig{URL: "ftp://example.com/file", Parser: "ipify"}, wantErr: "scheme must be http or https"},
+		{name: "userinfo", target: ProbeURLConfig{URL: "https://user:pass@chatgpt.com/cdn-cgi/trace", Parser: "chatgpt-trace"}, wantErr: "userinfo is not allowed"},
+		{name: "untrusted host", target: ProbeURLConfig{URL: "https://example.com/ip", Parser: "ipify"}, wantErr: "host \"example.com\" is not allowed"},
+		{name: "private literal", target: ProbeURLConfig{URL: "http://127.0.0.1/ip", Parser: "ipify"}, wantErr: "host \"127.0.0.1\" is not allowed"},
+		{name: "insecure chatgpt", target: ProbeURLConfig{URL: "http://chatgpt.com/cdn-cgi/trace", Parser: "chatgpt-trace"}, wantErr: "https is required"},
 	}
 
 	for _, tt := range tests {
@@ -44,4 +48,14 @@ func TestNormalizeProxyProbeURLsRejectsInvalidEntries(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestProxyProbeHostAllowedRequiresParserSpecificHost(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, proxyProbeHostAllowed("ip-api", "ip-api.com"))
+	require.True(t, proxyProbeHostAllowed("ipify", "api64.ipify.org"))
+	require.True(t, proxyProbeHostAllowed("chatgpt-trace", "chatgpt.com"))
+	require.False(t, proxyProbeHostAllowed("ipify", "chatgpt.com"))
+	require.False(t, proxyProbeHostAllowed("chatgpt-trace", "api.chatgpt.com"))
 }

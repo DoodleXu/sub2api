@@ -872,8 +872,18 @@ func normalizeProxyProbeURLs(targets []ProbeURLConfig) ([]ProbeURLConfig, error)
 		if err != nil || parsed.Host == "" {
 			return nil, fmt.Errorf("entry %d: invalid url %q", i, target.URL)
 		}
+		if parsed.User != nil {
+			return nil, fmt.Errorf("entry %d: url userinfo is not allowed", i)
+		}
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
 			return nil, fmt.Errorf("entry %d: url scheme must be http or https", i)
+		}
+		host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+		if !proxyProbeHostAllowed(parser, host) {
+			return nil, fmt.Errorf("entry %d: host %q is not allowed for parser %q", i, host, parser)
+		}
+		if parsed.Scheme != "https" && !(parser == "ip-api" && host == "ip-api.com") {
+			return nil, fmt.Errorf("entry %d: https is required for host %q", i, host)
 		}
 
 		normalized = append(normalized, ProbeURLConfig{
@@ -882,6 +892,23 @@ func normalizeProxyProbeURLs(targets []ProbeURLConfig) ([]ProbeURLConfig, error)
 		})
 	}
 	return normalized, nil
+}
+
+// proxyProbeHostAllowed keeps configurable probe targets inside a small,
+// purpose-built trust boundary. Do not reuse the general upstream allowlist:
+// proxy probes must remain safe even when the global allowlist is disabled or
+// private upstream hosts are explicitly enabled for other features.
+func proxyProbeHostAllowed(parser, host string) bool {
+	switch parser {
+	case "ip-api":
+		return host == "ip-api.com"
+	case "ipify":
+		return host == "api64.ipify.org"
+	case "chatgpt-trace":
+		return host == "chatgpt.com"
+	default:
+		return false
+	}
 }
 
 type BillingConfig struct {
