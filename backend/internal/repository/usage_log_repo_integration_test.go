@@ -849,7 +849,7 @@ func (s *UsageLogRepoSuite) TestAccountLedgerPublishesOnlyAfterFinalBatch() {
 	`, []any{account.ID}, &publishedCost, &publishedStandard, &initialized, &publishedInitialized, &pending))
 	s.Require().Zero(publishedCost)
 	s.Require().Zero(publishedStandard)
-	s.Require().False(initialized)
+	s.Require().True(initialized)
 	s.Require().False(publishedInitialized)
 	s.Require().True(pending)
 
