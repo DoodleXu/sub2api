@@ -1601,6 +1601,7 @@ export default {
       openaiAverageCost: 'OpenAI Avg Cost',
       totalCostCny: 'Total Cost',
       costAggregating: 'Cost data is aggregating',
+      costPending: 'Published cost data is awaiting incremental sync',
       costStaleAt: 'Cost snapshot is delayed; data as of {time}',
       costUnavailable: 'Cost data is temporarily unavailable',
       usd: 'USD',

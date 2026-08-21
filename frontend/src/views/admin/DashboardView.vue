@@ -66,6 +66,12 @@
                   {{ t('admin.dashboard.costUnavailable') }}
                 </p>
                 <p
+                  v-else-if="costSummary && costSummary.ledger_pending"
+                  class="text-xs text-amber-600 dark:text-amber-400"
+                >
+                  {{ t('admin.dashboard.costPending') }}
+                </p>
+                <p
                   v-else-if="costSummary && !costSummary.aggregation_complete"
                   class="text-xs text-amber-600 dark:text-amber-400"
                 >
@@ -592,7 +598,7 @@ const formatCnyCost = (value: number): string => {
 
 const formatMaterializedCny = (value: number | null | undefined): string => {
   if (costSummaryLoading.value && !costSummary.value) return '…'
-  if (!costSummary.value?.aggregation_complete) return '—'
+  if (!costSummary.value?.aggregation_complete && !costSummary.value?.ledger_pending) return '—'
   return `¥${formatCnyCost(toFiniteNumber(value))}`
 }
 

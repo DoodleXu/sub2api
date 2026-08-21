@@ -1610,6 +1610,7 @@ export default {
       openaiAverageCost: 'OpenAI 平均成本',
       totalCostCny: '总成本',
       costAggregating: '成本数据聚合中',
+      costPending: '已发布成本数据，等待增量同步',
       costStaleAt: '成本快照延迟，数据截至 {time}',
       costUnavailable: '成本数据暂不可用',
       usd: '美元',

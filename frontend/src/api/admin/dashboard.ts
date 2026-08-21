@@ -152,6 +152,9 @@ export interface DashboardCostSummary {
   as_of: string
   stale: boolean
   aggregation_complete: boolean
+  ledger_pending?: boolean
+  data_through?: string
+  stale_reason?: string
   coverage_start?: string
   coverage_end?: string
 }
