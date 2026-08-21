@@ -139,7 +139,6 @@ func TestOpenAIStreamErrorFrameDoesNotStartClientOutput(t *testing.T) {
 }
 
 func TestOpenAIStreamMetadataPreambleAndMessageOnlyOverloadFailOver(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	largeMetadata := strings.Repeat("x", 16*1024)
 	stream := strings.Join([]string{
 		"event: response.created",

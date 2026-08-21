@@ -32,6 +32,8 @@ git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
 - 合入渠道定价倍率与 Anthropic Fast service tier 计费上下文，保留 fork 的缺价审计、人民币真实成本和分组长上下文开关；用量统计改为单次 `GROUPING SETS` 聚合，同时继续返回 fork 的账号成本与真实人民币成本。
 - 合入 OpenAI 流内容量降载恢复：首个语义输出前暂存响应、识别空 added 事件和文本型 overloaded 信号，允许请求级同账号/换号恢复；已经产生语义输出后仅记录抑制日志，避免重复内容。保留 fork 的错误脱敏、用量回收和调度状态语义。
 - 合入代理探测目标、Grok 客户端工具发现与内联图片、Channel Monitor 配额模式展示，以及管理端平台选项复用等前后端修复。
+- 同步后安全审核进一步收紧可配置代理探测目标：每种解析器仅允许对应的固定可信主机，生产探测器始终拒绝私网地址及解析到私网的域名，不继承通用 URL allowlist 的宽松配置；重定向只能保持同一主机和协议，避免可信探测端点被利用为 SSRF 跳板或 HTTPS 降级入口。
+- 修复国产供应商固定 Responses 协议的 `/v1/messages` 路由：不再被旧的 Responses 探测缓存标记误导回退到 Chat Completions，固定协议现在对 Chat、Messages 和 Responses 入站保持一致。
 - 上游 8 个 repository/service 拆分文件继续保持删除，新增行为已迁入 fork 实际使用的聚合文件及 `*_v158.go` 扩展文件；迁移 `226_add_usage_log_effective_model_indexes_notx.sql`、`227_composite_routes_add_cn_providers.sql`、`228_channel_pricing_multipliers.sql` 与 fork 历史迁移按完整文件名并存。
 - `backend/cmd/server/VERSION` 保持 fork 的 `0.1.260`，本次只同步上游 release，不执行 push、tag 或发布。
 
@@ -40,6 +42,9 @@ git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
 - 合并前 `git merge-tree --write-tree` 识别 29 个冲突路径，其中 21 个内容冲突、8 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。
 - 后端 `TZ=UTC GOCACHE=/private/tmp/sub2api-go-cache go test -tags=unit -count=1 ./...` 全量通过；合并期间该套件先发现并修正用量统计 mock 仍按旧多查询结果列构造的问题。
 - 前端 `vue-tsc --noEmit`、`pnpm run lint:check` 和 `pnpm run build` 通过；全量 Vitest 其余 259 个测试文件、1837 个用例通过，唯一失败是新加的 probe 场景 fixture 沿用了 quota 模式，修正 fixture 后该文件 5 个用例复测通过。仅有既有 localStorage、Browserslist 与预期 jsdom stderr 提示。
+- 代理探测安全边界新增配置拒绝、生产构造器 fail-closed 和跨主机重定向回归测试；定向 `internal/config` 与 `internal/repository` unit 套件通过。
+- 国产协议定向回归覆盖固定 Chat/Responses 协议相互覆盖旧探测标记的三种入站路径；修复后通过。
+- 全量服务层门禁同步修正测试基础设施：Gin 全局模式只由 `TestMain` 初始化，并发国产配额探测夹具使用互斥保护，计费倍率同步仓库夹具实现当前带倍率 CAS 的接口，避免竞态、陈旧接口与进程级状态污染掩盖真实失败。
 
 本次 `v0.1.178` 合并说明：
 

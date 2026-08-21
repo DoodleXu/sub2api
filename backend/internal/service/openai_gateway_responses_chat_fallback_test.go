@@ -444,7 +444,6 @@ func (c *reasoningRecordingCache) snapshotSets() map[string]string {
 // 流式响应里的 reasoning_content 应按 reasoning item id 写入缓存，供后续轮次
 // 客户端不回传明文 summary 时回注（DeepSeek thinking mode 400 修复的写入侧）。
 func TestForwardResponses_ChatFallbackCachesStreamedReasoning(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-reasoner","input":"hello","stream":true}`)
 	rec := httptest.NewRecorder()
@@ -493,7 +492,6 @@ func TestForwardResponses_ChatFallbackCachesStreamedReasoning(t *testing.T) {
 // 请求侧：encrypted-only reasoning item（无明文 summary）经缓存回查补回
 // reasoning_content；带明文 summary 的 item 顺手回写缓存（自愈）。
 func TestForwardResponses_ChatFallbackRestoresReasoningFromCache(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{
 		"model":"deepseek-reasoner",

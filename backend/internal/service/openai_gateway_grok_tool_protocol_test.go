@@ -228,7 +228,6 @@ func TestForwardGrokResponsesClientToolNameConflictReturns400(t *testing.T) {
 }
 
 func TestForwardGrokResponsesMalformedToolSearchOutputReturns400BeforeUpstream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{
 		"model":"grok","stream":false,
