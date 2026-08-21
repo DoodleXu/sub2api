@@ -302,8 +302,9 @@ type OpenAIForwardResult struct {
 	// AudioUsage carries Voice billing units when present.
 	AudioUsage *AudioUsage
 
-	wsReplayInput       []json.RawMessage
-	wsReplayInputExists bool
+	wsReplayInput                []json.RawMessage
+	wsReplayInputExists          bool
+	wsAccountFailoverReplayInput []json.RawMessage
 }
 
 func (r *OpenAIForwardResult) SucceededForScheduling() bool {
@@ -1275,7 +1276,29 @@ func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg strin
 }
 
 func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode < http.StatusBadRequest {
+		return false
+	}
+	hasOverloadedCode := func(payload []byte) bool {
+		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+		if code == "" {
+			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+		}
+		return code == "server_is_overloaded" || code == "slow_down"
+	}
+	if len(upstreamBody) > 0 && hasOverloadedCode(upstreamBody) {
+		return true
+	}
+	if isOpenAICapacityShedMessage(upstreamMsg) ||
+		isOpenAICapacityShedMessage(gjson.GetBytes(upstreamBody, "error.message").String()) ||
+		isOpenAICapacityShedMessage(gjson.GetBytes(upstreamBody, "response.error.message").String()) ||
+		isOpenAICapacityShedMessage(string(upstreamBody)) {
+		return true
+	}
 	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	if upstreamStatusCode != http.StatusBadRequest {
 		return false
 	}
 
@@ -1288,9 +1311,6 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 			return true
 		}
 		if strings.Contains(lower, "selected model is at capacity") {
-			return true
-		}
-		if strings.Contains(lower, "server_is_overloaded") || strings.Contains(lower, "slow_down") {
 			return true
 		}
 		return strings.Contains(lower, "you can retry your request") &&
@@ -1307,10 +1327,20 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	if match(gjson.GetBytes(upstreamBody, "error.message").String()) {
 		return true
 	}
-	if match(gjson.GetBytes(upstreamBody, "error.code").String()) {
-		return true
-	}
 	return match(string(upstreamBody))
+}
+
+func isOpenAICapacityShedMessage(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(lower, "server is overloaded") ||
+		strings.Contains(lower, "servers are overloaded") ||
+		strings.Contains(lower, "servers are currently overloaded")
+}
+
+func isOpenAIRequestScopedCapacityShed(upstreamMsg string, upstreamBody []byte) bool {
+	return isOpenAIUpstreamCapacityShedEvent(upstreamBody) ||
+		isOpenAICapacityShedMessage(upstreamMsg) ||
+		isOpenAICapacityShedMessage(string(upstreamBody))
 }
 
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
@@ -1976,9 +2006,20 @@ func resolveOpenAIAccountUpstreamModelForRequest(account *Account, requestedMode
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
-	return account != nil &&
-		account.Type == AccountTypeAPIKey &&
-		!openai_compat.ShouldUseResponsesAPI(account.Extra)
+	if account == nil || account.Type != AccountTypeAPIKey {
+		return false
+	}
+	if IsCNProvider(account.Platform) {
+		switch account.GetAPIProtocol() {
+		case APIProtocolChatCompletions:
+			return true
+		case APIProtocolAdaptive:
+			return account.Platform != PlatformDeepseek
+		default:
+			return false
+		}
+	}
+	return !openai_compat.ShouldUseResponsesAPI(account.Extra)
 }
 
 func (s *OpenAIGatewayService) selectAccountForModelWithLimitContinuationPriority(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyAccountID int64, requiredCapability OpenAIEndpointCapability, preferLowUpstreamRate bool) (*Account, error) {
@@ -3183,6 +3224,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	nativeDeepSeekResponses := account.Platform == PlatformDeepseek &&
+		(account.GetAPIProtocol() == APIProtocolResponses || account.IsAdaptiveAPIProtocol())
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
@@ -3354,7 +3397,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && !compatMessagesBridge {
+	if instructionsEmpty && !compatMessagesBridge && !nativeDeepSeekResponses {
 		markPatchSet("instructions", "")
 	}
 
@@ -3523,7 +3566,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
-			case PlatformOpenAI:
+			case PlatformOpenAI, PlatformDeepseek:
 				// Responses-native output limit; keep until an upstream explicitly rejects it.
 			case PlatformAnthropic:
 				decoded, decodeErr := ensureReqBody()
@@ -4863,6 +4906,19 @@ type openaiNonStreamingResultPassthrough struct {
 	imageOutputSizes []string
 }
 
+const openAIStreamKeepaliveBytesKey = "openai_stream_keepalive_bytes"
+
+func recordOpenAIStreamKeepaliveBytes(c *gin.Context, written int) {
+	if c == nil || written <= 0 {
+		return
+	}
+	current := 0
+	if value, ok := c.Get(openAIStreamKeepaliveBytesKey); ok {
+		current, _ = value.(int)
+	}
+	c.Set(openAIStreamKeepaliveBytesKey, current+written)
+}
+
 func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
 	if localStarted {
 		return true
@@ -4882,6 +4938,84 @@ func openAIStreamEventIsPreamble(eventType string) bool {
 	}
 }
 
+func openAIStreamAddedEventStartsClientOutput(payload []byte, eventType string) bool {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return true
+	}
+	switch strings.TrimSpace(eventType) {
+	case "response.output_item.added":
+		item := gjson.GetBytes(payload, "item")
+		if !item.Exists() || !item.IsObject() {
+			return true
+		}
+		switch strings.TrimSpace(item.Get("type").String()) {
+		case "reasoning":
+			if item.Get("encrypted_content").String() != "" {
+				return true
+			}
+			summary := item.Get("summary")
+			if !summary.IsArray() {
+				return false
+			}
+			for _, part := range summary.Array() {
+				if strings.TrimSpace(part.Get("type").String()) != "summary_text" || part.Get("text").String() != "" {
+					return true
+				}
+			}
+			return false
+		case "message":
+			content := item.Get("content")
+			if !content.IsArray() {
+				return false
+			}
+			for _, part := range content.Array() {
+				switch strings.TrimSpace(part.Get("type").String()) {
+				case "output_text":
+					if part.Get("text").String() != "" {
+						return true
+					}
+				case "refusal":
+					if part.Get("refusal").String() != "" {
+						return true
+					}
+				default:
+					return true
+				}
+			}
+			return false
+		case "function_call":
+			return item.Get("arguments").String() != ""
+		case "custom_tool_call":
+			return item.Get("input").String() != ""
+		case "compaction":
+			return item.Get("encrypted_content").String() != ""
+		default:
+			return true
+		}
+	case "response.content_part.added":
+		part := gjson.GetBytes(payload, "part")
+		if !part.Exists() || !part.IsObject() {
+			return true
+		}
+		switch strings.TrimSpace(part.Get("type").String()) {
+		case "output_text":
+			return part.Get("text").String() != ""
+		case "refusal":
+			return part.Get("refusal").String() != ""
+		default:
+			return true
+		}
+	case "response.reasoning_summary_part.added":
+		part := gjson.GetBytes(payload, "part")
+		if !part.Exists() || !part.IsObject() || strings.TrimSpace(part.Get("type").String()) != "summary_text" {
+			return true
+		}
+		return part.Get("text").String() != ""
+	default:
+		return true
+	}
+}
+
 func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	trimmed := strings.TrimSpace(data)
 	if trimmed == "" {
@@ -4893,6 +5027,8 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	case "error":
 		payload := []byte(trimmed)
 		return !openAIStreamFailedEventShouldFailover(payload, extractOpenAISSEErrorMessage(payload))
+	case "response.output_item.added", "response.content_part.added", "response.reasoning_summary_part.added":
+		return openAIStreamAddedEventStartsClientOutput([]byte(trimmed), eventType)
 	}
 	return !openAIStreamEventIsPreamble(eventType)
 }
@@ -4936,9 +5072,25 @@ func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
 	switch openAIStreamFailedEventErrorCode(payload) {
 	case "server_is_overloaded", "slow_down":
 		return true
-	default:
-		return false
 	}
+	for _, path := range []string{"response.error.message", "error.message", "message"} {
+		if isOpenAICapacityShedMessage(gjson.GetBytes(payload, path).String()) {
+			return true
+		}
+	}
+	return false
+}
+
+func logOpenAICapacityFailoverSuppressed(ctx context.Context, account *Account, path, upstreamRequestID, eventType string) {
+	fields := []zap.Field{
+		zap.String("path", path),
+		zap.String("event_type", strings.TrimSpace(eventType)),
+		zap.String("upstream_request_id", strings.TrimSpace(upstreamRequestID)),
+	}
+	if account != nil {
+		fields = append(fields, zap.Int64("account_id", account.ID), zap.String("platform", account.Platform))
+	}
+	logger.FromContext(ctx).Warn("gateway.failover_suppressed_after_semantic_output", fields...)
 }
 
 const openAICapacityShedRetryableClientCode = "server_error"
@@ -4952,9 +5104,12 @@ func sanitizeOpenAICapacityShedErrorCodeForClient(payload []byte) ([]byte, bool)
 	updated := payload
 	changed := false
 	for _, path := range []string{"response.error.code", "error.code"} {
-		switch strings.ToLower(strings.TrimSpace(gjson.GetBytes(updated, path).String())) {
-		case "server_is_overloaded", "slow_down":
-		default:
+		parent := strings.TrimSuffix(path, ".code")
+		if !gjson.GetBytes(updated, parent).Exists() {
+			continue
+		}
+		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(updated, path).String()))
+		if code != "" && code != "server_is_overloaded" && code != "slow_down" {
 			continue
 		}
 		next, err := sjson.SetBytes(updated, path, openAICapacityShedRetryableClientCode)
@@ -5001,6 +5156,16 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 		}
 	}
 	return true
+}
+
+func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
+	if strings.TrimSpace(gjson.GetBytes(payload, "type").String()) != "error" {
+		return false
+	}
+	if isOpenAIContextWindowError(message, payload) {
+		return false
+	}
+	return isOpenAITransientProcessingError(http.StatusBadRequest, message, payload)
 }
 
 func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
@@ -5377,6 +5542,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	case AccountTypeAPIKey:
 		// API Key accounts use Platform API or custom base URL
 		baseURL := account.GetOpenAIBaseURL()
+		if account.Platform == PlatformDeepseek && account.IsAdaptiveAPIProtocol() {
+			baseURL = account.GetCNProtocolBaseURL(APIProtocolResponses)
+		}
 		if baseURL == "" {
 			targetURL = openaiPlatformAPIURL
 		} else {
@@ -6618,7 +6786,8 @@ func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
 }
 
 func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte {
-	if account == nil || account.Platform != PlatformDeepseek || account.GetAPIProtocol() != APIProtocolResponses {
+	if account == nil || account.Platform != PlatformDeepseek ||
+		(account.GetAPIProtocol() != APIProtocolResponses && !account.IsAdaptiveAPIProtocol()) {
 		return body
 	}
 	normalized, err := sjson.SetBytes(body, "store", false)
@@ -7127,6 +7296,10 @@ func openAIResponsesRequestPathSuffix(c *gin.Context) string {
 func IsForwardableOpenAIResponsesRequestPath(c *gin.Context) bool {
 	_, ok := sanitizedUpstreamPathSuffix(rawOpenAIResponsesRequestPathSuffix(c))
 	return ok
+}
+
+func IsOpenAIResponsesInputTokensRequestPath(c *gin.Context) bool {
+	return openAIResponsesRequestPathSuffix(c) == "/input_tokens"
 }
 
 func rawOpenAIResponsesRequestPathSuffix(c *gin.Context) string {

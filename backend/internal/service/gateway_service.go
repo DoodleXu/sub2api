@@ -468,6 +468,10 @@ var allowedHeaders = map[string]bool{
 // cache implementation (e.g. redis.Nil), mirroring ErrRefreshTokenNotFound.
 var ErrStickySessionNotFound = errors.New("sticky session not found")
 
+// ErrReasoningContentNotFound is returned by GatewayCache.GetReasoningContent
+// when no cached reasoning content exists for the reasoning item ID.
+var ErrReasoningContentNotFound = errors.New("reasoning content not found")
+
 // GatewayCache 定义网关服务的缓存操作接口。
 // 提供粘性会话（Sticky Session）的存储、查询、刷新和删除功能。
 //
@@ -502,6 +506,16 @@ type GatewayCache interface {
 	ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error)
 	// ReleaseGrokVideoBilled clears a claim so a failed RecordUsage can retry billing.
 	ReleaseGrokVideoBilled(ctx context.Context, key string) error
+
+	// Reasoning content cache (Responses→Chat Completions 桥接）。
+	// SetReasoningContent 按 reasoning item id 缓存 reasoning 全文，供后续请求
+	// 在客户端不回传明文 summary 时回注 reasoning_content（DeepSeek thinking
+	// mode 要求回传，否则 400）。
+	SetReasoningContent(ctx context.Context, itemID string, content string, ttl time.Duration) error
+	// GetReasoningContent 返回缓存的 reasoning 全文；未命中返回
+	// ErrReasoningContentNotFound，使 service 层无需依赖具体缓存实现即可
+	// 区分"未缓存"与真实读取失败。
+	GetReasoningContent(ctx context.Context, itemID string) (string, error)
 }
 
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
@@ -635,6 +649,9 @@ type ForwardResult struct {
 	FirstTokenMs                  *int // 首字时间（流式请求）
 	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
 	ReasoningEffort               *string
+	// ServiceTier records the billable request tier. OpenAI uses service_tier;
+	// Anthropic speed=fast is normalized to "fast".
+	ServiceTier *string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount         int    // 生成的图片数量
@@ -5214,11 +5231,21 @@ func systemHasBillingAttributionBlock(body []byte) bool {
 }
 
 // Forward 转发请求到Claude API
-func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (*ForwardResult, error) {
+func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
 	startTime := time.Now()
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	// Anthropic Fast uses speed=fast rather than OpenAI's service_tier. Attach
+	// the normalized tier at the shared boundary so every forward path records
+	// and bills the same request consistently.
+	defer func() {
+		if result != nil {
+			if tier := anthropicSpeedServiceTier(account, parsed.Speed, anthropicSpeedModel(parsed, result)); tier != nil {
+				result.ServiceTier = tier
+			}
+		}
+	}()
 	beginUpstreamResponseModelObservation(c)
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
@@ -10441,22 +10468,25 @@ func (s *GatewayService) calculateTokenCost(
 			Ctx:            ctx,
 			Model:          billingModel,
 			GroupID:        &gid,
+			Group:          apiKey.Group,
 			Tokens:         tokens,
 			RequestCount:   1,
 			RateMultiplier: multiplier,
 			PricingAt:      pricingAt,
+			ServiceTier:    optionalStringValue(result.ServiceTier),
 			Resolver:       s.resolver,
 			Resolved:       resolved,
 		})
+	} else if opts.LongContextThreshold > 0 && (apiKey.Group == nil || apiKey.Group.LongContextPricingEnabled) {
+		// 长上下文双倍计费（如 Gemini 200K 阈值）
+		cost, err = s.billingService.CalculateCostWithLongContext(billingModel, tokens, multiplier, opts.LongContextThreshold, opts.LongContextMultiplier)
 	} else if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
 		cost, err = s.billingService.CalculateCostUnified(CostInput{
 			Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
-			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: pricingAt, Resolver: s.resolver,
+			Tokens: tokens, RequestCount: 1, RateMultiplier: multiplier, PricingAt: pricingAt,
+			ServiceTier: optionalStringValue(result.ServiceTier), Resolver: s.resolver,
 		})
-	} else if opts.LongContextThreshold > 0 {
-		// 长上下文双倍计费（如 Gemini 200K 阈值）
-		cost, err = s.billingService.CalculateCostWithLongContext(billingModel, tokens, multiplier, opts.LongContextThreshold, opts.LongContextMultiplier)
 	} else {
 		cost, err = s.billingService.CalculateCost(billingModel, tokens, multiplier)
 	}
@@ -10507,6 +10537,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
 		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
 		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ServiceTier:           result.ServiceTier,
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
@@ -10555,6 +10586,42 @@ func (s *GatewayService) buildRecordUsageLog(
 	}
 
 	return usageLog
+}
+
+func anthropicSpeedModel(parsed *ParsedRequest, result *ForwardResult) string {
+	if result != nil {
+		if upstreamModel := strings.TrimSpace(result.UpstreamModel); upstreamModel != "" {
+			return upstreamModel
+		}
+	}
+	if parsed == nil {
+		return ""
+	}
+	return parsed.Model
+}
+
+// anthropicSpeedServiceTier normalizes supported Anthropic speed=fast
+// requests into the billable fast service tier.
+func anthropicSpeedServiceTier(account *Account, speed, model string) *string {
+	if account == nil || account.Platform != PlatformAnthropic || speed != "fast" {
+		return nil
+	}
+	if account.IsBedrock() || !modelSupportsAnthropicFastMode(model) {
+		return nil
+	}
+	tier := "fast"
+	return &tier
+}
+
+func modelSupportsAnthropicFastMode(model string) bool {
+	modelLower := strings.ToLower(strings.TrimSpace(model))
+	if !strings.Contains(modelLower, "opus") {
+		return false
+	}
+	if strings.Contains(modelLower, "opus-5") || strings.Contains(modelLower, "opus5") {
+		return true
+	}
+	return strings.Contains(modelLower, "4.8") || strings.Contains(modelLower, "4-8")
 }
 
 // resolveBillingMode 根据计费结果和请求类型确定计费模式。

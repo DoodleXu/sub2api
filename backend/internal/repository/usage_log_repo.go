@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +28,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 	gocache "github.com/patrickmn/go-cache"
-	"golang.org/x/sync/errgroup"
 )
 
 const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, upstream_response_model, upstream_model_mismatch, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, image_first_output_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, created_at"
@@ -4425,115 +4425,139 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	}
 
 	query := fmt.Sprintf(`
-		WITH %s
+		WITH %s,
+		scoped AS (
+			SELECT
+				COALESCE(NULLIF(TRIM(ul.inbound_endpoint), ''), 'unknown') AS inbound_endpoint,
+				COALESCE(NULLIF(TRIM(ul.upstream_endpoint), ''), 'unknown') AS upstream_endpoint,
+				ul.input_tokens,
+				ul.output_tokens,
+				ul.cache_creation_tokens,
+				ul.cache_read_tokens,
+				ul.total_cost,
+				ul.actual_cost,
+				COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1) AS account_cost,
+				ul.total_cost * COALESCE(account_cost_rate.cost_cny_per_usd, 0) AS real_cost_cny,
+				ul.duration_ms
+			FROM usage_logs ul
+			LEFT JOIN account_real_cost_rates account_cost_rate ON account_cost_rate.account_id = ul.account_id
+			%s
+		)
 		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(ul.input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(ul.output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(ul.cache_creation_tokens), 0) as total_cache_creation_tokens,
-			COALESCE(SUM(ul.cache_read_tokens), 0) as total_cache_read_tokens,
-			COALESCE(SUM(ul.total_cost), 0) as total_cost,
-			COALESCE(SUM(ul.actual_cost), 0) as total_actual_cost,
-			%s as total_account_cost,
-			%s as total_real_cost_cny,
-			COALESCE(AVG(ul.duration_ms), 0) as avg_duration_ms
-		FROM usage_logs ul
-		LEFT JOIN account_real_cost_rates account_cost_rate ON account_cost_rate.account_id = ul.account_id
-		%s
-	`, accountRealCostCNYRatesCTE, usageAccountCostSumExpr, usageRealCostCNYSumExpr, buildWhere(conditions))
+			GROUPING(inbound_endpoint) AS inbound_grouped,
+			GROUPING(upstream_endpoint) AS upstream_grouped,
+			inbound_endpoint,
+			upstream_endpoint,
+			COUNT(*) AS requests,
+			COALESCE(SUM(input_tokens), 0) AS input_tokens,
+			COALESCE(SUM(output_tokens), 0) AS output_tokens,
+			COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+			COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+			COALESCE(SUM(total_cost), 0) AS cost,
+			COALESCE(SUM(actual_cost), 0) AS actual_cost,
+			COALESCE(SUM(account_cost), 0) AS account_cost,
+			COALESCE(SUM(real_cost_cny), 0) AS real_cost_cny,
+			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms
+		FROM scoped
+		GROUP BY GROUPING SETS (
+			(),
+			(inbound_endpoint),
+			(upstream_endpoint),
+			(inbound_endpoint, upstream_endpoint)
+		)
+	`, accountRealCostCNYRatesCTE, buildWhere(conditions))
 
 	stats := &UsageStats{}
 	var totalAccountCost float64
 	var totalRealCostCNY float64
-
-	start := time.Unix(0, 0).UTC()
-	if filters.StartTime != nil {
-		start = *filters.StartTime
+	useAccountCostForEndpoint := filters.AccountID > 0 && filters.UserID == 0 && filters.APIKeyID == 0
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
-	end := time.Now().UTC()
-	if filters.EndTime != nil {
-		end = *filters.EndTime
-	}
+	defer func() { _ = rows.Close() }()
 
-	var endpoints, upstreamEndpoints, endpointPaths []EndpointStat
-
-	// 汇总查询:失败即致命。
-	runSummary := func(c context.Context) error {
-		return scanSingleRow(
-			c, r.sql, query, args,
-			&stats.TotalRequests,
-			&stats.TotalInputTokens,
-			&stats.TotalOutputTokens,
-			&stats.TotalCacheTokens,
-			&stats.TotalCacheCreationTokens,
-			&stats.TotalCacheReadTokens,
-			&stats.TotalCost,
-			&stats.TotalActualCost,
-			&totalAccountCost,
-			&totalRealCostCNY,
-			&stats.AverageDurationMs,
+	for rows.Next() {
+		var (
+			inboundGrouped, upstreamGrouped                                      int
+			inboundEndpoint, upstreamEndpoint                                    sql.NullString
+			requests, inputTokens, outputTokens, cacheCreationTokens, cacheReads int64
+			cost, actualCost, accountCost, realCostCNY, averageDurationMs        float64
 		)
-	}
-	// endpoint 明细:best-effort(失败 log + 返空),不致命。
-	runEndpoints := func(c context.Context) {
-		res, err := r.getEndpointStatsByColumnWithFilters(c, "inbound_endpoint", start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
-		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				logger.LegacyPrintf("repository.usage_log", "GetEndpointStatsWithFilters failed in GetStatsWithFilters: %v", err)
-			}
-			res = []EndpointStat{}
+		if err := rows.Scan(
+			&inboundGrouped,
+			&upstreamGrouped,
+			&inboundEndpoint,
+			&upstreamEndpoint,
+			&requests,
+			&inputTokens,
+			&outputTokens,
+			&cacheCreationTokens,
+			&cacheReads,
+			&cost,
+			&actualCost,
+			&accountCost,
+			&realCostCNY,
+			&averageDurationMs,
+		); err != nil {
+			return nil, err
 		}
-		endpoints = res
-	}
-	runUpstream := func(c context.Context) {
-		res, err := r.getEndpointStatsByColumnWithFilters(c, "upstream_endpoint", start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
-		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				logger.LegacyPrintf("repository.usage_log", "GetUpstreamEndpointStatsWithFilters failed in GetStatsWithFilters: %v", err)
-			}
-			res = []EndpointStat{}
+
+		totalTokens := inputTokens + outputTokens + cacheCreationTokens + cacheReads
+		endpointActualCost := actualCost
+		if useAccountCostForEndpoint {
+			endpointActualCost = accountCost
 		}
-		upstreamEndpoints = res
-	}
-	runPaths := func(c context.Context) {
-		res, err := r.getEndpointPathStatsWithFilters(c, start, end, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, filters.UpstreamModelMismatch)
-		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				logger.LegacyPrintf("repository.usage_log", "getEndpointPathStatsWithFilters failed in GetStatsWithFilters: %v", err)
-			}
-			res = []EndpointStat{}
+
+		switch {
+		case inboundGrouped == 1 && upstreamGrouped == 1:
+			stats.TotalRequests = requests
+			stats.TotalInputTokens = inputTokens
+			stats.TotalOutputTokens = outputTokens
+			stats.TotalCacheCreationTokens = cacheCreationTokens
+			stats.TotalCacheReadTokens = cacheReads
+			stats.TotalCacheTokens = cacheCreationTokens + cacheReads
+			stats.TotalCost = cost
+			stats.TotalActualCost = actualCost
+			totalAccountCost = accountCost
+			totalRealCostCNY = realCostCNY
+			stats.AverageDurationMs = averageDurationMs
+		case inboundGrouped == 0 && upstreamGrouped == 1:
+			stats.Endpoints = append(stats.Endpoints, EndpointStat{
+				Endpoint: inboundEndpoint.String, Requests: requests, TotalTokens: totalTokens,
+				Cost: cost, ActualCost: endpointActualCost,
+			})
+		case inboundGrouped == 1 && upstreamGrouped == 0:
+			stats.UpstreamEndpoints = append(stats.UpstreamEndpoints, EndpointStat{
+				Endpoint: upstreamEndpoint.String, Requests: requests, TotalTokens: totalTokens,
+				Cost: cost, ActualCost: endpointActualCost,
+			})
+		case inboundGrouped == 0 && upstreamGrouped == 0:
+			stats.EndpointPaths = append(stats.EndpointPaths, EndpointStat{
+				Endpoint: inboundEndpoint.String + " -> " + upstreamEndpoint.String,
+				Requests: requests, TotalTokens: totalTokens, Cost: cost, ActualCost: endpointActualCost,
+			})
 		}
-		endpointPaths = res
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	if r.db != nil {
-		// 生产路径:r.sql 是 *sql.DB 连接池,可并发。4 条查询并行,延迟取最大值。
-		g, gctx := errgroup.WithContext(ctx)
-		g.Go(func() error { return runSummary(gctx) })
-		g.Go(func() error { runEndpoints(gctx); return nil })
-		g.Go(func() error { runUpstream(gctx); return nil })
-		g.Go(func() error { runPaths(gctx); return nil })
-		if err := g.Wait(); err != nil {
-			return nil, err
-		}
-	} else {
-		// 事务路径(ent.Tx 不能并发查询):顺序执行,行为与重构前一致。
-		if err := runSummary(ctx); err != nil {
-			return nil, err
-		}
-		runEndpoints(ctx)
-		runUpstream(ctx)
-		runPaths(ctx)
+	sortEndpointStats := func(values []EndpointStat) {
+		sort.Slice(values, func(i, j int) bool {
+			if values[i].Requests != values[j].Requests {
+				return values[i].Requests > values[j].Requests
+			}
+			return values[i].Endpoint < values[j].Endpoint
+		})
 	}
+	sortEndpointStats(stats.Endpoints)
+	sortEndpointStats(stats.UpstreamEndpoints)
+	sortEndpointStats(stats.EndpointPaths)
 
 	stats.TotalAccountCost = &totalAccountCost
 	stats.TotalRealCostCNY = &totalRealCostCNY
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
-	stats.Endpoints = endpoints
-	stats.UpstreamEndpoints = upstreamEndpoints
-	stats.EndpointPaths = endpointPaths
-
 	return stats, nil
 }
 

@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-19
+最后更新：2026-08-21
 
 ## 当前对比基线
 
@@ -10,21 +10,36 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `8d4820e55` | 本次合并 v0.1.178 前的 fork 基线；版本源保持 `0.1.255` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.178` -> `e0c48a19ed794a565e3858662520afe0a1f9f0ba` | 合入 2026-08-18 发布的官方 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.178` -> `e0c48a19ed794a565e3858662520afe0a1f9f0ba` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 33 个冲突路径，其中 17 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `d4b6b1db8` | 本次合并 v0.1.179 前的 fork 基线；版本源保持 `0.1.260` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.179` -> `75f88be5f75c27771836b586f7de1503afa0e3bc` | 合入 2026-08-20 发布的官方 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.179` -> `75f88be5f75c27771836b586f7de1503afa0e3bc` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 29 个冲突路径，其中 8 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.178:refs/tags/upstream/v0.1.178 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.178^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.178^{}..HEAD
+git fetch upstream refs/tags/v0.1.179:refs/tags/upstream/v0.1.179 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.179^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+本次 `v0.1.179` 合并说明：
+
+- 合入国产供应商自适应协议与 Composite 路由增强：DeepSeek 自适应模式优先走原生 Responses，其余国产供应商可按协议在 Responses、Chat Completions 和 Anthropic 链路间分流；Composite 补齐 Kimi、智谱、DeepSeek 的模型候选与 Codex 模型目录。
+- 合入渠道定价倍率与 Anthropic Fast service tier 计费上下文，保留 fork 的缺价审计、人民币真实成本和分组长上下文开关；用量统计改为单次 `GROUPING SETS` 聚合，同时继续返回 fork 的账号成本与真实人民币成本。
+- 合入 OpenAI 流内容量降载恢复：首个语义输出前暂存响应、识别空 added 事件和文本型 overloaded 信号，允许请求级同账号/换号恢复；已经产生语义输出后仅记录抑制日志，避免重复内容。保留 fork 的错误脱敏、用量回收和调度状态语义。
+- 合入代理探测目标、Grok 客户端工具发现与内联图片、Channel Monitor 配额模式展示，以及管理端平台选项复用等前后端修复。
+- 上游 8 个 repository/service 拆分文件继续保持删除，新增行为已迁入 fork 实际使用的聚合文件及 `*_v158.go` 扩展文件；迁移 `226_add_usage_log_effective_model_indexes_notx.sql`、`227_composite_routes_add_cn_providers.sql`、`228_channel_pricing_multipliers.sql` 与 fork 历史迁移按完整文件名并存。
+- `backend/cmd/server/VERSION` 保持 fork 的 `0.1.260`，本次只同步上游 release，不执行 push、tag 或发布。
+
+### v0.1.179 合并验证
+
+- 合并前 `git merge-tree --write-tree` 识别 29 个冲突路径，其中 21 个内容冲突、8 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。
+- 后端 `TZ=UTC GOCACHE=/private/tmp/sub2api-go-cache go test -tags=unit -count=1 ./...` 全量通过；合并期间该套件先发现并修正用量统计 mock 仍按旧多查询结果列构造的问题。
+- 前端 `vue-tsc --noEmit`、`pnpm run lint:check` 和 `pnpm run build` 通过；全量 Vitest 其余 259 个测试文件、1837 个用例通过，唯一失败是新加的 probe 场景 fixture 沿用了 quota 模式，修正 fixture 后该文件 5 个用例复测通过。仅有既有 localStorage、Browserslist 与预期 jsdom stderr 提示。
 
 本次 `v0.1.178` 合并说明：
 

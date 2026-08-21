@@ -378,6 +378,104 @@ func TestUpstreamBillingProbeFallsBackToNewAPIUsageLog(t *testing.T) {
 	require.Equal(t, 0.06, rate)
 }
 
+func TestUpstreamBillingProbeAdaptiveCNUsesChatProtocolBaseURL(t *testing.T) {
+	account := &Account{
+		ID:          18,
+		Platform:    PlatformKimi,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":      "sk-sensitive",
+			"api_protocol": APIProtocolAdaptive,
+			"base_url":     "https://legacy-relay.example/v1",
+			"api_base_urls": map[string]any{
+				APIProtocolChatCompletions: "https://chat-relay.example/v1",
+			},
+		},
+		Extra: map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       upstreamBillingProbeValidBody(),
+	}}
+	svc := newUpstreamBillingProbeTestService(repo, upstream, &upstreamBillingProbeSettingRepo{})
+
+	snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
+	require.Equal(t, "https://chat-relay.example/v1/sub2api/billing", upstream.lastReq.URL.String())
+}
+
+func TestUpstreamBillingProbeSyncsResolvedRateForAllAPIKeyPlatforms(t *testing.T) {
+	for _, platform := range []string{
+		PlatformOpenAI,
+		PlatformAnthropic,
+		PlatformGemini,
+		PlatformAntigravity,
+		PlatformGrok,
+	} {
+		t.Run(platform, func(t *testing.T) {
+			initialRate := 0.25
+			account := &Account{
+				ID:             17,
+				Platform:       platform,
+				Type:           AccountTypeAPIKey,
+				Status:         StatusActive,
+				Concurrency:    1,
+				RateMultiplier: &initialRate,
+				Credentials: map[string]any{
+					"api_key":  "sk-sensitive",
+					"base_url": "https://upstream.example",
+				},
+				Extra: map[string]any{
+					UpstreamBillingProbeEnabledExtraKey:    true,
+					UpstreamBillingRateSyncEnabledExtraKey: true,
+				},
+			}
+			repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+			svc := newUpstreamBillingProbeTestService(repo, &upstreamBillingProbeHTTPStub{}, &upstreamBillingProbeSettingRepo{})
+
+			snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
+
+			require.NoError(t, err)
+			require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
+			require.NotNil(t, account.RateMultiplier)
+			require.Equal(t, 0.8, *account.RateMultiplier)
+		})
+	}
+}
+
+func TestUpstreamBillingProbeOnlyDoesNotChangeAccountRate(t *testing.T) {
+	initialRate := 0.25
+	account := &Account{
+		ID:             18,
+		Platform:       PlatformGrok,
+		Type:           AccountTypeAPIKey,
+		Status:         StatusActive,
+		Concurrency:    1,
+		RateMultiplier: &initialRate,
+		Credentials: map[string]any{
+			"api_key":  "sk-sensitive",
+			"base_url": "https://upstream.example",
+		},
+		Extra: map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	svc := newUpstreamBillingProbeTestService(repo, &upstreamBillingProbeHTTPStub{}, &upstreamBillingProbeSettingRepo{})
+
+	snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
+	require.NotNil(t, account.RateMultiplier)
+	require.Equal(t, initialRate, *account.RateMultiplier)
+	require.Contains(t, account.Extra, UpstreamBillingProbeExtraKey)
+}
+
 func TestUpstreamBillingProbeReportsNewAPIWithoutBillingSamples(t *testing.T) {
 	account := &Account{
 		ID:          49,

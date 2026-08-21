@@ -23,6 +23,7 @@
           >
             {{ providerLabel(item.provider) }}
           </span>
+          <!-- 纯配额模式主模型是占位符 "quota"，展示层替换为本地化「配额」标签 -->
           <span class="font-mono text-xs truncate text-gray-500 dark:text-gray-400">
             {{ primaryLabel }}
           </span>
@@ -121,6 +122,7 @@ const {
   providerLabel,
   providerBadgeClass,
   formatLatency,
+  formatMonitorModel,
 } = useChannelMonitorFormat()
 
 const providerTintClass = computed(() =>
@@ -133,8 +135,8 @@ const quotaVisible = computed(
 
 const primaryLabel = computed(() =>
   props.item.check_mode === 'quota'
-    ? t('monitorCommon.quota.monitorLabel')
-    : props.item.primary_model
+    ? formatMonitorModel('quota')
+    : formatMonitorModel(props.item.primary_model)
 )
 
 const availabilityLabel = computed(() => {

@@ -93,7 +93,14 @@ describe('MonitorCard quota snapshot visibility', () => {
   it('uses a localized quota label and hides probe metrics for quota-only monitors', () => {
     isQuotaVisible.mockReturnValue(false)
     const wrapper = mountCard(makeItem({ primary_model: 'quota', check_mode: 'quota' }))
-    expect(wrapper.text()).toContain('monitorCommon.quota.monitorLabel')
+    expect(wrapper.text()).toContain('monitorCommon.checkMode.quota')
     expect(wrapper.findComponent({ name: 'MonitorMetricPair' }).exists()).toBe(false)
+  })
+
+  // 占位符 "quota" 是主模型存储值，不得作为假模型名直接透出到用户端。
+  it('keeps the real model name for probe monitors', () => {
+	const wrapper = mountCard(makeItem({ primary_model: 'claude-sonnet-4-5', check_mode: 'probe' }))
+    expect(wrapper.text()).toContain('claude-sonnet-4-5')
+    expect(wrapper.text()).not.toContain('monitorCommon.checkMode.quota')
   })
 })

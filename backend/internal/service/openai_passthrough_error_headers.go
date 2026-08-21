@@ -191,12 +191,15 @@ func isOpenAIRequestBodyTooLargeError(statusCode int, upstreamMsg string, upstre
 }
 
 func newOpenAIUpstreamFailoverError(statusCode int, responseHeaders http.Header, responseBody []byte, upstreamMsg string, retryableOnSameAccount bool) *UpstreamFailoverError {
+	requestScopedCapacity := isOpenAIRequestScopedCapacityShed(upstreamMsg, responseBody)
 	failoverErr := &UpstreamFailoverError{
 		StatusCode: statusCode, ResponseBody: responseBody, ResponseHeaders: responseHeaders.Clone(),
-		RetryableOnSameAccount: retryableOnSameAccount,
+		RetryableOnSameAccount: retryableOnSameAccount || requestScopedCapacity,
+		RequestScopedTransient: requestScopedCapacity,
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
 		failoverErr.RetryableOnSameAccount = false
+		failoverErr.RequestScopedTransient = false
 		failoverErr.Scope = GatewayFailureScopeAccount
 		failoverErr.Reason = openAIRequestBodyTooLargeReason
 		failoverErr.NextAccountAction = NextAccountRetry
