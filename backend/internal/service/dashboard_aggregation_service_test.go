@@ -135,7 +135,7 @@ func (s *dashboardAggregationRepoTestStub) EnsureUsageLogsPartitions(ctx context
 	return s.ensurePartitionErr
 }
 
-func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesRetentionStart(t *testing.T) {
+func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesBoundedRealtimeStart(t *testing.T) {
 	repo := &dashboardAggregationRepoTestStub{watermark: time.Unix(0, 0).UTC()}
 	svc := &DashboardAggregationService{
 		repo: repo,
@@ -153,9 +153,9 @@ func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesRetentionS
 
 	svc.runScheduledAggregation()
 
-	require.Equal(t, 1, repo.aggregateCalls)
+	require.Equal(t, 24, repo.aggregateCalls)
 	require.False(t, repo.lastEnd.IsZero())
-	require.Equal(t, truncateToDayUTC(repo.lastEnd.AddDate(0, 0, -1)), repo.lastStart)
+	require.True(t, repo.lastEnd.Sub(repo.lastStart) <= time.Hour)
 }
 
 func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupUsageRollups(t *testing.T) {
@@ -451,8 +451,8 @@ func TestDashboardAggregationService_PartitionFailure_DoesNotAggregate(t *testin
 
 	svc.runScheduledAggregation()
 
-	require.Equal(t, 1, repo.ensurePartitionCalls)
-	require.Equal(t, 1, repo.aggregateCalls)
+	require.Equal(t, 24, repo.ensurePartitionCalls)
+	require.Equal(t, 24, repo.aggregateCalls)
 }
 
 func TestDashboardAggregationService_TriggerBackfill_TooLarge(t *testing.T) {
@@ -500,11 +500,16 @@ func TestDashboardAggregationService_AccountCostChangeRefreshesCostSnapshot(t *t
 		},
 	})
 	svc.SetDashboardCache(cache)
+	svc.accountCostSnapshotDelay = 10 * time.Millisecond
 
 	svc.RefreshDashboardCostSnapshotAfterAccountCostChange()
+	svc.RefreshDashboardCostSnapshotAfterAccountCostChange()
 
-	require.Equal(t, int32(1), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
-	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCostCalls))
+	require.Equal(t, int32(2), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
+	require.Equal(t, int32(2), atomic.LoadInt32(&cache.delCostCalls))
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&repo.refreshDoneCalls) == 1
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, 1, repo.refreshSnapshotCalls)
 }
 

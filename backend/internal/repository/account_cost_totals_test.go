@@ -85,7 +85,7 @@ func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotUsesPublished
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(`(?s)BOOL_AND\(published_initialized AND initialized\).*published_account_cost AS total_account_cost.*published_standard_account_cost AS total_standard_account_cost.*AND l\.complete`).
+	mock.ExpectQuery(`(?s)BOOL_AND\(.*published_account_cost AS total_account_cost.*published_standard_account_cost AS total_standard_account_cost.*ledger_pending`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"aggregation_complete"}).AddRow(true))
 
@@ -96,14 +96,14 @@ func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotUsesPublished
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotKeepsPreviousSnapshotWhileLedgerPending(t *testing.T) {
+func TestDashboardAggregationRepositoryRefreshDashboardCostSnapshotPublishesPendingState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(`(?s)BOOL_AND\(published_initialized AND initialized\).*AND l\.complete`).
+	mock.ExpectQuery(`(?s)BOOL_AND\(.*ledger_pending`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"aggregation_complete"}))
+		WillReturnRows(sqlmock.NewRows([]string{"aggregation_complete"}).AddRow(false))
 
 	repo := newDashboardAggregationRepositoryWithSQL(db)
 	complete, err := repo.RefreshDashboardCostSnapshot(context.Background(), time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC))

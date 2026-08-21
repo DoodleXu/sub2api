@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +37,8 @@ const (
 	accountCostBackfillYield                            = 100 * time.Millisecond
 	accountCostBackfillLogTimeout                       = 5 * time.Second
 	accountCostTotalsBatchSize                          = int64(10000)
+	accountCostSnapshotDebounce                         = 2 * time.Second
+	dashboardAggregationChunkSize                       = time.Hour
 )
 
 var (
@@ -101,6 +104,9 @@ type DashboardAggregationService struct {
 	accountCostMaintenanceRunning int32
 	lastRetentionCleanup          atomic.Value // time.Time
 	accountCostBackfillYieldFn    func(context.Context) bool
+	accountCostSnapshotMu         sync.Mutex
+	accountCostSnapshotTimer      *time.Timer
+	accountCostSnapshotDelay      time.Duration
 
 	lockCache      LeaderLockCache
 	db             *sql.DB
@@ -115,10 +121,11 @@ func NewDashboardAggregationService(repo DashboardAggregationRepository, timingW
 		aggCfg = cfg.DashboardAgg
 	}
 	return &DashboardAggregationService{
-		repo:        repo,
-		timingWheel: timingWheel,
-		cfg:         aggCfg,
-		instanceID:  uuid.NewString(),
+		repo:                     repo,
+		timingWheel:              timingWheel,
+		cfg:                      aggCfg,
+		instanceID:               uuid.NewString(),
+		accountCostSnapshotDelay: accountCostSnapshotDebounce,
 	}
 }
 
@@ -152,6 +159,7 @@ func (s *DashboardAggregationService) Start() {
 		return
 	}
 	go s.runStartupGroupUsageSync()
+	go s.runStartupDashboardBackfill()
 
 	interval := time.Duration(s.cfg.IntervalSeconds) * time.Second
 	if interval <= 0 {
@@ -170,6 +178,9 @@ func (s *DashboardAggregationService) Start() {
 	s.timingWheel.ScheduleRecurring("dashboard:aggregation", interval, func() {
 		s.runScheduledAggregation()
 	})
+	s.timingWheel.ScheduleRecurring("dashboard:startup-backfill", time.Minute, func() {
+		go s.runStartupDashboardBackfill()
+	})
 	s.timingWheel.ScheduleRecurring("dashboard:account-cost-maintenance", accountCostMaintenanceInterval, func() {
 		go s.runAccountCostMaintenance()
 	})
@@ -177,6 +188,85 @@ func (s *DashboardAggregationService) Start() {
 	if !s.cfg.BackfillEnabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 回填已禁用，如需补齐保留窗口以外历史数据请手动回填")
 	}
+}
+
+// runStartupDashboardBackfill closes the historical prefix that would
+// otherwise be skipped when the aggregate watermark is still at the epoch.
+// It is intentionally independent from the optional operator-triggered
+// backfill switch: a fresh install must not publish a permanently incomplete
+// dashboard just because that switch is disabled.
+func (s *DashboardAggregationService) runStartupDashboardBackfill() {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationBackfillTimeout)
+	defer cancel()
+	release, ok := tryAcquireSingletonLeaderLock(
+		ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID,
+		defaultDashboardAggregationBackfillTimeout+time.Minute,
+	)
+	if !ok {
+		return
+	}
+	defer release()
+	stateRepo, hasState := s.repo.(dashboardBackfillStateRepository)
+	last, err := s.repo.GetAggregationWatermark(ctx)
+	if err != nil {
+		return
+	}
+	retentionDays := s.cfg.Retention.UsageLogsDays
+	if retentionDays <= 0 {
+		retentionDays = 1
+	}
+	now := time.Now().UTC()
+	start := truncateToDayUTC(now.AddDate(0, 0, -retentionDays))
+	target := now
+	if hasState {
+		cursor, savedTarget, active, stateErr := stateRepo.GetDashboardBackfillState(ctx)
+		if stateErr != nil {
+			return
+		}
+		if active {
+			start, target = cursor, savedTarget
+		} else if last.After(time.Unix(0, 0).UTC()) {
+			return
+		}
+		if !active {
+			if err := stateRepo.SetDashboardBackfillState(ctx, start, target, "running"); err != nil {
+				return
+			}
+		}
+	} else if last.After(time.Unix(0, 0).UTC()) {
+		return
+	}
+	end := start.Add(24 * time.Hour)
+	if end.After(target) {
+		end = target
+	}
+	if !end.After(start) {
+		if hasState {
+			_ = stateRepo.SetDashboardBackfillState(ctx, start, target, "idle")
+		}
+		return
+	}
+	if err := s.aggregateRange(ctx, start, end); err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 启动历史 Dashboard 回填失败: %v", err)
+		return
+	}
+	if hasState {
+		status := "running"
+		if !end.Before(target) {
+			status = "idle"
+		}
+		if err := stateRepo.SetDashboardBackfillState(ctx, end, target, status); err != nil {
+			return
+		}
+	}
+	if !end.Before(target) {
+		_ = s.repo.UpdateAggregationWatermark(ctx, target)
+	}
+}
+
+type dashboardBackfillStateRepository interface {
+	GetDashboardBackfillState(ctx context.Context) (cursor, target time.Time, active bool, err error)
+	SetDashboardBackfillState(ctx context.Context, cursor, target time.Time, status string) error
 }
 
 func (s *DashboardAggregationService) runAccountCostMaintenance() {
@@ -204,7 +294,24 @@ func (s *DashboardAggregationService) runAccountCostMaintenance() {
 	defer release()
 
 	s.processAccountCostTotals()
+	s.processDirtyAccountCostBuckets()
 	s.backfillAccountCostAggregates()
+}
+
+type accountCostDirtyBucketProcessor interface {
+	ProcessDirtyAccountCostBuckets(ctx context.Context, limit int) (int, error)
+}
+
+func (s *DashboardAggregationService) processDirtyAccountCostBuckets() {
+	processor, ok := s.repo.(accountCostDirtyBucketProcessor)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostLedgerRunBudget)
+	defer cancel()
+	if _, err := processor.ProcessDirtyAccountCostBuckets(ctx, 32); err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 成本脏桶重算失败: %v", err)
+	}
 }
 
 func (s *DashboardAggregationService) backfillAccountCostAggregates() {
@@ -380,6 +487,23 @@ func (s *DashboardAggregationService) RefreshDashboardCostSnapshotAfterAccountCo
 		return
 	}
 	s.invalidateDashboardCostSnapshot()
+	s.accountCostSnapshotMu.Lock()
+	defer s.accountCostSnapshotMu.Unlock()
+	if s.accountCostSnapshotTimer != nil {
+		s.accountCostSnapshotTimer.Stop()
+	}
+	delay := s.accountCostSnapshotDelay
+	if delay <= 0 {
+		delay = accountCostSnapshotDebounce
+	}
+	s.accountCostSnapshotTimer = time.AfterFunc(delay, s.refreshDashboardCostSnapshotAfterDebounce)
+}
+
+func (s *DashboardAggregationService) refreshDashboardCostSnapshotAfterDebounce() {
+	s.accountCostSnapshotMu.Lock()
+	s.accountCostSnapshotTimer = nil
+	s.accountCostSnapshotMu.Unlock()
+
 	now := time.Now().UTC()
 	retentionDays := s.cfg.Retention.UsageLogsDays
 	if retentionDays <= 0 {
@@ -589,6 +713,12 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 	}
 	defer release()
 	defer s.runScheduledGroupUsageSync()
+	if stateRepo, ok := s.repo.(dashboardBackfillStateRepository); ok {
+		_, _, active, err := stateRepo.GetDashboardBackfillState(ctx)
+		if err == nil && active {
+			return
+		}
+	}
 
 	now := time.Now().UTC()
 	last, err := s.repo.GetAggregationWatermark(ctx)
@@ -600,12 +730,12 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 	lookback := time.Duration(s.cfg.LookbackSeconds) * time.Second
 	epoch := time.Unix(0, 0).UTC()
 	start := last.Add(-lookback)
-	if !last.After(epoch) {
-		retentionDays := s.cfg.Retention.UsageLogsDays
-		if retentionDays <= 0 {
-			retentionDays = 1
-		}
-		start = truncateToDayUTC(now.AddDate(0, 0, -retentionDays))
+	firstRun := !last.After(epoch)
+	if firstRun {
+		// Establish only a bounded realtime baseline on first boot. The separate
+		// startup dashboard backfill owns historical retention-window work and
+		// advances it in bounded chunks.
+		start = now.Add(-24 * time.Hour)
 	} else if start.After(now) {
 		start = now.Add(-lookback)
 	}
@@ -615,7 +745,12 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		return
 	}
 
-	updateErr := s.repo.UpdateAggregationWatermark(ctx, now)
+	watermarkUpdated := false
+	var updateErr error
+	if !firstRun {
+		updateErr = s.repo.UpdateAggregationWatermark(ctx, now)
+		watermarkUpdated = updateErr == nil
+	}
 	if updateErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 更新水位失败: %v", updateErr)
 	}
@@ -623,7 +758,7 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		"start", start.Format(time.RFC3339),
 		"end", now.Format(time.RFC3339),
 		"duration", time.Since(jobStart).String(),
-		"watermark_updated", updateErr == nil,
+		"watermark_updated", watermarkUpdated,
 	)
 	s.maybeCleanupRetention(ctx, now)
 }
@@ -701,10 +836,23 @@ func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start,
 	if !end.After(start) {
 		return nil
 	}
-	if err := s.repo.EnsureUsageLogsPartitions(ctx, end); err != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分区检查失败: %v", err)
+	// Keep each aggregation transaction bounded. This is especially important
+	// after a watermark reset or a first boot, where the requested range may
+	// cover the entire retention window.
+	for cursor := start; cursor.Before(end); {
+		chunkEnd := cursor.Add(dashboardAggregationChunkSize)
+		if chunkEnd.After(end) {
+			chunkEnd = end
+		}
+		if err := s.repo.EnsureUsageLogsPartitions(ctx, chunkEnd); err != nil {
+			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分区检查失败: %v", err)
+		}
+		if err := s.repo.AggregateRange(ctx, cursor, chunkEnd); err != nil {
+			return err
+		}
+		cursor = chunkEnd
 	}
-	return s.repo.AggregateRange(ctx, start, end)
+	return nil
 }
 
 func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {

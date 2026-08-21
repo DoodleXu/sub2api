@@ -412,6 +412,25 @@ func (r *dashboardAggregationRepository) GetAggregationWatermark(ctx context.Con
 	return ts.UTC(), nil
 }
 
+func (r *dashboardAggregationRepository) GetDashboardBackfillState(ctx context.Context) (time.Time, time.Time, bool, error) {
+	var cursor, target sql.NullTime
+	var status string
+	err := scanSingleRow(ctx, r.sql, `SELECT dashboard_backfill_cursor, dashboard_backfill_target, dashboard_backfill_status FROM usage_dashboard_aggregation_watermark WHERE id = 1`, nil, &cursor, &target, &status)
+	if err != nil {
+		if isUndefinedColumnError(err) {
+			return time.Time{}, time.Time{}, false, nil
+		}
+		return time.Time{}, time.Time{}, false, err
+	}
+	active := status == "running" && cursor.Valid && target.Valid && cursor.Time.Before(target.Time)
+	return cursor.Time.UTC(), target.Time.UTC(), active, nil
+}
+
+func (r *dashboardAggregationRepository) SetDashboardBackfillState(ctx context.Context, cursor, target time.Time, status string) error {
+	_, err := r.sql.ExecContext(ctx, `UPDATE usage_dashboard_aggregation_watermark SET dashboard_backfill_cursor = $1, dashboard_backfill_target = $2, dashboard_backfill_status = $3, updated_at = NOW() WHERE id = 1`, cursor.UTC(), target.UTC(), status)
+	return err
+}
+
 func (r *dashboardAggregationRepository) GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error) {
 	var start, end time.Time
 	query := `
@@ -495,6 +514,75 @@ func (r *dashboardAggregationRepository) AggregateAccountCostRange(ctx context.C
 		return tx.Commit()
 	}
 	return run(r)
+}
+
+// ProcessDirtyAccountCostBuckets recomputes historical account-cost/model
+// buckets invalidated by usage corrections. Reprocessing is idempotent; the
+// bucket is removed only after its replacement aggregates have committed.
+func (r *dashboardAggregationRepository) ProcessDirtyAccountCostBuckets(ctx context.Context, limit int) (int, error) {
+	if r == nil || r.sql == nil || limit <= 0 {
+		return 0, nil
+	}
+	processed := 0
+	for processed < limit {
+		if db, ok := r.sql.(*sql.DB); ok {
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return processed, err
+			}
+			txRepo := newDashboardAggregationRepositoryWithSQL(tx)
+			var bucket, requestedAt time.Time
+			err = scanSingleRow(ctx, tx, `SELECT bucket_start, requested_at FROM usage_account_cost_dirty_buckets ORDER BY requested_at, bucket_start FOR UPDATE SKIP LOCKED LIMIT 1`, nil, &bucket, &requestedAt)
+			if err == sql.ErrNoRows {
+				_ = tx.Rollback()
+				break
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				if isUndefinedTableError(err) {
+					return processed, nil
+				}
+				return processed, err
+			}
+			if err = txRepo.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
+				_ = tx.Rollback()
+				return processed, err
+			}
+			if _, err = tx.ExecContext(ctx, `DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
+				_ = tx.Rollback()
+				return processed, err
+			}
+			if err = tx.Commit(); err != nil {
+				return processed, err
+			}
+			processed++
+			continue
+		}
+		var bucket, requestedAt time.Time
+		err := scanSingleRow(ctx, r.sql, `
+			SELECT bucket_start, requested_at
+			FROM usage_account_cost_dirty_buckets
+			ORDER BY requested_at, bucket_start
+			LIMIT 1`, nil, &bucket, &requestedAt)
+		if err == sql.ErrNoRows {
+			break
+		}
+		if err != nil {
+			if isUndefinedTableError(err) {
+				return processed, nil
+			}
+			return processed, err
+		}
+		if err := r.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
+			return processed, err
+		}
+		if _, err := r.sql.ExecContext(ctx,
+			`DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
 }
 
 func completedAccountCostBucketEnd(hourEnd time.Time) time.Time {
@@ -1090,8 +1178,13 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 		),
 		ledger_state AS (
 			SELECT
-				COALESCE(BOOL_AND(published_initialized AND initialized), TRUE) AS complete
-			FROM usage_account_cost_totals
+				COALESCE(BOOL_AND(
+					COALESCE(l.published_initialized, FALSE)
+					AND COALESCE(l.initialized, FALSE)
+					AND NOT COALESCE(l.needs_processing, TRUE)
+				), TRUE) AS complete
+			FROM accounts a
+			LEFT JOIN usage_account_cost_totals l ON l.account_id = a.id
 		),
 		cost_by_account AS (
 			SELECT
@@ -1121,7 +1214,7 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			FROM accounts a
 			LEFT JOIN cost_by_account c ON c.account_id = a.id
 			LEFT JOIN today_by_account t ON t.account_id = a.id
-			WHERE a.deleted_at IS NULL AND a.total_cost_cny > 0
+			WHERE a.total_cost_cny > 0
 		),
 		metrics AS (
 			SELECT
@@ -1142,7 +1235,8 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 		INSERT INTO usage_dashboard_cost_snapshot (
 			id, today_real_cost_cny, total_cost_cny, total_account_cost, today_account_cost,
 			average_cost_cny_per_usd, anthropic_cost_cny_per_usd, openai_cost_cny_per_usd,
-			coverage_start, coverage_end, aggregation_complete, computed_at
+			coverage_start, coverage_end, aggregation_complete,
+			ledger_pending, data_through, stale_reason, computed_at
 		)
 		SELECT
 			1,
@@ -1156,13 +1250,15 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			c.start_time,
 			c.end_time,
 			l.complete,
+			NOT l.complete,
+			c.end_time,
+			CASE WHEN NOT l.complete THEN 'ledger_pending' ELSE NULL END,
 			NOW()
 		FROM coverage c
 		CROSS JOIN ledger_state l
 		CROSS JOIN metrics m
 		WHERE c.start_time <= $1
 			AND c.end_time >= $2
-			AND l.complete
 		ON CONFLICT (id)
 		DO UPDATE SET
 			today_real_cost_cny = EXCLUDED.today_real_cost_cny,
@@ -1175,6 +1271,9 @@ func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx contex
 			coverage_start = EXCLUDED.coverage_start,
 			coverage_end = EXCLUDED.coverage_end,
 			aggregation_complete = EXCLUDED.aggregation_complete,
+			ledger_pending = EXCLUDED.ledger_pending,
+			data_through = EXCLUDED.data_through,
+			stale_reason = EXCLUDED.stale_reason,
 			computed_at = EXCLUDED.computed_at
 		RETURNING aggregation_complete
 	`
@@ -1222,12 +1321,17 @@ func (r *dashboardAggregationRepository) GetDashboardCostSummary(ctx context.Con
 			coverage_start,
 			coverage_end,
 			aggregation_complete,
+			ledger_pending,
+			data_through,
+			stale_reason,
 			computed_at
 		FROM usage_dashboard_cost_snapshot
 		WHERE id = 1
 	`
 	result := &usagestats.DashboardCostSummary{}
 	var coverageStart, coverageEnd, computedAt time.Time
+	var dataThrough sql.NullTime
+	var staleReason sql.NullString
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
@@ -1243,6 +1347,9 @@ func (r *dashboardAggregationRepository) GetDashboardCostSummary(ctx context.Con
 		&coverageStart,
 		&coverageEnd,
 		&result.AggregationComplete,
+		&result.LedgerPending,
+		&dataThrough,
+		&staleReason,
 		&computedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -1253,6 +1360,12 @@ func (r *dashboardAggregationRepository) GetDashboardCostSummary(ctx context.Con
 	result.AsOf = computedAt.UTC().Format(time.RFC3339)
 	result.CoverageStart = coverageStart.UTC().Format(time.RFC3339)
 	result.CoverageEnd = coverageEnd.UTC().Format(time.RFC3339)
+	if dataThrough.Valid {
+		result.DataThrough = dataThrough.Time.UTC().Format(time.RFC3339)
+	}
+	if staleReason.Valid {
+		result.StaleReason = staleReason.String
+	}
 	return result, nil
 }
 

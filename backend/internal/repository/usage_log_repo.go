@@ -1741,6 +1741,71 @@ func (r *usageLogRepository) GetDashboardStatsWithRange(ctx context.Context, sta
 	return stats, nil
 }
 
+func (r *usageLogRepository) fillDashboardUsageStatsFromAggregates(ctx context.Context, stats *DashboardStats, startUTC, endUTC, todayUTC, now time.Time) error {
+	query := `
+		SELECT
+			COALESCE(SUM(total_requests), 0),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_creation_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(total_cost), 0),
+			COALESCE(SUM(actual_cost), 0),
+			COALESCE(SUM(account_cost), 0),
+			COALESCE(SUM(total_duration_ms), 0)
+		FROM usage_dashboard_hourly
+		WHERE bucket_start >= $1 AND bucket_start < $2
+	`
+	var totalDurationMs int64
+	if err := scanSingleRow(ctx, r.sql, query, []any{startUTC, endUTC},
+		&stats.TotalRequests, &stats.TotalInputTokens, &stats.TotalOutputTokens,
+		&stats.TotalCacheCreationTokens, &stats.TotalCacheReadTokens, &stats.TotalCost,
+		&stats.TotalActualCost, &stats.TotalAccountCost, &totalDurationMs); err != nil {
+		return err
+	}
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	if stats.TotalRequests > 0 {
+		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
+	}
+	if err := r.fillDashboardCostCNYStats(ctx, stats, todayUTC); err != nil {
+		return err
+	}
+
+	todayEnd := todayUTC.Add(24 * time.Hour)
+	todayStart := startUTC
+	if todayStart.Before(todayUTC) {
+		todayStart = todayUTC
+	}
+	todayRangeEnd := endUTC
+	if todayRangeEnd.After(todayEnd) {
+		todayRangeEnd = todayEnd
+	}
+	if todayRangeEnd.After(todayStart) {
+		todayQuery := `
+			SELECT COALESCE(SUM(total_requests), 0), COALESCE(SUM(input_tokens), 0),
+				COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0),
+				COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(total_cost), 0),
+				COALESCE(SUM(actual_cost), 0), COALESCE(SUM(account_cost), 0)
+			FROM usage_dashboard_hourly WHERE bucket_start >= $1 AND bucket_start < $2`
+		if err := scanSingleRow(ctx, r.sql, todayQuery, []any{todayStart, todayRangeEnd},
+			&stats.TodayRequests, &stats.TodayInputTokens, &stats.TodayOutputTokens,
+			&stats.TodayCacheCreationTokens, &stats.TodayCacheReadTokens, &stats.TodayCost,
+			&stats.TodayActualCost, &stats.TodayAccountCost); err != nil {
+			return err
+		}
+	}
+	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+	activeQuery := `SELECT COUNT(DISTINCT user_id) FROM usage_dashboard_hourly_users WHERE bucket_start >= $1 AND bucket_start < $2`
+	if err := scanSingleRow(ctx, r.sql, activeQuery, []any{startUTC, endUTC}, &stats.ActiveUsers); err != nil {
+		return err
+	}
+	hourStart := now.In(timezone.Location()).Truncate(time.Hour)
+	if err := scanSingleRow(ctx, r.sql, activeQuery, []any{hourStart, hourStart.Add(time.Hour)}, &stats.HourlyActiveUsers); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats *DashboardStats, todayUTC, now time.Time) error {
 	userStatsQuery := `
 		SELECT
@@ -2049,12 +2114,17 @@ func (r *usageLogRepository) GetDashboardCostSummary(ctx context.Context) (*usag
 			coverage_start,
 			coverage_end,
 			aggregation_complete,
+			ledger_pending,
+			data_through,
+			stale_reason,
 			computed_at
 		FROM usage_dashboard_cost_snapshot
 		WHERE id = 1
 	`
 	result := &usagestats.DashboardCostSummary{}
 	var coverageStart, coverageEnd, computedAt time.Time
+	var dataThrough sql.NullTime
+	var staleReason sql.NullString
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
@@ -2070,6 +2140,9 @@ func (r *usageLogRepository) GetDashboardCostSummary(ctx context.Context) (*usag
 		&coverageStart,
 		&coverageEnd,
 		&result.AggregationComplete,
+		&result.LedgerPending,
+		&dataThrough,
+		&staleReason,
 		&computedAt,
 	); err != nil {
 		if err == sql.ErrNoRows || isUndefinedTableError(err) {
@@ -2080,6 +2153,12 @@ func (r *usageLogRepository) GetDashboardCostSummary(ctx context.Context) (*usag
 	result.AsOf = computedAt.UTC().Format(time.RFC3339)
 	result.CoverageStart = coverageStart.UTC().Format(time.RFC3339)
 	result.CoverageEnd = coverageEnd.UTC().Format(time.RFC3339)
+	if dataThrough.Valid {
+		result.DataThrough = dataThrough.Time.UTC().Format(time.RFC3339)
+	}
+	if staleReason.Valid {
+		result.StaleReason = staleReason.String
+	}
 	return result, nil
 }
 

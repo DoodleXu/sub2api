@@ -802,8 +802,8 @@ func TestUsageLogRepositoryGetDashboardCostSummaryReadsSnapshotOnly(t *testing.T
 		WillReturnRows(sqlmock.NewRows([]string{
 			"today_real_cost_cny", "total_cost_cny", "total_account_cost", "today_account_cost",
 			"average_cost_cny_per_usd", "anthropic_cost_cny_per_usd", "openai_cost_cny_per_usd",
-			"coverage_start", "coverage_end", "aggregation_complete", "computed_at",
-		}).AddRow(1.2, 100.0, 20.0, 3.0, 5.0, 6.0, 4.0, coverageStart, coverageEnd, true, computedAt))
+			"coverage_start", "coverage_end", "aggregation_complete", "ledger_pending", "data_through", "stale_reason", "computed_at",
+		}).AddRow(1.2, 100.0, 20.0, 3.0, 5.0, 6.0, 4.0, coverageStart, coverageEnd, true, false, coverageEnd, "", computedAt))
 
 	got, err := repo.GetDashboardCostSummary(context.Background())
 	require.NoError(t, err)

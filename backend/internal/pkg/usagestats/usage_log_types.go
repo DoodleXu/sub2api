@@ -98,6 +98,9 @@ type DashboardCostSummary struct {
 	AsOf                   string  `json:"as_of"`
 	Stale                  bool    `json:"stale"`
 	AggregationComplete    bool    `json:"aggregation_complete"`
+	LedgerPending          bool    `json:"ledger_pending"`
+	DataThrough            string  `json:"data_through,omitempty"`
+	StaleReason            string  `json:"stale_reason,omitempty"`
 	CoverageStart          string  `json:"coverage_start,omitempty"`
 	CoverageEnd            string  `json:"coverage_end,omitempty"`
 }
