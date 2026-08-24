@@ -259,6 +259,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		CostStatsPending:        a.CostStatsPending,
 		Status:                  a.Status,
 		ArchivedAt:              a.ArchivedAt,
+		ParentArchivedAt:        a.ParentArchivedAt,
 		ErrorMessage:            a.ErrorMessage,
 		LastUsedAt:              a.LastUsedAt,
 		ExpiresAt:               timeToUnixSeconds(a.ExpiresAt),

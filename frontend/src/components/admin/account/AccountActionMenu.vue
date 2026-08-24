@@ -55,10 +55,13 @@
               {{ t('admin.accounts.resetQuota') }}
             </button>
             <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
-            <button v-if="isArchived" @click="$emit('unarchive', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-primary-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+            <button v-if="isArchived && !isParentArchived" @click="$emit('unarchive', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-primary-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="sync" size="sm" />
               {{ t('admin.accounts.unarchiveAccount') }}
             </button>
+            <div v-else-if="isArchived && isParentArchived" class="px-4 py-2 text-xs text-gray-500 dark:text-gray-400" :title="t('admin.accounts.parentArchivedHint')">
+              {{ t('admin.accounts.parentArchivedHint') }}
+            </div>
             <button v-else @click="$emit('archive', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="inbox" size="sm" />
               {{ t('admin.accounts.archiveAccount') }}
@@ -75,11 +78,13 @@ import { computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
+import { isAccountArchived } from '@/utils/accountScheduling'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
 const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'archive', 'unarchive'])
 const { t } = useI18n()
-const isArchived = computed(() => Boolean(props.account?.archived_at))
+const isArchived = computed(() => Boolean(props.account && isAccountArchived(props.account)))
+const isParentArchived = computed(() => Boolean(props.account?.parent_archived_at))
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false
   return ['apikey', 'upstream', 'bedrock', 'service_account'].includes(props.account.type)

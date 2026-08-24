@@ -230,7 +230,15 @@ func (s *Stripe) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 		Amount:        stripe.Int64(amountInMinorUnit),
 		Reason:        stripe.String(string(stripe.RefundReasonRequestedByCustomer)),
 	}
-	params.SetIdempotencyKey(fmt.Sprintf("re-%s-%d", req.OrderID, amountInMinorUnit))
+	attemptID := strings.TrimSpace(req.RefundID)
+	if attemptID != "" {
+		params.AddMetadata("sub2api_attempt_id", attemptID)
+	}
+	idempotencyKey := fmt.Sprintf("re-%s-%d", req.OrderID, amountInMinorUnit)
+	if attemptID != "" {
+		idempotencyKey = "re-" + attemptID
+	}
+	params.SetIdempotencyKey(idempotencyKey)
 	params.Context = ctx
 
 	r, err := s.sc.V1Refunds.Create(ctx, params)
@@ -249,8 +257,9 @@ func (s *Stripe) Refund(ctx context.Context, req payment.RefundRequest) (*paymen
 	}, nil
 }
 
-// QueryRefund retrieves a Stripe refund by refund ID when available, otherwise
-// falls back to the latest refund for the PaymentIntent.
+// QueryRefund retrieves a Stripe refund by refund ID. Owner-bound lookup is
+// implemented separately and fails closed unless exactly one refund carries
+// the persisted attempt metadata.
 func (s *Stripe) QueryRefund(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
 	s.ensureInit()
 
@@ -262,24 +271,60 @@ func (s *Stripe) QueryRefund(ctx context.Context, req payment.RefundQueryRequest
 			return nil, fmt.Errorf("stripe query refund: %w", err)
 		}
 	} else {
-		tradeNo := strings.TrimSpace(req.TradeNo)
-		if tradeNo == "" {
-			return nil, fmt.Errorf("stripe query refund: missing payment intent id")
-		}
-		params := &stripe.RefundListParams{PaymentIntent: stripe.String(tradeNo)}
-		params.Limit = stripe.Int64(1)
-		list := s.sc.V1Refunds.List(ctx, params)
-		if list.Err() != nil {
-			return nil, fmt.Errorf("stripe query refund: %w", list.Err())
-		}
-		refunds := list.Data()
-		if len(refunds) == 0 {
-			return nil, fmt.Errorf("stripe query refund: no refund found")
-		}
-		r = refunds[0]
+		return nil, fmt.Errorf("stripe query refund: missing provider refund id")
 	}
 
 	return &payment.RefundResponse{RefundID: r.ID, Status: stripeRefundProviderStatus(r.Status)}, nil
+}
+
+// QueryRefundByOrder deliberately leaves RefundID empty so Stripe lists the
+// refunds attached to the payment intent instead of trying to retrieve the
+// local rf_* idempotency key as if it were a Stripe refund resource. Legacy
+// audit rows without an attempt ID may recover only when the amount identifies
+// exactly one refund for that payment intent.
+func (s *Stripe) QueryRefundByOrder(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	s.ensureInit()
+	tradeNo := strings.TrimSpace(req.TradeNo)
+	attemptID := strings.TrimSpace(req.AttemptID)
+	if tradeNo == "" {
+		return nil, fmt.Errorf("stripe query refund: missing payment intent id")
+	}
+	params := &stripe.RefundListParams{PaymentIntent: stripe.String(tradeNo)}
+	params.Limit = stripe.Int64(100)
+	list := s.sc.V1Refunds.List(ctx, params)
+	if list.Err() != nil {
+		return nil, fmt.Errorf("stripe query refund: %w", list.Err())
+	}
+	targetAmount, err := payment.AmountToMinorUnit(strings.TrimSpace(req.Amount), s.currency())
+	if err != nil {
+		return nil, fmt.Errorf("stripe query refund: invalid amount: %w", err)
+	}
+	var match *stripe.Refund
+	for refund, iterErr := range list.All(ctx) {
+		if iterErr != nil {
+			return nil, fmt.Errorf("stripe query refund: %w", iterErr)
+		}
+		if refund == nil || refund.Amount != targetAmount {
+			continue
+		}
+		if attemptID != "" && refund.Metadata["sub2api_attempt_id"] != attemptID {
+			continue
+		}
+		if match != nil {
+			if attemptID != "" {
+				return nil, fmt.Errorf("stripe query refund: multiple refunds match attempt")
+			}
+			return nil, fmt.Errorf("stripe query refund: multiple refunds match amount")
+		}
+		match = refund
+	}
+	if match == nil {
+		if attemptID != "" {
+			return nil, fmt.Errorf("stripe query refund: no refund matches attempt")
+		}
+		return nil, fmt.Errorf("stripe query refund: no refund matches amount")
+	}
+	return &payment.RefundResponse{RefundID: match.ID, Status: stripeRefundProviderStatus(match.Status)}, nil
 }
 
 func stripeRefundProviderStatus(status stripe.RefundStatus) string {
@@ -347,7 +392,9 @@ func (s *Stripe) CancelPayment(ctx context.Context, tradeNo string) error {
 
 // Ensure interface compliance.
 var (
-	_ payment.Provider                 = (*Stripe)(nil)
-	_ payment.CancelableProvider       = (*Stripe)(nil)
-	_ payment.MerchantIdentityProvider = (*Stripe)(nil)
+	_ payment.Provider                   = (*Stripe)(nil)
+	_ payment.RefundQueryProvider        = (*Stripe)(nil)
+	_ payment.RefundQueryByOrderProvider = (*Stripe)(nil)
+	_ payment.CancelableProvider         = (*Stripe)(nil)
+	_ payment.MerchantIdentityProvider   = (*Stripe)(nil)
 )

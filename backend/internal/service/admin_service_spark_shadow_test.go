@@ -102,6 +102,21 @@ func (s *sparkShadowRepoStub) Update(_ context.Context, account *Account) error 
 	return nil
 }
 
+func (s *sparkShadowRepoStub) SetArchived(_ context.Context, id int64, archived bool) error {
+	account, ok := s.accounts[id]
+	if !ok {
+		return ErrAccountNotFound
+	}
+	if archived {
+		now := time.Now()
+		account.ArchivedAt = &now
+	} else {
+		account.ArchivedAt = nil
+	}
+	s.mockAccountRepoForGemini.accountsByID[id] = account
+	return nil
+}
+
 func (s *sparkShadowRepoStub) Delete(_ context.Context, id int64) error {
 	delete(s.accounts, id)
 	delete(s.mockAccountRepoForGemini.accountsByID, id)
@@ -521,6 +536,56 @@ func TestCreateShadowRejectsArchivedParent(t *testing.T) {
 	shadows, listErr := repo.ListShadowsByParent(ctx, parent.ID)
 	require.NoError(t, listErr)
 	require.Empty(t, shadows)
+}
+
+func TestUpdateAccountAllowsExplicitlyUnarchivingShadowWhenParentIsActive(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+	parent := &Account{
+		Name: "active-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Credentials: map[string]any{"access_token": "token"},
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "archived-shadow"})
+	require.NoError(t, err)
+	archivedAt := time.Now().Add(-time.Hour)
+	shadow.ArchivedAt = &archivedAt
+	repo.accounts[shadow.ID] = shadow
+	repo.mockAccountRepoForGemini.accountsByID[shadow.ID] = shadow
+
+	unarchive := false
+	updated, err := svc.UpdateAccount(ctx, shadow.ID, &UpdateAccountInput{Archived: &unarchive})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.Nil(t, updated.ArchivedAt)
+}
+
+func TestUpdateAccountStillRejectsUnarchivingShadowWhenParentIsArchived(t *testing.T) {
+	ctx := context.Background()
+	repo := newSparkShadowRepoStub()
+	svc := &adminServiceImpl{accountRepo: repo}
+	archivedAt := time.Now().Add(-time.Hour)
+	parent := &Account{
+		Name: "archived-parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, ArchivedAt: &archivedAt,
+		Credentials: map[string]any{"access_token": "token"},
+	}
+	require.NoError(t, repo.Create(ctx, parent))
+	shadow, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{Name: "archived-shadow"})
+	// CreateShadow must reject an archived parent, so construct the historical
+	// child directly for this mutation-boundary regression.
+	if err == nil {
+		t.Fatal("expected archived parent shadow creation to fail")
+	}
+	parentID := parent.ID
+	shadow = &Account{ID: 99, Name: "archived-shadow", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, ParentAccountID: &parentID, QuotaDimension: QuotaDimensionSpark}
+	repo.accounts[shadow.ID] = shadow
+	repo.mockAccountRepoForGemini.accountsByID[shadow.ID] = shadow
+	unarchive := false
+	_, err = svc.UpdateAccount(ctx, shadow.ID, &UpdateAccountInput{Archived: &unarchive})
+	require.Error(t, err)
+	require.Equal(t, "SPARK_SHADOW_PARENT_ARCHIVED", infraerrors.Reason(err))
 }
 
 // TestCreateShadow_StructuredErrors 验证外审 G3:可预期业务错误返回结构化 4xx 而非 500。

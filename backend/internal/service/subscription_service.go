@@ -689,6 +689,10 @@ func (s *SubscriptionService) revokeSubscription(ctx context.Context, subscripti
 
 // RestoreSubscription 恢复已撤销订阅
 func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscriptionID int64) (*UserSubscription, error) {
+	return s.restoreSubscription(ctx, subscriptionID, false)
+}
+
+func (s *SubscriptionService) restoreSubscription(ctx context.Context, subscriptionID int64, deferCacheInvalidation bool) (*UserSubscription, error) {
 	sub, err := s.userSubRepo.GetByIDIncludeDeleted(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
@@ -716,12 +720,16 @@ func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscript
 		return nil, err
 	}
 
-	s.invalidateSubscriptionCaches(restored.UserID, restored.GroupID)
+	s.maybeInvalidateAssignmentCaches(restored.UserID, restored.GroupID, deferCacheInvalidation)
 	return restored, nil
 }
 
 // ExtendSubscription 调整订阅时长（正数延长，负数缩短）
 func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscriptionID int64, days int) (*UserSubscription, error) {
+	return s.extendSubscription(ctx, subscriptionID, days, false)
+}
+
+func (s *SubscriptionService) extendSubscription(ctx context.Context, subscriptionID int64, days int, deferCacheInvalidation bool) (*UserSubscription, error) {
 	sub, err := s.userSubRepo.GetByID(ctx, subscriptionID)
 	if err != nil {
 		return nil, ErrSubscriptionNotFound
@@ -773,7 +781,7 @@ func (s *SubscriptionService) ExtendSubscription(ctx context.Context, subscripti
 		}
 	}
 
-	s.invalidateSubscriptionCaches(sub.UserID, sub.GroupID)
+	s.maybeInvalidateAssignmentCaches(sub.UserID, sub.GroupID, deferCacheInvalidation)
 
 	return s.userSubRepo.GetByID(ctx, subscriptionID)
 }

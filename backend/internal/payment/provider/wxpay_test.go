@@ -159,6 +159,42 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func TestWxpayRefundIDForAttemptIsStableAndDistinct(t *testing.T) {
+	orderID := "order_123"
+	amount := "12.34"
+
+	legacy := wxpayRefundIDForAttempt(orderID, amount, "")
+	if legacy != wxpayRefundID(orderID, amount) {
+		t.Fatalf("empty attempt id = %q, want legacy refund id %q", legacy, wxpayRefundID(orderID, amount))
+	}
+
+	first := wxpayRefundIDForAttempt(orderID, amount, "rf_attempt_1")
+	if first == wxpayRefundIDForAttempt(orderID, amount, "rf_attempt_2") {
+		t.Fatalf("different attempts share refund id %q", first)
+	}
+	if first != wxpayRefundIDForAttempt(orderID, amount, "rf_attempt_1") {
+		t.Fatalf("same attempt produced unstable refund id %q", first)
+	}
+	if !strings.HasPrefix(first, wxpayRefundID(orderID, amount)+"-") {
+		t.Fatalf("attempt refund id = %q, want legacy prefix %q", first, wxpayRefundID(orderID, amount))
+	}
+}
+
+func TestWxpayRefundIDForAttemptRespectsWechatLengthLimit(t *testing.T) {
+	orderID := strings.Repeat("long-order-id-", 8)
+	amount := "999999999999.99"
+	refundID := wxpayRefundIDForAttempt(orderID, amount, "rf_attempt_with_a_long_identifier")
+	if len(refundID) > 64 {
+		t.Fatalf("refund id length = %d, want <= 64: %q", len(refundID), refundID)
+	}
+	if strings.HasSuffix(refundID, "-") {
+		t.Fatalf("refund id has empty attempt suffix: %q", refundID)
+	}
+	if refundID == wxpayRefundIDForAttempt(orderID, amount, "rf_attempt_with_a_different_identifier") {
+		t.Fatalf("truncated refund ids collide: %q", refundID)
+	}
+}
+
 func TestFormatPEM(t *testing.T) {
 	t.Parallel()
 

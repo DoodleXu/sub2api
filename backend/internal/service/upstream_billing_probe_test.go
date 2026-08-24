@@ -82,6 +82,15 @@ func (r *upstreamBillingProbeAccountRepo) GetByIDs(_ context.Context, ids []int6
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	result := make([]*Account, 0, len(ids))
+	if r.accounts == nil {
+		// Tests that only exercise the bulk-update payload historically did not
+		// need an account fixture. Model those requested rows as existing while
+		// keeping a non-nil map authoritative for missing-account coverage.
+		for _, id := range ids {
+			result = append(result, &Account{ID: id})
+		}
+		return result, nil
+	}
 	for _, id := range ids {
 		if account := r.accounts[id]; account != nil {
 			result = append(result, account)

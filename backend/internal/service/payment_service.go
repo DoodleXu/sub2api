@@ -148,6 +148,24 @@ type RefundPlan struct {
 	BalanceToDeduct      float64
 	SubscriptionID       int64
 	ProviderRefundID     string
+	// ProviderQueryID is the real upstream refund resource identifier returned
+	// after submission. It is intentionally separate from ProviderRefundID,
+	// which is the local/request idempotency key persisted before the call.
+	ProviderQueryID string
+	// DeductionLineageID identifies the local entitlement deduction tranche.
+	// It is intentionally independent from ProviderRefundID because a retry may
+	// use a fresh provider idempotency key while still referring to the same
+	// deduction that must not be applied twice.
+	DeductionLineageID string
+	// DeductionAlreadyApplied records that a previous attempt deducted the
+	// user's entitlement and the compensating rollback failed. Retries must
+	// retain the exact deducted amount for audit/result reporting, but must not
+	// apply the deduction a second time.
+	DeductionAlreadyApplied bool
+	// SubscriptionRevoked records that the near-expiry fallback revoked the
+	// subscription while applying the deduction. Rollback must restore the
+	// soft-deleted row instead of trying to extend an active-only lookup.
+	SubscriptionRevoked bool
 }
 
 type RefundResult struct {

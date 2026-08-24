@@ -1171,9 +1171,11 @@ export interface Account {
   total_account_cost?: number
   cost_cny_per_usd?: number
   cost_stats_pending?: boolean
-  status: 'active' | 'inactive' | 'error'
-  archived_at?: string | null
-  error_message: string | null
+	status: 'active' | 'inactive' | 'error'
+	archived_at?: string | null
+	/** Effective archive inherited from a shadow account's parent. */
+	parent_archived_at?: string | null
+	error_message: string | null
   last_used_at: string | null
   expires_at: number | null
   auto_pause_on_expired: boolean

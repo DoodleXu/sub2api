@@ -274,7 +274,7 @@ func (a *Airwallex) Refund(ctx context.Context, req payment.RefundRequest) (*pay
 	}
 
 	payload := airwallexCreateRefundRequest{
-		RequestID:       airwallexDeterministicRequestID("refund", intentID, req.Amount),
+		RequestID:       airwallexRefundRequestID(intentID, req.Amount, req.RefundID),
 		PaymentIntentID: intentID,
 		Amount:          newAirwallexRequestAmount(amount),
 		Reason:          strings.TrimSpace(req.Reason),
@@ -317,6 +317,64 @@ func (a *Airwallex) QueryRefund(ctx context.Context, req payment.RefundQueryRequ
 		resp.ID = refundID
 	}
 	return &payment.RefundResponse{RefundID: resp.ID, Status: airwallexRefundProviderStatus(resp.Status)}, nil
+}
+
+// QueryRefundByOrder lists refunds for the payment intent and selects the
+// deterministic amount tranche used by Refund. This is the recovery path when
+// the create request timed out before its provider refund ID was returned.
+func (a *Airwallex) QueryRefundByOrder(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	intentID := strings.TrimSpace(req.TradeNo)
+	if intentID == "" {
+		return nil, fmt.Errorf("airwallex query refund: missing payment intent id")
+	}
+	targetAmount, err := decimal.NewFromString(strings.TrimSpace(req.Amount))
+	if err != nil || targetAmount.LessThanOrEqual(decimal.Zero) {
+		return nil, fmt.Errorf("airwallex query refund: invalid amount %s", req.Amount)
+	}
+	token, err := a.accessToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("airwallex auth: %w", err)
+	}
+	query := url.Values{}
+	query.Set("payment_intent_id", intentID)
+	query.Set("page_size", "100")
+	var list airwallexRefundList
+	if err := a.doJSON(ctx, http.MethodGet, "/pa/refunds?"+query.Encode(), token, nil, &list); err != nil {
+		return nil, fmt.Errorf("airwallex query refunds: %w", err)
+	}
+	if list.HasMore {
+		return nil, fmt.Errorf("airwallex query refunds: result set is truncated")
+	}
+	attemptID := strings.TrimSpace(req.AttemptID)
+	expectedRequestID := airwallexRefundRequestID(intentID, req.Amount, attemptID)
+	matches := make([]airwallexRefund, 0, 1)
+	for _, refund := range list.Items {
+		if strings.TrimSpace(refund.ID) == "" || refund.PaymentIntentID != "" && strings.TrimSpace(refund.PaymentIntentID) != intentID {
+			continue
+		}
+		if attemptID != "" && strings.TrimSpace(refund.RequestID) != expectedRequestID {
+			continue
+		}
+		if !refund.Amount.Equal(targetAmount) {
+			continue
+		}
+		matches = append(matches, refund)
+	}
+	if len(matches) != 1 {
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("airwallex query refunds: no matching refund found")
+		}
+		return nil, fmt.Errorf("airwallex query refunds: multiple refunds match request")
+	}
+	refund := matches[0]
+	return &payment.RefundResponse{RefundID: refund.ID, Status: airwallexRefundProviderStatus(refund.Status)}, nil
+}
+
+func airwallexRefundRequestID(intentID, amount, attemptID string) string {
+	if attemptID = strings.TrimSpace(attemptID); attemptID != "" {
+		return airwallexDeterministicRequestID("refund", intentID, amount, attemptID)
+	}
+	return airwallexDeterministicRequestID("refund", intentID, amount)
 }
 
 func (a *Airwallex) CancelPayment(ctx context.Context, tradeNo string) error {
@@ -634,6 +692,11 @@ type airwallexRefund struct {
 	Status          string          `json:"status"`
 }
 
+type airwallexRefundList struct {
+	Items   []airwallexRefund `json:"items"`
+	HasMore bool              `json:"has_more"`
+}
+
 type airwallexWebhookEvent struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -652,7 +715,9 @@ func (e airwallexWebhookEvent) accountID() string {
 }
 
 var (
-	_ payment.Provider                 = (*Airwallex)(nil)
-	_ payment.CancelableProvider       = (*Airwallex)(nil)
-	_ payment.MerchantIdentityProvider = (*Airwallex)(nil)
+	_ payment.Provider                   = (*Airwallex)(nil)
+	_ payment.RefundQueryProvider        = (*Airwallex)(nil)
+	_ payment.RefundQueryByOrderProvider = (*Airwallex)(nil)
+	_ payment.CancelableProvider         = (*Airwallex)(nil)
+	_ payment.MerchantIdentityProvider   = (*Airwallex)(nil)
 )

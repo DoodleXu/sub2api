@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -99,4 +100,11 @@ func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	require.NotNil(t, got)
 	require.Nil(t, got.Credentials)
 	require.Nil(t, got.CredentialsStatus)
+}
+
+func TestAccountFromServiceShallowIncludesParentArchiveState(t *testing.T) {
+	archivedAt := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
+	got := AccountFromServiceShallow(&service.Account{ID: 7, ParentArchivedAt: &archivedAt})
+	require.NotNil(t, got.ParentArchivedAt)
+	require.Equal(t, archivedAt, *got.ParentArchivedAt)
 }

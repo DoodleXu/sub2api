@@ -2,6 +2,10 @@ import type { Account } from '@/types'
 
 export const OPENAI_CONTINUE_SCHEDULING_AFTER_LIMIT_KEY = 'openai_continue_scheduling_after_limit'
 
+export const isAccountArchived = (account: Pick<Account, 'archived_at' | 'parent_archived_at'>): boolean => {
+  return Boolean(account.archived_at || account.parent_archived_at)
+}
+
 const isFutureTime = (value: string | null | undefined, now: number): boolean => {
   if (!value) return false
   const timestamp = new Date(value).getTime()

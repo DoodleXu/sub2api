@@ -168,7 +168,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { Account } from '@/types'
-import { getAccountLimitSchedulingState } from '@/utils/accountScheduling'
+import { getAccountLimitSchedulingState, isAccountArchived } from '@/utils/accountScheduling'
 import { formatCountdown, formatDateTime, formatDateTimeToMinute, formatCountdownWithSuffix, formatTime } from '@/utils/format'
 
 const { t } = useI18n()
@@ -191,7 +191,7 @@ const isExpired = computed(() => {
 const isOverclocking = computed(() => {
   return limitSchedulingState.value.overclocking &&
     props.account.status === 'active' &&
-    !props.account.archived_at &&
+	!isAccountArchived(props.account) &&
     props.account.schedulable &&
     !isExpired.value &&
     !isOverloaded.value
@@ -289,7 +289,7 @@ const isOverloaded = computed(() => {
 
 const isTempUnschedulable = computed(() => limitSchedulingState.value.tempUnschedulable)
 
-const isArchived = computed(() => Boolean(props.account.archived_at))
+const isArchived = computed(() => isAccountArchived(props.account))
 
 // Computed: has error status
 const hasError = computed(() => {

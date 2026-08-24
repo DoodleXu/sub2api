@@ -726,3 +726,77 @@ func TestQueryUsageShadowResolve_EndToEnd(t *testing.T) {
 	require.Equal(t, "org-e2e-parent", capturedAccountID,
 		"upstream should receive parent's chatgpt-account-id; got: %s", capturedAccountID)
 }
+
+func TestQueryUsageFailsClosedWhenShadowParentBecomesUnavailableBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(repo *stubQuotaAccountRepo, parent *Account)
+	}{
+		{
+			name: "deleted",
+			mutate: func(repo *stubQuotaAccountRepo, parent *Account) {
+				delete(repo.accounts, parent.ID)
+			},
+		},
+		{
+			name: "archived",
+			mutate: func(_ *stubQuotaAccountRepo, parent *Account) {
+				now := time.Now()
+				parent.ArchivedAt = &now
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parentID := int64(810)
+			shadow := &Account{
+				ID:              811,
+				ParentAccountID: &parentID,
+				Platform:        PlatformOpenAI,
+				Type:            AccountTypeOAuth,
+				Status:          StatusActive,
+				QuotaDimension:  QuotaDimensionSpark,
+			}
+			parent := &Account{
+				ID:       parentID,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Status:   StatusActive,
+				Credentials: map[string]any{
+					"chatgpt_account_id": "org-parent-race",
+				},
+			}
+			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{
+				shadow.ID: shadow,
+				parent.ID: parent,
+			}}
+			tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
+				OpenAITokenCacheKey(parent): "cached-token-before-parent-change",
+			}}, nil)
+
+			upstreamCalls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				upstreamCalls++
+				w.Header().Set("content-type", "application/json")
+				_ = json.NewEncoder(w).Encode(OpenAIQuotaUsage{})
+			}))
+			defer srv.Close()
+
+			redirectFactory := newQuotaRedirectingFactory(srv)
+			clientFactory := func(proxyURL string) (*req.Client, error) {
+				// QueryUsage creates the client only after prepareUpstreamCall has
+				// resolved the parent and obtained the cached token.
+				tt.mutate(repo, parent)
+				return redirectFactory(proxyURL)
+			}
+			svc := NewOpenAIQuotaService(repo, nil, tokenProvider, clientFactory)
+
+			usage, err := svc.QueryUsage(context.Background(), shadow.ID)
+			require.Error(t, err)
+			require.Nil(t, usage)
+			require.ErrorContains(t, err, "failed to build upstream authentication")
+			require.Zero(t, upstreamCalls, "stale cached credentials must never reach upstream")
+		})
+	}
+}

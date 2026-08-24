@@ -261,7 +261,7 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 }
 
 func (r *accountRepository) GetByID(ctx context.Context, id int64) (*service.Account, error) {
-	m, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).Only(ctx)
+	m, err := clientFromContext(ctx, r.client).Account.Query().Where(dbaccount.IDEQ(id)).WithParent().Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
@@ -298,13 +298,23 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		return []*service.Account{}, nil
 	}
 
-	entAccounts, err := r.client.Account.
-		Query().
-		Where(dbaccount.IDIn(uniqueIDs...)).
-		WithProxy().
-		All(ctx)
-	if err != nil {
-		return nil, err
+	client := clientFromContext(ctx, r.client)
+	entAccounts := make([]*dbent.Account, 0, len(uniqueIDs))
+	for start := 0; start < len(uniqueIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(uniqueIDs) {
+			end = len(uniqueIDs)
+		}
+		batch, err := client.Account.
+			Query().
+			Where(dbaccount.IDIn(uniqueIDs[start:end]...)).
+			WithProxy().
+			WithParent().
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entAccounts = append(entAccounts, batch...)
 	}
 	if len(entAccounts) == 0 {
 		return []*service.Account{}, nil
@@ -332,6 +342,9 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		// Prefer the preloaded proxy edge when available.
 		if entAcc.Edges.Proxy != nil {
 			out.Proxy = proxyEntityToService(entAcc.Edges.Proxy)
+		}
+		if entAcc.Edges.Parent != nil {
+			out.ParentArchivedAt = entAcc.Edges.Parent.ArchivedAt
 		}
 
 		if groups, ok := groupsByAccount[entAcc.ID]; ok {
@@ -440,6 +453,53 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier)
 }
 
+// SetArchived is the explicit archive toggle.  Ordinary Update intentionally
+// leaves archived_at untouched so a stale account edit cannot silently
+// unarchive a historical account.
+func (r *accountRepository) SetArchived(ctx context.Context, id int64, archived bool) error {
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+
+	query := client.Account.UpdateOneID(id)
+	if archived {
+		query.SetArchivedAt(time.Now())
+	} else {
+		query.ClearArchivedAt()
+	}
+	updated, err := query.Save(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+	}
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshot(baseCtx, updated.ID)
+	}
+	return nil
+}
+
 // UpdateWithAccountBillingSettings applies an admin account edit while
 // preserving a concurrently probe-synchronized rate unless the request
 // explicitly includes a manual rate.
@@ -453,15 +513,35 @@ func (r *accountRepository) UpdateWithAccountBillingSettings(
 	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier)
 }
 
+// UpdateWithAccountBillingSettingsAndArchive keeps an explicit archive toggle
+// in the same transaction as the rest of an admin account edit.  Generic
+// Update intentionally leaves archived_at untouched; this capability is the
+// opt-in path for callers that have validated the user's archive intent.
+func (r *accountRepository) UpdateWithAccountBillingSettingsAndArchive(
+	ctx context.Context,
+	account *service.Account,
+	probeEnabled *bool,
+	rateSyncEnabled *bool,
+	rateMultiplier *float64,
+	archived *bool,
+) error {
+	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier, archived)
+}
+
 func (r *accountRepository) updateAccount(
 	ctx context.Context,
 	account *service.Account,
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
+	archive ...*bool,
 ) error {
 	if account == nil {
 		return nil
+	}
+	var archiveState *bool
+	if len(archive) > 0 {
+		archiveState = archive[0]
 	}
 
 	baseCtx := ctx
@@ -490,6 +570,7 @@ func (r *accountRepository) updateAccount(
 		explicitProbeEnabled,
 		explicitRateSyncEnabled,
 		explicitRateMultiplier,
+		archiveState,
 	)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
@@ -519,6 +600,7 @@ func (r *accountRepository) updateLockedAccount(
 	explicitProbeEnabled *bool,
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
+	archive *bool,
 ) (*dbent.Account, error) {
 	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled)
 	if err != nil {
@@ -554,10 +636,17 @@ func (r *accountRepository) updateLockedAccount(
 	} else {
 		builder.ClearLoadFactor()
 	}
-	if account.ArchivedAt != nil {
-		builder.SetArchivedAt(*account.ArchivedAt)
-	} else {
-		builder.ClearArchivedAt()
+	// archived_at is deliberately not part of a generic account edit.  The
+	// loaded account may be stale and clearing it here would unarchive a record
+	// merely because an older form payload omitted the archive field.  Use the
+	// explicit AccountArchiveRepository.SetArchived operation for intentional
+	// archive state changes.
+	if archive != nil {
+		if *archive {
+			builder.SetArchivedAt(time.Now())
+		} else {
+			builder.ClearArchivedAt()
+		}
 	}
 
 	if account.ProxyID != nil {
@@ -1045,7 +1134,10 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 func activeAccountParentPredicate() dbpredicate.Account {
 	return dbaccount.Or(
 		dbaccount.ParentAccountIDIsNil(),
-		dbaccount.HasParentWith(dbaccount.ArchivedAtIsNil()),
+		dbaccount.HasParentWith(
+			dbaccount.DeletedAtIsNil(),
+			dbaccount.ArchivedAtIsNil(),
+		),
 	)
 }
 
@@ -3224,6 +3316,7 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 
 	accountIDs := make([]int64, 0, len(accounts))
 	proxyIDs := make([]int64, 0, len(accounts))
+	parentIDs := make([]int64, 0, len(accounts))
 	for _, acc := range accounts {
 		accountIDs = append(accountIDs, acc.ID)
 		if acc.ProxyID != nil {
@@ -3232,6 +3325,9 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		if acc.ProxyFallbackOriginID != nil {
 			proxyIDs = append(proxyIDs, *acc.ProxyFallbackOriginID)
 		}
+		if acc.ParentAccountID != nil {
+			parentIDs = append(parentIDs, *acc.ParentAccountID)
+		}
 	}
 
 	proxyMap, err := r.loadProxies(ctx, proxyIDs)
@@ -3239,6 +3335,10 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		return nil, err
 	}
 	groupsByAccount, groupIDsByAccount, accountGroupsByAccount, err := r.loadAccountGroups(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	parentArchivedByID, err := r.loadParentArchiveStates(ctx, parentIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -3255,6 +3355,11 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 			}
 		}
 		out.ProxyFallbackOriginID = acc.ProxyFallbackOriginID
+		if acc.Edges.Parent != nil {
+			out.ParentArchivedAt = acc.Edges.Parent.ArchivedAt
+		} else if acc.ParentAccountID != nil {
+			out.ParentArchivedAt = parentArchivedByID[*acc.ParentAccountID]
+		}
 		if acc.ProxyFallbackOriginID != nil {
 			if op, ok := proxyMap[*acc.ProxyFallbackOriginID]; ok && op != nil {
 				n := op.Name
@@ -3274,6 +3379,30 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	}
 
 	return outAccounts, nil
+}
+
+func (r *accountRepository) loadParentArchiveStates(ctx context.Context, parentIDs []int64) (map[int64]*time.Time, error) {
+	parentArchivedByID := make(map[int64]*time.Time)
+	parentIDs = uniquePositiveInt64s(parentIDs)
+	if len(parentIDs) == 0 {
+		return parentArchivedByID, nil
+	}
+
+	client := clientFromContext(ctx, r.client)
+	for start := 0; start < len(parentIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(parentIDs) {
+			end = len(parentIDs)
+		}
+		parents, err := client.Account.Query().Where(dbaccount.IDIn(parentIDs[start:end]...)).All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, parent := range parents {
+			parentArchivedByID[parent.ID] = parent.ArchivedAt
+		}
+	}
+	return parentArchivedByID, nil
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {
@@ -3334,7 +3463,7 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 		if end > len(proxyIDs) {
 			end = len(proxyIDs)
 		}
-		proxies, err := r.client.Proxy.Query().Where(dbproxy.IDIn(proxyIDs[start:end]...)).All(ctx)
+		proxies, err := clientFromContext(ctx, r.client).Proxy.Query().Where(dbproxy.IDIn(proxyIDs[start:end]...)).All(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -3492,7 +3621,7 @@ func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []
 		if end > len(accountIDs) {
 			end = len(accountIDs)
 		}
-		entries, err := r.client.AccountGroup.Query().
+		entries, err := clientFromContext(ctx, r.client).AccountGroup.Query().
 			Where(dbaccountgroup.AccountIDIn(accountIDs[start:end]...)).
 			Order(dbaccountgroup.ByAccountID(), dbaccountgroup.ByPriority()).
 			All(ctx)
@@ -3540,7 +3669,7 @@ func (r *accountRepository) loadGroups(ctx context.Context, groupIDs []int64) (m
 		if end > len(groupIDs) {
 			end = len(groupIDs)
 		}
-		groups, err := r.client.Group.Query().Where(dbgroup.IDIn(groupIDs[start:end]...)).All(ctx)
+		groups, err := clientFromContext(ctx, r.client).Group.Query().Where(dbgroup.IDIn(groupIDs[start:end]...)).All(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -3628,8 +3757,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 	}
 
 	rateMultiplier := m.RateMultiplier
-
-	return &service.Account{
+	out := &service.Account{
 		ID:                      m.ID,
 		Name:                    m.Name,
 		Notes:                   m.Notes,
@@ -3664,6 +3792,10 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		ParentAccountID:         m.ParentAccountID,
 		QuotaDimension:          string(m.QuotaDimension),
 	}
+	if m.Edges.Parent != nil {
+		out.ParentArchivedAt = m.Edges.Parent.ArchivedAt
+	}
+	return out
 }
 
 func normalizeJSONMap(in map[string]any) map[string]any {
@@ -4081,12 +4213,37 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 // ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
 // 软删除行由 SoftDeleteMixin 拦截器自动排除，无需手写 deleted_at IS NULL。
 func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID int64) ([]*service.Account, error) {
-	rows, err := clientFromContext(ctx, r.client).Account.Query().
-		Where(dbaccount.ParentAccountIDEQ(parentID), dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark)).
-		All(ctx)
-	if err != nil {
-		return nil, err
+	return r.ListShadowsByParents(ctx, []int64{parentID})
+}
+
+// ListShadowsByParents returns the managed spark shadows for all requested
+// parents. Parent IDs are de-duplicated and split below PostgreSQL's parameter
+// ceiling so large scheduler bulk events remain bounded.
+func (r *accountRepository) ListShadowsByParents(ctx context.Context, parentIDs []int64) ([]*service.Account, error) {
+	parentIDs = uniquePositiveInt64s(parentIDs)
+	if len(parentIDs) == 0 {
+		return []*service.Account{}, nil
 	}
+
+	client := clientFromContext(ctx, r.client)
+	rows := make([]*dbent.Account, 0, len(parentIDs))
+	for start := 0; start < len(parentIDs); start += postgresParameterBatchSize {
+		end := start + postgresParameterBatchSize
+		if end > len(parentIDs) {
+			end = len(parentIDs)
+		}
+		batch, err := client.Account.Query().
+			Where(
+				dbaccount.ParentAccountIDIn(parentIDs[start:end]...),
+				dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark),
+			).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, batch...)
+	}
+
 	accounts, err := r.accountsToService(ctx, rows)
 	if err != nil {
 		return nil, err

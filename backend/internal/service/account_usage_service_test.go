@@ -196,6 +196,9 @@ func TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(
 	if usage.SevenDay == nil || usage.SevenDay.Utilization != 100.0 {
 		t.Fatalf("预期 7 天用量仍然可见，实际为 %#v", usage.SevenDay)
 	}
+	if usage.Source != "passive" {
+		t.Fatalf("被动查询不应因缺少 usage log repository 被标记为 active，实际为 %q", usage.Source)
+	}
 	if account.RateLimitResetAt != nil {
 		t.Fatalf("不应让已耗尽的 codex extra 改写运行时限流状态: %v", account.RateLimitResetAt)
 	}

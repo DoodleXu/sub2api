@@ -586,6 +586,9 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 
 	found := make(map[int64]struct{}, len(accounts))
 	rebuildGroupSet := make(map[int64]struct{}, len(preloadGroupIDs))
+	shadowGroupIDs := make([]int64, 0)
+	parentIDs := make([]int64, 0)
+	seenParentIDs := make(map[int64]struct{})
 	for _, gid := range preloadGroupIDs {
 		if gid > 0 {
 			rebuildGroupSet[gid] = struct{}{}
@@ -606,6 +609,44 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		for _, gid := range account.GroupIDs {
 			if gid > 0 {
 				rebuildGroupSet[gid] = struct{}{}
+			}
+		}
+		if account.ParentAccountID == nil && account.IsOpenAIOAuth() {
+			if _, exists := seenParentIDs[account.ID]; !exists {
+				seenParentIDs[account.ID] = struct{}{}
+				parentIDs = append(parentIDs, account.ID)
+			}
+		}
+	}
+
+	// A bulk event may contain only OAuth parents. Include all of their shadow
+	// groups exactly as the single-account event does, but load them in one
+	// repository operation when production supports the optional capability.
+	if len(parentIDs) > 0 {
+		var shadows []*Account
+		if batchRepo, ok := s.accountRepo.(AccountShadowBatchRepository); ok {
+			shadows, err = batchRepo.ListShadowsByParents(ctx, parentIDs)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, parentID := range parentIDs {
+				parentShadows, listErr := s.accountRepo.ListShadowsByParent(ctx, parentID)
+				if listErr != nil {
+					return listErr
+				}
+				shadows = append(shadows, parentShadows...)
+			}
+		}
+		for _, shadow := range shadows {
+			if shadow == nil {
+				continue
+			}
+			for _, gid := range shadow.GroupIDs {
+				if gid > 0 {
+					rebuildGroupSet[gid] = struct{}{}
+					shadowGroupIDs = append(shadowGroupIDs, gid)
+				}
 			}
 		}
 	}
@@ -660,6 +701,9 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		default:
 			return s.rebuildByGroupIDs(ctx, rebuildGroupIDs, "account_bulk_change", seen)
 		}
+	}
+	if len(shadowGroupIDs) > 0 {
+		addPlatformGroups(PlatformOpenAI, s.normalizeGroupIDs(shadowGroupIDs))
 	}
 
 	// payload 携带更新前的组；只扩散到本事件实际涉及的平台，避免平台间交叉重建。

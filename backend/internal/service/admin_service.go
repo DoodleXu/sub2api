@@ -3292,6 +3292,33 @@ func normalizeAccountConcurrency(platform, accountType string, concurrency int) 
 	return concurrency
 }
 
+// ensureMutableAccount rejects writes to a credential shadow whose parent is
+// archived.  A child can remain status=active in stale snapshots, so checking
+// only the child's own archived_at is insufficient; resolve the parent at the
+// mutation boundary and fail closed.
+func (s *adminServiceImpl) ensureMutableAccount(ctx context.Context, account *Account, allowSelfUnarchive ...bool) error {
+	if account == nil || !account.IsShadow() {
+		return nil
+	}
+	parent, err := s.accountRepo.GetByID(ctx, *account.ParentAccountID)
+	if err != nil {
+		return fmt.Errorf("resolve spark shadow parent %d: %w", *account.ParentAccountID, err)
+	}
+	if parent == nil || parent.IsArchived() {
+		return infraerrors.New(http.StatusConflict, "SPARK_SHADOW_PARENT_ARCHIVED",
+			"spark shadow account is not mutable while its parent is archived")
+	}
+	// A shadow may be archived independently for historical retention.  Only an
+	// explicit unarchive operation may clear that local marker; all other writes
+	// remain blocked.  The parent check above is deliberately authoritative so a
+	// stale child snapshot cannot bypass an archived parent.
+	if account.ArchivedAt != nil && (len(allowSelfUnarchive) == 0 || !allowSelfUnarchive[0]) {
+		return infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ARCHIVED",
+			"spark shadow account is not mutable while it is archived")
+	}
+	return nil
+}
+
 // ValidateOpenAILongContextBillingExtra validates the OpenAI account billing flag when present.
 func ValidateOpenAILongContextBillingExtra(platform string, extra map[string]any) error {
 	if platform != PlatformOpenAI {
@@ -3509,6 +3536,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
+	if input.TotalCostCNY != nil && s.dashboardCostRefresh != nil {
+		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
+	}
 
 	// OAuth 账号：创建后异步设置隐私。
 	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
@@ -3543,6 +3573,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	allowSelfUnarchive := input != nil && input.Archived != nil && !*input.Archived
+	if err := s.ensureMutableAccount(ctx, account, allowSelfUnarchive); err != nil {
+		return nil, err
+	}
+	archiveRepo, supportsExplicitArchive := s.accountRepo.(AccountArchiveRepository)
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -3768,7 +3803,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Status != "" {
 		account.Status = input.Status
 	}
-	if input.Archived != nil {
+	if input.Archived != nil && !supportsExplicitArchive {
 		if *input.Archived {
 			now := time.Now()
 			account.ArchivedAt = &now
@@ -3803,12 +3838,35 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	billingSettingsAppliedAtomically := false
+	archiveAppliedAtomically := false
 	updater := s.accountBillingRepo
 	if updater == nil {
 		updater, _ = s.accountRepo.(AccountBillingSettingsRepository)
 	}
 	if updater != nil {
-		if err := updater.UpdateWithAccountBillingSettings(
+		if input.Archived != nil && supportsExplicitArchive {
+			if archiveUpdater, ok := updater.(AccountBillingSettingsArchiveRepository); ok {
+				if err := archiveUpdater.UpdateWithAccountBillingSettingsAndArchive(
+					ctx,
+					account,
+					requestedProbeEnabledUpdate,
+					requestedRateSyncEnabledUpdate,
+					input.RateMultiplier,
+					input.Archived,
+				); err != nil {
+					return nil, err
+				}
+				archiveAppliedAtomically = true
+			} else if err := updater.UpdateWithAccountBillingSettings(
+				ctx,
+				account,
+				requestedProbeEnabledUpdate,
+				requestedRateSyncEnabledUpdate,
+				input.RateMultiplier,
+			); err != nil {
+				return nil, err
+			}
+		} else if err := updater.UpdateWithAccountBillingSettings(
 			ctx,
 			account,
 			requestedProbeEnabledUpdate,
@@ -3835,6 +3893,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			if err := s.accountRepo.UpdateExtra(ctx, account.ID, settings); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if input.Archived != nil && supportsExplicitArchive && !archiveAppliedAtomically {
+		if err := archiveRepo.SetArchived(ctx, account.ID, *input.Archived); err != nil {
+			return nil, err
 		}
 	}
 
@@ -3867,6 +3930,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return err
+	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
@@ -3875,10 +3945,6 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
-		account, err := s.accountRepo.GetByID(ctx, id)
-		if err != nil {
-			return err
-		}
 		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
 			return err
 		}
@@ -3917,8 +3983,34 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return result, nil
 	}
 
-	if err := s.filterArchivedBulkUpdateTargets(ctx, input, result); err != nil {
+	requestedAccountIDs := append([]int64(nil), input.AccountIDs...)
+	openAISettings, err := normalizeBulkOpenAISettings(input)
+	if err != nil {
 		return nil, err
+	}
+	targetsByID, err := s.filterArchivedBulkUpdateTargets(ctx, input, result)
+	if err != nil {
+		return nil, err
+	}
+	if openAISettings.any() {
+		// OpenAI routing and billing settings are validated atomically across
+		// the original selection. A missing account must reject the request,
+		// rather than silently applying cross-account configuration to only the
+		// remaining rows. Generic account fields retain partial-success behavior.
+		for _, accountID := range requestedAccountIDs {
+			if targetsByID[accountID] == nil {
+				return nil, invalidBulkOpenAITarget(accountID, "account does not exist")
+			}
+		}
+	}
+	if input.ProbeEnabled != nil {
+		// Probe configuration is also all-or-nothing. Applying it only to the
+		// subset that still exists would leave the selected pool inconsistent.
+		for _, accountID := range requestedAccountIDs {
+			if targetsByID[accountID] == nil {
+				return nil, ErrAccountNotFound
+			}
+		}
 	}
 	if len(input.AccountIDs) == 0 {
 		return result, nil
@@ -3929,27 +4021,20 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, err
 		}
 	}
-	openAISettings, err := normalizeBulkOpenAISettings(input)
-	if err != nil {
-		return nil, err
-	}
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 
-	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
-	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
-		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
-		if err != nil {
-			return nil, err
+	// Reuse the snapshot loaded by filterArchivedBulkUpdateTargets. Parent
+	// lifecycle checks are resolved in one batch so a large shadow selection
+	// does not issue one query per account.
+	cachedTargets := make([]*Account, 0, len(input.AccountIDs))
+	for _, accountID := range input.AccountIDs {
+		if account := targetsByID[accountID]; account != nil {
+			cachedTargets = append(cachedTargets, account)
 		}
-		cachedTargets = loaded
 	}
-	targetsByID := make(map[int64]*Account, len(cachedTargets))
-	for _, account := range cachedTargets {
-		if account != nil {
-			targetsByID[account.ID] = account
-		}
+	if err := s.ensureMutableAccounts(ctx, cachedTargets, isBulkUnarchiveOnly(input)); err != nil {
+		return nil, err
 	}
 	if openAISettings.any() {
 		inheritedCount, err := validateBulkOpenAISettingsTargets(input, openAISettings, targetsByID)
@@ -4147,13 +4232,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	return result, nil
 }
 
-func (s *adminServiceImpl) filterArchivedBulkUpdateTargets(ctx context.Context, input *BulkUpdateAccountsInput, result *BulkUpdateAccountsResult) error {
+func (s *adminServiceImpl) filterArchivedBulkUpdateTargets(ctx context.Context, input *BulkUpdateAccountsInput, result *BulkUpdateAccountsResult) (map[int64]*Account, error) {
 	accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 	if err != nil {
-		return err
-	}
-	if len(accounts) == 0 {
-		return nil
+		return nil, err
 	}
 
 	byID := make(map[int64]*Account, len(accounts))
@@ -4167,7 +4249,14 @@ func (s *adminServiceImpl) filterArchivedBulkUpdateTargets(ctx context.Context, 
 	allowedIDs := make([]int64, 0, len(input.AccountIDs))
 	for _, accountID := range input.AccountIDs {
 		account := byID[accountID]
-		if account == nil || !account.IsArchived() || allowArchived {
+		if account == nil {
+			entry := BulkUpdateAccountResult{AccountID: accountID, Success: false, Error: "account not found"}
+			result.Failed++
+			result.FailedIDs = append(result.FailedIDs, accountID)
+			result.Results = append(result.Results, entry)
+			continue
+		}
+		if !account.IsArchived() || allowArchived {
 			allowedIDs = append(allowedIDs, accountID)
 			continue
 		}
@@ -4181,6 +4270,54 @@ func (s *adminServiceImpl) filterArchivedBulkUpdateTargets(ctx context.Context, 
 		result.Results = append(result.Results, entry)
 	}
 	input.AccountIDs = allowedIDs
+	return byID, nil
+}
+
+func (s *adminServiceImpl) ensureMutableAccounts(ctx context.Context, accounts []*Account, allowSelfUnarchive bool) error {
+	parentIDs := make([]int64, 0, len(accounts))
+	seenParentIDs := make(map[int64]struct{}, len(accounts))
+	for _, account := range accounts {
+		if account == nil || !account.IsShadow() || account.ParentAccountID == nil {
+			continue
+		}
+		parentID := *account.ParentAccountID
+		if parentID <= 0 {
+			return infraerrors.New(http.StatusConflict, "SPARK_SHADOW_PARENT_ARCHIVED",
+				"spark shadow account is not mutable while its parent is unavailable")
+		}
+		if _, ok := seenParentIDs[parentID]; ok {
+			continue
+		}
+		seenParentIDs[parentID] = struct{}{}
+		parentIDs = append(parentIDs, parentID)
+	}
+	if len(parentIDs) == 0 {
+		return nil
+	}
+	parents, err := s.accountRepo.GetByIDs(ctx, parentIDs)
+	if err != nil {
+		return err
+	}
+	parentsByID := make(map[int64]*Account, len(parents))
+	for _, parent := range parents {
+		if parent != nil {
+			parentsByID[parent.ID] = parent
+		}
+	}
+	for _, account := range accounts {
+		if account == nil || !account.IsShadow() || account.ParentAccountID == nil {
+			continue
+		}
+		parent := parentsByID[*account.ParentAccountID]
+		if parent == nil || parent.IsArchived() {
+			return infraerrors.New(http.StatusConflict, "SPARK_SHADOW_PARENT_ARCHIVED",
+				"spark shadow account is not mutable while its parent is archived")
+		}
+		if account.ArchivedAt != nil && !allowSelfUnarchive {
+			return infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ARCHIVED",
+				"spark shadow account is not mutable while it is archived")
+		}
+	}
 	return nil
 }
 
@@ -4252,6 +4389,13 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return err
+	}
 	if s.entClient != nil && dbent.TxFromContext(ctx) == nil {
 		tx, err := s.entClient.Tx(ctx)
 		if err != nil {
@@ -4291,11 +4435,21 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return nil, err
+	}
 	// TODO: Implement refresh logic
 	return account, nil
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}
@@ -4318,10 +4472,24 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return err
+	}
 	return s.accountRepo.SetError(ctx, id, errorMsg)
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}
@@ -4333,11 +4501,18 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 }
 
 func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id int64) error {
+	account, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
+		return err
+	}
 	if err := s.accountRepo.RevertProxyFallback(ctx, id); err != nil {
 		return err
 	}
 	// 加载回退后的账号以获取实际 ProxyID，再传播到影子账号
-	account, err := s.accountRepo.GetByID(ctx, id)
+	account, err = s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get account after proxy revert: %w", err)
 	}
@@ -5288,6 +5463,9 @@ func (e *MixedChannelError) Error() string {
 func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) error {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureMutableAccount(ctx, account); err != nil {
 		return err
 	}
 	// spark 影子账号不持自有配额(凭据透传母账号、spark 用量走独立 codex_* 维度由 QueryUsage 维护),

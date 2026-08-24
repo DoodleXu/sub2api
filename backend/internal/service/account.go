@@ -40,10 +40,14 @@ type Account struct {
 	CostCNYPerUSD    float64
 	// CostStatsPending is true while the incremental account-cost ledger has
 	// not caught up. Callers must not treat the zero-value totals as final.
-	CostStatsPending   bool
-	LoadFactor         *int // 调度负载因子；nil 表示使用 Concurrency
-	Status             string
-	ArchivedAt         *time.Time
+	CostStatsPending bool
+	LoadFactor       *int // 调度负载因子；nil 表示使用 Concurrency
+	Status           string
+	ArchivedAt       *time.Time
+	// ParentArchivedAt is populated when a shadow account is loaded with its
+	// parent.  It is intentionally non-persistent and makes effective archive
+	// checks available to callers that only hold the child snapshot.
+	ParentArchivedAt   *time.Time
 	ErrorMessage       string
 	LastUsedAt         *time.Time
 	ExpiresAt          *time.Time
@@ -140,7 +144,13 @@ func (a *Account) IsActive() bool {
 }
 
 func (a *Account) IsArchived() bool {
-	return a != nil && a.ArchivedAt != nil
+	return a != nil && (a.ArchivedAt != nil || a.ParentArchivedAt != nil)
+}
+
+// IsHealthy reports whether the account can be treated as a live account.
+// Archived accounts (including shadows of archived parents) are never healthy.
+func (a *Account) IsHealthy() bool {
+	return a != nil && !a.IsArchived() && a.Status == StatusActive
 }
 
 // IsSyntheticUITest reports whether the account belongs to an isolated UI load-test
@@ -221,7 +231,7 @@ func (a *Account) IsSchedulable() bool {
 // 手动 Schedulable 开关:spark 影子拥有独立 spark 配额窗口,母账号 global 429(走 RateLimitResetAt)
 // 不应连坐 spark(否则重新耦合影子架构本应解耦的两条 429 道)。nil receiver 返回 false。
 func (a *Account) IsCredentialUsableForShadow() bool {
-	if a == nil || !a.IsActive() {
+	if a == nil || a.IsArchived() || !a.IsActive() {
 		return false
 	}
 	now := time.Now()

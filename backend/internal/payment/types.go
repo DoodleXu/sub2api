@@ -195,10 +195,15 @@ type RefundRequest struct {
 // RefundQueryRequest contains identifiers needed to query a previously
 // requested refund.
 type RefundQueryRequest struct {
-	TradeNo  string
-	OrderID  string
+	TradeNo string
+	OrderID string
+	// RefundID is the provider resource identifier, when one is known.
 	RefundID string
-	Amount   string
+	// AttemptID is the local/provider request id persisted before dispatch. It
+	// is intentionally separate from RefundID so owner-bound recovery can match
+	// provider metadata without treating a local key as a provider resource ID.
+	AttemptID string
+	Amount    string
 }
 
 // RefundResponse is returned after a refund request.
@@ -241,6 +246,15 @@ type Provider interface {
 type RefundQueryProvider interface {
 	Provider
 	QueryRefund(ctx context.Context, req RefundQueryRequest) (*RefundResponse, error)
+}
+
+// RefundQueryByOrderProvider can recover an in-flight refund when the create
+// request ended without a provider refund identifier. Implementations must use
+// an owner-bound, deterministic lookup (for example the payment intent plus
+// amount); callers must not pass a local idempotency key as a provider ID.
+type RefundQueryByOrderProvider interface {
+	RefundQueryProvider
+	QueryRefundByOrder(ctx context.Context, req RefundQueryRequest) (*RefundResponse, error)
 }
 
 // CancelableProvider extends Provider with the ability to cancel pending payments.

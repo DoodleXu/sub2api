@@ -3,6 +3,8 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -470,7 +472,7 @@ func (w *Wxpay) Refund(ctx context.Context, req payment.RefundRequest) (*payment
 	}
 	rs := refunddomestic.RefundsApiService{Client: c}
 	cur := wxpayCurrency
-	outRefundNo := wxpayRefundID(req.OrderID, req.Amount)
+	outRefundNo := wxpayRefundIDForAttempt(req.OrderID, req.Amount, req.RefundID)
 	res, _, err := rs.Create(ctx, refunddomestic.CreateRequest{
 		OutTradeNo:  core.String(req.OrderID),
 		OutRefundNo: core.String(outRefundNo),
@@ -494,7 +496,7 @@ func (w *Wxpay) QueryRefund(ctx context.Context, req payment.RefundQueryRequest)
 	}
 	outRefundNo := strings.TrimSpace(req.RefundID)
 	if outRefundNo == "" {
-		outRefundNo = wxpayRefundID(req.OrderID, req.Amount)
+		outRefundNo = wxpayRefundIDForAttempt(req.OrderID, req.Amount, req.AttemptID)
 	}
 	if outRefundNo == "" {
 		return nil, fmt.Errorf("wxpay query refund: missing refund id")
@@ -518,6 +520,33 @@ func (w *Wxpay) QueryRefund(ctx context.Context, req payment.RefundQueryRequest)
 		}
 	}
 	return &payment.RefundResponse{RefundID: outRefundNo, Status: status}, nil
+}
+
+// QueryRefundByOrder uses WeChat Pay's deterministic out_refund_no derived from
+// the merchant order and amount. The local rf_* request key is never sent as a
+// provider refund number.
+func (w *Wxpay) QueryRefundByOrder(ctx context.Context, req payment.RefundQueryRequest) (*payment.RefundResponse, error) {
+	// QueryRefund derives the same attempt-specific out_refund_no used by
+	// Refund when the provider ID was not returned to the caller.
+	req.RefundID = wxpayRefundIDForAttempt(req.OrderID, req.Amount, req.AttemptID)
+	return w.QueryRefund(ctx, req)
+}
+
+func wxpayRefundIDForAttempt(orderID, amount, attemptID string) string {
+	base := wxpayRefundID(orderID, amount)
+	if attemptID = strings.TrimSpace(attemptID); attemptID == "" {
+		return base
+	}
+	digest := sha256.Sum256([]byte(attemptID))
+	suffix := hex.EncodeToString(digest[:6])
+	// WeChat caps out_refund_no at 64 bytes. Preserve the legacy prefix where
+	// possible, then append a short attempt fingerprint so equal-amount tranches
+	// cannot address the same provider refund record.
+	maxBase := 64 - 1 - len(suffix)
+	if len(base) > maxBase {
+		base = base[:maxBase]
+	}
+	return base + "-" + suffix
 }
 
 func wxpayRefundID(orderID, amount string) string {
@@ -563,6 +592,8 @@ func (w *Wxpay) CancelPayment(ctx context.Context, tradeNo string) error {
 }
 
 var (
-	_ payment.Provider           = (*Wxpay)(nil)
-	_ payment.CancelableProvider = (*Wxpay)(nil)
+	_ payment.Provider                   = (*Wxpay)(nil)
+	_ payment.RefundQueryProvider        = (*Wxpay)(nil)
+	_ payment.RefundQueryByOrderProvider = (*Wxpay)(nil)
+	_ payment.CancelableProvider         = (*Wxpay)(nil)
 )

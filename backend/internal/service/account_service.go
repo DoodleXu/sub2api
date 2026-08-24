@@ -50,7 +50,8 @@ type OAuthRefreshCandidatePager interface {
 type AccountRepository interface {
 	Create(ctx context.Context, account *Account) error
 	GetByID(ctx context.Context, id int64) (*Account, error)
-	// GetByIDs fetches accounts by IDs in a single query.
+	// GetByIDs fetches accounts by IDs in bounded batches and preserves the
+	// first-occurrence input order while omitting missing IDs.
 	// It should return all accounts found (missing IDs are ignored).
 	GetByIDs(ctx context.Context, ids []int64) ([]*Account, error)
 	// ExistsByID 检查账号是否存在，仅返回布尔值，用于删除前的轻量级存在性检查
@@ -125,6 +126,14 @@ type AccountRepository interface {
 	ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error)
 }
 
+// AccountShadowBatchRepository is an optional repository capability used by
+// bulk scheduler events to load every affected parent's managed shadows in one
+// bounded operation. AccountRepository retains the single-parent method for
+// focused test doubles and call sites that only handle one parent.
+type AccountShadowBatchRepository interface {
+	ListShadowsByParents(ctx context.Context, parentIDs []int64) ([]*Account, error)
+}
+
 // AccountCascadeDeleteRepository is implemented by repositories that can
 // delete an account and all managed shadow accounts atomically.
 // AccountRepository remains broad for compatibility with focused test doubles
@@ -156,6 +165,30 @@ type AccountBillingSettingsRepository interface {
 		rateSyncEnabled *bool,
 		rateMultiplier *float64,
 	) error
+}
+
+// AccountBillingSettingsArchiveRepository is the transactional variant used
+// when an admin edit changes archive state together with other account fields.
+// Keeping this as an optional capability preserves compatibility with focused
+// repository test doubles while production repositories can commit the whole
+// edit and its scheduler outbox event atomically.
+type AccountBillingSettingsArchiveRepository interface {
+	UpdateWithAccountBillingSettingsAndArchive(
+		ctx context.Context,
+		account *Account,
+		probeEnabled *bool,
+		rateSyncEnabled *bool,
+		rateMultiplier *float64,
+		archived *bool,
+	) error
+}
+
+// AccountArchiveRepository exposes the explicit archive toggle separately from
+// ordinary account edits.  Repository.Update must preserve archived_at when a
+// stale edit payload omits the field; callers that intentionally archive or
+// unarchive use this capability instead.
+type AccountArchiveRepository interface {
+	SetArchived(ctx context.Context, id int64, archived bool) error
 }
 
 // AdminAccountRepository makes the account-duplication write capability an explicit

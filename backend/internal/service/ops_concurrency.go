@@ -71,7 +71,10 @@ func filterArchivedOpsAccounts(accounts []Account) []Account {
 	}
 	out := accounts[:0]
 	for _, acc := range accounts {
-		if acc.ArchivedAt != nil {
+		// A shadow inherits its parent's archive state.  Use the same effective
+		// predicate as schedulers and admin APIs so archived parents cannot still
+		// inflate operations availability/concurrency metrics.
+		if acc.IsArchived() {
 			continue
 		}
 		out = append(out, acc)

@@ -219,12 +219,16 @@ type Account struct {
 	CostStatsPending        bool                           `json:"cost_stats_pending"`
 	Status                  string                         `json:"status"`
 	ArchivedAt              *time.Time                     `json:"archived_at"`
-	ErrorMessage            string                         `json:"error_message"`
-	LastUsedAt              *time.Time                     `json:"last_used_at"`
-	ExpiresAt               *int64                         `json:"expires_at"`
-	AutoPauseOnExpired      bool                           `json:"auto_pause_on_expired"`
-	CreatedAt               time.Time                      `json:"created_at"`
-	UpdatedAt               time.Time                      `json:"updated_at"`
+	// ParentArchivedAt is set for shadow accounts whose parent is archived.
+	// It remains separate from ArchivedAt so clients can distinguish an
+	// effective archive from a locally reversible archive marker.
+	ParentArchivedAt   *time.Time `json:"parent_archived_at,omitempty"`
+	ErrorMessage       string     `json:"error_message"`
+	LastUsedAt         *time.Time `json:"last_used_at"`
+	ExpiresAt          *int64     `json:"expires_at"`
+	AutoPauseOnExpired bool       `json:"auto_pause_on_expired"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 
 	Schedulable bool `json:"schedulable"`
 

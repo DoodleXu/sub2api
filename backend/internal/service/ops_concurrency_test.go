@@ -19,6 +19,7 @@ func (r opsStatsAccountRepoStub) ListOpsAccountsForStats(_ context.Context, _ st
 
 func TestOpsAvailabilityStatsExcludeArchivedAccounts(t *testing.T) {
 	now := time.Now()
+	parentID := int64(99)
 	group := &Group{ID: 10, Name: "default", Platform: PlatformOpenAI}
 	svc := &OpsService{
 		accountRepo: opsStatsAccountRepoStub{
@@ -40,6 +41,16 @@ func TestOpsAvailabilityStatsExcludeArchivedAccounts(t *testing.T) {
 					Schedulable: false,
 					Groups:      []*Group{group},
 				},
+				{
+					ID:               3,
+					Name:             "shadow-of-archived-parent",
+					Platform:         PlatformOpenAI,
+					Status:           StatusActive,
+					Schedulable:      true,
+					ParentAccountID:  &parentID,
+					ParentArchivedAt: &now,
+					Groups:           []*Group{group},
+				},
 			},
 		},
 	}
@@ -49,6 +60,7 @@ func TestOpsAvailabilityStatsExcludeArchivedAccounts(t *testing.T) {
 
 	require.Contains(t, accountStats, int64(1))
 	require.NotContains(t, accountStats, int64(2))
+	require.NotContains(t, accountStats, int64(3))
 
 	require.Equal(t, int64(1), platformStats[PlatformOpenAI].TotalAccounts)
 	require.Equal(t, int64(1), platformStats[PlatformOpenAI].AvailableCount)

@@ -551,7 +551,7 @@ import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
-import { getAccountLimitSchedulingState } from '@/utils/accountScheduling'
+import { getAccountLimitSchedulingState, isAccountArchived } from '@/utils/accountScheduling'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
@@ -2176,7 +2176,7 @@ const buildAccountQueryFilters = () => ({
 
 const accountMatchesCurrentFilters = (account: Account) => {
   const filters = buildAccountQueryFilters()
-  const isArchived = Boolean(account.archived_at)
+  const isArchived = isAccountArchived(account)
   if (filters.platform && account.platform !== filters.platform) return false
   if (filters.type && account.type !== filters.type) return false
   if (filters.status) {
@@ -2192,7 +2192,7 @@ const accountMatchesCurrentFilters = (account: Account) => {
     } = getAccountLimitSchedulingState(account, now)
 
     if (filters.status === 'archived') {
-      // 已在上方按 archived_at 判断；保留原始 status，不参与其它派生状态判断。
+      // 已在上方按有效归档状态判断；保留原始 status，不参与其它派生状态判断。
     } else if (filters.status === 'active') {
       if (account.status !== 'active' || isRateLimited || isTempUnschedulable || !account.schedulable) return false
     } else if (filters.status === 'rate_limited') {
@@ -2234,6 +2234,7 @@ const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Accou
     current_window_cost: updatedAccount.current_window_cost ?? oldAccount.current_window_cost,
     active_sessions: updatedAccount.active_sessions ?? oldAccount.active_sessions,
     archived_at: Object.prototype.hasOwnProperty.call(updatedAccount, 'archived_at') ? (updatedAccount.archived_at ?? null) : (oldAccount.archived_at ?? null),
+    parent_archived_at: Object.prototype.hasOwnProperty.call(updatedAccount, 'parent_archived_at') ? (updatedAccount.parent_archived_at ?? null) : (oldAccount.parent_archived_at ?? null),
     total_account_cost: updatedAccount.total_account_cost ?? oldAccount.total_account_cost,
     cost_cny_per_usd: updatedAccount.cost_cny_per_usd ?? oldAccount.cost_cny_per_usd
   }

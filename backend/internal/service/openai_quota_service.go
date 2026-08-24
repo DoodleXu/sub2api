@@ -466,21 +466,32 @@ func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, account
 func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, accountID int64, accessToken, chatGPTAccountID string, fedRAMP bool) (map[string]string, string, error) {
 	headers := buildCodexCommonHeaders(accessToken, chatGPTAccountID, fedRAMP)
 	if s == nil || s.accountRepo == nil {
-		return headers, "", nil
+		return nil, "", fmt.Errorf("account repository is unavailable")
 	}
+	// Re-read immediately before each upstream request so an access token
+	// obtained moments earlier cannot bypass account or parent archival.
 	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil || account == nil {
-		if strings.TrimSpace(accessToken) == "" {
-			return nil, "", fmt.Errorf("agent identity account credentials are unavailable")
-		}
-		return headers, "", nil
+	if err != nil {
+		return nil, "", fmt.Errorf("account %d is unavailable: %w", accountID, err)
+	}
+	if account == nil {
+		return nil, "", fmt.Errorf("account %d is unavailable", accountID)
+	}
+	if account.IsArchived() {
+		return nil, "", fmt.Errorf("account %d is archived", accountID)
 	}
 	if account.IsShadow() {
-		if resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account); resolveErr == nil && resolved != nil {
-			account = resolved
-		} else if strings.TrimSpace(accessToken) == "" {
-			return nil, "", fmt.Errorf("agent identity shadow credentials are unavailable")
+		resolved, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if resolveErr != nil {
+			return nil, "", fmt.Errorf("shadow account %d credentials are unavailable: %w", accountID, resolveErr)
 		}
+		if resolved == nil {
+			return nil, "", fmt.Errorf("shadow account %d credentials are unavailable", accountID)
+		}
+		account = resolved
+	}
+	if account.IsArchived() {
+		return nil, "", fmt.Errorf("credential account %d is archived", account.ID)
 	}
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil

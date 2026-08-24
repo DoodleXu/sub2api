@@ -609,8 +609,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.GET("/email-broadcasts/:batch_id", h.Admin.Setting.GetEmailBroadcastStatus)
 		adminSettings.GET("/email-broadcasts/:batch_id/recipients", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.ListEmailBroadcastRecipients)
 		adminSettings.GET("/notifications", h.Admin.Setting.GetNotificationConfig)
-		adminSettings.PUT("/notifications", h.Admin.Setting.UpdateNotificationConfig)
-		adminSettings.POST("/notifications/test", h.Admin.Setting.TestNotificationTransport)
+		adminSettings.PUT("/notifications", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.UpdateNotificationConfig)
+		adminSettings.POST("/notifications/test", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.TestNotificationTransport)
 		// Admin API Key 管理
 		adminSettings.GET("/admin-api-key", h.Admin.Setting.GetAdminAPIKey)
 		adminSettings.POST("/admin-api-key/regenerate", h.Admin.Setting.RegenerateAdminAPIKey)

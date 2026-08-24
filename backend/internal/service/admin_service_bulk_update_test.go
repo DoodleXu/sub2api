@@ -32,6 +32,7 @@ type accountRepoStubForBulkUpdate struct {
 	getByIDsErr         error
 	getByIDsCalled      bool
 	getByIDsIDs         []int64
+	getByIDsCalls       [][]int64
 	getByIDAccounts     map[int64]*Account
 	getByIDErrByID      map[int64]error
 	getByIDCalled       []int64
@@ -97,10 +98,38 @@ func (s *accountRepoStubForBulkUpdate) BindGroups(_ context.Context, accountID i
 func (s *accountRepoStubForBulkUpdate) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
 	s.getByIDsCalled = true
 	s.getByIDsIDs = append([]int64{}, ids...)
+	s.getByIDsCalls = append(s.getByIDsCalls, append([]int64{}, ids...))
 	if s.getByIDsErr != nil {
 		return nil, s.getByIDsErr
 	}
-	return s.getByIDsAccounts, nil
+
+	configured := s.getByIDsAccounts != nil || s.getByIDAccounts != nil
+	if !configured {
+		accounts := make([]*Account, 0, len(ids))
+		for _, id := range ids {
+			accounts = append(accounts, &Account{ID: id})
+		}
+		return accounts, nil
+	}
+
+	byID := make(map[int64]*Account, len(s.getByIDsAccounts)+len(s.getByIDAccounts))
+	for _, account := range s.getByIDsAccounts {
+		if account != nil {
+			byID[account.ID] = account
+		}
+	}
+	for id, account := range s.getByIDAccounts {
+		if account != nil {
+			byID[id] = account
+		}
+	}
+	accounts := make([]*Account, 0, len(ids))
+	for _, id := range ids {
+		if account := byID[id]; account != nil {
+			accounts = append(accounts, account)
+		}
+	}
+	return accounts, nil
 }
 
 func (s *accountRepoStubForBulkUpdate) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -110,6 +139,11 @@ func (s *accountRepoStubForBulkUpdate) GetByID(_ context.Context, id int64) (*Ac
 	}
 	if account, ok := s.getByIDAccounts[id]; ok {
 		return account, nil
+	}
+	for _, account := range s.getByIDsAccounts {
+		if account != nil && account.ID == id {
+			return account, nil
+		}
 	}
 	return nil, errors.New("account not found")
 }
@@ -190,6 +224,79 @@ func TestAdminService_BulkUpdateAccounts_SkipsArchivedAccounts(t *testing.T) {
 	require.Equal(t, []int64{2}, repo.bulkUpdateIDs)
 }
 
+func TestAdminService_BulkUpdateAccounts_ReportsMissingAccounts(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+	schedulable := true
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{1, 999},
+		Schedulable: &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Equal(t, 1, result.Failed)
+	require.Equal(t, []int64{1}, result.SuccessIDs)
+	require.Equal(t, []int64{999}, result.FailedIDs)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+	require.Equal(t, "account not found", result.Results[0].Error)
+}
+
+func TestAdminService_BulkUpdateAccounts_AllMissingSkipsWrite(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{}}
+	svc := &adminServiceImpl{accountRepo: repo}
+	schedulable := true
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{404, 405},
+		Schedulable: &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, result.Success)
+	require.Equal(t, 2, result.Failed)
+	require.Equal(t, []int64{404, 405}, result.FailedIDs)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
+func TestAdminService_BulkUpdateAccounts_BatchesShadowParentValidation(t *testing.T) {
+	parentIDs := []int64{1001, 1002}
+	accounts := []*Account{
+		{ID: parentIDs[0], Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		{ID: parentIDs[1], Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	}
+	accountIDs := make([]int64, 0, 50)
+	for i := 0; i < 50; i++ {
+		id := int64(i + 1)
+		parentID := parentIDs[i%len(parentIDs)]
+		accountIDs = append(accountIDs, id)
+		accounts = append(accounts, &Account{
+			ID:              id,
+			Platform:        PlatformOpenAI,
+			Type:            AccountTypeOAuth,
+			ParentAccountID: &parentID,
+		})
+	}
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: accounts}
+	svc := &adminServiceImpl{accountRepo: repo}
+	schedulable := true
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  accountIDs,
+		Schedulable: &schedulable,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, len(accountIDs), result.Success)
+	require.Len(t, repo.getByIDsCalls, 2, "targets and unique parents should each use one batch read")
+	require.ElementsMatch(t, parentIDs, repo.getByIDsCalls[1])
+	require.Empty(t, repo.getByIDCalled, "bulk shadow validation must not query each parent separately")
+	require.Equal(t, accountIDs, repo.bulkUpdateIDs)
+}
+
 func TestAdminService_BulkUpdateAccounts_AllowsArchivedUnarchiveOnly(t *testing.T) {
 	now := time.Now()
 	repo := &accountRepoStubForBulkUpdate{
@@ -207,6 +314,49 @@ func TestAdminService_BulkUpdateAccounts_AllowsArchivedUnarchiveOnly(t *testing.
 	require.Equal(t, 1, result.Success)
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+}
+
+func TestAdminService_BulkUpdateAccounts_AllowsUnarchivingOwnArchivedShadow(t *testing.T) {
+	now := time.Now()
+	parentID := int64(2)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1, ParentAccountID: &parentID, ArchivedAt: &now}},
+		getByIDAccounts: map[int64]*Account{
+			parentID: {ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+	unarchive := false
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		Archived:   &unarchive,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Success)
+	require.Empty(t, result.FailedIDs)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+}
+
+func TestAdminService_BulkUpdateAccountsRejectsUnarchivingShadowWithArchivedParent(t *testing.T) {
+	now := time.Now()
+	parentID := int64(2)
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1, ParentAccountID: &parentID, ArchivedAt: &now}},
+		getByIDAccounts: map[int64]*Account{
+			parentID: {ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, ArchivedAt: &now},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+	unarchive := false
+	_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		Archived:   &unarchive,
+	})
+
+	require.Error(t, err)
+	require.Equal(t, "SPARK_SHADOW_PARENT_ARCHIVED", infraerrors.Reason(err))
+	require.Empty(t, repo.bulkUpdateIDs)
 }
 
 // TestAdminService_BulkUpdateAccounts_PartialFailureIDs 验证部分失败时 success_ids/failed_ids 正确。
@@ -552,6 +702,7 @@ func TestAdminServiceBulkUpdateAccounts_ReportsLongContextShadowInheritance(t *t
 func TestAdminServiceBulkUpdateAccounts_RequiresParentForShadowOnlyLongContextUpdate(t *testing.T) {
 	parentID := int64(10)
 	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
+		{ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
 		{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
 		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
 	}}
@@ -569,9 +720,10 @@ func TestAdminServiceBulkUpdateAccounts_RequiresParentForShadowOnlyLongContextUp
 
 func TestAdminServiceBulkUpdateAccounts_ShadowLongContextAllowsOtherUpdates(t *testing.T) {
 	parentID := int64(10)
-	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{{
-		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID,
-	}}}
+	repo := &accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
+		{ID: parentID, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
+	}}
 	svc := &adminServiceImpl{accountRepo: repo}
 	status := StatusDisabled
 

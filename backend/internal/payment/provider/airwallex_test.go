@@ -239,6 +239,126 @@ func TestAirwallexRefundRejectsUnsettledStatus(t *testing.T) {
 	}
 }
 
+func TestAirwallexRefundUsesAttemptSpecificRequestID(t *testing.T) {
+	t.Parallel()
+
+	var requests []airwallexCreateRefundRequest
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/authentication/login":
+			_, _ = w.Write([]byte(`{"token":"token-1","expires_at":"2099-01-01T00:00:00Z"}`))
+		case "/api/v1/pa/refunds/create":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			var request airwallexCreateRefundRequest
+			require.NoError(t, json.Unmarshal(body, &request))
+			requests = append(requests, request)
+			_, _ = w.Write([]byte(`{"id":"ref_123","payment_intent_id":"int_123","amount":12.34,"currency":"CNY","status":"SETTLED"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	prov := mustTestAirwallexProvider(t, server)
+	_, err := prov.Refund(context.Background(), payment.RefundRequest{
+		TradeNo:  "int_123",
+		Amount:   "12.34",
+		RefundID: "rf_attempt_123",
+	})
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	require.Equal(t, airwallexRefundRequestID("int_123", "12.34", "rf_attempt_123"), requests[0].RequestID)
+	require.NotEqual(t, airwallexRefundRequestID("int_123", "12.34", ""), requests[0].RequestID)
+}
+
+func TestAirwallexQueryRefundByOrderMatchesExactRequestIDAndAmount(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/authentication/login":
+			_, _ = w.Write([]byte(`{"token":"token-1","expires_at":"2099-01-01T00:00:00Z"}`))
+		case "/api/v1/pa/refunds":
+			require.Equal(t, "int_123", r.URL.Query().Get("payment_intent_id"))
+			require.Equal(t, "100", r.URL.Query().Get("page_size"))
+			_, _ = w.Write([]byte(`{"items":[
+				{"id":"ref_wrong_intent","payment_intent_id":"int_other","request_id":"` + airwallexRefundRequestID("int_123", "12.34", "rf_attempt_123") + `","amount":12.34,"status":"SETTLED"},
+				{"id":"ref_wrong_attempt","payment_intent_id":"int_123","request_id":"refund-other","amount":12.34,"status":"SETTLED"},
+				{"id":"ref_wrong_amount","payment_intent_id":"int_123","request_id":"` + airwallexRefundRequestID("int_123", "12.34", "rf_attempt_123") + `","amount":12.35,"status":"SETTLED"},
+				{"id":"ref_exact","payment_intent_id":"int_123","request_id":"` + airwallexRefundRequestID("int_123", "12.34", "rf_attempt_123") + `","amount":12.34,"status":"SETTLED"}
+			],"has_more":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	prov := mustTestAirwallexProvider(t, server)
+	resp, err := prov.QueryRefundByOrder(context.Background(), payment.RefundQueryRequest{
+		TradeNo:   "int_123",
+		AttemptID: "rf_attempt_123",
+		Amount:    "12.34",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ref_exact", resp.RefundID)
+	require.Equal(t, payment.ProviderStatusSuccess, resp.Status)
+}
+
+func TestAirwallexQueryRefundByOrderRejectsAmbiguousMatches(t *testing.T) {
+	t.Parallel()
+
+	requestID := airwallexRefundRequestID("int_123", "12.34", "rf_attempt_123")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/authentication/login":
+			_, _ = w.Write([]byte(`{"token":"token-1","expires_at":"2099-01-01T00:00:00Z"}`))
+		case "/api/v1/pa/refunds":
+			_, _ = w.Write([]byte(`{"items":[
+				{"id":"ref_first","payment_intent_id":"int_123","request_id":"` + requestID + `","amount":12.34,"status":"SETTLED"},
+				{"id":"ref_second","payment_intent_id":"int_123","request_id":"` + requestID + `","amount":12.34,"status":"SETTLED"}
+			],"has_more":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	prov := mustTestAirwallexProvider(t, server)
+	resp, err := prov.QueryRefundByOrder(context.Background(), payment.RefundQueryRequest{
+		TradeNo:   "int_123",
+		AttemptID: "rf_attempt_123",
+		Amount:    "12.34",
+	})
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, "multiple refunds match request")
+}
+
+func TestAirwallexQueryRefundByOrderRejectsTruncatedResultSet(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/authentication/login":
+			_, _ = w.Write([]byte(`{"token":"token-1","expires_at":"2099-01-01T00:00:00Z"}`))
+		case "/api/v1/pa/refunds":
+			_, _ = w.Write([]byte(`{"items":[],"has_more":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	prov := mustTestAirwallexProvider(t, server)
+	resp, err := prov.QueryRefundByOrder(context.Background(), payment.RefundQueryRequest{
+		TradeNo:   "int_123",
+		AttemptID: "rf_attempt_123",
+		Amount:    "12.34",
+	})
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, "result set is truncated")
+}
+
 func TestAirwallexAuthErrorIncludesCredentialGuidance(t *testing.T) {
 	t.Parallel()
 

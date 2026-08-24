@@ -14,7 +14,9 @@ import (
 
 type bulkEventAccountRepo struct {
 	*batchAccountQueryRepo
-	accounts []*Account
+	accounts          []*Account
+	batchShadowCalls  int
+	singleShadowCalls int
 }
 
 func newBulkEventAccountRepo(accounts ...*Account) *bulkEventAccountRepo {
@@ -24,8 +26,23 @@ func newBulkEventAccountRepo(accounts ...*Account) *bulkEventAccountRepo {
 	}
 }
 
-func (r *bulkEventAccountRepo) GetByIDs(context.Context, []int64) ([]*Account, error) {
-	return append([]*Account(nil), r.accounts...), nil
+func (r *bulkEventAccountRepo) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	wanted := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	accounts := make([]*Account, 0, len(ids))
+	for _, account := range r.accounts {
+		if account == nil {
+			continue
+		}
+		if _, ok := wanted[account.ID]; !ok {
+			continue
+		}
+		copy := *account
+		accounts = append(accounts, &copy)
+	}
+	return accounts, nil
 }
 
 func (r *bulkEventAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -39,15 +56,38 @@ func (r *bulkEventAccountRepo) GetByID(_ context.Context, id int64) (*Account, e
 }
 
 func (r *bulkEventAccountRepo) ListShadowsByParent(_ context.Context, parentID int64) ([]*Account, error) {
+	r.singleShadowCalls++
+	return r.listShadowsByParents([]int64{parentID}), nil
+}
+
+func (r *bulkEventAccountRepo) ListShadowsByParents(_ context.Context, parentIDs []int64) ([]*Account, error) {
+	r.batchShadowCalls++
+	return r.listShadowsByParents(parentIDs), nil
+}
+
+func (r *bulkEventAccountRepo) listShadowsByParents(parentIDs []int64) []*Account {
+	wanted := make(map[int64]struct{}, len(parentIDs))
+	for _, parentID := range parentIDs {
+		wanted[parentID] = struct{}{}
+	}
 	shadows := make([]*Account, 0)
 	for _, account := range r.accounts {
-		if account == nil || account.ParentAccountID == nil || *account.ParentAccountID != parentID {
+		if account == nil || account.ParentAccountID == nil {
+			continue
+		}
+		if _, ok := wanted[*account.ParentAccountID]; !ok {
 			continue
 		}
 		copy := *account
 		shadows = append(shadows, &copy)
 	}
-	return shadows, nil
+	return shadows
+}
+
+// singleShadowOnlyAccountRepo narrows the promoted method set back to the
+// legacy interface so the scheduler fallback remains covered.
+type singleShadowOnlyAccountRepo struct {
+	AccountRepository
 }
 
 type bulkEventSnapshotCache struct {
@@ -246,6 +286,47 @@ func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *test
 	require.NoError(t, err)
 	platforms := schedulerSnapshotPlatforms()
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{41, 42}, platforms[:]...), cache.capturedBuckets())
+}
+
+func TestSchedulerBulkAccountEventBatchesOAuthParentShadowLookup(t *testing.T) {
+	parent1ID := int64(80)
+	parent2ID := int64(81)
+	cache := newBulkEventSnapshotCache()
+	repo := newBulkEventAccountRepo(
+		&Account{ID: parent1ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{801}},
+		&Account{ID: parent2ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{802}},
+		&Account{ID: 82, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent1ID, GroupIDs: []int64{811}},
+		&Account{ID: 83, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent2ID, GroupIDs: []int64{812}},
+	)
+	svc := newBulkEventTestService(cache, repo)
+
+	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{parent1ID, parent2ID}, nil), make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, repo.batchShadowCalls)
+	require.Zero(t, repo.singleShadowCalls)
+	require.ElementsMatch(t, schedulerBucketsForTest([]int64{801, 802, 811, 812}, PlatformOpenAI), cache.capturedBuckets())
+}
+
+func TestSchedulerBulkAccountEventFallsBackToSingleParentShadowLookup(t *testing.T) {
+	parent1ID := int64(90)
+	parent2ID := int64(91)
+	cache := newBulkEventSnapshotCache()
+	baseRepo := newBulkEventAccountRepo(
+		&Account{ID: parent1ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{901}},
+		&Account{ID: parent2ID, Platform: PlatformOpenAI, Type: AccountTypeOAuth, GroupIDs: []int64{902}},
+		&Account{ID: 92, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent1ID, GroupIDs: []int64{911}},
+		&Account{ID: 93, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent2ID, GroupIDs: []int64{912}},
+	)
+	repo := &singleShadowOnlyAccountRepo{AccountRepository: baseRepo}
+	svc := newBulkEventTestService(cache, repo)
+
+	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{parent1ID, parent2ID}, nil), make(map[batchSeenKey]struct{}))
+
+	require.NoError(t, err)
+	require.Zero(t, baseRepo.batchShadowCalls)
+	require.Equal(t, 2, baseRepo.singleShadowCalls)
+	require.ElementsMatch(t, schedulerBucketsForTest([]int64{901, 902, 911, 912}, PlatformOpenAI), cache.capturedBuckets())
 }
 
 func TestSchedulerAccountEventRebuildsParentAndShadowGroups(t *testing.T) {

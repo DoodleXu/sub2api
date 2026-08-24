@@ -349,6 +349,12 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 	if account == nil {
 		return nil, fmt.Errorf("account is required")
 	}
+	// Archived accounts are historical records.  Never probe an upstream or
+	// write a refreshed snapshot for them: callers must receive only data that
+	// was already persisted before the archive operation.
+	if account.IsArchived() {
+		return s.getPassiveUsageForArchivedAccount(ctx, account)
+	}
 	accountID := account.ID
 
 	// Dedicated UI load-test accounts must remain fully interactive without ever
@@ -561,6 +567,10 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		g.Go(func() error {
 			var usage *UsageInfo
 			var usageErr error
+			// Anthropic usage in a batch is intentionally passive: the batch
+			// endpoint is used for account tables and must not fan out upstream
+			// probes.  Archived accounts are handled by getUsageForAccount's
+			// passive guard for every platform.
 			if supportsAnthropicPassiveUsage(account) {
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
 			} else {
@@ -583,6 +593,34 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 	}
 
 	return usageByAccount, errorsByAccount, nil
+}
+
+// getPassiveUsageForArchivedAccount builds a best-effort snapshot without any
+// network calls or account mutations.  Platform-specific active quota
+// services are deliberately skipped; the persisted Extra/session fields and
+// local usage ledger are the only allowed sources for an archived account.
+func (s *AccountUsageService) getPassiveUsageForArchivedAccount(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if account == nil {
+		return nil, fmt.Errorf("account is required")
+	}
+	if supportsAnthropicPassiveUsage(account) {
+		return s.getPassiveUsageForAccount(ctx, account)
+	}
+	switch {
+	case account.Platform == PlatformOpenAI && account.IsOAuth():
+		return s.getOpenAIUsage(ctx, account, false, false)
+	case account.Platform == PlatformGrok:
+		return s.getGrokUsage(ctx, account, false, false)
+	case account.Type == AccountTypeSetupToken:
+		now := time.Now()
+		usage := s.estimateSetupTokenUsage(account)
+		usage.Source = "passive"
+		usage.UpdatedAt = &now
+		return usage, nil
+	default:
+		now := time.Now()
+		return &UsageInfo{Source: "passive", UpdatedAt: &now}, nil
+	}
 }
 
 // GetPassiveUsage 从 Account.Extra 中的被动采样数据构建 UsageInfo，不调用外部 API。
@@ -708,7 +746,7 @@ func (s *AccountUsageService) syncActiveToPassive(ctx context.Context, accountID
 	}
 }
 
-func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
+func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Account, force bool, probe ...bool) (*UsageInfo, error) {
 	now := time.Now()
 	usage := &UsageInfo{UpdatedAt: &now}
 
@@ -718,7 +756,13 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	applyExtraToUsage(usage, account.Extra, now)
 
-	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
+	allowProbe := true
+	if len(probe) > 0 {
+		allowProbe = probe[0]
+	}
+	didProbe := false
+	if allowProbe && (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
+		didProbe = true
 		if account.IsShadow() {
 			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
 			// via the shared OpenAIQuotaService, which resolves credentials from the
@@ -748,7 +792,19 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	}
 
 	if s.usageLogRepo == nil {
+		// A missing local usage repository only means that there are no
+		// additional window statistics to enrich.  Mark the result active only
+		// when this call actually attempted an upstream probe; otherwise it is
+		// a passive persisted snapshot.
+		if didProbe {
+			usage.Source = "active"
+		} else {
+			usage.Source = "passive"
+		}
 		return usage, nil
+	}
+	if !didProbe {
+		usage.Source = "passive"
 	}
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.FiveHour, 5*time.Hour, now)); err == nil {
@@ -972,6 +1028,7 @@ func (s *AccountUsageService) getGeminiUsage(ctx context.Context, account *Accou
 	}
 
 	if s.geminiQuotaService == nil || s.usageLogRepo == nil {
+		usage.Source = "active"
 		return usage, nil
 	}
 
@@ -1094,13 +1151,17 @@ func (s *AccountUsageService) getAntigravityUsage(ctx context.Context, account *
 	return usage, nil
 }
 
-func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
+func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account, force bool, probe ...bool) (*UsageInfo, error) {
 	if s.grokQuotaFetcher == nil {
 		now := time.Now()
-		return &UsageInfo{UpdatedAt: &now}, nil
+		return &UsageInfo{Source: "passive", UpdatedAt: &now}, nil
+	}
+	allowProbe := true
+	if len(probe) > 0 {
+		allowProbe = probe[0]
 	}
 	var billingProbeResult *GrokQuotaProbeResult
-	if account != nil && account.IsGrokOAuth() && s.grokQuotaService != nil && (force || grokBillingSnapshotNeedsRefresh(account, time.Now())) && s.shouldProbeGrokBilling(account.ID, time.Now(), force) {
+	if allowProbe && account != nil && account.IsGrokOAuth() && s.grokQuotaService != nil && (force || grokBillingSnapshotNeedsRefresh(account, time.Now())) && s.shouldProbeGrokBilling(account.ID, time.Now(), force) {
 		result, err := s.grokQuotaService.ProbeBilling(ctx, account.ID)
 		if err == nil && result != nil && result.Billing != nil {
 			billingProbeResult = result
@@ -1143,6 +1204,9 @@ func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account
 	}
 
 	enrichUsageWithAccountError(usage, account)
+	if !allowProbe {
+		usage.Source = "passive"
+	}
 	return usage, nil
 }
 
@@ -1341,6 +1405,9 @@ func enrichUsageWithAccountError(info *UsageInfo, account *Account) {
 // addWindowStats 为 usage 数据添加窗口期统计
 // 使用独立缓存（1 分钟），与 API 缓存分离
 func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Account, usage *UsageInfo) {
+	if s == nil || s.usageLogRepo == nil || s.cache == nil || account == nil {
+		return
+	}
 	// 修复：即使 FiveHour 为 nil，也要尝试获取统计数据
 	// 因为 SevenDay/SevenDaySonnet/SevenDayFable 可能需要
 	if usage.FiveHour == nil && usage.SevenDay == nil && usage.SevenDaySonnet == nil && usage.SevenDayFable == nil {

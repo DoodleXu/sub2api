@@ -72,6 +72,19 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.status.error')
   })
 
+  it('父账号归档时也显示有效归档状态', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({ parent_archived_at: '2026-03-15T00:00:00Z' })
+      },
+      global: {
+        stubs: { Icon: true }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.archived')
+  })
+
   it('Claude 5 模型限流时显示 Opus 和 Sonnet 的短别名', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
