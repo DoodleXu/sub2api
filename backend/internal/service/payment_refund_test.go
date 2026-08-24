@@ -1008,7 +1008,9 @@ func TestHandleGatewayFailureCommitsRollbackAndRecoveryMarkerTogether(t *testing
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusCompleted, reloaded.Status)
-	require.True(t, svc.refundRollbackWasRecovered(ctx, order.ID, "rf_atomic_rollback"))
+	recovered, err := refundRollbackWasRecoveredWithClient(ctx, client, order.ID, "rf_atomic_rollback")
+	require.NoError(t, err)
+	require.True(t, recovered)
 	gatewayFailureAudits, err := client.PaymentAuditLog.Query().
 		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("REFUND_GATEWAY_FAILED")).
 		Count(ctx)

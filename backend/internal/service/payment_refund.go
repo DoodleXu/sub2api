@@ -2251,14 +2251,6 @@ func refundAuditLineageID(raw string) string {
 	return strings.TrimSpace(detail.AttemptID)
 }
 
-func (s *PaymentService) refundRollbackWasRecovered(ctx context.Context, oid int64, refundID string) bool {
-	if s == nil || s.entClient == nil {
-		return false
-	}
-	recovered, err := refundRollbackWasRecoveredWithClient(ctx, s.entClient, oid, refundID)
-	return err == nil && recovered
-}
-
 func refundRollbackWasRecoveredWithClient(ctx context.Context, client *dbent.Client, oid int64, lineageID string) (bool, error) {
 	lineageID = strings.TrimSpace(lineageID)
 	if client == nil || lineageID == "" {
