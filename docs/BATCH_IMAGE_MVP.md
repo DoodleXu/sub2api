@@ -43,7 +43,7 @@ Submit request:
           "id": "style",
           "type": "style",
           "mime_type": "image/jpeg",
-          "file_uri": "gs://internal-managed-bucket/batch-image/refs/style.jpg"
+          "data": "<base64-encoded-image>"
         }
       ]
     }
@@ -53,12 +53,12 @@ Submit request:
 }
 ```
 
-`reference_images` is optional per item. Inline `data` is a base64 string decoded by the backend; `file_uri` is reserved for internal Google Cloud Storage references and must be a `gs://` URI. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`. Current model limits are:
+`reference_images` is optional per item. Public API requests must provide inline `data`, a base64 string decoded by the backend. Caller-supplied `file_uri` values are rejected because the public endpoint cannot prove ownership of an arbitrary cloud object; managed Google Cloud Storage references remain an internal provider capability. Each reference image must use one of `image/png`, `image/jpeg`, or `image/webp`. Current model limits are:
 
 - `gemini-2.5-flash-image` and other Flash Image aliases: up to 3 reference images per item.
 - `gemini-3-pro-image` and other Pro Image aliases: up to 14 reference images per item.
 - Per batch job: up to 1000 reference image attachments total after `output_count` expansion across all items. This is an internal Sub2API guardrail for request size and cost control, not the generated-image cap and not a Pro Image per-item capability. The generated-output cap is 200 images per job.
-- Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, prefer `gs://` `file_uri` references or split the request into multiple jobs.
+- Per batch job: up to 128 MB decoded inline reference image data total. For large batches or repeated reference images, split the request into multiple jobs.
 
 `output_count` is optional per item and defaults to `1`. It means "repeat this prompt and reference image set N times" rather than relying on Gemini to return multiple images from one upstream request. The backend expands each repeat into a separate provider JSONL line with suffixed custom ids such as `cover_001_01`, `cover_001_02`. Current limits are:
 
@@ -134,7 +134,7 @@ cancelled                  -> cancelled
 output_deleted             -> output_deleted
 ```
 
-`completed -> output_deleted` happens after manual output deletion or TTL cleanup.
+`completed -> output_deleted` happens after manual output deletion or TTL cleanup. Failed and cancelled jobs keep their business status after cleanup and expose `output_deleted_at`; preserving that terminal status lets the idempotent billing-hold release path retry after a temporary billing failure.
 
 ## Redis
 
@@ -168,6 +168,7 @@ MVP billing rules:
 - Settlement request id is `batch_image_settlement:{batch_id}`.
 - Settlement is idempotent; re-running settlement must not double charge.
 - Settlement billing failures are retried with a bounded retry limit. After the retry limit is reached, the job is failed and the remaining hold is released through the idempotent release path.
+- Provider polling failures use a persisted, saturating fast-retry counter. Transient transport, rate-limit, upstream, and account-repository read failures remain retryable; provider failures move to a 15-minute reconciliation interval after the fast budget is exhausted without changing the job to failed or releasing its hold. Explicit permanent authentication, permission, missing-resource, missing-account, removed-credential, or unavailable-provider conditions terminate the job and release the hold.
 
 Exact production pricing is resolved through model pricing configuration and is not defined here.
 
@@ -187,7 +188,7 @@ Manual output deletion:
 DELETE /v1/images/batches/{id}/outputs
 ```
 
-After output cleanup, downloads return `410 Gone` with `BATCH_IMAGE_OUTPUT_DELETED`.
+After output cleanup, downloads return `410 Gone` with `BATCH_IMAGE_OUTPUT_DELETED`. Cleanup changes a completed job to `output_deleted`; failed and cancelled jobs retain their original public status and record `output_deleted_at` instead.
 
 Cleanup never accepts user-supplied provider paths. Provider cleanup must use server-generated refs and prefix-safe deletion.
 

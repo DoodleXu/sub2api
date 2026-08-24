@@ -202,6 +202,7 @@ WHERE ns.nspname = 'public'
 	require.True(t, imageTaskHistoryRegclass.Valid, "expected image_task_history table to exist")
 	requireColumn(t, tx, "image_task_history", "task_id", "character varying", 96, false)
 	requireColumn(t, tx, "image_task_history", "result_json", "jsonb", 0, true)
+	requireColumn(t, tx, "image_task_history", "storage_binding_id", "character varying", 96, false)
 	requireIndex(t, tx, "image_task_history", "idx_image_task_history_status_created")
 
 	// security_secrets table should exist

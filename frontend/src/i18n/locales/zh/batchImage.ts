@@ -189,7 +189,7 @@ export default {
       promptTooLong: '单条 prompt 过长，请缩短后重试。',
       invalidReferenceImage: '参考图格式不正确，请使用 10MB 以内的 PNG、JPEG 或 WebP。',
       tooManyReferenceImages: '参考图数量超过限制：Flash Image 每条最多 3 张，Pro Image 每条最多 14 张，整组最多 1000 张。',
-      referenceImagesTooLarge: '参考图总量过大。inline 参考图整组最多 128MB；大量参考图请改用 gs:// file_uri 或拆分任务。',
+      referenceImagesTooLarge: '参考图总量过大。inline 参考图整组最多 128MB；请压缩参考图或拆分任务。公共接口不接受 caller-provided file_uri。',
       tooManyOutputImages: '预计生成张数超过限制：每条最多 4 张，整组最多 200 张。',
       idempotencyConflict: '这次提交和之前的请求标识冲突，请刷新页面后重新提交。',
       notReady: '任务还没有完成，完成后才能下载。',

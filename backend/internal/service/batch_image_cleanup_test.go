@@ -43,6 +43,19 @@ func TestBatchImageCleanupService_DeleteOutputsForOwner(t *testing.T) {
 		require.Empty(t, provider.cleanupTargets)
 	})
 
+	for _, terminalStatus := range []string{BatchImageJobStatusFailed, BatchImageJobStatusCancelled} {
+		t.Run("manual delete accepts "+terminalStatus, func(t *testing.T) {
+			svc, repo, provider := newTestBatchImageCleanupService()
+			repo.jobs["imgbatch_cleanup"].Status = terminalStatus
+			got, err := svc.DeleteOutputsForOwner(ctx, testBatchImageOwner(), "imgbatch_cleanup")
+			require.NoError(t, err)
+			require.Equal(t, terminalStatus, got.Status)
+			require.NotNil(t, got.OutputDeletedAt)
+			require.Equal(t, terminalStatus, repo.jobs["imgbatch_cleanup"].Status)
+			require.Len(t, provider.cleanupTargets, 1)
+		})
+	}
+
 	t.Run("not completed returns not ready", func(t *testing.T) {
 		svc, repo, _ := newTestBatchImageCleanupService()
 		repo.jobs["imgbatch_cleanup"].Status = BatchImageJobStatusRunning
@@ -107,7 +120,7 @@ func TestBatchImageCleanupService_InputOutputAndWorker(t *testing.T) {
 		require.Len(t, provider.cleanupTargets, 1)
 	})
 
-	t.Run("output cleanup for failed job keeps status", func(t *testing.T) {
+	t.Run("output cleanup for failed job preserves business status", func(t *testing.T) {
 		svc, repo, _ := newTestBatchImageCleanupService()
 		repo.jobs["imgbatch_cleanup"].Status = BatchImageJobStatusFailed
 
@@ -140,6 +153,64 @@ func TestBatchImageCleanupService_InputOutputAndWorker(t *testing.T) {
 		require.Nil(t, repo.jobs["imgbatch_future"].OutputDeletedAt)
 		require.NotContains(t, strings.Join(repo.events["imgbatch_running"], ","), "cleanup")
 	})
+
+	t.Run("worker cleans failed output referenced by managed gcs uri", func(t *testing.T) {
+		svc, repo, provider := newTestBatchImageCleanupService()
+		job := cleanupTestJob("imgbatch_failed_gcs", BatchImageJobStatusFailed)
+		job.ProviderOutputRef = nil
+		job.GCSOutputURI = batchImageStringPtr("gs://managed-bucket/batch-image/output/")
+		expired := time.Now().Add(-time.Minute)
+		job.OutputExpiresAt = &expired
+		repo.jobs[job.BatchID] = job
+
+		result, err := svc.RunOnce(context.Background(), time.Now())
+		require.NoError(t, err)
+		require.Equal(t, 1, result.OutputCleaned)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
+		// The worker also applies the terminal input-retention policy to both
+		// old jobs before processing the expired output. Keep the assertion
+		// order-independent because the repository returns due jobs by query
+		// order, not by the in-memory fixture's map iteration order.
+		require.ElementsMatch(t, []CleanupTarget{
+			CleanupTargetInput,
+			CleanupTargetInput,
+			CleanupTargetOutput,
+		}, provider.cleanupTargets)
+	})
+}
+
+func TestBatchImageOutputCleanupPreservesTerminalStatusForHoldReleaseRetry(t *testing.T) {
+	ctx := context.Background()
+	for _, terminalStatus := range []string{BatchImageJobStatusFailed, BatchImageJobStatusCancelled} {
+		t.Run(terminalStatus, func(t *testing.T) {
+			svc, repo, _ := newTestBatchImageCleanupService()
+			job := repo.jobs["imgbatch_cleanup"]
+			job.Status = terminalStatus
+			holdAmount := 0.5
+			job.EstimatedCost = holdAmount
+			job.HoldAmount = &holdAmount
+
+			billing := &fakeBatchImageBillingRepo{releaseErr: errors.New("temporary billing failure")}
+			processor := newTestBatchImageProcessor(repo, &fakeProcessorProvider{})
+			processor.BillingRepo = billing
+
+			_, err := processor.Process(ctx, job.BatchID)
+			require.ErrorIs(t, err, ErrBatchImageBillingHoldFailed)
+			require.Len(t, billing.releases, 1)
+
+			deleted, err := svc.DeleteOutputsForOwner(ctx, testBatchImageOwner(), job.BatchID)
+			require.NoError(t, err)
+			require.Equal(t, terminalStatus, deleted.Status)
+			require.NotNil(t, deleted.OutputDeletedAt)
+			require.Equal(t, terminalStatus, repo.jobs[job.BatchID].Status)
+
+			billing.releaseErr = nil
+			result, err := processor.Process(ctx, job.BatchID)
+			require.NoError(t, err)
+			require.True(t, result.Terminal)
+			require.Len(t, billing.releases, 2)
+		})
+	}
 }
 
 func TestBatchImageSettlementOutputExpiration(t *testing.T) {

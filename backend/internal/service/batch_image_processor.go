@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
@@ -24,6 +25,8 @@ const (
 
 	defaultBatchImageProcessorRequeue = 30 * time.Second
 	batchImageProviderErrorRequeue    = time.Minute
+	batchImageProviderReconcileDelay  = 15 * time.Minute
+	batchImageProviderPollMaxRetries  = 5
 	batchImageMaxErrorMessageLength   = 1000
 )
 
@@ -53,6 +56,7 @@ type BatchImageProviderProcessor struct {
 	Indexer          *BatchImageResultIndexer
 	BillingRepo      UsageBillingRepository
 	AuthCache        APIKeyAuthCacheInvalidator
+	Config           *config.Config
 	DefaultRequeue   time.Duration
 }
 
@@ -71,41 +75,117 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		}
 		return BatchImageProcessResult{Terminal: true}, nil
 	}
+	failPermanentPreflight := func(code string, cause error) (BatchImageProcessResult, error) {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			code = "BATCH_IMAGE_PROVIDER_PREFLIGHT_FAILED"
+		}
+		message := "batch image provider configuration is no longer available"
+		if cause != nil {
+			if publicMessage := strings.TrimSpace(infraerrors.Message(cause)); publicMessage != "" {
+				message = publicMessage
+			}
+		}
+		message = truncateBatchImageMessage(sanitizeBatchImagePublicMessage(message), batchImageMaxErrorMessageLength)
+		if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
+			EventType:       "job_failed",
+			EventPayload:    map[string]any{"error_code": code, "preflight_terminal": true},
+			ErrorCode:       batchImageStringPtr(code),
+			ErrorMessage:    batchImageOptionalStringPtr(message),
+			OutputExpiresAt: p.batchImageOutputExpiration(),
+		}); err != nil {
+			return BatchImageProcessResult{}, err
+		}
+		job.Status = BatchImageJobStatusFailed
+		if err := p.releaseTerminalHold(ctx, job); err != nil {
+			return BatchImageProcessResult{}, err
+		}
+		return BatchImageProcessResult{Terminal: true}, nil
+	}
 
 	provider, ok := p.ProviderRegistry.Get(job.Provider)
 	if !ok || provider == nil {
-		return BatchImageProcessResult{}, ErrBatchImageUnsupportedProvider
+		return failPermanentPreflight("BATCH_IMAGE_UNSUPPORTED_PROVIDER", ErrBatchImageUnsupportedProvider)
 	}
 	if job.AccountID == nil || *job.AccountID <= 0 {
-		return BatchImageProcessResult{}, ErrBatchImageMissingAccountID
+		return failPermanentPreflight("BATCH_IMAGE_MISSING_ACCOUNT_ID", ErrBatchImageMissingAccountID)
+	}
+	if strings.TrimSpace(batchImageDerefString(job.ProviderJobName)) == "" {
+		return failPermanentPreflight("BATCH_IMAGE_MISSING_PROVIDER_JOB_NAME", ErrBatchImageMissingProviderJobName)
 	}
 	account, err := p.AccountResolver.ResolveBatchImageAccount(ctx, *job.AccountID)
 	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			return failPermanentPreflight("BATCH_IMAGE_ACCOUNT_UNAVAILABLE", ErrAccountNotFound)
+		}
 		return BatchImageProcessResult{}, err
 	}
 	if !provider.SupportsAccount(account) {
-		return BatchImageProcessResult{}, ErrBatchImageProviderUnsupportedAccount
-	}
-	if strings.TrimSpace(batchImageDerefString(job.ProviderJobName)) == "" {
-		return BatchImageProcessResult{}, ErrBatchImageMissingProviderJobName
+		return failPermanentPreflight("BATCH_IMAGE_PROVIDER_UNSUPPORTED_ACCOUNT", ErrBatchImageProviderUnsupportedAccount)
 	}
 
 	if job.Status == BatchImageJobStatusIndexing {
 		return p.indexAndSettle(ctx, job, provider, account)
 	}
 
-	status, err := provider.Get(ctx, job, account)
-	if err != nil {
+	recordPollFailure := func(code, msg string, cause error) (BatchImageProcessResult, error) {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			code = "PROVIDER_POLL_FAILED"
+		}
+		msg = truncateBatchImageMessage(sanitizeBatchImagePublicMessage(msg), batchImageMaxErrorMessageLength)
+		if isPermanentBatchImageProviderPollError(code, cause) {
+			if transitionErr := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
+				EventType:       "job_failed",
+				EventPayload:    map[string]any{"error_code": code, "poll_terminal": true},
+				ErrorCode:       batchImageStringPtr(code),
+				ErrorMessage:    batchImageOptionalStringPtr(msg),
+				OutputExpiresAt: p.batchImageOutputExpiration(),
+			}); transitionErr != nil {
+				return BatchImageProcessResult{}, transitionErr
+			}
+			job.Status = BatchImageJobStatusFailed
+			if releaseErr := p.releaseTerminalHold(ctx, job); releaseErr != nil {
+				return BatchImageProcessResult{}, releaseErr
+			}
+			return BatchImageProcessResult{Terminal: true}, nil
+		}
+		retryCount, recordErr := p.Repo.RecordBatchImageProviderPollFailure(ctx, job.BatchID, code, msg, batchImageProviderPollMaxRetries)
+		if recordErr != nil {
+			return BatchImageProcessResult{}, recordErr
+		}
+		job.RetryCount = retryCount
+		job.LastErrorCode = batchImageStringPtr(code)
+		job.LastErrorMessage = batchImageOptionalStringPtr(msg)
 		logger.L().Warn("batch_image.provider_status_check_failed",
 			zap.String("batch_id", job.BatchID),
 			zap.String("provider", job.Provider),
 			zap.String("provider_job_name", batchImageDerefString(job.ProviderJobName)),
-			zap.Error(err),
+			zap.Int("poll_retry_count", retryCount),
+			zap.Error(cause),
 		)
-		return BatchImageProcessResult{RequeueAfter: batchImageProviderErrorRequeue}, nil
+		return BatchImageProcessResult{RequeueAfter: batchImageProviderPollRetryDelay(retryCount)}, nil
+	}
+
+	status, err := provider.Get(ctx, job, account)
+	if err != nil {
+		code := strings.TrimSpace(infraerrors.Reason(err))
+		if code == "" {
+			code = "PROVIDER_POLL_FAILED"
+		}
+		return recordPollFailure(code, err.Error(), err)
 	}
 	if status == nil {
-		return BatchImageProcessResult{RequeueAfter: p.requeueDelay(0)}, nil
+		return recordPollFailure("PROVIDER_POLL_EMPTY_RESPONSE", "provider status response was empty", nil)
+	}
+	// A successful provider response starts a fresh retry budget for the later
+	// settlement phase. Polling failures therefore cannot consume settlement
+	// retries, while transient outages remain bounded across worker restarts.
+	if job.RetryCount > 0 {
+		if err := p.Repo.ResetBatchImageProviderPollFailures(ctx, job.BatchID); err != nil {
+			return BatchImageProcessResult{}, err
+		}
+		job.RetryCount = 0
 	}
 	if err := p.persistProviderOutputRef(ctx, job, status.ProviderOutputRef); err != nil {
 		return BatchImageProcessResult{}, err
@@ -146,10 +226,11 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		}
 		msg := truncateBatchImageMessage(status.ErrorMessage, batchImageMaxErrorMessageLength)
 		if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
-			EventType:    "job_failed",
-			EventPayload: map[string]any{"provider_state": status.RawState, "error_code": code},
-			ErrorCode:    batchImageStringPtr(code),
-			ErrorMessage: batchImageOptionalStringPtr(msg),
+			EventType:       "job_failed",
+			EventPayload:    map[string]any{"provider_state": status.RawState, "error_code": code},
+			ErrorCode:       batchImageStringPtr(code),
+			ErrorMessage:    batchImageOptionalStringPtr(msg),
+			OutputExpiresAt: p.batchImageOutputExpiration(),
 		}); err != nil {
 			return BatchImageProcessResult{}, err
 		}
@@ -160,8 +241,9 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 		return BatchImageProcessResult{Terminal: true}, nil
 	case BatchProviderStateCancelled:
 		if err := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusCancelled, BatchImageTransitionOptions{
-			EventType:    "job_failed",
-			EventPayload: map[string]any{"provider_state": status.RawState, "error_code": "PROVIDER_BATCH_CANCELLED"},
+			EventType:       "job_failed",
+			EventPayload:    map[string]any{"provider_state": status.RawState, "error_code": "PROVIDER_BATCH_CANCELLED"},
+			OutputExpiresAt: p.batchImageOutputExpiration(),
 		}); err != nil {
 			return BatchImageProcessResult{}, err
 		}
@@ -173,6 +255,39 @@ func (p *BatchImageProviderProcessor) Process(ctx context.Context, batchID strin
 	default:
 		return BatchImageProcessResult{RequeueAfter: p.requeueDelay(status.SuggestedRequeueAfter)}, nil
 	}
+}
+
+func isPermanentBatchImageProviderPollError(code string, err error) bool {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if strings.HasPrefix(code, "VERTEX_AUTH_FAILED") ||
+		strings.HasPrefix(code, "VERTEX_PERMISSION_DENIED") ||
+		strings.HasPrefix(code, "VERTEX_BATCH_NOT_FOUND") {
+		return true
+	}
+	// Some provider implementations return a plain error without an
+	// infraerrors reason. Keep the classification fail-closed for explicit
+	// permanent wording while allowing network/5xx errors to retry.
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		return strings.Contains(msg, "authentication failed") ||
+			strings.Contains(msg, "permission denied") ||
+			strings.Contains(msg, "batch resource was not found")
+	}
+	return false
+}
+
+func batchImageProviderPollRetryDelay(retryCount int) time.Duration {
+	if retryCount <= 1 {
+		return batchImageProviderErrorRequeue
+	}
+	if retryCount >= batchImageProviderPollMaxRetries {
+		return batchImageProviderReconcileDelay
+	}
+	delay := batchImageProviderErrorRequeue * time.Duration(1<<(retryCount-1))
+	if delay > batchImageProviderReconcileDelay {
+		return batchImageProviderReconcileDelay
+	}
+	return delay
 }
 
 func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *BatchImageJob, provider BatchImageProvider, account *Account) (BatchImageProcessResult, error) {
@@ -200,10 +315,11 @@ func (p *BatchImageProviderProcessor) indexAndSettle(ctx context.Context, job *B
 		}
 		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
 		transitionErr := p.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
-			EventType:    "indexing_failed",
-			EventPayload: map[string]any{"error_code": code},
-			ErrorCode:    batchImageStringPtr(code),
-			ErrorMessage: batchImageOptionalStringPtr(msg),
+			EventType:       "indexing_failed",
+			EventPayload:    map[string]any{"error_code": code},
+			ErrorCode:       batchImageStringPtr(code),
+			ErrorMessage:    batchImageOptionalStringPtr(msg),
+			OutputExpiresAt: p.batchImageOutputExpiration(),
 		})
 		if transitionErr != nil {
 			return BatchImageProcessResult{}, transitionErr
@@ -242,6 +358,15 @@ func (p *BatchImageProviderProcessor) releaseTerminalHold(ctx context.Context, j
 		p.AuthCache.InvalidateAuthCacheByUserID(ctx, job.UserID)
 	}
 	return nil
+}
+
+func (p *BatchImageProviderProcessor) batchImageOutputExpiration() *time.Time {
+	retention := defaultBatchImageOutputRetentionAfterTerminal
+	if p != nil && p.Config != nil && p.Config.BatchImage.OutputRetentionAfterTerminalHours > 0 {
+		retention = time.Duration(p.Config.BatchImage.OutputRetentionAfterTerminalHours) * time.Hour
+	}
+	expiresAt := time.Now().Add(retention)
+	return &expiresAt
 }
 
 func (p *BatchImageProviderProcessor) persistProviderOutputRef(ctx context.Context, job *BatchImageJob, ref string) error {

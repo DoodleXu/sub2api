@@ -56,6 +56,7 @@ type ImageResultUploader struct {
 	httpClient       *http.Client
 	prefix           string
 	maxDownloadBytes int64
+	bindingID        string
 }
 
 // NewImageResultUploader 构造一个 uploader；storage 为 nil 时 Rewrite 直接透传。
@@ -72,6 +73,23 @@ func NewImageResultUploader(storage ImageStorage, prefix string, maxDownloadByte
 		prefix:           prefix,
 		maxDownloadBytes: maxDownloadBytes,
 	}
+}
+
+// SetBindingID associates the uploader with the effective object-store
+// configuration that created it. The value is a non-secret fingerprint used
+// to prevent a restarted worker from operating on objects in another bucket.
+func (u *ImageResultUploader) SetBindingID(bindingID string) {
+	if u == nil {
+		return
+	}
+	u.bindingID = strings.TrimSpace(bindingID)
+}
+
+func (u *ImageResultUploader) BindingID() string {
+	if u == nil {
+		return ""
+	}
+	return strings.TrimSpace(u.bindingID)
 }
 
 func defaultImageDownloadHTTPClient() *http.Client {

@@ -27,6 +27,13 @@ type ImageStorageBrowser interface {
 	List(ctx context.Context, prefix, cursor string, limit int) (*ImageStorageObjectPage, error)
 }
 
+// ImageStorageObjectURLResolver is an optional browser capability used by the
+// persistent task history. Object keys are durable; access URLs are generated
+// at read time so private-bucket links do not expire while stored in PostgreSQL.
+type ImageStorageObjectURLResolver interface {
+	ResolveURLs(ctx context.Context, keys []string) (map[string]string, error)
+}
+
 type ImageStorageBrowserFactory func(ctx context.Context, cfg *config.ImageStorageConfig) (ImageStorageBrowser, error)
 
 // BrowserConfig returns the same effective object-store binding used by async tasks.

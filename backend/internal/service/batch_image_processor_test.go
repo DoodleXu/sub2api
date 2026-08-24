@@ -208,22 +208,88 @@ func TestBatchImageProviderProcessor_ValidationAndTerminalCases(t *testing.T) {
 	t.Run("missing provider", func(t *testing.T) {
 		repo := newFakeBatchImageRepository()
 		repo.jobs["imgbatch_missing_provider"] = &BatchImageJob{BatchID: "imgbatch_missing_provider", Status: BatchImageJobStatusSubmitted, Provider: "missing", AccountID: &accountID, ProviderJobName: &providerJob}
-		_, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_provider")
-		require.ErrorIs(t, err, ErrBatchImageUnsupportedProvider)
+		got, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_provider")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_missing_provider"].Status)
+		require.Equal(t, "BATCH_IMAGE_UNSUPPORTED_PROVIDER", batchImageDerefString(repo.jobs["imgbatch_missing_provider"].LastErrorCode))
 	})
 
 	t.Run("missing account id", func(t *testing.T) {
 		repo := newFakeBatchImageRepository()
 		repo.jobs["imgbatch_missing_account"] = &BatchImageJob{BatchID: "imgbatch_missing_account", Status: BatchImageJobStatusSubmitted, Provider: "fake", ProviderJobName: &providerJob}
-		_, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_account")
-		require.ErrorIs(t, err, ErrBatchImageMissingAccountID)
+		got, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_account")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_missing_account"].Status)
+		require.Equal(t, "BATCH_IMAGE_MISSING_ACCOUNT_ID", batchImageDerefString(repo.jobs["imgbatch_missing_account"].LastErrorCode))
 	})
 
 	t.Run("missing provider job name", func(t *testing.T) {
 		repo := newFakeBatchImageRepository()
 		repo.jobs["imgbatch_missing_name"] = &BatchImageJob{BatchID: "imgbatch_missing_name", Status: BatchImageJobStatusSubmitted, Provider: "fake", AccountID: &accountID}
-		_, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_name")
-		require.ErrorIs(t, err, ErrBatchImageMissingProviderJobName)
+		got, err := (&BatchImageProviderProcessor{Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}), AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}}).Process(ctx, "imgbatch_missing_name")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_missing_name"].Status)
+		require.Equal(t, "BATCH_IMAGE_MISSING_PROVIDER_JOB_NAME", batchImageDerefString(repo.jobs["imgbatch_missing_name"].LastErrorCode))
+	})
+
+	t.Run("deleted account fails and releases hold", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		holdAmount := 0.5
+		apiKeyID := int64(22)
+		repo.jobs["imgbatch_deleted_account"] = &BatchImageJob{
+			BatchID: "imgbatch_deleted_account", Status: BatchImageJobStatusSubmitted, Provider: "fake",
+			AccountID: &accountID, ProviderJobName: &providerJob, UserID: 11, APIKeyID: &apiKeyID,
+			EstimatedCost: holdAmount, HoldAmount: &holdAmount,
+		}
+		billing := &fakeBatchImageBillingRepo{}
+		processor := &BatchImageProviderProcessor{
+			Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}),
+			AccountResolver: &fakeBatchImageAccountResolver{err: ErrAccountNotFound}, BillingRepo: billing,
+		}
+		got, err := processor.Process(ctx, "imgbatch_deleted_account")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_deleted_account"].Status)
+		require.Equal(t, "BATCH_IMAGE_ACCOUNT_UNAVAILABLE", batchImageDerefString(repo.jobs["imgbatch_deleted_account"].LastErrorCode))
+		require.Len(t, billing.releases, 1)
+	})
+
+	t.Run("removed credentials fail and release hold", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		holdAmount := 0.5
+		apiKeyID := int64(22)
+		repo.jobs["imgbatch_removed_credentials"] = &BatchImageJob{
+			BatchID: "imgbatch_removed_credentials", Status: BatchImageJobStatusSubmitted, Provider: "fake",
+			AccountID: &accountID, ProviderJobName: &providerJob, UserID: 11, APIKeyID: &apiKeyID,
+			EstimatedCost: holdAmount, HoldAmount: &holdAmount,
+		}
+		billing := &fakeBatchImageBillingRepo{}
+		processor := &BatchImageProviderProcessor{
+			Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{unsupportedAccount: true}),
+			AccountResolver: &fakeBatchImageAccountResolver{account: &Account{}}, BillingRepo: billing,
+		}
+		got, err := processor.Process(ctx, "imgbatch_removed_credentials")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_removed_credentials"].Status)
+		require.Equal(t, "BATCH_IMAGE_PROVIDER_UNSUPPORTED_ACCOUNT", batchImageDerefString(repo.jobs["imgbatch_removed_credentials"].LastErrorCode))
+		require.Len(t, billing.releases, 1)
+	})
+
+	t.Run("transient account read error remains retryable", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		repo.jobs["imgbatch_account_read"] = &BatchImageJob{BatchID: "imgbatch_account_read", Status: BatchImageJobStatusSubmitted, Provider: "fake", AccountID: &accountID, ProviderJobName: &providerJob}
+		readErr := errors.New("temporary database failure")
+		got, err := (&BatchImageProviderProcessor{
+			Repo: repo, ProviderRegistry: NewBatchImageProviderRegistry(&fakeProcessorProvider{}),
+			AccountResolver: &fakeBatchImageAccountResolver{err: readErr},
+		}).Process(ctx, "imgbatch_account_read")
+		require.ErrorIs(t, err, readErr)
+		require.False(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs["imgbatch_account_read"].Status)
 	})
 }
 
@@ -265,6 +331,77 @@ func TestBatchImageProviderProcessor_StatusFlow(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, got.Terminal)
 		require.Equal(t, time.Minute, got.RequeueAfter)
+	})
+
+	t.Run("transient provider errors enter low frequency reconciliation without releasing hold", func(t *testing.T) {
+		cases := []struct {
+			name string
+			err  error
+			code string
+		}{
+			{name: "timeout", err: context.DeadlineExceeded, code: "PROVIDER_POLL_FAILED"},
+			{name: "rate limit", err: infraerrors.New(429, "GEMINI_RATE_LIMITED", "Gemini rate limit exceeded"), code: "GEMINI_RATE_LIMITED"},
+			{name: "server error", err: infraerrors.New(502, "VERTEX_INVALID_RESPONSE", "Vertex API request failed"), code: "VERTEX_INVALID_RESPONSE"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				repo := newFakeBatchImageRepository()
+				repo.jobs["imgbatch_flow"] = newJob(BatchImageJobStatusSubmitted)
+				apiKeyID := int64(22)
+				holdAmount := 0.5
+				repo.jobs["imgbatch_flow"].UserID = 11
+				repo.jobs["imgbatch_flow"].APIKeyID = &apiKeyID
+				repo.jobs["imgbatch_flow"].EstimatedCost = holdAmount
+				repo.jobs["imgbatch_flow"].HoldAmount = &holdAmount
+				provider := &fakeProcessorProvider{getErr: tc.err}
+				processor := newTestBatchImageProcessor(repo, provider)
+				billing := &fakeBatchImageBillingRepo{}
+				processor.BillingRepo = billing
+				for attempt := 1; attempt <= batchImageProviderPollMaxRetries+3; attempt++ {
+					got, err := processor.Process(ctx, "imgbatch_flow")
+					require.NoError(t, err)
+					require.False(t, got.Terminal)
+					if attempt >= batchImageProviderPollMaxRetries {
+						require.Equal(t, batchImageProviderReconcileDelay, got.RequeueAfter)
+					}
+				}
+				require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs["imgbatch_flow"].Status)
+				require.Equal(t, batchImageProviderPollMaxRetries, repo.jobs["imgbatch_flow"].RetryCount)
+				require.Equal(t, tc.code, batchImageDerefString(repo.jobs["imgbatch_flow"].LastErrorCode))
+				require.Nil(t, repo.jobs["imgbatch_flow"].OutputExpiresAt)
+				require.Empty(t, billing.releases)
+			})
+		}
+	})
+
+	t.Run("empty provider responses are bounded", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		repo.jobs["imgbatch_flow"] = newJob(BatchImageJobStatusSubmitted)
+		provider := &fakeProcessorProvider{returnNilStatus: true}
+		processor := newTestBatchImageProcessor(repo, provider)
+		for attempt := 1; attempt <= batchImageProviderPollMaxRetries+1; attempt++ {
+			got, err := processor.Process(ctx, "imgbatch_flow")
+			require.NoError(t, err)
+			require.False(t, got.Terminal)
+			if attempt >= batchImageProviderPollMaxRetries {
+				require.Equal(t, batchImageProviderReconcileDelay, got.RequeueAfter)
+			}
+		}
+		require.Equal(t, BatchImageJobStatusSubmitted, repo.jobs["imgbatch_flow"].Status)
+		require.Equal(t, batchImageProviderPollMaxRetries, repo.jobs["imgbatch_flow"].RetryCount)
+		require.Equal(t, "PROVIDER_POLL_EMPTY_RESPONSE", batchImageDerefString(repo.jobs["imgbatch_flow"].LastErrorCode))
+	})
+
+	t.Run("permanent provider errors fail immediately", func(t *testing.T) {
+		repo := newFakeBatchImageRepository()
+		repo.jobs["imgbatch_flow"] = newJob(BatchImageJobStatusSubmitted)
+		provider := &fakeProcessorProvider{getErr: infraerrors.New(502, "VERTEX_PERMISSION_DENIED", "Vertex permission denied")}
+		got, err := newTestBatchImageProcessor(repo, provider).Process(ctx, "imgbatch_flow")
+		require.NoError(t, err)
+		require.True(t, got.Terminal)
+		require.Equal(t, BatchImageJobStatusFailed, repo.jobs["imgbatch_flow"].Status)
+		require.Equal(t, "VERTEX_PERMISSION_DENIED", batchImageDerefString(repo.jobs["imgbatch_flow"].LastErrorCode))
+		require.Equal(t, 0, repo.jobs["imgbatch_flow"].RetryCount)
 	})
 
 	t.Run("succeeded indexes and settles from submitted", func(t *testing.T) {
@@ -345,9 +482,11 @@ func (r *fakeBatchImageAccountResolver) ResolveBatchImageAccount(context.Context
 }
 
 type fakeProcessorProvider struct {
-	status *BatchProviderStatus
-	getErr error
-	result string
+	status             *BatchProviderStatus
+	getErr             error
+	result             string
+	returnNilStatus    bool
+	unsupportedAccount bool
 
 	getCalled        bool
 	openResultCalled bool
@@ -355,7 +494,7 @@ type fakeProcessorProvider struct {
 
 func (p *fakeProcessorProvider) Name() string { return "fake" }
 func (p *fakeProcessorProvider) SupportsAccount(*Account) bool {
-	return true
+	return !p.unsupportedAccount
 }
 func (p *fakeProcessorProvider) Submit(context.Context, *BatchImageJob, *Account, BatchImageInput) (*BatchProviderJob, error) {
 	panic("Submit must not be called by PR5 processor")
@@ -364,6 +503,9 @@ func (p *fakeProcessorProvider) Get(context.Context, *BatchImageJob, *Account) (
 	p.getCalled = true
 	if p.getErr != nil {
 		return nil, p.getErr
+	}
+	if p.returnNilStatus {
+		return nil, nil
 	}
 	if p.status == nil {
 		return &BatchProviderStatus{InternalState: BatchProviderStateQueued}, nil
@@ -386,7 +528,12 @@ type fakeBatchImageRepository struct {
 	transitions   map[string][]string
 	events        map[string][]string
 	transitionErr error
-	replaceCalls  int
+	createErr     error
+	// skipIdempotencyLookupOnce models the optimistic lookup missing while a
+	// concurrent transaction wins the database unique constraint.
+	skipIdempotencyLookupOnce bool
+	idempotencyLookupCalls    int
+	replaceCalls              int
 }
 
 func newFakeBatchImageRepository() *fakeBatchImageRepository {
@@ -400,6 +547,9 @@ func newFakeBatchImageRepository() *fakeBatchImageRepository {
 }
 
 func (r *fakeBatchImageRepository) CreateBatchImageJob(_ context.Context, params CreateBatchImageJobParams) (*BatchImageJob, error) {
+	if r.createErr != nil {
+		return nil, r.createErr
+	}
 	job := &BatchImageJob{
 		BatchID:                 params.BatchID,
 		UserID:                  params.UserID,
@@ -441,6 +591,10 @@ func (r *fakeBatchImageRepository) GetBatchImageJobByBatchID(_ context.Context, 
 }
 
 func (r *fakeBatchImageRepository) GetBatchImageJobByIdempotencyKey(_ context.Context, userID, apiKeyID int64, key string) (*BatchImageJob, error) {
+	r.idempotencyLookupCalls++
+	if r.skipIdempotencyLookupOnce && r.idempotencyLookupCalls == 1 {
+		return nil, ErrBatchImageJobNotFound
+	}
 	for _, job := range r.jobs {
 		if job.UserID == userID && job.APIKeyID != nil && *job.APIKeyID == apiKeyID && batchImageDerefString(job.IdempotencyKey) == key {
 			return job, nil
@@ -527,6 +681,9 @@ func (r *fakeBatchImageRepository) TransitionBatchImageJobStatus(_ context.Conte
 	job.Status = toStatus
 	job.LastErrorCode = opts.ErrorCode
 	job.LastErrorMessage = opts.ErrorMessage
+	if job.OutputExpiresAt == nil && opts.OutputExpiresAt != nil && (toStatus == BatchImageJobStatusFailed || toStatus == BatchImageJobStatusCancelled) {
+		job.OutputExpiresAt = opts.OutputExpiresAt
+	}
 	r.transitions[batchID] = append(r.transitions[batchID], toStatus)
 	if opts.EventType != "" {
 		r.events[batchID] = append(r.events[batchID], opts.EventType)
@@ -650,6 +807,29 @@ func (r *fakeBatchImageRepository) SetBatchImageJobSettlementFailed(_ context.Co
 	job.RetryCount++
 	r.events[batchID] = append(r.events[batchID], "settlement_failed")
 	return job.RetryCount, nil
+}
+
+func (r *fakeBatchImageRepository) RecordBatchImageProviderPollFailure(_ context.Context, batchID, code, message string, maxRetries int) (int, error) {
+	job, ok := r.jobs[batchID]
+	if !ok {
+		return 0, ErrBatchImageJobNotFound
+	}
+	job.LastErrorCode = batchImageStringPtr(code)
+	job.LastErrorMessage = batchImageStringPtr(message)
+	if job.RetryCount < maxRetries {
+		job.RetryCount++
+	}
+	r.events[batchID] = append(r.events[batchID], "provider_poll_failed")
+	return job.RetryCount, nil
+}
+
+func (r *fakeBatchImageRepository) ResetBatchImageProviderPollFailures(_ context.Context, batchID string) error {
+	job, ok := r.jobs[batchID]
+	if !ok {
+		return ErrBatchImageJobNotFound
+	}
+	job.RetryCount = 0
+	return nil
 }
 
 func (r *fakeBatchImageRepository) CreateBatchImageItem(_ context.Context, params CreateBatchImageItemParams) (*BatchImageItem, error) {
@@ -805,7 +985,15 @@ func (r *fakeBatchImageRepository) ListBatchImageJobsDueForOutputCleanup(_ conte
 	}
 	var jobs []*BatchImageJob
 	for _, job := range r.jobs {
-		if job.OutputDeletedAt != nil || batchImageDerefString(job.ProviderOutputRef) == "" || job.Status != BatchImageJobStatusCompleted || job.OutputExpiresAt == nil || job.OutputExpiresAt.After(now) {
+		if job.OutputDeletedAt != nil || (batchImageDerefString(job.ProviderOutputRef) == "" && batchImageDerefString(job.GCSOutputURI) == "") || (job.Status != BatchImageJobStatusCompleted && job.Status != BatchImageJobStatusFailed && job.Status != BatchImageJobStatusCancelled) {
+			continue
+		}
+		expiresAt := job.OutputExpiresAt
+		if expiresAt == nil && job.FinishedAt != nil {
+			fallback := job.FinishedAt.Add(defaultBatchImageOutputRetentionAfterTerminal)
+			expiresAt = &fallback
+		}
+		if expiresAt == nil || expiresAt.After(now) {
 			continue
 		}
 		jobs = append(jobs, job)

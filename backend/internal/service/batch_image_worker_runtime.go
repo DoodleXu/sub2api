@@ -38,6 +38,7 @@ func ProvideBatchImageWorkerRuntime(
 			AccountResolver:  &BatchImageAccountRepositoryResolver{Repo: accountRepo},
 			BillingRepo:      billingRepo,
 			AuthCache:        authCache,
+			Config:           cfg,
 		},
 		SettlementService: &BatchImageSettlementService{
 			Repo:         repo,

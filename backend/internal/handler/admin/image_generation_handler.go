@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -104,9 +106,17 @@ func (h *ImageGenerationHandler) ListTasks(c *gin.Context) {
 		return
 	}
 	now := time.Now().UTC()
+	resultURLs, err := h.resolveTaskResultURLs(c.Request.Context(), page.Tasks)
+	if err != nil {
+		// History metadata remains useful when object storage is temporarily
+		// unavailable. Durable-key tasks intentionally keep URLs empty instead of
+		// exposing stale or cross-bucket links; legacy inline results remain usable.
+		slog.Warn("resolve image task history URLs", "error", err)
+		resultURLs = map[string][]string{}
+	}
 	items := make([]imageGenerationTaskView, 0, len(page.Tasks))
 	for _, task := range page.Tasks {
-		items = append(items, imageGenerationTaskToView(task, now))
+		items = append(items, imageGenerationTaskToView(task, now, resultURLs[task.ID]))
 	}
 	response.Success(c, gin.H{
 		"items":       items,
@@ -115,6 +125,70 @@ func (h *ImageGenerationHandler) ListTasks(c *gin.Context) {
 		"stats":       page.Stats,
 		"server_time": now.UnixMilli(),
 	})
+}
+
+func (h *ImageGenerationHandler) resolveTaskResultURLs(ctx context.Context, tasks []*service.ImageTaskRecord) (map[string][]string, error) {
+	if h == nil || h.settings == nil || h.factory == nil {
+		for _, task := range tasks {
+			if task != nil && len(task.ResultObjectKeys) > 0 {
+				return nil, fmt.Errorf("resolve image task history URLs: object storage is unavailable")
+			}
+		}
+		return map[string][]string{}, nil
+	}
+	cfg, err := h.settings.BrowserConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	currentBinding := service.ImageStorageBindingID(cfg)
+	keysByTask := make(map[string][]string)
+	uniqueKeys := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, task := range tasks {
+		if task == nil || len(task.ResultObjectKeys) == 0 || task.StorageBindingID == "" || task.StorageBindingID != currentBinding {
+			continue
+		}
+		for _, rawKey := range task.ResultObjectKeys {
+			key := strings.TrimSpace(rawKey)
+			if key == "" {
+				continue
+			}
+			keysByTask[task.ID] = append(keysByTask[task.ID], key)
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				uniqueKeys = append(uniqueKeys, key)
+			}
+		}
+	}
+	if len(uniqueKeys) == 0 {
+		return map[string][]string{}, nil
+	}
+	for _, key := range uniqueKeys {
+		if !strings.HasPrefix(key, cfg.Prefix) {
+			return nil, fmt.Errorf("resolve image task history URLs: object key is outside the configured prefix")
+		}
+	}
+	browser, err := h.factory(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	resolver, ok := browser.(service.ImageStorageObjectURLResolver)
+	if !ok {
+		return nil, fmt.Errorf("resolve image task history URLs: storage browser cannot issue object URLs")
+	}
+	resolvedByKey, err := resolver.ResolveURLs(ctx, uniqueKeys)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]string, len(keysByTask))
+	for taskID, keys := range keysByTask {
+		for _, key := range keys {
+			if resolved := strings.TrimSpace(resolvedByKey[key]); resolved != "" {
+				result[taskID] = append(result[taskID], resolved)
+			}
+		}
+	}
+	return result, nil
 }
 
 func imageTaskDateRange(c *gin.Context) (int64, int64, error) {
@@ -142,7 +216,7 @@ func imageTaskDateRange(c *gin.Context) (int64, int64, error) {
 	return startAt, endAt, nil
 }
 
-func imageGenerationTaskToView(task *service.ImageTaskRecord, now time.Time) imageGenerationTaskView {
+func imageGenerationTaskToView(task *service.ImageTaskRecord, now time.Time, freshResultURLs []string) imageGenerationTaskView {
 	view := imageGenerationTaskView{
 		ID:          task.ID,
 		TaskID:      task.ID,
@@ -177,6 +251,11 @@ func imageGenerationTaskToView(task *service.ImageTaskRecord, now time.Time) ima
 			view.ErrorType = strings.TrimSpace(taskError.Type)
 			view.StopReason = strings.TrimSpace(taskError.Message)
 		}
+	}
+	if len(task.ResultObjectKeys) > 0 {
+		view.ResultCount = len(task.ResultObjectKeys)
+		view.ResultURLs = append(view.ResultURLs, freshResultURLs...)
+		return view
 	}
 	if len(task.Result) > 0 {
 		var result struct {

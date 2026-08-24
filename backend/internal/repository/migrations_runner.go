@@ -64,6 +64,8 @@ const usageLogsAccountCostLookupIndex = "idx_usage_logs_account_id_id"
 const usageLogsEffectiveModelIndexesMigration = "226_add_usage_log_effective_model_indexes_notx.sql"
 const usageLogsEffectiveRequestedModelIndex = "idx_usage_logs_effective_requested_model_created"
 const usageLogsEffectiveUpstreamModelIndex = "idx_usage_logs_effective_upstream_model_created"
+const batchImageIdempotencyUniqueMigration = "231_batch_image_idempotency_unique_notx.sql"
+const batchImageJobsOwnerIdempotencyUniqueIndex = "batch_image_jobs_owner_idempotency_unique_idx"
 
 type migrationChecksumCompatibilityRule struct {
 	fileChecksum       string
@@ -544,6 +546,8 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 			}
 		}
 		return nil
+	case batchImageIdempotencyUniqueMigration:
+		return dropInvalidIndexIfPresent(ctx, db, batchImageJobsOwnerIdempotencyUniqueIndex)
 	default:
 		return nil
 	}

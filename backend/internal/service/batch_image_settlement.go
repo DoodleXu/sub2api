@@ -236,9 +236,10 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 		msg = "settlement billing retry limit reached"
 	}
 	if err := s.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusFailed, BatchImageTransitionOptions{
-		ErrorCode:    batchImageStringPtr("SETTLEMENT_BILLING_RETRY_EXHAUSTED"),
-		ErrorMessage: batchImageStringPtr(msg),
-		EventType:    "settlement_retry_exhausted",
+		ErrorCode:       batchImageStringPtr("SETTLEMENT_BILLING_RETRY_EXHAUSTED"),
+		ErrorMessage:    batchImageStringPtr(msg),
+		OutputExpiresAt: func() *time.Time { v := time.Now().Add(s.outputRetentionAfterTerminal()); return &v }(),
+		EventType:       "settlement_retry_exhausted",
 		EventPayload: map[string]any{
 			"batch_id":    job.BatchID,
 			"retry_count": job.RetryCount,

@@ -141,6 +141,18 @@ func TestImageTaskServiceLifecycleAndOwnership(t *testing.T) {
 	require.NotNil(t, completed.CompletedAt)
 }
 
+func TestImageTaskServicePersistsStorageBindingAtAdmission(t *testing.T) {
+	store := &imageTaskMemoryStore{}
+	uploader := NewImageResultUploader(&fakeImageStorage{}, "images/", 0, nil)
+	uploader.SetBindingID("imgbind_test")
+	svc := NewImageTaskServiceWithUploader(store, uploader, time.Hour, time.Minute)
+	t.Cleanup(svc.Close)
+
+	_, err := svc.Create(context.Background(), ImageTaskOwner{UserID: 1, APIKeyID: 2})
+	require.NoError(t, err)
+	require.Equal(t, "imgbind_test", store.task.StorageBindingID)
+}
+
 func TestImageTaskServiceInvalidResultBecomesFailed(t *testing.T) {
 	store := &imageTaskMemoryStore{}
 	svc := NewImageTaskServiceWithOptions(store, time.Hour, time.Minute)

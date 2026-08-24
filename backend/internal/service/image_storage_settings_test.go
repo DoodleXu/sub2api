@@ -335,12 +335,13 @@ func TestImageStorageSettingsFallBackToConfigFile(t *testing.T) {
 	svc, _, built := newImageStorageFixture(t, config.ImageStorageConfig{
 		Enabled: true, Endpoint: "https://acct.r2.cloudflarestorage.com", Region: "auto",
 		Bucket: "yaml-bucket", AccessKeyID: "yaml-ak", SecretAccessKey: "yaml-sk",
-		Prefix: "images/", MaxDownloadByte: 1024,
+		Prefix: "images", MaxDownloadByte: 1024,
 	})
 
 	_, enabled := svc.resolve()
 	require.True(t, enabled, "config.yaml still enables the feature when nothing is stored yet")
 	require.Equal(t, "yaml-bucket", (*built)[0].Bucket)
+	require.Equal(t, "images/", (*built)[0].Prefix, "the config fallback must use a path-safe object prefix")
 
 	fetched, err := svc.Get(context.Background())
 	require.NoError(t, err)

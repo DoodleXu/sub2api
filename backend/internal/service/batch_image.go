@@ -91,7 +91,7 @@ var (
 	ErrBatchImageDownloadTooLarge         = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_DOWNLOAD_TOO_LARGE", "batch image download is too large")
 	ErrBatchImageItemImageIndexOutOfRange = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ITEM_IMAGE_INDEX_OUT_OF_RANGE", "batch image item image index is out of range")
 	ErrBatchImageZipTooManyItems          = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_ZIP_TOO_MANY_ITEMS", "batch image ZIP contains too many items; use single item downloads")
-	ErrBatchImageOutputDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_OUTPUT_DELETE_NOT_READY", "batch image output can only be deleted after completion")
+	ErrBatchImageOutputDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_OUTPUT_DELETE_NOT_READY", "batch image output can only be deleted after the job reaches a terminal state")
 	ErrBatchImageRecordDeleteNotReady     = infraerrors.New(http.StatusConflict, "BATCH_IMAGE_RECORD_DELETE_NOT_READY", "batch image record can only be deleted after the job finishes")
 	ErrBatchImageCleanupFailed            = infraerrors.New(http.StatusBadGateway, "BATCH_IMAGE_CLEANUP_FAILED", "batch image cleanup failed")
 	ErrBatchImageCleanupUnsafePath        = infraerrors.New(http.StatusBadRequest, "BATCH_IMAGE_CLEANUP_UNSAFE_PATH", "batch image cleanup path is unsafe")
@@ -277,11 +277,12 @@ type UpdateBatchImageJobProviderSubmitParams struct {
 }
 
 type BatchImageTransitionOptions struct {
-	EventType    string
-	EventPayload any
-	ErrorCode    *string
-	ErrorMessage *string
-	Now          *time.Time
+	EventType       string
+	EventPayload    any
+	ErrorCode       *string
+	ErrorMessage    *string
+	OutputExpiresAt *time.Time
+	Now             *time.Time
 }
 
 type MarkBatchImageJobSettledParams struct {
@@ -322,6 +323,12 @@ type BatchImageRepository interface {
 	RecordBatchImageJobSubmitFailure(ctx context.Context, batchID, code, message string, markFailed bool) error
 	MarkBatchImageJobSettled(ctx context.Context, params MarkBatchImageJobSettledParams) error
 	SetBatchImageJobSettlementFailed(ctx context.Context, batchID, code, message string) (int, error)
+	// Provider polling failures are persisted separately from the settlement
+	// phase. The counter saturates at maxRetries so transient provider outages
+	// remain observable without growing unbounded, and is reset once the
+	// provider responds.
+	RecordBatchImageProviderPollFailure(ctx context.Context, batchID, code, message string, maxRetries int) (int, error)
+	ResetBatchImageProviderPollFailures(ctx context.Context, batchID string) error
 	CreateBatchImageItem(ctx context.Context, params CreateBatchImageItemParams) (*BatchImageItem, error)
 	BulkCreateBatchImageItems(ctx context.Context, params []CreateBatchImageItemParams) error
 	ReplaceBatchImageItemsForJob(ctx context.Context, batchID string, items []CreateBatchImageItemParams, counts BatchImageCounts) error
@@ -373,9 +380,7 @@ func CanTransitionBatchImageJob(from, to string) bool {
 		return false
 	}
 	if IsTerminalBatchImageJobStatus(from) {
-		return to == BatchImageJobStatusOutputDeleted &&
-			from != BatchImageJobStatusOutputDeleted &&
-			(from == BatchImageJobStatusCompleted || from == BatchImageJobStatusFailed || from == BatchImageJobStatusCancelled)
+		return from == BatchImageJobStatusCompleted && to == BatchImageJobStatusOutputDeleted
 	}
 	if to == BatchImageJobStatusFailed {
 		return true

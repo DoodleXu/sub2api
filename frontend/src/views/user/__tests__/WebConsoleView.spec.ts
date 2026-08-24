@@ -6,6 +6,7 @@ import { loadWebConsoleSessions, saveWebConsoleSessions } from '@/features/web-c
 import type { WebConsoleSession } from '@/features/web-console/types'
 
 const keysListMock = vi.hoisted(() => vi.fn())
+const keysGetByIdMock = vi.hoisted(() => vi.fn())
 const fetchPublicSettingsMock = vi.hoisted(() => vi.fn())
 const createImageTaskMock = vi.hoisted(() => vi.fn())
 const getImageTaskMock = vi.hoisted(() => vi.fn())
@@ -30,6 +31,7 @@ vi.mock('@/features/web-console/utils', () => ({
 vi.mock('@/api', () => ({
   keysAPI: {
     list: keysListMock,
+    getById: keysGetByIdMock,
   },
   asyncImageTasksAPI: {
     create: createImageTaskMock,
@@ -135,6 +137,8 @@ describe('WebConsoleView', () => {
     fetchPublicSettingsMock.mockResolvedValue(appStore.cachedPublicSettings)
     createImageTaskMock.mockReset()
     getImageTaskMock.mockReset()
+    keysGetByIdMock.mockReset()
+    keysGetByIdMock.mockRejectedValue(new Error('API Key not found'))
     taskAssetsMock.mockClear()
     keysListMock.mockResolvedValue({
       items: [{
@@ -1083,6 +1087,7 @@ describe('WebConsoleView', () => {
           content: '生图失败：临时拉取失败',
           images: [],
           imageTaskId: 'imgtask_105',
+          imageTaskApiKeyId: 1,
           imageTaskEndpoint: 'https://api.example.com',
           imageRequest: {
             prompt: '画一张海报',
@@ -1152,6 +1157,7 @@ describe('WebConsoleView', () => {
             unavailable: false,
           }],
           imageTaskId: 'imgtask_107',
+          imageTaskApiKeyId: 1,
           imageRequest: {
             prompt: '画一张海报',
             model: 'gpt-5.5',
@@ -1197,6 +1203,111 @@ describe('WebConsoleView', () => {
     wrapper.unmount()
     Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectURL, configurable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectURL, configurable: true })
+  })
+
+  it('按保存的 API Key ID 跨页恢复生图任务，不使用当前选中的 Key', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-paginated-key',
+        title: '跨页 Key 任务',
+        mode: 'image',
+        messages: [{
+          id: 'message-paginated-key',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageTaskId: 'imgtask_paginated_key',
+          imageTaskApiKeyId: 2,
+          imageTaskEndpoint: '/',
+          imageRequest: {
+            prompt: '用原 Key 恢复',
+            model: 'gpt-image-2',
+            options: { size: '', quality: '', background: '', outputFormat: 'png', count: 1 },
+          },
+          status: 'processing',
+          created_at: '2026-08-03T00:00:00.000Z',
+        }],
+      }),
+    ])
+    const keyBase = {
+      status: 'active',
+      quota: 10,
+      quota_used: 0,
+      group: { name: 'OpenAI 组', platform: 'openai', subscription_type: 'balance' },
+    }
+    keysListMock.mockImplementation((page: number) => Promise.resolve(page === 1
+      ? { items: [{ id: 1, name: '当前 Key', key: 'sk-current', ...keyBase }], page: 1, page_size: 100, pages: 2, total: 2 }
+      : { items: [{ id: 2, name: '原 Key', key: 'sk-original', ...keyBase }], page: 2, page_size: 100, pages: 2, total: 2 }))
+    getImageTaskMock.mockResolvedValue({
+      id: 'imgtask_paginated_key',
+      task_id: 'imgtask_paginated_key',
+      status: 'completed',
+      assets: [{ url: 'data:image/png;base64,ZmFrZQ==', asset_index: 0 }],
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(keysListMock).toHaveBeenCalledWith(2, 100, { status: 'active' })
+    expect(keysGetByIdMock).not.toHaveBeenCalled()
+    expect(getImageTaskMock).toHaveBeenCalledWith('/', 'sk-original', 'imgtask_paginated_key', expect.any(AbortSignal))
+    expect(getImageTaskMock).not.toHaveBeenCalledWith('/', 'sk-current', 'imgtask_paginated_key', expect.anything())
+    expect(wrapper.text()).toContain('已生成 1 张图片。')
+
+    wrapper.unmount()
+  })
+
+  it('原 API Key 不可用时保留任务引用且不使用其他 Key 轮询', async () => {
+    saveWebConsoleSessions([
+      session({
+        id: 'session-disabled-key',
+        title: '已停用 Key 任务',
+        mode: 'image',
+        messages: [{
+          id: 'message-disabled-key',
+          role: 'assistant',
+          content: '生图任务已提交，正在生成图片。',
+          images: [],
+          imageTaskId: 'imgtask_disabled_key',
+          imageTaskApiKeyId: 99,
+          imageTaskEndpoint: '/',
+          imageRequest: {
+            prompt: '保留原任务',
+            model: 'gpt-image-2',
+            options: { size: '', quality: '', background: '', outputFormat: 'png', count: 1 },
+          },
+          status: 'processing',
+          created_at: '2026-08-03T00:00:00.000Z',
+        }],
+      }),
+    ])
+    keysGetByIdMock.mockResolvedValue({
+      id: 99,
+      name: '原 Key',
+      key: 'sk-disabled',
+      status: 'inactive',
+      quota: 10,
+      quota_used: 0,
+      group: { name: 'OpenAI 组', platform: 'openai', subscription_type: 'balance' },
+    })
+
+    const wrapper = mount(WebConsoleView)
+    await flushPromises()
+    await flushPromises()
+
+    expect(keysGetByIdMock).toHaveBeenCalledWith(99)
+    expect(getImageTaskMock).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('原 API Key #99 当前不可用')
+    const stored = loadWebConsoleSessions()
+    expect(stored[0].messages[0]).toEqual(expect.objectContaining({
+      imageTaskId: 'imgtask_disabled_key',
+      imageTaskApiKeyId: 99,
+      imageTaskEndpoint: '/',
+      status: 'processing',
+    }))
+
+    wrapper.unmount()
   })
 
   it('旧版数字任务不会再请求已移除的 fork 任务接口', async () => {

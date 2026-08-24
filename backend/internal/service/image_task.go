@@ -59,9 +59,16 @@ type ImageTaskRecord struct {
 	Result            json.RawMessage `json:"result,omitempty"`
 	Error             json.RawMessage `json:"error,omitempty"`
 	PendingObjectKeys []string        `json:"pending_object_keys,omitempty"`
-	CreatedAt         int64           `json:"created_at"`
-	CompletedAt       *int64          `json:"completed_at,omitempty"`
-	ExpiresAt         int64           `json:"expires_at"`
+	// ResultObjectKeys are the durable object identities behind Result URLs.
+	// They stay private and let the admin history endpoint issue fresh presigned
+	// URLs after the URL captured at task completion has expired.
+	ResultObjectKeys []string `json:"result_object_keys,omitempty"`
+	// StorageBindingID identifies the object-store configuration used for this
+	// task. It is a non-secret fingerprint, never a credential.
+	StorageBindingID string `json:"storage_binding_id,omitempty"`
+	CreatedAt        int64  `json:"created_at"`
+	CompletedAt      *int64 `json:"completed_at,omitempty"`
+	ExpiresAt        int64  `json:"expires_at"`
 }
 
 // ImageTask is the API-safe task representation returned to callers.
@@ -249,16 +256,32 @@ func (s *ImageTaskService) current() (*ImageResultUploader, bool) {
 	return s.uploader, s.enabled
 }
 
-func (s *ImageTaskService) uploaderForTask(id string) *ImageResultUploader {
-	if s == nil {
+func (s *ImageTaskService) uploaderForTaskRecord(task *ImageTaskRecord) *ImageResultUploader {
+	if s == nil || task == nil {
 		return nil
 	}
-	if uploader, ok := s.taskUploaders.Load(id); ok {
+	if uploader, ok := s.taskUploaders.Load(task.ID); ok {
 		if typed, valid := uploader.(*ImageResultUploader); valid {
-			return typed
+			if task.StorageBindingID == "" || typed.BindingID() == task.StorageBindingID {
+				return typed
+			}
+			return nil
 		}
 	}
+	// A resolver may return a new bucket after a restart or settings change.
+	// Without a persisted binding, never use that current uploader for a task
+	// carrying durable object identities; it could sign or delete another store's
+	// objects. Legacy processing tasks without object keys can still complete.
+	if s.resolve != nil && task.StorageBindingID == "" && (len(task.PendingObjectKeys) > 0 || len(task.ResultObjectKeys) > 0) {
+		return nil
+	}
 	uploader, _ := s.current()
+	if uploader == nil {
+		return nil
+	}
+	if task.StorageBindingID != "" && uploader.BindingID() != task.StorageBindingID {
+		return nil
+	}
 	return uploader
 }
 
@@ -332,7 +355,7 @@ func (s *ImageTaskService) reconcilePendingObjects() {
 			task = &failed
 		}
 		if task.Status == ImageTaskStatusFailed && len(task.PendingObjectKeys) > 0 {
-			uploader := s.uploaderForTask(task.ID)
+			uploader := s.uploaderForTaskRecord(task)
 			if uploader == nil {
 				continue
 			}
@@ -394,6 +417,9 @@ func (s *ImageTaskService) Create(ctx context.Context, owner ImageTaskOwner, met
 		task.Operation = strings.TrimSpace(metadata[0].Operation)
 		task.Model = strings.TrimSpace(metadata[0].Model)
 		task.ImageCount = metadata[0].ImageCount
+	}
+	if uploader != nil {
+		task.StorageBindingID = uploader.BindingID()
 	}
 	if err := s.store.Save(ctx, task, s.ttl); err != nil {
 		return nil, ErrImageTaskUnavailable.WithCause(err)
@@ -458,8 +484,15 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 	if !json.Valid(result) {
 		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "upstream returned a non-JSON image response"))
 	}
-	uploader := s.uploaderForTask(id)
-	if s.resolve != nil && uploader == nil {
+	task, err := s.store.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrImageTaskNotFound) {
+			return ErrImageTaskNotFound
+		}
+		return ErrImageTaskUnavailable.WithCause(err)
+	}
+	uploader := s.uploaderForTaskRecord(task)
+	if uploader == nil && (s.resolve != nil || task.StorageBindingID != "") {
 		logger.L().Error("image_task.uploader_snapshot_unavailable", zap.String("task_id", id))
 		return s.Fail(ctx, id, http.StatusBadGateway, imageTaskErrorJSON("api_error", "image object storage is unavailable"))
 	}
@@ -480,7 +513,7 @@ func (s *ImageTaskService) Complete(ctx context.Context, id string, statusCode i
 		result = rewritten.payload
 		uploadedKeys = rewritten.keys
 	}
-	transitioned, transitionAttempted, err := s.finish(ctx, id, ImageTaskStatusCompleted, statusCode, result, nil)
+	transitioned, transitionAttempted, err := s.finish(ctx, id, ImageTaskStatusCompleted, statusCode, result, nil, uploadedKeys)
 	cleanupUploaded := err == nil && !transitioned
 	if err != nil && transitionAttempted {
 		switch s.reconcileCompletionAfterTransitionError(id, result) {
@@ -546,18 +579,22 @@ func (s *ImageTaskService) Fail(ctx context.Context, id string, statusCode int, 
 	if !json.Valid(taskErr) {
 		taskErr = imageTaskErrorJSON("api_error", "image generation failed")
 	}
-	_, _, err := s.finish(ctx, id, ImageTaskStatusFailed, statusCode, nil, taskErr)
-	uploader := s.uploaderForTask(id)
+	_, _, err := s.finish(ctx, id, ImageTaskStatusFailed, statusCode, nil, taskErr, nil)
 	if err != nil {
 		return err
 	}
-	if uploader == nil {
-		s.forgetTaskUploader(id)
-		return nil
-	}
 	task, getErr := s.store.Get(ctx, id)
 	if getErr != nil {
-		return errors.Join(err, ErrImageTaskUnavailable.WithCause(getErr))
+		return ErrImageTaskUnavailable.WithCause(getErr)
+	}
+	uploader := s.uploaderForTaskRecord(task)
+	if uploader == nil {
+		if len(task.PendingObjectKeys) > 0 {
+			logger.L().Warn("image_task.pending_object_cleanup_deferred_binding_mismatch", zap.String("task_id", id), zap.String("storage_binding_id", task.StorageBindingID))
+			return ErrImageTaskUnavailable
+		}
+		s.forgetTaskUploader(id)
+		return nil
 	}
 	if task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
 		s.forgetTaskUploader(id)
@@ -593,7 +630,7 @@ func (s *ImageTaskService) scheduleFailedPendingObjectCleanup(task *ImageTaskRec
 	if s == nil || s.store == nil || task == nil || task.Status != ImageTaskStatusFailed || len(task.PendingObjectKeys) == 0 {
 		return
 	}
-	uploader := s.uploaderForTask(task.ID)
+	uploader := s.uploaderForTaskRecord(task)
 	if uploader == nil {
 		return
 	}
@@ -677,7 +714,7 @@ func (s *ImageTaskService) trackPendingObjects(ctx context.Context, id string, k
 	return tracked, nil
 }
 
-func (s *ImageTaskService) finish(ctx context.Context, id, status string, statusCode int, result, taskErr json.RawMessage) (transitioned, transitionAttempted bool, err error) {
+func (s *ImageTaskService) finish(ctx context.Context, id, status string, statusCode int, result, taskErr json.RawMessage, resultObjectKeys []string) (transitioned, transitionAttempted bool, err error) {
 	if s == nil || s.store == nil {
 		return false, false, ErrImageTaskUnavailable
 	}
@@ -700,6 +737,7 @@ func (s *ImageTaskService) finish(ctx context.Context, id, status string, status
 	task.Result = result
 	task.Error = taskErr
 	if status == ImageTaskStatusCompleted {
+		task.ResultObjectKeys = append([]string(nil), resultObjectKeys...)
 		task.PendingObjectKeys = nil
 	}
 	task.CompletedAt = &completedAt

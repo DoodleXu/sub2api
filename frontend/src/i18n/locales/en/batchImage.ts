@@ -189,7 +189,7 @@ export default {
       promptTooLong: 'One prompt is too long. Shorten it and try again.',
       invalidReferenceImage: 'A reference image is invalid. Use PNG, JPEG, or WebP under 10 MB.',
       tooManyReferenceImages: 'Too many reference images. Flash Image allows up to 3 per item, Pro Image allows up to 14, and each job allows up to 1000 total.',
-      referenceImagesTooLarge: 'Reference images are too large. Inline reference images are limited to 128 MB per job; use gs:// file_uri or split the job for large batches.',
+      referenceImagesTooLarge: 'Reference images are too large. Inline reference images are limited to 128 MB per job; compress the images or split the job. The public API does not accept caller-provided file_uri.',
       tooManyOutputImages: 'Too many expected output images. Each prompt can request up to 4 images, and each job can generate up to 200 images.',
       idempotencyConflict: 'This submission conflicts with a previous request ID. Refresh the page and submit again.',
       notReady: 'The job is not complete yet. Download will be available after completion.',

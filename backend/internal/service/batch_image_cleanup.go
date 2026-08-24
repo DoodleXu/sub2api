@@ -59,7 +59,7 @@ func (s *BatchImageCleanupService) DeleteOutputsForOwner(ctx context.Context, ow
 	if job.Status == BatchImageJobStatusOutputDeleted || job.OutputDeletedAt != nil {
 		return BatchImageJobToPublic(job), nil
 	}
-	if job.Status != BatchImageJobStatusCompleted {
+	if job.Status != BatchImageJobStatusCompleted && job.Status != BatchImageJobStatusFailed && job.Status != BatchImageJobStatusCancelled {
 		return nil, ErrBatchImageOutputDeleteNotReady
 	}
 	s.appendCleanupEvent(ctx, job.BatchID, "manual_output_delete_requested", map[string]any{

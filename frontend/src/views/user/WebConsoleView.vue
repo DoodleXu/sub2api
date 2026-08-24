@@ -357,6 +357,7 @@ const appStore = useAppStore()
 const sessions = ref<WebConsoleSession[]>([])
 const currentSessionId = ref('')
 const apiKeys = ref<ApiKey[]>([])
+const apiKeysLoaded = ref(false)
 const selectedKeyId = ref(0)
 const selectedEndpoint = ref('')
 const model = ref('gpt-image-2')
@@ -1074,6 +1075,38 @@ function stopTerminalImageTask(session: WebConsoleSession, message: WebConsoleMe
   touchSession(session)
 }
 
+function waitingForOriginalImageTaskKeyContent(apiKeyID?: number): string {
+  if (apiKeyID) {
+    return `生图任务仍已保留，但原 API Key #${apiKeyID} 当前不可用。恢复或重新启用该 Key 后刷新页面即可继续查询。`
+  }
+  return '生图任务仍已保留，但本地没有记录原 API Key。请保留此任务并联系管理员恢复查询。'
+}
+
+function isUsableImageTaskKey(key: ApiKey, endpoint: string): boolean {
+  const platform = key.group?.platform?.trim().toLowerCase()
+  return key.status === 'active' && Boolean(platform && compatiblePlatformsForEndpoint(endpoint).includes(platform))
+}
+
+async function resolveOriginalImageTaskKey(message: WebConsoleMessage): Promise<ApiKey | null> {
+  const apiKeyID = Number(message.imageTaskApiKeyId)
+  if (!Number.isInteger(apiKeyID) || apiKeyID <= 0) return null
+  const endpoint = message.imageTaskEndpoint || selectedEndpoint.value
+  const loadedKey = apiKeys.value.find((key) => key.id === apiKeyID)
+  if (loadedKey) return isUsableImageTaskKey(loadedKey, endpoint) ? loadedKey : null
+
+  try {
+    const exactKey = await keysAPI.getById(apiKeyID)
+    return isUsableImageTaskKey(exactKey, endpoint) ? exactKey : null
+  } catch {
+    return null
+  }
+}
+
+function keepImageTaskForKeyRecovery(session: WebConsoleSession, message: WebConsoleMessage): void {
+  message.content = waitingForOriginalImageTaskKeyContent(message.imageTaskApiKeyId)
+  touchSession(session)
+}
+
 function waitForNextImageTaskPoll(delayMs = 2000): Promise<boolean> {
   const signal = imageTaskPollingController.signal
   if (signal.aborted) return Promise.resolve(false)
@@ -1128,12 +1161,16 @@ async function pollImageTask(session: WebConsoleSession, message: WebConsoleMess
   if (pollingImageTaskIds.has(taskID)) return
   pollingImageTaskIds.add(taskID)
   try {
+    const taskKey = await resolveOriginalImageTaskKey(message)
+    if (signal.aborted || deletingSessionIds.has(session.id)) return
+    if (!taskKey) {
+      keepImageTaskForKeyRecovery(session, message)
+      return
+    }
     for (let attempt = 0; attempt < 900; attempt++) {
       if (signal.aborted || deletingSessionIds.has(session.id)) return
       let task
       try {
-        const taskKey = compatibleApiKeys.value.find((key) => key.id === message.imageTaskApiKeyId) || selectedKey.value
-        if (!taskKey) return
         task = await asyncImageTasksAPI.get(
           requestEndpoint(message.imageTaskEndpoint || selectedEndpoint.value),
           taskKey.key,
@@ -1360,8 +1397,17 @@ async function submit(): Promise<void> {
 }
 
 async function loadApiKeys(): Promise<void> {
-  const response = await keysAPI.list(1, 100, { status: 'active' })
-  apiKeys.value = response.items || []
+  const loadedKeys = new Map<number, ApiKey>()
+  let page = 1
+  while (true) {
+    const response = await keysAPI.list(page, 100, { status: 'active' })
+    for (const key of response.items || []) loadedKeys.set(key.id, key)
+    const totalPages = Number(response.pages)
+    if (!Number.isFinite(totalPages) || totalPages <= page || (response.items || []).length === 0) break
+    page += 1
+  }
+  apiKeys.value = Array.from(loadedKeys.values())
+  apiKeysLoaded.value = true
   syncSelectedKeyWithEndpoint()
 }
 
@@ -1394,7 +1440,7 @@ watch(currentSessionId, (sessionId) => {
   const session = sessions.value.find((item) => item.id === sessionId)
   if (session) {
     void restoreCachedImagesForSession(session)
-    resumeImageTasksForSession(session)
+    if (apiKeysLoaded.value) resumeImageTasksForSession(session)
   }
 })
 

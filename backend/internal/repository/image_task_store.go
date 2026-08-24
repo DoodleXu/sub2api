@@ -374,23 +374,33 @@ func upsertImageTaskHistory(ctx context.Context, executor sqlExecutor, task *ser
 	if len(task.Error) > 0 {
 		errorJSON = string(task.Error)
 	}
-	_, err := executor.ExecContext(ctx, `
+	objectKeys := task.ResultObjectKeys
+	if objectKeys == nil {
+		objectKeys = []string{}
+	}
+	objectKeysJSON, err := json.Marshal(objectKeys)
+	if err != nil {
+		return fmt.Errorf("marshal image task result object keys: %w", err)
+	}
+	_, err = executor.ExecContext(ctx, `
 INSERT INTO image_task_history (
     task_id, user_id, api_key_id, platform, operation, model, image_count,
-    status, http_status, result_json, error_json, created_at, completed_at, expires_at
+    status, http_status, result_json, error_json, result_object_keys, storage_binding_id, created_at, completed_at, expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-    to_timestamp($12), CASE WHEN $13::bigint > 0 THEN to_timestamp($13) ELSE NULL END, to_timestamp($14)
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+    to_timestamp($14), CASE WHEN $15::bigint > 0 THEN to_timestamp($15) ELSE NULL END, to_timestamp($16)
 )
 ON CONFLICT (task_id) DO UPDATE SET
     status = EXCLUDED.status,
     http_status = EXCLUDED.http_status,
     result_json = EXCLUDED.result_json,
     error_json = EXCLUDED.error_json,
+    result_object_keys = EXCLUDED.result_object_keys,
+    storage_binding_id = EXCLUDED.storage_binding_id,
     completed_at = EXCLUDED.completed_at,
     expires_at = EXCLUDED.expires_at`,
 		task.ID, task.UserID, task.APIKeyID, task.Platform, task.Operation, task.Model, task.ImageCount,
-		task.Status, task.HTTPStatus, resultJSON, errorJSON, task.CreatedAt, unixTimeValue(task.CompletedAt), task.ExpiresAt)
+		task.Status, task.HTTPStatus, resultJSON, errorJSON, string(objectKeysJSON), task.StorageBindingID, task.CreatedAt, unixTimeValue(task.CompletedAt), task.ExpiresAt)
 	return err
 }
 
@@ -463,7 +473,7 @@ func (s *imageTaskStore) listAdminHistory(ctx context.Context, query service.Ima
 	limitArg := addArg(query.Limit + 1)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,
-       status, http_status, result_json, error_json,
+       status, http_status, result_json, error_json, result_object_keys, storage_binding_id,
        EXTRACT(EPOCH FROM created_at)::bigint,
        CASE WHEN completed_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM completed_at)::bigint END,
        EXTRACT(EPOCH FROM expires_at)::bigint
@@ -479,13 +489,18 @@ LIMIT `+limitArg, args...)
 	for rows.Next() {
 		var task service.ImageTaskRecord
 		var completedAt sql.NullInt64
-		var resultJSON, errorJSON []byte
+		var resultJSON, errorJSON, resultObjectKeysJSON []byte
 		if err := rows.Scan(&task.ID, &task.UserID, &task.APIKeyID, &task.Platform, &task.Operation, &task.Model, &task.ImageCount,
-			&task.Status, &task.HTTPStatus, &resultJSON, &errorJSON, &task.CreatedAt, &completedAt, &task.ExpiresAt); err != nil {
+			&task.Status, &task.HTTPStatus, &resultJSON, &errorJSON, &resultObjectKeysJSON, &task.StorageBindingID, &task.CreatedAt, &completedAt, &task.ExpiresAt); err != nil {
 			return nil, err
 		}
 		task.Result = resultJSON
 		task.Error = errorJSON
+		if len(resultObjectKeysJSON) > 0 {
+			if err := json.Unmarshal(resultObjectKeysJSON, &task.ResultObjectKeys); err != nil {
+				return nil, fmt.Errorf("decode image task result object keys: %w", err)
+			}
+		}
 		if completedAt.Valid {
 			value := completedAt.Int64
 			task.CompletedAt = &value

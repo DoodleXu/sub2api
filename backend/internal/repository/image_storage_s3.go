@@ -233,6 +233,36 @@ func (s *S3ImageStorage) List(ctx context.Context, prefix, cursor string, limit 
 	return page, nil
 }
 
+// ResolveURLs generates current access URLs for known object keys without
+// rescanning the bucket. Callers remain responsible for constraining keys to
+// their configured namespace before invoking this method.
+func (s *S3ImageStorage) ResolveURLs(ctx context.Context, keys []string) (map[string]string, error) {
+	resolved := make(map[string]string, len(keys))
+	if len(keys) == 0 {
+		return resolved, nil
+	}
+	presignClient := s3.NewPresignClient(s.client)
+	for _, rawKey := range keys {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			continue
+		}
+		if s.publicBaseURL != "" {
+			resolved[key] = s.publicBaseURL + "/" + strings.TrimLeft(key, "/")
+			continue
+		}
+		result, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+			Bucket: &s.bucket,
+			Key:    &key,
+		}, s3.WithPresignExpires(s.presignExpiry))
+		if err != nil {
+			return nil, fmt.Errorf("presign image object %q: %w", key, err)
+		}
+		resolved[key] = result.URL
+	}
+	return resolved, nil
+}
+
 func (s *S3ImageStorage) cachedObjects(ctx context.Context, prefix string) ([]service.ImageStorageObject, error) {
 	if objects, ok := s.cachedObjectsForPrefix(prefix, time.Now()); ok {
 		return objects, nil

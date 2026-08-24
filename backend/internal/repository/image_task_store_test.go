@@ -49,10 +49,10 @@ func TestImageTaskStoreListsPersistentHistoryWithDateRange(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	store := NewImageTaskStore(rdb, db)
 
-	columns := []string{"task_id", "user_id", "api_key_id", "platform", "operation", "model", "image_count", "status", "http_status", "result_json", "error_json", "created_at", "completed_at", "expires_at"}
+	columns := []string{"task_id", "user_id", "api_key_id", "platform", "operation", "model", "image_count", "status", "http_status", "result_json", "error_json", "result_object_keys", "storage_binding_id", "created_at", "completed_at", "expires_at"}
 	mock.ExpectQuery(`SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,`).
 		WithArgs(service.ImageTaskStatusCompleted, int64(100), int64(200), 11).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow("imgtask_history", int64(7), int64(9), "openai", "generation", "gpt-image-1", 1, "completed", 200, []byte(`{"data":[]}`), nil, int64(150), int64(160), int64(300)))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("imgtask_history", int64(7), int64(9), "openai", "generation", "gpt-image-1", 1, "completed", 200, []byte(`{"data":[]}`), nil, []byte(`[]`), "", int64(150), int64(160), int64(300)))
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FILTER`).
 		WithArgs(int64(100), int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"processing", "completed", "failed"}).AddRow(0, 1, 0))
@@ -159,7 +159,7 @@ func TestImageTaskStoreTransitionMarksHistoryFailedWhenRuntimeExpires(t *testing
 	mock.ExpectExec("INSERT INTO image_task_history").
 		WithArgs(
 			task.ID, task.UserID, task.APIKeyID, task.Platform, task.Operation, task.Model, task.ImageCount,
-			service.ImageTaskStatusFailed, 410, nil, sqlmock.AnyArg(), task.CreatedAt, sqlmock.AnyArg(), task.ExpiresAt,
+			service.ImageTaskStatusFailed, 410, nil, sqlmock.AnyArg(), "[]", "", task.CreatedAt, sqlmock.AnyArg(), task.ExpiresAt,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 

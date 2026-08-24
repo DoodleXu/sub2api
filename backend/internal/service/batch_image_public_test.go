@@ -241,6 +241,9 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 			{name: "reference_requires_data_or_file_uri", mutate: func(r *BatchImageSubmitRequest) {
 				r.Items[0].ReferenceImages = []BatchImageReferenceInput{{MimeType: "image/png"}}
 			}, want: ErrBatchImageInvalidReferenceImage},
+			{name: "public_file_uri_requires_owner_bound_upload", mutate: func(r *BatchImageSubmitRequest) {
+				r.Items[0].ReferenceImages = []BatchImageReferenceInput{{MimeType: "image/png", FileURI: "gs://caller-owned/object.png"}}
+			}, want: ErrBatchImageInvalidReferenceImage},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -419,6 +422,36 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Nil(t, second)
 		require.ErrorIs(t, err, ErrBatchImageIdempotencyConflict)
 		require.NotEmpty(t, first.ID)
+	})
+
+	t.Run("unique conflict refetches concurrent winner", func(t *testing.T) {
+		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+		req := validBatchImageSubmitRequest()
+		normalized, err := svc.validateSubmitRequest(req)
+		require.NoError(t, err)
+		requestHash := HashBatchImageSubmitRequest(normalized)
+		key := "concurrent-key"
+		apiKeyID := int64(22)
+		repo.jobs["winner"] = &BatchImageJob{
+			BatchID:        "winner",
+			UserID:         11,
+			APIKeyID:       &apiKeyID,
+			IdempotencyKey: batchImageStringPtr(key),
+			RequestHash:    batchImageStringPtr(requestHash),
+			Status:         BatchImageJobStatusSubmitted,
+			Provider:       BatchImageProviderGeminiAPI,
+			Model:          normalized.Model,
+			ItemCount:      len(normalized.Items),
+			CreatedAt:      time.Now(),
+		}
+		repo.createErr = ErrBatchImageJobExists
+		repo.skipIdempotencyLookupOnce = true
+
+		got, err := svc.Submit(ctx, testBatchImageOwner(), req, key)
+		require.NoError(t, err)
+		require.Equal(t, "winner", got.ID)
+		require.Equal(t, []string{"winner"}, queue.enqueued, "the loser must repair a submitted winner that may have missed enqueue")
+		require.Empty(t, gemini.submits, "the loser must not submit a second provider job")
 	})
 
 	t.Run("public response does not expose internals", func(t *testing.T) {

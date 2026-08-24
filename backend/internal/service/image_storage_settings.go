@@ -145,6 +145,7 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 		return nil, false
 	}
 	s.uploader = NewImageResultUploader(storage, cfg.Prefix, cfg.MaxDownloadByte, nil)
+	s.uploader.SetBindingID(ImageStorageBindingID(cfg))
 	s.enabled = true
 	return s.uploader, true
 }
@@ -271,10 +272,16 @@ func (s *ImageStorageSettingService) effectiveConfig(ctx context.Context) (*conf
 	}
 	if settings == nil {
 		fallback := s.fallback
+		normalizeImageStorageConfig(&fallback)
 		return &fallback, nil
 	}
 	normalizeImageStorageSettings(settings)
-	return s.toImageStorageConfig(ctx, settings)
+	cfg, err := s.toImageStorageConfig(ctx, settings)
+	if err != nil {
+		return nil, err
+	}
+	normalizeImageStorageConfig(cfg)
+	return cfg, nil
 }
 
 func (s *ImageStorageSettingService) toImageStorageConfig(ctx context.Context, in *ImageStorageSettings) (*config.ImageStorageConfig, error) {
@@ -394,5 +401,39 @@ func normalizeImageStorageSettings(in *ImageStorageSettings) {
 	}
 	if in.MaxDownloadBytes <= 0 {
 		in.MaxDownloadBytes = defaultImageMaxDownloadBytes
+	}
+}
+
+// normalizeImageStorageConfig keeps config.yaml fallbacks on the same safe
+// path/defaults as settings saved through the admin API. In particular, a
+// missing trailing slash would concatenate the prefix and task id into a
+// different object key than the history/browser code expects.
+func normalizeImageStorageConfig(in *config.ImageStorageConfig) {
+	if in == nil {
+		return
+	}
+	in.Endpoint = strings.TrimSpace(in.Endpoint)
+	in.Region = strings.TrimSpace(in.Region)
+	in.Bucket = strings.TrimSpace(in.Bucket)
+	in.AccessKeyID = strings.TrimSpace(in.AccessKeyID)
+	in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
+	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
+	in.Prefix = strings.TrimSpace(in.Prefix)
+	if in.Prefix == "" {
+		in.Prefix = "images/"
+	} else if !strings.HasSuffix(in.Prefix, "/") {
+		in.Prefix += "/"
+	}
+	if in.Region == "" {
+		in.Region = "auto"
+	}
+	if in.PresignExpiry <= 0 {
+		in.PresignExpiry = 24
+	}
+	if in.LifecycleExpirationDays <= 0 {
+		in.LifecycleExpirationDays = 2
+	}
+	if in.MaxDownloadByte <= 0 {
+		in.MaxDownloadByte = defaultImageMaxDownloadBytes
 	}
 }

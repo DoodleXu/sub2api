@@ -60,7 +60,9 @@ func (r *batchImageRepository) GetBatchImageJobByBatchID(ctx context.Context, ba
 
 func (r *batchImageRepository) GetBatchImageJobByIdempotencyKey(ctx context.Context, userID, apiKeyID int64, key string) (*service.BatchImageJob, error) {
 	job, err := scanBatchImageJob(r.sql.QueryRowContext(ctx, batchImageJobSelectSQL+`
- WHERE user_id = $1 AND api_key_id = $2 AND idempotency_key = $3
+ WHERE user_id = $1
+   AND COALESCE(api_key_id, 0) = COALESCE(NULLIF($2, 0), 0)
+   AND idempotency_key = $3
  ORDER BY id DESC LIMIT 1`, userID, apiKeyID, key))
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrBatchImageJobNotFound, nil)
@@ -345,6 +347,7 @@ SET last_error_code = $2,
     retry_count = retry_count + 1,
     updated_at = $4
 WHERE batch_id = $1
+  AND status = 'settling'
 RETURNING retry_count`, batchID, code, message, time.Now()).Scan(&retryCount)
 	if err != nil {
 		return 0, translatePersistenceError(err, service.ErrBatchImageJobNotFound, nil)
@@ -352,6 +355,39 @@ RETURNING retry_count`, batchID, code, message, time.Now()).Scan(&retryCount)
 	return retryCount, appendBatchImageEventWithSQL(ctx, r.sql, batchID, "settlement_failed", map[string]any{
 		"error_code": code,
 	})
+}
+
+func (r *batchImageRepository) RecordBatchImageProviderPollFailure(ctx context.Context, batchID, code, message string, maxRetries int) (int, error) {
+	if maxRetries <= 0 {
+		maxRetries = 1
+	}
+	var retryCount int
+	err := r.sql.QueryRowContext(ctx, `
+UPDATE batch_image_jobs
+SET last_error_code = $2,
+    last_error_message = $3,
+    retry_count = LEAST(retry_count + 1, $5),
+    updated_at = $4
+WHERE batch_id = $1
+  AND status IN ('submitted', 'running')
+RETURNING retry_count`, batchID, code, message, time.Now(), maxRetries).Scan(&retryCount)
+	if err != nil {
+		return 0, translatePersistenceError(err, service.ErrBatchImageJobNotFound, nil)
+	}
+	return retryCount, appendBatchImageEventWithSQL(ctx, r.sql, batchID, "provider_poll_failed", map[string]any{
+		"error_code":  code,
+		"retry_count": retryCount,
+	})
+}
+
+func (r *batchImageRepository) ResetBatchImageProviderPollFailures(ctx context.Context, batchID string) error {
+	_, err := r.sql.ExecContext(ctx, `
+UPDATE batch_image_jobs
+SET retry_count = 0,
+    updated_at = $2
+WHERE batch_id = $1
+  AND status NOT IN ('completed', 'failed', 'cancelled', 'output_deleted')`, batchID, time.Now())
+	return err
 }
 
 func (r *batchImageRepository) transitionBatchImageJobStatusWithSQL(ctx context.Context, sqlq batchImageSQLExecutor, batchID, toStatus string, opts service.BatchImageTransitionOptions) error {
@@ -378,10 +414,11 @@ SET
     last_error_message = CASE WHEN $2::varchar = 'failed' THEN $5 ELSE last_error_message END,
     submitted_at = CASE WHEN $2::varchar = 'submitted' AND submitted_at IS NULL THEN $3 ELSE submitted_at END,
     started_at = CASE WHEN $2::varchar = 'running' AND started_at IS NULL THEN $3 ELSE started_at END,
-    finished_at = CASE WHEN $2::varchar IN ('completed', 'failed', 'cancelled') AND finished_at IS NULL THEN $3 ELSE finished_at END,
-    settled_at = CASE WHEN $2::varchar = 'completed' AND settled_at IS NULL THEN $3 ELSE settled_at END,
-    output_deleted_at = CASE WHEN $2::varchar = 'output_deleted' AND output_deleted_at IS NULL THEN $3 ELSE output_deleted_at END
-WHERE batch_id = $1`, batchID, toStatus, now, opts.ErrorCode, opts.ErrorMessage); err != nil {
+		finished_at = CASE WHEN $2::varchar IN ('completed', 'failed', 'cancelled') AND finished_at IS NULL THEN $3 ELSE finished_at END,
+		settled_at = CASE WHEN $2::varchar = 'completed' AND settled_at IS NULL THEN $3 ELSE settled_at END,
+		output_expires_at = CASE WHEN $2::varchar IN ('failed', 'cancelled') AND output_expires_at IS NULL THEN $6 ELSE output_expires_at END,
+		output_deleted_at = CASE WHEN $2::varchar = 'output_deleted' AND output_deleted_at IS NULL THEN $3 ELSE output_deleted_at END
+WHERE batch_id = $1`, batchID, toStatus, now, opts.ErrorCode, opts.ErrorMessage, opts.OutputExpiresAt); err != nil {
 		return err
 	}
 
@@ -591,11 +628,10 @@ func (r *batchImageRepository) ListBatchImageJobsDueForOutputCleanup(ctx context
 	}
 	rows, err := r.sql.QueryContext(ctx, batchImageJobSelectSQL+`
  WHERE output_deleted_at IS NULL
-   AND provider_output_ref IS NOT NULL
-   AND status = 'completed'
-   AND output_expires_at IS NOT NULL
-   AND output_expires_at <= $1
- ORDER BY output_expires_at ASC, id ASC
+   AND (provider_output_ref IS NOT NULL OR gcs_output_uri IS NOT NULL)
+   AND status IN ('completed', 'failed', 'cancelled')
+   AND COALESCE(output_expires_at, COALESCE(finished_at, settled_at, updated_at, created_at) + INTERVAL '72 hours') <= $1
+ ORDER BY COALESCE(output_expires_at, COALESCE(finished_at, settled_at, updated_at, created_at) + INTERVAL '72 hours') ASC, id ASC
  LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
@@ -647,7 +683,7 @@ func (r *batchImageRepository) MarkBatchImageOutputDeleted(ctx context.Context, 
 UPDATE batch_image_jobs
 SET status = CASE WHEN status = 'completed' THEN 'output_deleted' ELSE status END,
     output_deleted_at = CASE WHEN output_deleted_at IS NULL THEN $2 ELSE output_deleted_at END,
-    finished_at = CASE WHEN status = 'completed' AND finished_at IS NULL THEN $2 ELSE finished_at END,
+    finished_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') AND finished_at IS NULL THEN $2 ELSE finished_at END,
     updated_at = $2,
     version = version + 1
 WHERE batch_id = $1`, batchID, deletedAt)

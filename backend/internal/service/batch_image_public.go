@@ -218,13 +218,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 			if batchImageDerefString(existing.RequestHash) != requestHash {
 				return nil, ErrBatchImageIdempotencyConflict
 			}
-			if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
-				if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
-					_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, existing.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(enqueueErr.Error()), false)
-					return nil, ErrBatchImageQueueFailed
-				}
-			}
-			return BatchImageJobToPublic(existing), nil
+			return s.returnExistingBatchImageJob(ctx, existing)
 		}
 		if !errors.Is(err, ErrBatchImageJobNotFound) {
 			return nil, err
@@ -285,6 +279,18 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		SessionID:               normalized.SessionID,
 	})
 	if err != nil {
+		// The database unique index is the concurrency authority. Two requests
+		// may both miss the optimistic lookup above; the loser refetches the
+		// winner and applies the same request-hash conflict rule.
+		if idempotencyKey != "" && errors.Is(err, ErrBatchImageJobExists) {
+			existing, lookupErr := s.Repo.GetBatchImageJobByIdempotencyKey(ctx, owner.UserID, owner.APIKeyID, idempotencyKey)
+			if lookupErr == nil {
+				if batchImageDerefString(existing.RequestHash) != requestHash {
+					return nil, ErrBatchImageIdempotencyConflict
+				}
+				return s.returnExistingBatchImageJob(ctx, existing)
+			}
+		}
 		return nil, err
 	}
 	if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
@@ -399,6 +405,23 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	return BatchImageJobToPublic(created), nil
+}
+
+// returnExistingBatchImageJob keeps idempotent retries live after a database
+// unique-key race. A prior request may have persisted the provider submission
+// but lost its queue enqueue; the retry must repair that handoff instead of
+// merely returning a permanently stuck submitted job.
+func (s *BatchImagePublicService) returnExistingBatchImageJob(ctx context.Context, existing *BatchImageJob) (*BatchImagePublicBatch, error) {
+	if existing == nil {
+		return nil, ErrBatchImageJobNotFound
+	}
+	if existing.Status == BatchImageJobStatusSubmitted && s.Queue != nil {
+		if enqueueErr := s.Queue.Enqueue(ctx, existing.BatchID); enqueueErr != nil && !errors.Is(enqueueErr, ErrBatchImageAlreadyQueued) {
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, existing.BatchID, "QUEUE_FAILED", sanitizeBatchImagePublicMessage(enqueueErr.Error()), false)
+			return nil, ErrBatchImageQueueFailed
+		}
+	}
+	return BatchImageJobToPublic(existing), nil
 }
 
 func (s *BatchImagePublicService) releaseFailedSubmitHold(ctx context.Context, job *BatchImageJob, requestHash string) error {
@@ -752,8 +775,9 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return BatchImageJobToPublic(updated), nil
 	}
 	if err := s.Repo.TransitionBatchImageJobStatus(ctx, job.BatchID, BatchImageJobStatusCancelled, BatchImageTransitionOptions{
-		EventType:    "job_cancelled",
-		EventPayload: map[string]any{"batch_id": job.BatchID},
+		EventType:       "job_cancelled",
+		EventPayload:    map[string]any{"batch_id": job.BatchID},
+		OutputExpiresAt: s.batchImageOutputExpiration(),
 	}); err != nil {
 		return nil, err
 	}
@@ -767,6 +791,15 @@ func (s *BatchImagePublicService) Cancel(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	return BatchImageJobToPublic(updated), nil
+}
+
+func (s *BatchImagePublicService) batchImageOutputExpiration() *time.Time {
+	hours := defaultBatchImageOutputRetentionAfterTerminal
+	if s != nil && s.Config != nil && s.Config.BatchImage.OutputRetentionAfterTerminalHours > 0 {
+		hours = time.Duration(s.Config.BatchImage.OutputRetentionAfterTerminalHours) * time.Hour
+	}
+	expiresAt := time.Now().Add(hours)
+	return &expiresAt
 }
 
 func (s *BatchImagePublicService) validateSubmitRequest(req BatchImageSubmitRequest) (BatchImageSubmitRequest, error) {
@@ -892,7 +925,10 @@ func normalizeBatchImageReferenceInputs(model string, item *BatchImageSubmitItem
 		if len(ref.Data) > maxBatchImageReferenceImageBytes {
 			return 0, 0, ErrBatchImageInvalidReferenceImage
 		}
-		if ref.FileURI != "" && !strings.HasPrefix(ref.FileURI, "gs://") {
+		// Public callers cannot prove ownership of arbitrary gs:// objects.
+		// Keep FileURI in the provider-internal type, but require inline bytes at
+		// this public boundary until an owner-bound managed upload flow exists.
+		if ref.FileURI != "" {
 			return 0, 0, ErrBatchImageInvalidReferenceImage
 		}
 		inlineBytes += len(ref.Data)

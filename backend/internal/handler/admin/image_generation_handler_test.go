@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,7 +16,8 @@ import (
 )
 
 type imageStorageBrowserStub struct {
-	prefix string
+	prefix       string
+	resolvedKeys []string
 }
 
 func (s *imageStorageBrowserStub) List(_ context.Context, prefix, _ string, _ int) (*service.ImageStorageObjectPage, error) {
@@ -24,6 +26,15 @@ func (s *imageStorageBrowserStub) List(_ context.Context, prefix, _ string, _ in
 		Items:      []service.ImageStorageObject{{Key: prefix + "imgtask_1-0.png"}},
 		TotalCount: 1,
 	}, nil
+}
+
+func (s *imageStorageBrowserStub) ResolveURLs(_ context.Context, keys []string) (map[string]string, error) {
+	s.resolvedKeys = append([]string(nil), keys...)
+	resolved := make(map[string]string, len(keys))
+	for _, key := range keys {
+		resolved[key] = "https://fresh.example.test/" + key
+	}
+	return resolved, nil
 }
 
 type imageTaskAdminStoreStub struct {
@@ -148,4 +159,84 @@ func TestImageGenerationListTasksFiltersSensitiveTaskFields(t *testing.T) {
 	require.Len(t, envelope.Data.Items, 1)
 	require.Equal(t, 1, envelope.Data.Items[0].ResultCount)
 	require.Equal(t, []string{"https://cdn.example.test/image.png"}, envelope.Data.Items[0].ResultURLs)
+}
+
+func TestImageGenerationListTasksResolvesPersistedObjectKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	storageCfg := config.ImageStorageConfig{
+		Enabled: true, Bucket: "images", Prefix: "images/", AccessKeyID: "key", SecretAccessKey: "secret",
+	}
+	settings := service.NewImageStorageSettingService(nil, nil, nil, nil, storageCfg)
+	browser := &imageStorageBrowserStub{}
+	now := time.Now().Unix()
+	store := &imageTaskAdminStoreStub{page: &service.ImageTaskAdminPage{Tasks: []*service.ImageTaskRecord{{
+		ID: "imgtask_history_1", Status: service.ImageTaskStatusCompleted, HTTPStatus: http.StatusOK,
+		CreatedAt: now - 10, ExpiresAt: now + 3600,
+		Result:           json.RawMessage(`{"data":[{"url":"https://expired.example.test/old.png"}]}`),
+		ResultObjectKeys: []string{"images/history-1.png"},
+		StorageBindingID: service.ImageStorageBindingID(&storageCfg),
+	}}}}
+	tasks := service.NewImageTaskService(store)
+	t.Cleanup(tasks.Close)
+	h := NewImageGenerationHandler(settings, func(context.Context, *config.ImageStorageConfig) (service.ImageStorageBrowser, error) {
+		return browser, nil
+	}, tasks)
+	router := gin.New()
+	router.GET("/admin/image-generations/tasks", h.ListTasks)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/image-generations/tasks", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, []string{"images/history-1.png"}, browser.resolvedKeys)
+	var envelope struct {
+		Data struct {
+			Items []struct {
+				ResultCount int      `json:"result_count"`
+				ResultURLs  []string `json:"result_urls"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Len(t, envelope.Data.Items, 1)
+	require.Equal(t, 1, envelope.Data.Items[0].ResultCount)
+	require.Equal(t, []string{"https://fresh.example.test/images/history-1.png"}, envelope.Data.Items[0].ResultURLs)
+}
+
+func TestImageGenerationListTasksDegradesWhenObjectStorageIsUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	storageCfg := config.ImageStorageConfig{
+		Enabled: true, Bucket: "images", Prefix: "images/", AccessKeyID: "key", SecretAccessKey: "secret",
+	}
+	settings := service.NewImageStorageSettingService(nil, nil, nil, nil, storageCfg)
+	now := time.Now().Unix()
+	store := &imageTaskAdminStoreStub{page: &service.ImageTaskAdminPage{Tasks: []*service.ImageTaskRecord{{
+		ID: "imgtask_history_storage_down", Status: service.ImageTaskStatusCompleted, HTTPStatus: http.StatusOK,
+		CreatedAt: now - 10, ExpiresAt: now + 3600,
+		Result:           json.RawMessage(`{"data":[{"url":"https://expired.example.test/old.png"}]}`),
+		ResultObjectKeys: []string{"images/history-storage-down.png"},
+		StorageBindingID: service.ImageStorageBindingID(&storageCfg),
+	}}}}
+	tasks := service.NewImageTaskService(store)
+	t.Cleanup(tasks.Close)
+	h := NewImageGenerationHandler(settings, func(context.Context, *config.ImageStorageConfig) (service.ImageStorageBrowser, error) {
+		return nil, fmt.Errorf("storage unavailable")
+	}, tasks)
+	router := gin.New()
+	router.GET("/admin/image-generations/tasks", h.ListTasks)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/image-generations/tasks", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var envelope struct {
+		Data struct {
+			Items []struct {
+				ResultCount int      `json:"result_count"`
+				ResultURLs  []string `json:"result_urls"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Len(t, envelope.Data.Items, 1)
+	require.Equal(t, 1, envelope.Data.Items[0].ResultCount)
+	require.Empty(t, envelope.Data.Items[0].ResultURLs)
 }
