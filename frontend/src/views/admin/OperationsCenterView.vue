@@ -489,6 +489,16 @@ const totalRecords = ref(0)
 const recordPage = ref(1)
 const recordPageSize = 20
 
+// A generation protects data assignment, while a per-loader token protects
+// the loading flag itself.  An older request may finish after a newer range or
+// tab request; it must not clear the newer request's spinner, nor leave a
+// spinner stuck when the newer generation does not load that section.
+let overviewRequestToken = 0
+let analyticsRequestToken = 0
+let recordsRequestToken = 0
+let businessRequestToken = 0
+let rangeRequestGeneration = 0
+
 const form = reactive<CheckinRuleForm>({
   daily_checkin_enabled: true,
   daily_checkin_required_usage_usd: 1,
@@ -739,29 +749,37 @@ function assignSettings(settings: Awaited<ReturnType<typeof settingsAPI.getSetti
   form.daily_checkin_crit_max_reward_usd = settings.daily_checkin_crit_max_reward_usd ?? 0
 }
 
+function isCurrentRangeRequest(generation: number): boolean {
+  return generation === rangeRequestGeneration
+}
+
 async function refreshAll() {
+  const generation = ++rangeRequestGeneration
   loading.value = true
   try {
-    await Promise.all([loadOverview(), loadActiveTab(true)])
+    await Promise.all([loadOverview(generation), loadActiveTab(true, generation)])
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     console.error('Failed to load operations center:', error)
     appStore.showError(t('admin.operations.loadFailed'))
   } finally {
-    loading.value = false
+    if (isCurrentRangeRequest(generation)) loading.value = false
   }
 }
 
-async function loadSettingsAndStats() {
+async function loadSettingsAndStats(generation = rangeRequestGeneration) {
   const [settings, nextStats] = await Promise.all([
     settingsAPI.getSettings(),
     operationsAPI.getDailyCheckinStats({ timezone: reportingTimezone() }),
   ])
+  if (!isCurrentRangeRequest(generation)) return
   assignSettings(settings)
   stats.value = nextStats
   settingsLoaded.value = true
 }
 
-async function loadOverview() {
+async function loadOverview(generation = rangeRequestGeneration) {
+  const requestToken = ++overviewRequestToken
   loadingOverview.value = true
   overviewError.value = false
   try {
@@ -769,31 +787,38 @@ async function loadOverview() {
       operationsAPI.getOperationsOverview(dateRangeQuery()),
       operationsAPI.getOperationsOverview(previousDateRangeQuery()),
     ])
+    if (!isCurrentRangeRequest(generation)) return
     overview.value = current
     previousOverview.value = previous
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     overviewError.value = true
     throw error
   } finally {
-    loadingOverview.value = false
+    if (requestToken === overviewRequestToken) loadingOverview.value = false
   }
 }
 
-async function loadAnalytics() {
+async function loadAnalytics(generation = rangeRequestGeneration) {
+  const requestToken = ++analyticsRequestToken
   loadingAnalytics.value = true
   analyticsError.value = false
   try {
-    checkinAnalytics.value = await operationsAPI.getDailyCheckinAnalytics(dateRangeQuery())
+    const nextAnalytics = await operationsAPI.getDailyCheckinAnalytics(dateRangeQuery())
+    if (!isCurrentRangeRequest(generation)) return
+    checkinAnalytics.value = nextAnalytics
     analyticsLoaded.value = true
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     analyticsError.value = true
     throw error
   } finally {
-    loadingAnalytics.value = false
+    if (requestToken === analyticsRequestToken) loadingAnalytics.value = false
   }
 }
 
-async function loadBusinessInsights() {
+async function loadBusinessInsights(generation = rangeRequestGeneration) {
+  const requestToken = ++businessRequestToken
   loadingBusiness.value = true
   businessError.value = false
   try {
@@ -808,6 +833,7 @@ async function loadBusinessInsights() {
       operationsAPI.getDailyCheckinAnalytics(query),
       operationsAPI.getOperationsRetention(query),
     ])
+    if (!isCurrentRangeRequest(generation)) return
     businessStats.value = nextStats
     businessModels.value = modelResult.models
     businessGroups.value = groupResult?.groups || []
@@ -822,10 +848,11 @@ async function loadBusinessInsights() {
     analyticsLoaded.value = true
     businessLoaded.value = true
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     businessError.value = true
     throw error
   } finally {
-    loadingBusiness.value = false
+    if (requestToken === businessRequestToken) loadingBusiness.value = false
   }
 }
 
@@ -837,7 +864,8 @@ function calendarRangeDays(startDate: string, endDate: string): number {
   return Math.floor((end - start) / 86400000) + 1
 }
 
-async function loadRecords() {
+async function loadRecords(generation = rangeRequestGeneration) {
+  const requestToken = ++recordsRequestToken
   loadingRecords.value = true
   recordsError.value = false
   try {
@@ -846,14 +874,16 @@ async function loadRecords() {
       page_size: recordPageSize,
       ...dailyCheckinRecordQuery(),
     })
+    if (!isCurrentRangeRequest(generation)) return
     records.value = result.items
     totalRecords.value = result.total
     recordsLoaded.value = true
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     recordsError.value = true
     throw error
   } finally {
-    loadingRecords.value = false
+    if (requestToken === recordsRequestToken) loadingRecords.value = false
   }
 }
 
@@ -882,43 +912,47 @@ async function applyCustomRange() {
 }
 
 async function reloadForRangeChange() {
+  const generation = ++rangeRequestGeneration
   loading.value = true
   try {
-    await Promise.all([loadOverview(), loadActiveTab(true)])
+    await Promise.all([loadOverview(generation), loadActiveTab(true, generation)])
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     console.error('Failed to reload operations range:', error)
     appStore.showError(t('admin.operations.loadFailed'))
   } finally {
-    loading.value = false
+    if (isCurrentRangeRequest(generation)) loading.value = false
   }
 }
 
 async function selectTab(tab: TabKey) {
   activeTab.value = tab
+  const generation = rangeRequestGeneration
   try {
-    await loadActiveTab(false)
+    await loadActiveTab(false, generation)
   } catch (error) {
+    if (!isCurrentRangeRequest(generation)) return
     console.error(`Failed to load operations tab ${tab}:`, error)
     appStore.showError(t('admin.operations.loadFailed'))
   }
 }
 
-async function loadActiveTab(force: boolean) {
+async function loadActiveTab(force: boolean, generation = rangeRequestGeneration) {
   switch (activeTab.value) {
     case 'business':
-      if (force || !businessLoaded.value) await loadBusinessInsights()
+      if (force || !businessLoaded.value) await loadBusinessInsights(generation)
       break
     case 'checkin':
       await Promise.all([
-        force || !settingsLoaded.value ? loadSettingsAndStats() : Promise.resolve(),
-        force || !analyticsLoaded.value ? loadAnalytics() : Promise.resolve(),
+        force || !settingsLoaded.value ? loadSettingsAndStats(generation) : Promise.resolve(),
+        force || !analyticsLoaded.value ? loadAnalytics(generation) : Promise.resolve(),
       ])
       break
     case 'records':
-      if (force || !recordsLoaded.value) await loadRecords()
+      if (force || !recordsLoaded.value) await loadRecords(generation)
       break
     case 'rules':
-      if (force || !settingsLoaded.value) await loadSettingsAndStats()
+      if (force || !settingsLoaded.value) await loadSettingsAndStats(generation)
       break
   }
 }

@@ -1123,7 +1123,7 @@ func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID str
 			case <-ctx.Done():
 				timer.Stop()
 				slog.Warn("notification email broadcast canceled", "batch_id", batchID, "error", ctx.Err())
-				status.LastError = ctx.Err().Error()
+				status.LastError = sanitizeNotificationEmailBroadcastError(ctx.Err().Error())
 				s.completeBroadcastAsCanceled(ctx, batchID, status, states)
 				return
 			case <-timer.C:
@@ -1141,9 +1141,9 @@ func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID str
 		unsubscribed, err := s.IsUnsubscribed(ctx, recipient.Email, NotificationEmailEventAdminBroadcast)
 		if err != nil {
 			state.Status = "failed"
-			state.Error = err.Error()
+			state.Error = sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email)
 			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
-			status.LastError = err.Error()
+			status.LastError = sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email)
 			slog.Warn("notification email broadcast unsubscribe check failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
 			notificationEmailBroadcastApplyCounts(&status, states)
 			s.saveBroadcastRecipientsBestEffort(ctx, batchID, states)
@@ -1180,9 +1180,9 @@ func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID str
 		})
 		if err != nil {
 			state.Status = "failed"
-			state.Error = err.Error()
+			state.Error = sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email)
 			state.UpdatedAt = s.nowUTC().Format(time.RFC3339)
-			status.LastError = err.Error()
+			status.LastError = sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email)
 			slog.Warn("notification email broadcast recipient failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
 		} else {
 			state.Status = "sent"
@@ -1438,10 +1438,16 @@ func (s *NotificationEmailService) getBroadcastRecipients(ctx context.Context, b
 	if err := json.Unmarshal([]byte(raw), &states); err != nil {
 		return nil, err
 	}
+	for index := range states {
+		states[index].Error = sanitizeNotificationEmailBroadcastError(states[index].Error, states[index].Email)
+	}
 	return states, nil
 }
 
 func (s *NotificationEmailService) saveBroadcastRecipients(ctx context.Context, batchID string, states []notificationEmailBroadcastRecipientState) error {
+	for index := range states {
+		states[index].Error = sanitizeNotificationEmailBroadcastError(states[index].Error, states[index].Email)
+	}
 	raw, err := json.Marshal(states)
 	if err != nil {
 		return err
@@ -1483,6 +1489,7 @@ func (s *NotificationEmailService) saveBroadcastStatus(ctx context.Context, stat
 	if strings.TrimSpace(status.StartedAt) == "" {
 		status.StartedAt = now
 	}
+	status.LastError = sanitizeNotificationEmailBroadcastError(status.LastError, status.CreatedByEmail)
 	status.UpdatedAt = now
 	raw, err := json.Marshal(status)
 	if err != nil {
@@ -1601,6 +1608,7 @@ func (s *NotificationEmailService) getBroadcastStatusRaw(ctx context.Context, ba
 	if err := json.Unmarshal([]byte(raw), &status); err != nil {
 		return NotificationEmailBroadcastStatus{}, err
 	}
+	status.LastError = sanitizeNotificationEmailBroadcastError(status.LastError, status.CreatedByEmail)
 	return status, nil
 }
 

@@ -21,8 +21,8 @@
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.baseAmount') }}</p>
           <p class="text-sm font-medium text-gray-900 dark:text-white">{{ paymentAmountSymbol }}{{ baseAmount.toFixed(2) }}</p>
         </div>
-        <div v-if="order.fee_rate > 0">
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('payment.orders.fee') }} ({{ order.fee_rate }}%)</p>
+        <div v-if="feeAmount > 0">
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ feeAmountLabel }}</p>
           <p class="text-sm font-medium text-gray-900 dark:text-white">{{ paymentAmountSymbol }}{{ feeAmount.toFixed(2) }}</p>
         </div>
         <div>
@@ -132,20 +132,36 @@ const creditedAmountSymbol = currencySymbol('USD')
 
 const paymentAmountSymbol = computed(() => currencySymbol(props.order?.currency))
 
-/** 充值金额 (base amount before fee) = pay_amount - fee = pay_amount / (1 + fee_rate/100) */
+/** 充值金额 = pay_amount - fee_amount；旧订单没有 fee_amount 时回退到费率反推。 */
 const baseAmount = computed(() => {
   if (!props.order) return 0
+  const directFee = getDirectFeeAmount(props.order)
+  if (directFee !== null) return Math.round((props.order.pay_amount - directFee) * 100) / 100
   const feeRate = Number(props.order.fee_rate) || 0
   if (feeRate <= 0) return props.order.pay_amount
-  return props.order.pay_amount / (1 + feeRate / 100)
+  return Math.round((props.order.pay_amount / (1 + feeRate / 100)) * 100) / 100
 })
 
-/** 手续费 = pay_amount - baseAmount */
+/** 手续费 = fee_amount；旧订单没有 fee_amount 时回退到 pay_amount - baseAmount。 */
 const feeAmount = computed(() => {
   if (!props.order) return 0
+  const directFee = getDirectFeeAmount(props.order)
+  if (directFee !== null) return directFee
   const feeRate = Number(props.order.fee_rate) || 0
   if (feeRate <= 0) return 0
-  return props.order.pay_amount - baseAmount.value
+  return Math.round((props.order.pay_amount - baseAmount.value) * 100) / 100
+})
+
+function getDirectFeeAmount(order: PaymentOrder): number | null {
+  if (order.fee_amount === undefined || order.fee_amount === null) return null
+
+  const value = Number(order.fee_amount)
+  return Number.isFinite(value) && value >= 0 ? value : null
+}
+
+const feeAmountLabel = computed(() => {
+  if (!props.order || props.order.fee_rate <= 0) return t('payment.orders.fee')
+  return `${t('payment.orders.fee')} (${props.order.fee_rate}%)`
 })
 
 const emit = defineEmits<{

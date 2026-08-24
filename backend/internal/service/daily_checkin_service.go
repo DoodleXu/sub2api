@@ -397,17 +397,20 @@ func (s *DailyCheckinService) CheckIn(ctx context.Context, userID int64) (*Daily
 	if err := linkDailyCheckinBalanceRecord(ctx, tx, checkinID, redeemCodeID); err != nil {
 		return nil, err
 	}
+	// Read the response snapshot while the transaction is still open. A status
+	// query after COMMIT can fail independently, leaving the caller with a
+	// successful balance mutation but an error response and no reliable retry
+	// semantics.
+	status, err := s.getStatus(ctx, tx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit daily checkin: %w", err)
 	}
 
 	s.invalidateUserCaches(ctx, userID)
-
-	status, err := s.getStatus(ctx, s.db, userID)
-	if err != nil {
-		return nil, err
-	}
 	return &DailyCheckinResult{
 		DailyCheckinStatus:  *status,
 		RewardAmount:        rewardAmount,
@@ -1055,7 +1058,16 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 		return nil, err
 	}
 
-	checkins, err := s.listCheckinsForAnalytics(ctx, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	// The handler parses date-only filters in the requested user location. Keep
+	// those calendar components when constructing server-calendar boundaries;
+	// converting the midnight instant first would shift Tokyo/Los Angeles dates
+	// into the previous or next server day.
+	serverStart := serverCalendarDateBoundary(start)
+	serverEnd := serverCalendarDateBoundary(end)
+	if !serverEnd.After(serverStart) {
+		serverEnd = serverStart.AddDate(0, 0, 1)
+	}
+	checkins, err := s.listCheckinsForAnalytics(ctx, serverStart.Format("2006-01-02"), serverEnd.Format("2006-01-02"))
 	if err != nil {
 		return nil, err
 	}
@@ -1063,7 +1075,7 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	if err != nil {
 		return nil, err
 	}
-	qualifiedByDate, err := s.qualifiedUsersByDate(ctx, start, end, ruleHistory)
+	qualifiedByDate, err := s.qualifiedUsersByDate(ctx, serverStart, serverEnd, ruleHistory)
 	if err != nil {
 		return nil, err
 	}
@@ -1100,7 +1112,7 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	points := make([]DailyCheckinAnalyticsPoint, 0)
 	qualifiedUserSet := map[int64]struct{}{}
 	checkinUserSet := map[int64]struct{}{}
-	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+	for day := serverStart; day.Before(serverEnd); day = day.AddDate(0, 0, 1) {
 		date := day.Format("2006-01-02")
 		qualifiedIDs := qualifiedByDate[date]
 		records := byDate[date]
@@ -1144,7 +1156,7 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 		points = append(points, point)
 	}
 
-	now := time.Now().In(start.Location())
+	now := timezone.Now()
 	todayStart := startOfDayInLocation(now)
 	tomorrowStart := todayStart.AddDate(0, 0, 1)
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
@@ -1192,6 +1204,16 @@ func (s *DailyCheckinService) GetDailyCheckinAnalytics(ctx context.Context, star
 	}
 	sortRewardDistribution(dist)
 	return &DailyCheckinAnalyticsResponse{Summary: summary, Points: points, RewardDistribution: dist, Meta: s.operationsDataMeta(ctx, start, end)}, nil
+}
+
+func serverCalendarDateBoundary(value time.Time) time.Time {
+	loc := value.Location()
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := value.In(loc)
+	serverLoc := timezone.Location()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, serverLoc)
 }
 
 func (s *DailyCheckinService) getStatus(ctx context.Context, q dailyCheckinQuerier, userID int64) (*DailyCheckinStatus, error) {

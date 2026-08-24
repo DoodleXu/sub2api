@@ -98,6 +98,41 @@ func TestOperationsExportDailyCheckinRecordsCSV(t *testing.T) {
 	require.Contains(t, body, "2.500000")
 }
 
+func TestOperationsExportDailyCheckinRecordsNeutralizesSpreadsheetFormulas(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler, db := newOperationsExportTestHandler(t)
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	_, err := db.Exec(`
+		INSERT INTO users (id, username, email, balance, total_recharged, created_at, updated_at)
+		VALUES
+			(1, '=HYPERLINK("https://evil.example","click")', 'safe@example.com', 0, 0, ?, ?),
+			(2, 'normal-user', '+cmd@example.com', 0, 0, ?, ?),
+			(3, '-cmd@example.com', '@cmd@example.com', 0, 0, ?, ?)
+	`, now, now, now, now, now, now)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO user_checkins (user_id, checkin_date, reward_amount, qualified_usage_usd, created_at)
+		VALUES
+			(1, '2026-06-14', 1.00, 2.00, ?),
+			(2, '2026-06-14', 1.00, 2.00, ?),
+			(3, '2026-06-14', 1.00, 2.00, ?)
+	`, now, now, now)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/operations/export?dataset=daily_checkin_records&start_date=2026-06-14&end_date=2026-06-14", nil)
+
+	handler.ExportOperationsData(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, `'=HYPERLINK`)
+	require.Contains(t, body, `'+cmd@example.com`)
+	require.Contains(t, body, `'-cmd@example.com`)
+	require.Contains(t, body, `,'@cmd@example.com,`)
+}
+
 func TestOperationsExportDailyCheckinRecordsDefaultsToOperationsDateRange(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler, db := newOperationsExportTestHandler(t)

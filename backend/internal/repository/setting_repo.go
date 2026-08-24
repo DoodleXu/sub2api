@@ -104,6 +104,51 @@ func (r *settingRepository) SetMultiple(ctx context.Context, settings map[string
 		Exec(ctx)
 }
 
+// SetMultipleWithLockedRead serializes read/derive/write settings updates on a
+// stable settings row. It is used for append-only rule snapshots, where a
+// read-then-write performed by two admin requests would otherwise lose one
+// snapshot. The callback runs inside the same database transaction while the
+// requested rows are locked.
+func (r *settingRepository) SetMultipleWithLockedRead(ctx context.Context, updates map[string]string, readKeys []string, mutate func(map[string]string) (map[string]string, error)) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if len(readKeys) == 0 {
+		readKeys = []string{service.SettingKeyDailyCheckinEnabled}
+	}
+	rows, err := tx.Setting.Query().Where(setting.KeyIn(readKeys...)).ForUpdate().All(ctx)
+	if err != nil {
+		return err
+	}
+	current := make(map[string]string, len(rows))
+	for _, row := range rows {
+		current[row.Key] = row.Value
+	}
+	if mutate != nil {
+		updates, err = mutate(current)
+		if err != nil {
+			return err
+		}
+	}
+	if len(updates) == 0 {
+		return tx.Commit()
+	}
+	now := time.Now()
+	builders := make([]*ent.SettingCreate, 0, len(updates))
+	for key, value := range updates {
+		builders = append(builders, tx.Setting.Create().SetKey(key).SetValue(value).SetUpdatedAt(now))
+	}
+	if err := tx.Setting.CreateBulk(builders...).OnConflictColumns(setting.FieldKey).UpdateNewValues().Exec(ctx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (r *settingRepository) GetAll(ctx context.Context) (map[string]string, error) {
 	settings, err := r.client.Setting.Query().All(ctx)
 	if err != nil {

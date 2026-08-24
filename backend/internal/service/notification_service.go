@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,7 +30,6 @@ const (
 	notificationDefaultMinIntervalSeconds = 1800
 	notificationHTTPTimeout               = 10 * time.Second
 	notificationAsyncDispatchTimeout      = 30 * time.Second
-	notificationMaxResponseBodyBytes      = 512
 )
 
 type NotificationConfig struct {
@@ -396,6 +395,11 @@ func validateNotificationEnabledTransports(cfg *NotificationConfig) error {
 	}
 	if cfg.Transports.Bark.Enabled && len(cfg.Transports.Bark.DeviceKeys) == 0 {
 		return errors.New("bark device key is required when bark transport is enabled")
+	}
+	if cfg.Transports.Bark.Enabled {
+		if err := validateBarkServerURL(cfg.Transports.Bark.ServerURL); err != nil {
+			return err
+		}
 	}
 	if cfg.Transports.Telegram.Enabled {
 		if strings.TrimSpace(cfg.Transports.Telegram.BotToken) == "" {
@@ -783,10 +787,10 @@ func (s *NotificationService) sendBark(ctx context.Context, payload Notification
 	if len(deviceKeys) == 0 {
 		return errors.New("bark device key is not configured")
 	}
-	client := s.httpClient
-	if client == nil {
-		client = http.DefaultClient
+	if err := validateBarkServerURL(cfg.ServerURL); err != nil {
+		return err
 	}
+	client := notificationSafeHTTPClient(s.httpClient)
 	title := renderNotificationTextTemplate(cfg.TitleTemplate, payload, payload.Title)
 	content := renderNotificationTextTemplate(cfg.BodyTemplate, payload, payload.Content)
 	successCount := 0
@@ -815,6 +819,85 @@ func (s *NotificationService) sendBark(ctx context.Context, payload Notification
 		successCount++
 	}
 	return notificationDeliveryResult(successCount, len(failures), failures)
+}
+
+// validateBarkServerURL validates the URL shape and rejects destinations that
+// are unconditionally unsafe. Hostnames are checked again by safeDialContext
+// immediately before each connection so DNS rebinding cannot bypass policy.
+func validateBarkServerURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("bark server url must be an https origin without credentials or query parameters")
+	}
+	hostname := u.Hostname()
+	if isBlockedHostname(hostname) {
+		return errors.New("bark server url must use a public hostname")
+	}
+	if ip := net.ParseIP(hostname); ip != nil && isPrivateIP(ip) {
+		return errors.New("bark server url must resolve to a public address")
+	}
+	return nil
+}
+
+func notificationSafeHTTPClient(base *http.Client) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	clone := *base
+	if clone.Transport == nil {
+		clone.Transport = &http.Transport{
+			Proxy:                 nil,
+			ForceAttemptHTTP2:     true,
+			DialContext:           safeDialContext,
+			MaxIdleConns:          16,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: notificationHTTPTimeout,
+		}
+	} else if transport, ok := clone.Transport.(*http.Transport); ok {
+		// Clone caller-owned transports before applying the SSRF-safe dialer.
+		// This preserves TLS/proxy settings while preventing DNS rebinding.
+		safeTransport := transport.Clone()
+		safeTransport.Proxy = nil
+		safeTransport.DialContext = safeDialContext
+		clone.Transport = safeTransport
+	}
+	clone.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("notification webhook stopped after too many redirects")
+		}
+		if next == nil || next.URL == nil {
+			return errors.New("notification webhook redirect target is invalid")
+		}
+		if err := validateBarkServerURL(next.URL.String()); err != nil {
+			return fmt.Errorf("notification webhook redirect target is not allowed: %w", err)
+		}
+		if len(via) == 0 || via[0] == nil || via[0].URL == nil {
+			return errors.New("notification webhook redirect origin is unavailable")
+		}
+		if !sameHTTPSOrigin(via[0].URL, next.URL) {
+			return errors.New("notification webhook cross-origin redirect is not allowed")
+		}
+		return nil
+	}
+	return &clone
+}
+
+func sameHTTPSOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, "https") || !strings.EqualFold(right.Scheme, "https") {
+		return false
+	}
+	if !strings.EqualFold(left.Hostname(), right.Hostname()) {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if value := u.Port(); value != "" {
+			return value
+		}
+		return "443"
+	}
+	return port(left) == port(right)
 }
 
 func renderNotificationTextTemplate(template string, payload NotificationPayload, fallback string) string {
@@ -924,8 +1007,9 @@ func doNotificationHTTP(client *http.Client, req *http.Request) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, notificationMaxResponseBodyBytes))
-	return fmt.Errorf("notification webhook returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	// Never include a remote response body in an admin/API error. Bark servers
+	// can echo secrets or arbitrary attacker-controlled content.
+	return fmt.Errorf("notification webhook returned status %d", resp.StatusCode)
 }
 
 func htmlEscapeLines(s string) string {

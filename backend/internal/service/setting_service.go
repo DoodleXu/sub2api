@@ -184,6 +184,15 @@ type SettingRepository interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// AtomicSettingUpdater is implemented by the SQL-backed repository. It locks
+// a stable settings row, reads the requested keys, lets the service derive a
+// merged update, and commits that update in the same transaction. The
+// optional interface keeps lightweight test repositories source-compatible
+// while preventing append-only rule history lost updates in production.
+type AtomicSettingUpdater interface {
+	SetMultipleWithLockedRead(ctx context.Context, updates map[string]string, readKeys []string, mutate func(map[string]string) (map[string]string, error)) error
+}
+
 // cachedVersionBounds 缓存 Claude Code 版本号上下限（进程内缓存，60s TTL）
 type cachedVersionBounds struct {
 	min       string // 空字符串 = 不检查
@@ -2718,8 +2727,7 @@ func (s *SettingService) UpdateSettingsOmitting(ctx context.Context, settings *S
 		return err
 	}
 	omitted.dropFrom(updates)
-
-	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+	if err := s.setSettingsWithDailyCheckinHistory(ctx, updates); err != nil {
 		return err
 	}
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
@@ -2732,10 +2740,7 @@ func (s *SettingService) UpdateDailyCheckinSettings(ctx context.Context, setting
 	if err != nil {
 		return err
 	}
-	if err := s.appendDailyCheckinRuleHistoryUpdate(ctx, updates); err != nil {
-		return err
-	}
-	return s.settingRepo.SetMultiple(ctx, updates)
+	return s.setSettingsWithDailyCheckinHistory(ctx, updates)
 }
 
 func (s *SettingService) OIDCSecurityWriteDefaults(ctx context.Context) (bool, bool, error) {
@@ -2780,15 +2785,39 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx contex
 		updates[key] = value
 	}
 	omitted.dropFrom(updates)
-	if err := s.appendDailyCheckinRuleHistoryUpdate(ctx, updates); err != nil {
-		return err
-	}
-
-	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+	if err := s.setSettingsWithDailyCheckinHistory(ctx, updates); err != nil {
 		return err
 	}
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
 	return nil
+}
+
+func (s *SettingService) setSettingsWithDailyCheckinHistory(ctx context.Context, updates map[string]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	readKeys := []string{
+		SettingKeyDailyCheckinEnabled,
+		SettingKeyDailyCheckinRequiredUsageUSD,
+		SettingKeyDailyCheckinUsageScope,
+		SettingKeyDailyCheckinRuleHistory,
+	}
+	if atomicUpdater, ok := s.settingRepo.(AtomicSettingUpdater); ok {
+		return atomicUpdater.SetMultipleWithLockedRead(ctx, updates, readKeys, func(current map[string]string) (map[string]string, error) {
+			merged := make(map[string]string, len(updates)+1)
+			for key, value := range updates {
+				merged[key] = value
+			}
+			if err := appendDailyCheckinRuleHistoryUpdateFromValues(merged, current); err != nil {
+				return nil, err
+			}
+			return merged, nil
+		})
+	}
+	if err := s.appendDailyCheckinRuleHistoryUpdate(ctx, updates); err != nil {
+		return err
+	}
+	return s.settingRepo.SetMultiple(ctx, updates)
 }
 
 func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) {
@@ -5654,29 +5683,70 @@ func (s *SettingService) appendDailyCheckinRuleHistoryUpdate(ctx context.Context
 	if len(updates) == 0 {
 		return nil
 	}
-	_, hasRequiredUsage := updates[SettingKeyDailyCheckinRequiredUsageUSD]
-	_, hasUsageScope := updates[SettingKeyDailyCheckinUsageScope]
-	if !hasRequiredUsage && !hasUsageScope {
-		return nil
+	if _, hasRequiredUsage := updates[SettingKeyDailyCheckinRequiredUsageUSD]; !hasRequiredUsage {
+		if _, hasUsageScope := updates[SettingKeyDailyCheckinUsageScope]; !hasUsageScope {
+			return nil
+		}
 	}
 	current, err := s.GetDailyCheckinSettings(ctx)
 	if err != nil {
 		return err
 	}
-	nextRequired := current.RequiredUsageUSD
+	currentValues := map[string]string{
+		SettingKeyDailyCheckinRequiredUsageUSD: strconv.FormatFloat(current.RequiredUsageUSD, 'f', 8, 64),
+		SettingKeyDailyCheckinUsageScope:       normalizeDailyCheckinUsageScope(current.UsageScope),
+	}
+	if s != nil && s.settingRepo != nil {
+		// Use the repository's bulk-read contract here. Besides avoiding an
+		// extra round trip for the fallback implementation, this keeps the
+		// compatibility path usable by repositories that only implement the
+		// read-many operation (the atomic implementation locks these rows).
+		values, getErr := s.settingRepo.GetMultiple(ctx, []string{SettingKeyDailyCheckinRuleHistory})
+		if getErr != nil {
+			return fmt.Errorf("get daily checkin rule history: %w", getErr)
+		}
+		if raw, ok := values[SettingKeyDailyCheckinRuleHistory]; ok {
+			currentValues[SettingKeyDailyCheckinRuleHistory] = raw
+		}
+	}
+	return appendDailyCheckinRuleHistoryUpdateFromValues(updates, currentValues)
+}
+
+func appendDailyCheckinRuleHistoryUpdateFromValues(updates, current map[string]string) error {
+	_, hasRequiredUsage := updates[SettingKeyDailyCheckinRequiredUsageUSD]
+	_, hasUsageScope := updates[SettingKeyDailyCheckinUsageScope]
+	if !hasRequiredUsage && !hasUsageScope {
+		return nil
+	}
+	currentRequired := parseDailyCheckinPositiveFloat(current[SettingKeyDailyCheckinRequiredUsageUSD], DailyCheckinRequiredUsageDefault)
+	currentScope := normalizeDailyCheckinUsageScope(current[SettingKeyDailyCheckinUsageScope])
+	nextRequired := currentRequired
 	if raw, ok := updates[SettingKeyDailyCheckinRequiredUsageUSD]; ok {
 		nextRequired = parseDailyCheckinPositiveFloat(raw, DailyCheckinRequiredUsageDefault)
 	}
-	nextScope := normalizeDailyCheckinUsageScope(current.UsageScope)
+	nextScope := currentScope
 	if raw, ok := updates[SettingKeyDailyCheckinUsageScope]; ok {
 		nextScope = normalizeDailyCheckinUsageScope(raw)
 	}
-	if math.Abs(nextRequired-current.RequiredUsageUSD) < 0.00000001 && nextScope == normalizeDailyCheckinUsageScope(current.UsageScope) {
+	if math.Abs(nextRequired-currentRequired) < 0.00000001 && nextScope == currentScope {
 		return nil
 	}
-	history, err := s.GetDailyCheckinRuleHistory(ctx)
-	if err != nil {
-		return err
+	history := make([]DailyCheckinRuleSnapshot, 0, 2)
+	if raw := strings.TrimSpace(current[SettingKeyDailyCheckinRuleHistory]); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &history); err != nil {
+			history = nil
+		}
+	}
+	if len(history) == 0 {
+		history = append(history, DailyCheckinRuleSnapshot{
+			EffectiveAt:      time.Unix(0, 0).UTC(),
+			RequiredUsageUSD: currentRequired,
+			UsageScope:       currentScope,
+		})
+	}
+	for i := range history {
+		history[i].RequiredUsageUSD = normalizeDailyCheckinNonNegativeFloat(history[i].RequiredUsageUSD, DailyCheckinRequiredUsageDefault)
+		history[i].UsageScope = normalizeDailyCheckinUsageScope(history[i].UsageScope)
 	}
 	history = append(history, DailyCheckinRuleSnapshot{
 		EffectiveAt:      timezone.Now().UTC(),

@@ -398,6 +398,21 @@ func TestDailyCheckinAnalyticsIncludesCheckedInUsersInQualifiedDenominator(t *te
 	require.InDelta(t, 1.0, res.Summary.CheckinRate, 0.0001)
 }
 
+func TestDailyCheckinAnalyticsPreservesUserDateAcrossServerTimezone(t *testing.T) {
+	svc, _ := newDailyCheckinTestService(t, nil)
+	userLoc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, userLoc)
+	end := time.Date(2026, 8, 2, 0, 0, 0, 0, userLoc)
+
+	res, err := svc.GetDailyCheckinAnalytics(context.Background(), start, end)
+	require.NoError(t, err)
+	require.Len(t, res.Points, 1)
+	require.Equal(t, "2026-08-01", res.Points[0].Date)
+	require.Equal(t, "2026-08-01", res.Meta.RequestedStart)
+	require.Equal(t, "2026-08-01", res.Meta.RequestedEnd)
+}
+
 func TestDailyCheckinAnalyticsUsesHistoricalRuleSnapshots(t *testing.T) {
 	start := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	history, err := json.Marshal([]DailyCheckinRuleSnapshot{

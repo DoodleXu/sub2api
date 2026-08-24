@@ -32,6 +32,30 @@ if [ "$committed_version" != "$tag_version" ]; then
   exit 1
 fi
 
+default_branch=$(gh api "repos/$repository" --jq '.default_branch')
+if [ -z "$default_branch" ]; then
+  echo "Unable to resolve the default branch for $repository" >&2
+  exit 1
+fi
+
+default_branch_sha=$(gh api --method GET \
+  "repos/$repository/commits" \
+  -f "sha=$default_branch" \
+  -f 'per_page=1' \
+  --jq '.[0].sha')
+if [ -z "$default_branch_sha" ]; then
+  echo "Unable to resolve $repository default branch head: $default_branch" >&2
+  exit 1
+fi
+
+merge_base_sha=$(gh api \
+  "repos/$repository/compare/$target_sha...$default_branch_sha" \
+  --jq '.merge_base_commit.sha')
+if [ "$merge_base_sha" != "$target_sha" ]; then
+  echo "Release candidate $target_sha is not reachable from $repository default branch $default_branch ($default_branch_sha)" >&2
+  exit 1
+fi
+
 for workflow in backend-ci.yml security-scan.yml; do
   successful_runs=$(gh api \
     "repos/$repository/actions/workflows/$workflow/runs?head_sha=$target_sha&status=completed&per_page=100" \

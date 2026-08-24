@@ -509,7 +509,27 @@ func (s *DashboardAggregationService) refreshDashboardCostSnapshotAfterDebounce(
 	if retentionDays <= 0 {
 		retentionDays = 1
 	}
-	s.refreshDashboardCostSnapshot(truncateToDayUTC(now.AddDate(0, 0, -retentionDays)), now)
+	targetStart := truncateToDayUTC(now.AddDate(0, 0, -retentionDays))
+	// Account-cost aggregation intentionally trails wall-clock time. Refreshing
+	// against now would therefore fail the repository's complete-coverage check
+	// until another usage aggregation happened, even though changing an account's
+	// CNY cost does not require any new usage rows. Use the published aggregation
+	// waterline as the exact snapshot boundary instead.
+	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
+	coverageStart, coverageEnd, err := s.repo.GetAccountCostAggregationCoverage(ctx)
+	cancel()
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取成本聚合覆盖水位失败: %v", err)
+		return
+	}
+	if coverageStart.After(targetStart) {
+		targetStart = coverageStart
+	}
+	if !coverageEnd.After(targetStart) {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 成本快照等待有效覆盖水位 (coverage_start=%s coverage_end=%s)", coverageStart.UTC().Format(time.RFC3339), coverageEnd.UTC().Format(time.RFC3339))
+		return
+	}
+	s.refreshDashboardCostSnapshot(targetStart, coverageEnd)
 }
 
 func (s *DashboardAggregationService) yieldAccountCostBackfill(ctx context.Context) bool {

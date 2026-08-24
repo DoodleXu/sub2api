@@ -3588,6 +3588,7 @@ export default {
       deleteAccount: '删除账号',
       archiveAccount: '归档账号',
       unarchiveAccount: '取消归档',
+      parentArchivedHint: '请先恢复母账号，再取消该影子账号的归档。',
       archiveConfirm: "确定要归档账号 '{name}' 吗？历史成本和用量会保留，但账号将从默认列表和调度中隐藏。",
       archiveSuccess: '账号已归档',
       archiveFailed: '归档账号失败',

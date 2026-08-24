@@ -61,6 +61,21 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// neutralizeCSVFormula prevents spreadsheet applications from evaluating
+// user-controlled values that start with a formula marker.
+func neutralizeCSVFormula(value string) string {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+	if trimmed == "" {
+		return value
+	}
+	switch trimmed[0] {
+	case '=', '+', '-', '@':
+		return "'" + value
+	default:
+		return value
+	}
+}
+
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
 	settingService           *service.SettingService
@@ -695,8 +710,8 @@ func (h *SettingHandler) writeDailyCheckinRecordsCSV(writer *csv.Writer, iter *s
 		if err := writer.Write([]string{
 			strconv.FormatInt(record.ID, 10),
 			strconv.FormatInt(record.UserID, 10),
-			record.Username,
-			record.Email,
+			neutralizeCSVFormula(record.Username),
+			neutralizeCSVFormula(record.Email),
 			record.Date,
 			formatCSVFloat(record.RewardAmount),
 			formatCSVFloat(record.QualifiedUsageUSD),

@@ -450,6 +450,62 @@ func TestNotificationEmailBroadcastStatusIsPersistedAndReadable(t *testing.T) {
 	require.NotEmpty(t, status.UpdatedAt)
 }
 
+func TestNotificationEmailBroadcastErrorsAreRedactedAndBounded(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	rawRecipient := "target@example.test"
+	rawSecret := "super-secret-token"
+	longError := "delivery failed for " + rawRecipient + " access_token=" + rawSecret + " " + strings.Repeat("x", notificationEmailBroadcastLastErrorMaxLength+100)
+	statusInput := NotificationEmailBroadcastStatus{
+		BatchID:        "broadcast_redaction",
+		Status:         "failed",
+		CreatedByEmail: "admin@example.test",
+		LastError:      longError,
+	}
+	require.NoError(t, svc.saveBroadcastStatus(ctx, statusInput))
+
+	raw, err := repo.GetValue(ctx, notificationEmailBroadcastKey(statusInput.BatchID))
+	require.NoError(t, err)
+	require.NotContains(t, raw, rawRecipient)
+	require.NotContains(t, raw, rawSecret)
+
+	status, err := svc.GetBroadcastStatus(ctx, statusInput.BatchID)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(status.LastError), notificationEmailBroadcastLastErrorMaxLength)
+	require.NotContains(t, status.LastError, rawRecipient)
+	require.NotContains(t, status.LastError, rawSecret)
+}
+
+func TestNotificationEmailBroadcastRecipientErrorsAreRedactedBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	svc := NewNotificationEmailService(repo, nil)
+	rawRecipient := "target@example.test"
+	rawSecret := "smtp-password"
+	states := []notificationEmailBroadcastRecipientState{{
+		Email:  rawRecipient,
+		Status: "failed",
+		Error:  "smtp rejected " + rawRecipient + " smtp_password=" + rawSecret,
+	}}
+	require.NoError(t, svc.saveBroadcastRecipients(ctx, "broadcast_recipient_redaction", states))
+
+	raw, err := repo.GetValue(ctx, notificationEmailBroadcastRecipientsKey("broadcast_recipient_redaction"))
+	require.NoError(t, err)
+	require.NotContains(t, raw, rawSecret)
+	var persisted []notificationEmailBroadcastRecipientState
+	require.NoError(t, json.Unmarshal([]byte(raw), &persisted))
+	require.Len(t, persisted, 1)
+	require.NotContains(t, persisted[0].Error, rawRecipient)
+	require.NotContains(t, persisted[0].Error, rawSecret)
+
+	loaded, err := svc.getBroadcastRecipients(ctx, "broadcast_recipient_redaction")
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.NotContains(t, loaded[0].Error, rawRecipient)
+	require.NotContains(t, loaded[0].Error, rawSecret)
+}
+
 func TestNotificationEmailBroadcastRunUpdatesFailureStatus(t *testing.T) {
 	ctx := context.Background()
 	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)

@@ -9,16 +9,22 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
 const (
-	notificationEmailBroadcastLeaseTTL      = 2 * time.Minute
-	notificationEmailBroadcastRecoveryEvery = 30 * time.Second
-	notificationEmailBroadcastRetention     = 90 * 24 * time.Hour
-	notificationEmailBroadcastMaxAttempts   = 3
+	notificationEmailBroadcastLeaseTTL           = 2 * time.Minute
+	notificationEmailBroadcastRecoveryEvery      = 30 * time.Second
+	notificationEmailBroadcastRetention          = 90 * 24 * time.Hour
+	notificationEmailBroadcastMaxAttempts        = 3
+	notificationEmailBroadcastLastErrorMaxLength = 512
 )
+
+var notificationEmailAddressPattern = regexp.MustCompile(`(?i)\b[a-z0-9.!#$%&'*+/=?^_` + "{" + `|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b`)
 
 func (s *NotificationEmailService) StartBroadcastWorker() {
 	if s == nil || s.broadcastRepo == nil {
@@ -180,7 +186,7 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 	}()
 
 	if err := s.broadcastRepo.MarkOrphanedSendingUncertain(workerCtx, batchID); err != nil {
-		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", err.Error(), true)
+		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(err.Error()), true)
 		return
 	}
 	job, err := s.broadcastRepo.Get(workerCtx, batchID)
@@ -193,7 +199,7 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 	}
 	targets, err := s.broadcastRepo.ListRunnableRecipients(workerCtx, batchID)
 	if err != nil {
-		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", err.Error(), true)
+		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(err.Error()), true)
 		return
 	}
 	delay := time.Minute / time.Duration(job.RPM)
@@ -201,7 +207,7 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 		cancel, cancelErr := s.broadcastRepo.CancelRequested(workerCtx, batchID)
 		if cancelErr != nil {
 			if workerCtx.Err() == nil {
-				_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", cancelErr.Error(), true)
+				_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(cancelErr.Error()), true)
 			}
 			return
 		}
@@ -218,7 +224,7 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 			return
 		}
 		if err := s.sendDurableBroadcastRecipient(workerCtx, job, recipient); err != nil {
-			slog.Warn("persist durable email broadcast recipient failed", "batch_id", batchID, "recipient", recipient.NormalizedEmail, "error", err)
+			slog.Warn("persist durable email broadcast recipient failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
 			return
 		}
 	}
@@ -270,7 +276,7 @@ func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Con
 		}
 		code, transient := notificationEmailBroadcastClassifyError(err)
 		if transient && attempt < notificationEmailBroadcastMaxAttempts {
-			if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "retry", code, err.Error(), nil); persistErr != nil {
+			if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "retry", code, sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email), nil); persistErr != nil {
 				return fmt.Errorf("persist retryable email broadcast recipient: %w", persistErr)
 			}
 			if !notificationEmailBroadcastWait(ctx, time.Duration(attempt*attempt)*5*time.Second) {
@@ -278,7 +284,7 @@ func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Con
 			}
 			continue
 		}
-		if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "failed", code, err.Error(), nil); persistErr != nil {
+		if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "failed", code, sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email), nil); persistErr != nil {
 			return fmt.Errorf("persist failed email broadcast recipient: %w", persistErr)
 		}
 		return nil
@@ -328,7 +334,7 @@ func notificationEmailBroadcastStatusFromJob(job NotificationEmailBroadcastJob) 
 		MessageTitle: job.MessageTitle, TargetCount: job.TargetCount, SentCount: job.SentCount, SkippedCount: job.SkippedCount,
 		UnsubscribedCount: job.UnsubscribedCount, FailureCount: job.FailureCount, UncertainCount: job.UncertainCount,
 		CreatedByUserID: job.CreatedByUserID, CreatedByEmail: job.CreatedByEmail, RPM: job.RPM,
-		StartedAt: job.StartedAt.UTC().Format(time.RFC3339), UpdatedAt: job.UpdatedAt.UTC().Format(time.RFC3339), LastError: job.LastError}
+		StartedAt: job.StartedAt.UTC().Format(time.RFC3339), UpdatedAt: job.UpdatedAt.UTC().Format(time.RFC3339), LastError: sanitizeNotificationEmailBroadcastError(job.LastError, job.CreatedByEmail)}
 	if job.CompletedAt != nil {
 		status.CompletedAt = job.CompletedAt.UTC().Format(time.RFC3339)
 	}
@@ -478,6 +484,30 @@ func maskNotificationEmailAddress(value string) string {
 	return local + "@" + parts[1]
 }
 
+// sanitizeNotificationEmailBroadcastError keeps worker failures useful to
+// administrators without persisting recipient addresses or credentials.
+// Error strings can originate in SMTP clients, which frequently echo both.
+func sanitizeNotificationEmailBroadcastError(message string, recipients ...string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	for _, recipient := range recipients {
+		recipient = strings.TrimSpace(recipient)
+		if recipient == "" {
+			continue
+		}
+		masked := maskNotificationEmailAddress(recipient)
+		message = strings.ReplaceAll(message, recipient, masked)
+		if parsed, err := mail.ParseAddress(recipient); err == nil && parsed.Address != "" {
+			message = strings.ReplaceAll(message, parsed.Address, maskNotificationEmailAddress(parsed.Address))
+		}
+	}
+	message = notificationEmailAddressPattern.ReplaceAllStringFunc(message, maskNotificationEmailAddress)
+	message = logredact.RedactText(message, "token", "api_key", "apikey", "smtp_password", "smtp_user", "recipient", "email")
+	return truncateString(message, notificationEmailBroadcastLastErrorMaxLength)
+}
+
 func (s *NotificationEmailService) ListBroadcastRecipients(ctx context.Context, batchID, status string, page, pageSize int) (NotificationEmailBroadcastRecipientPage, error) {
 	if s == nil || s.broadcastRepo == nil {
 		return NotificationEmailBroadcastRecipientPage{}, errors.New("durable email broadcast storage is not configured")
@@ -493,9 +523,11 @@ func (s *NotificationEmailService) ListBroadcastRecipients(ctx context.Context, 
 		return NotificationEmailBroadcastRecipientPage{}, err
 	}
 	for index := range result.Recipients {
-		masked := maskNotificationEmailAddress(result.Recipients[index].Email)
+		rawEmail := result.Recipients[index].Email
+		masked := maskNotificationEmailAddress(rawEmail)
 		result.Recipients[index].Email = masked
 		result.Recipients[index].NormalizedEmail = masked
+		result.Recipients[index].LastError = sanitizeNotificationEmailBroadcastError(result.Recipients[index].LastError, rawEmail)
 	}
 	return result, nil
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,33 @@ type notificationRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f notificationRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func newNotificationBarkTestServer(t *testing.T, handler http.Handler) (*httptest.Server, string) {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	return server, "https://bark.example"
+}
+
+func notificationBarkTestRoundTrip(server *httptest.Server, req *http.Request) (*http.Response, error) {
+	if server == nil || req == nil || req.URL == nil {
+		return nil, fmt.Errorf("notification bark test transport received invalid request")
+	}
+	clone := req.Clone(req.Context())
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		return nil, err
+	}
+	clone.URL.Scheme = serverURL.Scheme
+	clone.URL.Host = serverURL.Host
+	return server.Client().Transport.RoundTrip(clone)
+}
+
+func notificationBarkTestClient(server *httptest.Server) *http.Client {
+	return &http.Client{Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return notificationBarkTestRoundTrip(server, req)
+	})}
 }
 
 func TestNotificationConfigMasksAndPreservesSecrets(t *testing.T) {
@@ -155,6 +183,116 @@ func TestNotificationConfigDefaultsDisabled(t *testing.T) {
 	require.Equal(t, "active", cfg.Transports.Bark.Level)
 	require.Contains(t, cfg.Transports.Bark.TitleTemplate, "Sub2API 渠道监控")
 	require.Contains(t, cfg.Transports.Bark.BodyTemplate, "监控：{monitor_name}")
+}
+
+func TestNotificationBarkURLValidationAndResponseRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{name: "public https origin", url: "https://bark.example", wantErr: false},
+		{name: "http scheme", url: "http://bark.example", wantErr: true},
+		{name: "loopback literal", url: "https://127.0.0.1", wantErr: true},
+		{name: "link local literal", url: "https://169.254.169.254", wantErr: true},
+		{name: "blocked metadata host", url: "https://metadata.google.internal", wantErr: true},
+		{name: "query parameters", url: "https://bark.example/?token=secret", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBarkServerURL(tc.url)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	secretBody := "remote secret body"
+	client := &http.Client{Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader(secretBody)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	req := httptest.NewRequest(http.MethodPost, "https://bark.example/device", strings.NewReader(`{}`))
+	req.RequestURI = ""
+	err := doNotificationHTTP(notificationSafeHTTPClient(client), req)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), secretBody)
+	require.Contains(t, err.Error(), "status 502")
+}
+
+func TestNotificationBarkRedirectValidationRejectsUnsafeTarget(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{"https://127.0.0.1/private"}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    req,
+		}, nil
+	})}
+	req := httptest.NewRequest(http.MethodPost, "https://bark.example/device", strings.NewReader(`{}`))
+	req.RequestURI = ""
+	err := doNotificationHTTP(notificationSafeHTTPClient(client), req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "redirect target is not allowed")
+	require.Equal(t, 1, requests, "unsafe redirect must be rejected before a second request")
+}
+
+func TestNotificationBarkRedirectValidationRejectsCrossOriginTarget(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusTemporaryRedirect,
+			Header:     http.Header{"Location": []string{"https://other.example/private"}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    req,
+		}, nil
+	})}
+	req, err := http.NewRequest(http.MethodPost, "https://bark.example/device", strings.NewReader(`{"secret":"payload"}`))
+	require.NoError(t, err)
+	err = doNotificationHTTP(notificationSafeHTTPClient(client), req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cross-origin redirect is not allowed")
+	require.Equal(t, 1, requests, "cross-origin redirect must be rejected before forwarding the POST body")
+}
+
+func TestNotificationBarkRedirectValidationAllowsSameOriginTarget(t *testing.T) {
+	requests := 0
+	var redirectedBody string
+	client := &http.Client{Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusTemporaryRedirect,
+				Header:     http.Header{"Location": []string{"https://bark.example/redirected-device"}},
+				Body:       io.NopCloser(strings.NewReader("redirect")),
+				Request:    req,
+			}, nil
+		}
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		redirectedBody = string(raw)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})}
+	req, err := http.NewRequest(http.MethodPost, "https://bark.example/device", strings.NewReader(`{"message":"same-origin"}`))
+	require.NoError(t, err)
+	require.NoError(t, doNotificationHTTP(notificationSafeHTTPClient(client), req))
+	require.Equal(t, 2, requests)
+	require.JSONEq(t, `{"message":"same-origin"}`, redirectedBody)
 }
 
 func TestNotificationConfigRejectsInvalidQuietHours(t *testing.T) {
@@ -373,19 +511,21 @@ func TestNotificationDispatchSendsBarkAndTelegram(t *testing.T) {
 	repo := newNotificationEmailMemorySettingRepo()
 	var barkPath string
 	var barkPayload map[string]string
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		barkPath = r.URL.EscapedPath()
 		require.Equal(t, http.MethodPost, r.Method)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&barkPayload))
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
 
 	var telegramPath string
 	var telegramPayload map[string]string
 	svc := NewNotificationService(repo, nil, nil, nil)
 	svc.httpClient = &http.Client{
 		Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host == "bark.example" {
+				return notificationBarkTestRoundTrip(barkServer, req)
+			}
 			if req.URL.Host != "api.telegram.org" {
 				return http.DefaultTransport.RoundTrip(req)
 			}
@@ -405,7 +545,7 @@ func TestNotificationDispatchSendsBarkAndTelegram(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:       true,
-				ServerURL:     barkServer.URL,
+				ServerURL:     barkURL,
 				DeviceKeys:    []string{"device/key"},
 				Level:         "critical",
 				TitleTemplate: "中文提醒：{monitor_name} {new_status}",
@@ -526,20 +666,19 @@ func TestNotificationDispatchRespectsQuietHours(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newNotificationEmailMemorySettingRepo()
 			var count int
-			barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				count++
 				w.WriteHeader(http.StatusOK)
 			}))
-			t.Cleanup(barkServer.Close)
-
 			svc := NewNotificationService(repo, nil, nil, nil)
+			svc.httpClient = notificationBarkTestClient(barkServer)
 			svc.now = func() time.Time { return tc.now }
 			_, err := svc.UpdateConfig(ctx, &NotificationConfig{
 				Enabled: true,
 				Transports: NotificationTransportConfigs{
 					Bark: NotificationBarkTransportConfig{
 						Enabled:    true,
-						ServerURL:  barkServer.URL,
+						ServerURL:  barkURL,
 						DeviceKeys: []string{"device"},
 						Level:      "active",
 					},
@@ -575,13 +714,12 @@ func TestNotificationTestBypassesQuietHours(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()
 	var count int
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		count++
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
-
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	svc.now = func() time.Time {
 		return time.Date(2026, 6, 7, 15, 0, 0, 0, time.UTC) // 23:00 Asia/Shanghai
 	}
@@ -590,7 +728,7 @@ func TestNotificationTestBypassesQuietHours(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"device"},
 				Level:      "active",
 			},
@@ -625,7 +763,7 @@ func TestNotificationDispatchAsyncReturnsBeforeTransportCompletes(t *testing.T) 
 	repo := newNotificationEmailMemorySettingRepo()
 	requestStarted := make(chan struct{})
 	releaseResponse := make(chan struct{})
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(requestStarted)
 		<-releaseResponse
 		w.WriteHeader(http.StatusOK)
@@ -636,12 +774,13 @@ func TestNotificationDispatchAsyncReturnsBeforeTransportCompletes(t *testing.T) 
 	})
 
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
 		Enabled: true,
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"device"},
 				Level:      "active",
 			},
@@ -683,13 +822,13 @@ func TestNotificationRateLimitKeySuppressesRepeatedDispatch(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()
 	var count int
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		count++
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
 
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	now := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
@@ -697,7 +836,7 @@ func TestNotificationRateLimitKeySuppressesRepeatedDispatch(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"device"},
 				Level:      "active",
 			},
@@ -735,13 +874,13 @@ func TestNotificationRateLimitIgnoresPayloadSubEvent(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()
 	var count int
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		count++
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
 
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	now := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
@@ -749,7 +888,7 @@ func TestNotificationRateLimitIgnoresPayloadSubEvent(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"device"},
 				Level:      "active",
 			},
@@ -785,7 +924,7 @@ func TestNotificationDispatchDoesNotRateLimitFailedDelivery(t *testing.T) {
 	repo := newNotificationEmailMemorySettingRepo()
 	var count int
 	failDelivery := true
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		count++
 		if failDelivery {
 			http.Error(w, "temporary failure", http.StatusInternalServerError)
@@ -793,9 +932,9 @@ func TestNotificationDispatchDoesNotRateLimitFailedDelivery(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
 
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	now := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
@@ -803,7 +942,7 @@ func TestNotificationDispatchDoesNotRateLimitFailedDelivery(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"device"},
 				Level:      "active",
 			},
@@ -842,7 +981,7 @@ func TestNotificationDispatchRateLimitsPartialDelivery(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()
 	var count int
-	barkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	barkServer, barkURL := newNotificationBarkTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++
 		if strings.Contains(r.URL.EscapedPath(), "bad") {
 			http.Error(w, "temporary failure", http.StatusInternalServerError)
@@ -850,9 +989,9 @@ func TestNotificationDispatchRateLimitsPartialDelivery(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(barkServer.Close)
 
 	svc := NewNotificationService(repo, nil, nil, nil)
+	svc.httpClient = notificationBarkTestClient(barkServer)
 	now := time.Date(2026, 6, 7, 10, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
 	_, err := svc.UpdateConfig(ctx, &NotificationConfig{
@@ -860,7 +999,7 @@ func TestNotificationDispatchRateLimitsPartialDelivery(t *testing.T) {
 		Transports: NotificationTransportConfigs{
 			Bark: NotificationBarkTransportConfig{
 				Enabled:    true,
-				ServerURL:  barkServer.URL,
+				ServerURL:  barkURL,
 				DeviceKeys: []string{"good-device", "bad-device"},
 				Level:      "active",
 			},

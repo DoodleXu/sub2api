@@ -294,6 +294,64 @@ describe('OperationsCenterView', () => {
     )
   })
 
+  it('ignores stale overview responses after a rapid range change', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const pending: Array<{
+      query: { start_date?: string }
+      resolve: (value: typeof baseOverviewResponse) => void
+    }> = []
+    getOperationsOverview.mockImplementation((query: { start_date?: string }) => new Promise((resolve) => {
+      pending.push({ query, resolve })
+    }))
+
+    const range7 = wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last7Days')
+    const range90 = wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last90Days')
+    await range7?.trigger('click')
+    await range90?.trigger('click')
+
+    expect(pending).toHaveLength(4)
+    const newestRequests = pending.slice(2)
+    newestRequests.forEach((request) => request.resolve({
+        ...baseOverviewResponse,
+        summary: { ...baseOverviewResponse.summary, actual_cost: 90 },
+      }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$90.00')
+    const refreshButton = wrapper.findAll('button').find((button) => button.text().includes('admin.operations.refresh'))
+    expect(refreshButton?.attributes('disabled')).toBeUndefined()
+
+    pending.slice(0, 2).forEach((request) => request.resolve({
+        ...baseOverviewResponse,
+        summary: { ...baseOverviewResponse.summary, actual_cost: 7 },
+      }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('$90.00')
+    expect(wrapper.text()).not.toContain('$7.00')
+  })
+
+  it('clears a stale analytics loading flag after switching tabs and ranges', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    let resolveAnalytics!: (value: typeof baseAnalyticsResponse) => void
+    getDailyCheckinAnalytics.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAnalytics = resolve
+    }))
+
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.checkinAnalysis')?.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.records')?.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.last7Days')?.trigger('click')
+
+    resolveAnalytics(baseAnalyticsResponse)
+    await flushPromises()
+
+    expect((wrapper.vm as unknown as { loadingAnalytics: boolean }).loadingAnalytics).toBe(false)
+  })
+
   it('reloads only the active tab and lazily loads the remaining sections', async () => {
     const wrapper = mountView()
 

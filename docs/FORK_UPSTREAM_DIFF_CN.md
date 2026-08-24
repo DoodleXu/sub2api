@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-21
+最后更新：2026-08-24
 
 ## 当前对比基线
 
@@ -125,6 +125,27 @@ git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
 - 后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过，`go vet -tags=unit ./...` 通过；设置公开注入 schema、Grok 视频/配额探测、调度阈值、强制计费 request ID 和 Gin 全局状态均有回归覆盖。
 - 前端 `pnpm typecheck`、`pnpm exec vitest run --reporter=dot`（243 个测试文件、1698 个用例）和 `pnpm build` 全部通过；构建产物正常生成到 `backend/internal/web/dist`。
 - `git diff --check`、冲突标记和未合并索引检查在提交前再次执行；本次未执行 push，版本源继续保持 `0.1.243`。
+
+## 2026-08-24 审查修复与 fork 增量
+
+本轮基于 `7a29b8076bc09f3b1c0d3ee32bd450088d4d590f` 对 `main` 相较 `origin/main` 的 fork 新增功能做了收口，以下行为属于当前 fork 运行边界，同步上游时必须保留：
+
+- 支付退款将本地请求幂等键、供应商退款单号和权益扣减 lineage 分开持久化；网关结果未知时，Stripe/Airwallex/微信支付只按订单归属、尝试标识和金额做确定性查询，绝不把本地 `rf_*` 当成供应商资源 ID，也不回退到“最近一笔退款”。
+- 退款尝试的权益扣减与 `REFUND_ATTEMPT` 审计通过事务 client 原子提交；COMMIT 回执不确定时订单保持 `REFUNDING` 并进入人工核验，不能恢复成可重试状态。`REFUND_ATTEMPT`/`REFUND_PENDING` 显式保存管理员是否要求扣回权益、扣减类型和实际扣减量（包括零），pending 确认不得把 `deduct_balance=false` 改成扣余额/订阅，也不得按确认时的新余额重新计算。缺失或损坏的旧审计使用未知三态：仍可只读查询供应商，但禁止自动扣减、补偿和最终落单。
+- 退款失败重试只继承已成功退款水位；无 lineage 的旧 `REFUND_ROLLBACK_FAILED` 按不可变审计行 ID 生成稳定 lineage，恢复后不能被另一笔同额退款再次复用。网关明确失败时，当前扣减或继承的历史扣减都与订单失败状态及 `REFUND_ROLLBACK_RECOVERED` 标记在同一事务补偿；本次供应商尝试键保持已消费，下一次 `REFUND_FAILED` 重试必须使用新键。余额补偿使用纯余额调整，不增加 `total_recharged`，订阅补偿在提交后才失效缓存。确认和补偿复用实际扣减金额/订阅天数，近到期订阅撤销会按原订阅恢复。管理端批量生图提交使用数据库唯一幂等约束，冲突请求只有在请求哈希一致时复用原任务，失败或取消产物也进入统一生命周期清理。
+- 批量生图只接受受管的内联图片引用，拒绝公开 `file_uri`；供应商轮询失败计数持久化并饱和在快速重试上限，临时故障随后转入低频对账且继续保留任务和资金 hold，只有明确的鉴权、权限、资源不存在，或任务绑定的账号/凭据/provider 配置已确定不可用时才终止任务并走幂等释放；账号仓储瞬时读取错误仍保持可重试。失败、取消和已完成结果都带过期时间并可清理；清理失败/取消任务只写 `output_deleted_at`，不覆盖业务终态，以便账务释放失败后继续重试。非事务迁移 `231_batch_image_idempotency_unique_notx.sql` 执行前会删除同名无效索引，支持 `CREATE INDEX CONCURRENTLY` 中断后的可靠重试。
+- 账号归档独立于上游状态，影子账号继承母账号的有效归档状态；归档账号不再触发上游用量/刷新/调度写操作，缺失、已软删除或已归档母账号的影子账号更新和调度均 fail-closed，历史成本账本仍保留。OpenAI 配额请求在真正出站前重新读取账号并再次解析影子母账号，归档/删除竞态不能借已缓存 token 访问上游；账号批量更新预加载目标并把普通缺失 ID 逐项报告为失败，OpenAI 设置与探测开关等特殊更新在任何目标缺失时保持全批次不写入；账号列表、批量母账号校验和调度快照的母账号/影子状态都按 PostgreSQL 参数上限分批加载，禁止逐账号 N+1 查询。用量来源标记不会把无日志的被动快照误报为 active。
+- 运维并发与可用统计统一使用有效归档状态，母账号归档后的影子账号不再占用容量或进入可用账号统计；运营中心各异步 loader 以独立请求 token 清理 loading 状态，旧请求完成不会遗留卡死 spinner。
+- Bark 通知 URL 强制 HTTPS、可信主机和重定向同源校验，并阻断私网解析；通知测试/发送和邮件群发错误在服务端限长脱敏，运营 CSV 对表格公式注入做中和，敏感通知写入口要求 step-up 认证。
+- 签到状态快照在余额事务提交前读取，签到规则历史通过锁定读取与写入避免并发丢版本；运营分析按服务端签到时区计算资格、日期和预算，浏览器时区只作为观察性元数据。账号成本变更后的 Dashboard 快照以成本聚合 coverage 水位为终点，不以墙上当前时间制造未覆盖窗口。
+- 生图历史持久化受管对象键而不是短期签名 URL，管理端读取历史时按配置前缀校验并重新签名，旧 URL 过期不影响历史展示；存储绑定只包含 endpoint、region、bucket、prefix 和寻址模式等稳定命名空间，轮换凭据或公开 URL 不会隐藏历史任务，切换桶或前缀仍会隔离旧对象。迁移 `232_image_task_history_object_keys.sql` 将空值规范为 JSON `[]`。
+- 前端运营中心丢弃过期范围请求；创作台按任务保存的 API Key 恢复轮询，不回退到另一把 Key；订单固定手续费在费率为零时仍展示。发布候选校验要求提交可从默认分支到达，并覆盖默认分支与旁支场景。
+
+### 本轮验证
+
+- 已通过 `TZ=UTC GOCACHE=/private/tmp/sub2api-go-build go test -tags=unit -count=1 ./...`（全部后端包）、`go vet`、批量生图/退款/图像历史/签到/成本覆盖/设置并发/归档保护/通知脱敏等定向回归，以及 `/bin/sh tools/test_verify_release_candidate.sh`；`git diff --check` 通过。
+- 前端 `pnpm exec vitest run --reporter=dot`（260 个测试文件、1845 个用例）、`pnpm exec vue-tsc --noEmit`、`pnpm run lint:check` 和 `pnpm run build` 全部通过，构建产物正常生成到 `backend/internal/web/dist`。
+- 供应商退款查询额外覆盖 Stripe/Airwallex/微信支付的尝试标识、金额精确匹配、歧义拒绝和 WeChat 退款单号长度限制。
 
 ## 2026-08-10 上游同步后全面审核修复
 

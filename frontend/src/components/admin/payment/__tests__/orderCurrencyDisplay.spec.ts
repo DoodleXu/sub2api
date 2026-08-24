@@ -73,6 +73,57 @@ describe('admin order currency display', () => {
     expect(text).toContain('$25.00')
   })
 
+  it('renders a fixed fee amount even when the fee rate is zero', () => {
+    const wrapper = mount(AdminOrderDetail, {
+      props: {
+        show: true,
+        order: orderFactory({
+          currency: 'CNY',
+          pay_amount: 105,
+          fee_rate: 0,
+          fee_amount: 5,
+        }),
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+        },
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.orders.fee')
+    expect(text).not.toContain('payment.orders.fee (0%)')
+    expect(text).toContain('¥100.00')
+    expect(text).toContain('¥5.00')
+    expect(text).toContain('¥105.00')
+  })
+
+  it('honors a persisted zero fee instead of inferring from the fee rate', () => {
+    const wrapper = mount(AdminOrderDetail, {
+      props: {
+        show: true,
+        order: orderFactory({
+          currency: 'CNY',
+          amount: 100,
+          pay_amount: 100,
+          fee_rate: 8,
+          fee_amount: 0,
+        }),
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+        },
+      },
+    })
+
+    const text = wrapper.text()
+    expect(text).toContain('¥100.00')
+    expect(text).not.toContain('¥92.59')
+    expect(text).not.toContain('¥8.00')
+  })
+
   it('uses order currency for pay_amount and USD for refundable balance amounts', () => {
     const wrapper = mount(AdminRefundDialog, {
       props: {

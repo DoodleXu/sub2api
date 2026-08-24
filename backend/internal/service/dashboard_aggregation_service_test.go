@@ -29,6 +29,8 @@ type dashboardAggregationRepoTestStub struct {
 	accountCoverageStart   time.Time
 	accountCoverageEnd     time.Time
 	refreshSnapshotCalls   int
+	refreshSnapshotStart   time.Time
+	refreshSnapshotEnd     time.Time
 	processTotalsCalls     int
 	processTotalsResult    int64
 	markSnapshotStaleCalls int32
@@ -85,6 +87,8 @@ func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationState(ctx co
 
 func (s *dashboardAggregationRepoTestStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
 	s.refreshSnapshotCalls++
+	s.refreshSnapshotStart = targetStart
+	s.refreshSnapshotEnd = targetEnd
 	atomic.AddInt32(&s.refreshDoneCalls, 1)
 	return true, nil
 }
@@ -492,7 +496,9 @@ func TestDashboardAggregationService_TriggerRecomputeInvalidatesAndRefreshesCost
 }
 
 func TestDashboardAggregationService_AccountCostChangeRefreshesCostSnapshot(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{}
+	coverageStart := time.Now().UTC().AddDate(0, 0, -30).Truncate(time.Hour)
+	coverageEnd := time.Now().UTC().Add(-17 * time.Minute).Truncate(time.Minute)
+	repo := &dashboardAggregationRepoTestStub{accountCoverageStart: coverageStart, accountCoverageEnd: coverageEnd}
 	cache := &dashboardCacheStub{}
 	svc := NewDashboardAggregationService(repo, nil, &config.Config{
 		DashboardAgg: config.DashboardAggregationConfig{
@@ -511,6 +517,9 @@ func TestDashboardAggregationService_AccountCostChangeRefreshesCostSnapshot(t *t
 		return atomic.LoadInt32(&repo.refreshDoneCalls) == 1
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, 1, repo.refreshSnapshotCalls)
+	require.Equal(t, coverageEnd, repo.refreshSnapshotEnd)
+	require.True(t, repo.refreshSnapshotStart.Before(repo.refreshSnapshotEnd))
+	require.False(t, repo.refreshSnapshotEnd.After(time.Now().UTC()), "refresh must stop at the materialized coverage waterline")
 }
 
 func TestDashboardAggregationService_DisabledRecomputeStillInvalidatesCostSnapshot(t *testing.T) {

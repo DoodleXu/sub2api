@@ -3502,6 +3502,7 @@ export default {
       deleteAccount: 'Delete Account',
       archiveAccount: 'Archive Account',
       unarchiveAccount: 'Unarchive Account',
+      parentArchivedHint: 'Restore the parent account before unarchiving this shadow account.',
       archiveConfirm: "Archive account '{name}'? Historical cost and usage will be kept, but the account will be hidden from the default list and scheduling.",
       archiveSuccess: 'Account archived successfully',
       archiveFailed: 'Failed to archive account',
