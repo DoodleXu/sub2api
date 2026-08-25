@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+)
 
 // resolveOpenAIForwardModel 解析 OpenAI 兼容转发使用的模型。
 // messagesDispatchMappedModel 是调用方已为 /v1/messages 解析的显式调度结果；
@@ -13,12 +17,36 @@ func resolveOpenAIForwardModel(account *Account, requestedModel, messagesDispatc
 		}
 		return requestedModel
 	}
+	if account.Platform == PlatformGrok {
+		normalized := strings.ToLower(strings.TrimSpace(requestedModel))
+		if normalized == "grok" || normalized == "grok-latest" {
+			rawMapping, _ := account.Credentials["model_mapping"].(map[string]any)
+			if _, explicitlyMapped := rawMapping[normalized]; !explicitlyMapped {
+				return grokDefaultResponsesModel
+			}
+		}
+	}
 
 	mappedModel, matched := account.ResolveMappedModel(requestedModel)
 	if !matched && messagesDispatchMappedModel != "" {
 		return messagesDispatchMappedModel
 	}
 	return mappedModel
+}
+
+// resolveOpenAIChatForwardModel keeps the newer Grok chat fallback independent
+// from the fork's cache-capable Responses default.
+func resolveOpenAIChatForwardModel(account *Account, requestedModel, messagesDispatchMappedModel string) string {
+	if account != nil && account.Platform == PlatformGrok {
+		normalized := strings.ToLower(strings.TrimSpace(requestedModel))
+		if normalized == "grok" || normalized == "grok-latest" {
+			rawMapping, _ := account.Credentials["model_mapping"].(map[string]any)
+			if _, explicitlyMapped := rawMapping[normalized]; !explicitlyMapped {
+				return xai.DefaultTextModel
+			}
+		}
+	}
+	return resolveOpenAIForwardModel(account, requestedModel, messagesDispatchMappedModel)
 }
 
 // openAIOAuthForeignModelPrefixes 列出明确属于其他厂商家族的模型名前缀。

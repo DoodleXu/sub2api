@@ -116,8 +116,9 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		WebConsoleEnabled:         settings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint: settings.WebConsoleDefaultEndpoint,
 
-		ModelPlazaEnabled:     settings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth: settings.ModelPlazaRequireAuth,
+		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled: settings.PluginManagementEnabled,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 

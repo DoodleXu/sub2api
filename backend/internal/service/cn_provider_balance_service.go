@@ -240,7 +240,7 @@ func parseCNBalancePayload(provider string, bodyBytes []byte) ([]CNProviderBalan
 		// balance_infos 是必需数组；缺失/空数组或条目字段畸形均失败关闭。
 		infos := gjson.GetBytes(bodyBytes, "balance_infos")
 		if !infos.Exists() || !infos.IsArray() || len(infos.Array()) == 0 {
-			return nil, false, fmt.Errorf("invalid DeepSeek balance response: balance_infos is missing or empty")
+			return nil, false, fmt.Errorf("invalid DeepSeek balance response: missing balance_infos or no valid balance entries")
 		}
 		// is_available 缺省视为 true（健康）；显式存在时取其值。
 		if v := gjson.GetBytes(bodyBytes, "is_available"); v.Exists() {
@@ -263,7 +263,7 @@ func parseCNBalancePayload(provider string, bodyBytes []byte) ([]CNProviderBalan
 			return true
 		})
 		if !valid || len(entries) == 0 {
-			return nil, false, fmt.Errorf("invalid DeepSeek balance response: balance_infos contains missing or non-numeric fields")
+			return nil, false, fmt.Errorf("invalid DeepSeek balance response: no valid balance entries")
 		}
 	default:
 		return nil, false, fmt.Errorf("invalid balance response: unsupported provider")

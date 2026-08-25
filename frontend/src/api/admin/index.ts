@@ -37,6 +37,7 @@ import operationsAPI from './operations'
 import imageGenerationsAPI from './imageGenerations'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
+import pluginsAPI from './plugins'
 
 /**
  * Unified admin API object for convenient access
@@ -75,7 +76,8 @@ export const adminAPI = {
   operations: operationsAPI,
   imageGenerations: imageGenerationsAPI,
   compliance: adminComplianceAPI,
-  audit: auditAPI
+  audit: auditAPI,
+  plugins: pluginsAPI
 }
 
 export {
@@ -112,7 +114,8 @@ export {
   operationsAPI,
   imageGenerationsAPI,
   adminComplianceAPI,
-  auditAPI
+  auditAPI,
+  pluginsAPI
 }
 
 export default adminAPI
@@ -123,6 +126,12 @@ export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
 export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'
 export type { TLSFingerprintProfile, CreateProfileRequest, UpdateProfileRequest } from './tlsFingerprintProfile'
+export type {
+  PluginInstallation,
+  PluginCompatibility,
+  PluginUISession,
+  PluginTestResult
+} from './plugins'
 export type {
   ContentModerationConfig,
   ContentModerationLog,

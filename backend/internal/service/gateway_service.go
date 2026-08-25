@@ -208,8 +208,8 @@ func openAIStreamEventIsTerminalWithType(data, eventType string) bool {
 }
 
 func openAIStreamEventTypeIsTerminal(eventType string) bool {
-	switch eventType {
-	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
 		return true
 	default:
 		return false
@@ -644,13 +644,18 @@ type ForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
-	Stream                        bool
-	Duration                      time.Duration
-	FirstTokenMs                  *int // 首字时间（流式请求）
-	ClientDisconnect              bool // 客户端是否在流式传输过程中断开
-	ReasoningEffort               *string
-	// ServiceTier records the billable request tier. OpenAI uses service_tier;
-	// Anthropic speed=fast is normalized to "fast".
+	// UpstreamResponseServiceTier is the tier the upstream reports having used
+	// (Anthropic usage.speed: "fast" / "standard"); "" when not declared.
+	UpstreamResponseServiceTier string
+	Stream                      bool
+	Duration                    time.Duration
+	FirstTokenMs                *int // 首字时间（流式请求）
+	ClientDisconnect            bool // 客户端是否在流式传输过程中断开
+	ReasoningEffort             *string
+	// ServiceTier records the tier requested by the client. OpenAI uses
+	// service_tier; Anthropic speed=fast is normalized to "fast". Usage recording
+	// lowers it to UpstreamResponseServiceTier when the upstream reports a
+	// cheaper tier (see ResolveBillingServiceTier).
 	ServiceTier *string
 
 	// 图片生成计费字段（图片生成模型使用）
@@ -701,12 +706,15 @@ type GatewayFailureReason string
 // source-compatible and preserves their legacy retry-next-account behavior.
 type UpstreamFailoverError struct {
 	StatusCode               int
-	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
-	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	ResponseBody             []byte        // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header   // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool          // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool          // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SameAccountRetryDelay    time.Duration // 同账号重试的最小间隔；零值使用 handler 默认值
+	SameAccountRetryDeadline time.Time     // 同账号重试截止时间；零值表示仅受 retryLimit 限制
+	SameAccountRetryMax      int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
+	RequestScopedTransient   bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	Stage                    GatewayFailureStage
 	Scope                    GatewayFailureScope
 	Reason                   GatewayFailureReason
@@ -729,6 +737,10 @@ func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
 
 func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 	return e != nil && e.Stage == GatewayFailureStageAccountAuth
+}
+
+func (e *UpstreamFailoverError) IsOpenAICapacityShed() bool {
+	return e != nil && (e.RequestScopedTransient || isOpenAIRequestScopedCapacityShed("", e.ResponseBody))
 }
 
 // ShouldReportAccountScheduleFailure prevents provider- and request-scoped
@@ -3545,7 +3557,6 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	preferOAuth := platform == PlatformGemini
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, platform)
 
-	// require_privacy_set: 获取分组信息
 	var schedGroup *Group
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
@@ -3574,7 +3585,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
-						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
+						if !clearSticky && (schedGroup == nil || !schedGroup.RequirePrivacySet || account.IsPrivacySet()) && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
 							if s.debugModelRoutingEnabled() {
 								logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 							}
@@ -3627,8 +3638,6 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			}
 			// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 			if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-				_ = s.accountRepo.SetError(ctx, acc.ID,
-					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3700,7 +3709,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 					if clearSticky || restrictedSticky {
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
-					if !clearSticky && !restrictedSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
+					if !clearSticky && !restrictedSticky && (schedGroup == nil || !schedGroup.RequirePrivacySet || account.IsPrivacySet()) && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
 						return account, nil
 					}
 				}
@@ -3745,8 +3754,6 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-			_ = s.accountRepo.SetError(ctx, acc.ID,
-				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -3815,7 +3822,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	preferOAuth := nativePlatform == PlatformGemini
 	routingAccountIDs := s.routingAccountIDsForRequest(ctx, groupID, requestedModel, nativePlatform)
 
-	// require_privacy_set: 获取分组信息
 	var schedGroup *Group
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
@@ -3893,8 +3899,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			}
 			// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 			if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-				_ = s.accountRepo.SetError(ctx, acc.ID,
-					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 				continue
 			}
 			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
@@ -4008,8 +4012,6 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
 		if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
-			_ = s.accountRepo.SetError(ctx, acc.ID,
-				fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 			continue
 		}
 		// 过滤：原生平台直接通过，antigravity 需要启用混合调度
@@ -6677,6 +6679,41 @@ func parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
 			usage.CacheCreationInputTokens = int(total)
 		}
 	}
+	normalizeCNProviderUsageAliases(parsed, usage)
+}
+
+func normalizeCNProviderUsageAliases(parsed gjson.Result, usage *ClaudeUsage) {
+	if usage == nil || !parsed.Exists() {
+		return
+	}
+	node := parsed.Get("usage")
+	if !node.Exists() {
+		node = parsed.Get("message.usage")
+	}
+	if !node.Exists() {
+		return
+	}
+	cached := node.Get("cached_tokens").Int()
+	if cached == 0 {
+		cached = node.Get("prompt_tokens_details.cached_tokens").Int()
+	}
+	if cached == 0 {
+		cached = node.Get("prompt_cache_hit_tokens").Int()
+	}
+	if cached > 0 {
+		usage.CacheReadInputTokens = int(cached)
+	}
+	prompt := node.Get("prompt_tokens").Int()
+	if prompt > 0 && (cached > 0 || node.Get("prompt_cache_miss_tokens").Exists()) {
+		miss := prompt - cached
+		if miss < 0 {
+			miss = 0
+		}
+		usage.InputTokens = int(miss)
+	}
+	if miss := node.Get("prompt_cache_miss_tokens").Int(); miss > 0 && prompt == 0 {
+		usage.InputTokens = int(miss)
+	}
 }
 
 func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
@@ -6694,7 +6731,11 @@ func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 	usage.InputTokens = int(usageNode.Get("input_tokens").Int())
 	usage.OutputTokens = int(usageNode.Get("output_tokens").Int())
 	usage.CacheCreationInputTokens = int(usageNode.Get("cache_creation_input_tokens").Int())
-	usage.CacheReadInputTokens = int(usageNode.Get("cache_read_input_tokens").Int())
+	cacheRead := usageNode.Get("cache_read_input_tokens")
+	explicitCacheRead := cacheRead.Exists() && cacheRead.Int() != 0
+	if cacheRead.Exists() {
+		usage.CacheReadInputTokens = int(cacheRead.Int())
+	}
 
 	cc5m := usageNode.Get("cache_creation.ephemeral_5m_input_tokens").Int()
 	cc1h := usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int()
@@ -6705,10 +6746,14 @@ func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 	if usage.CacheCreationInputTokens == 0 && (cc5m > 0 || cc1h > 0) {
 		usage.CacheCreationInputTokens = int(cc5m + cc1h)
 	}
-	if usage.CacheReadInputTokens == 0 {
+	if !cacheRead.Exists() {
 		if cached := usageNode.Get("cached_tokens").Int(); cached > 0 {
 			usage.CacheReadInputTokens = int(cached)
 		}
+	}
+	normalizeCNProviderUsageAliases(parsed, usage)
+	if explicitCacheRead {
+		usage.CacheReadInputTokens = int(cacheRead.Int())
 	}
 	return usage
 }
@@ -10150,6 +10195,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	account := input.Account
 	subscription := input.Subscription
 	ApplyForwardImageBillingResolution(result)
+	ApplyForwardServiceTierBillingResolution(result)
 
 	// 强制缓存计费：将 input_tokens 转为 cache_read_input_tokens
 	// 用于粘性会话切换时的特殊计费处理
@@ -11629,19 +11675,19 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 	}
 
 	// 如果 path 指向一个已存在的目录，自动追加默认文件名
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
+	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // G703: path 仅来自启动环境变量 SUB2API_DEBUG_GATEWAY_BODY（运维配置），非请求输入
 		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
 	}
 
 	// 确保父目录存在
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // G703: 同上
 			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
 			return
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644) //nolint:gosec // G703: 同上
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
 		return

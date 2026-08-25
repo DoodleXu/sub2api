@@ -981,6 +981,14 @@ pnpm --dir frontend run build
 
 ## 快速定位命令
 
+## v0.1.181 候选同步记录（2026-08-25）
+
+- 上游基线：`upstream/v0.1.181`（`3af5443b224823ae507a50c7b113aa50604409c8`）。
+- 已保留 fork 的签到、运营中心、成本核算、账号归档、Web 创作台、生图管理，以及 Responses/WS/透传兼容行为。
+- Ent 既有 schema 与已上线 fork 基线（`0d939797ab875c620bcb7ed4baf5c068f7fd68c5`）无差异。
+- 候选新增迁移为插件安装/绑定表及 `artifact_data` 字段（`229_plugins.sql`、`230_plugin_artifacts.sql`），属于向后兼容的加法变更。
+- 当前状态：候选 service 全量测试仍有 49 个失败用例，尚未具备替换 `main` 的发布条件；已收敛 DeepSeek client tools、Responses bare-error 状态机、Grok Chat/Responses 默认模型分流等兼容回归。
+
 ```bash
 # 查看 fork 自有提交
 git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.153^{}...HEAD
@@ -994,3 +1002,13 @@ git diff --name-status refs/tags/upstream/v0.1.153^{}..HEAD
 # 查看某个功能的代码入口
 rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|OperationsCenter'
 ```
+## 2026-08-26 上游 v0.1.181 候选分支
+
+- 候选基于已上线 fork `0d939797ab875c620bcb7ed4baf5c068f7fd68c5`，合入上游 `v0.1.181`；保留签到、运营中心、成本核算、账号归档、创作台、生图管理、Responses Lite、高级调度、图片/WS 计费、插件扩展等 fork 能力。
+- 上游拆分文件继续按 fork 的聚合模块布局承载；新增插件能力仅增加迁移 `229_plugins.sql`、`230_plugin_artifacts.sql`，与已上线 fork 表结构为加法兼容，未修改或删除既有列、索引和约束。
+- 针对 OpenAI Responses/Codex/Grok WebSocket、compact、service tier、隐私调度、配额 singleflight、HTTP bridge 拒绝字段重试等上游行为完成定向回归。
+
+### 候选验证
+
+- 通过：`go test ./... -count=1`、迁移与 repository schema 定向测试、`go build ./...`、`pnpm exec vue-tsc --noEmit`、`pnpm run build`、`git diff --check`。
+- 服务包定向回归通过；完整 `internal/service` 包仍有旧测试 `TestOpenAIGatewayServiceLegacyLowRatePriorityIsIndependentFromAdvancedScheduler` 受全局调度设置缓存污染，单组连续运行通过但全包顺序下不稳定，故候选尚未替换 `main`。

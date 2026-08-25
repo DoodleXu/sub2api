@@ -344,9 +344,10 @@ type SystemSettings struct {
 	DailyCheckinCritMaxRewardUSD    float64                                `json:"daily_checkin_crit_max_reward_usd"`
 
 	// Model Plaza feature (public group/model pricing showcase)
-	ModelPlazaEnabled     bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription string `json:"model_plaza_description"`
+	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription   string `json:"model_plaza_description"`
+	PluginManagementEnabled bool   `json:"plugin_management_enabled"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
@@ -453,6 +454,7 @@ type PublicSettings struct {
 	WebConsoleDefaultEndpoint string `json:"web_console_default_endpoint"`
 	ModelPlazaEnabled         bool   `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth     bool   `json:"model_plaza_require_auth"`
+	PluginManagementEnabled   bool   `json:"plugin_management_enabled"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

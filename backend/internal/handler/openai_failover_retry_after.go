@@ -14,6 +14,9 @@ func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError
 	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
 		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
 	}
+	if failoverErr != nil && failoverErr.Reason == service.OpenAIUpstreamAccessStateReason {
+		return http.StatusBadGateway, service.OpenAIUpstreamAccessUnavailableClientMessage()
+	}
 	return http.StatusServiceUnavailable, service.GrokCredentialUnavailableClientMessage
 }
 

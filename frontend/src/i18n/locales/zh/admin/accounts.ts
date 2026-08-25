@@ -344,7 +344,9 @@ export default {
         balance: '余额 --',
         window5h: '5 小时窗口',
         windowWeekly: '每周窗口',
+        probe: '查询',
         probeTooltip: '请求供应商额度端点，查询 5 小时 / 每周滚动窗口用量',
+        balanceProbeTooltip: '请求供应商余额端点，查询账户余额',
         balanceLow: '余额不足',
         noBalanceEndpoint: '该平台暂无余额查询接口',
         resetSoon: '即将重置',
@@ -494,6 +496,14 @@ export default {
         resetAccountRecoveryFailed: '窗口已重置，但账号状态恢复失败，请手动恢复账号状态。',
         resetAccountRefreshFailed: '窗口、账号状态和重置次数缓存已更新，但无法加载最新账号显示。',
         refreshCachePersistFailed: '已显示实时次数，但到期明细获取失败，仍保留原有缓存明细。',
+        autoStatus: {
+          checking: '检测中',
+          available: '卡可用',
+          resetting: '自动重置中',
+          success: '自动重置成功',
+          noCredit: '无卡',
+          failed: '自动重置失败'
+        },
         confirmTitle: '确认重置周限',
         confirmMessage: '将消耗 1 次重置次数立即恢复当前窗口，剩余 {count} 次。此操作不可撤销，确定继续吗？'
       },

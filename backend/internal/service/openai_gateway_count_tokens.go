@@ -83,7 +83,7 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -137,7 +137,7 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 	if originalModel == "" {
 		return nil, fmt.Errorf("parse responses input_tokens request: model is required")
 	}
-	billingModel := resolveOpenAIForwardModel(account, originalModel, "")
+	billingModel := resolveOpenAIChatForwardModel(account, originalModel, "")
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	req.Model = upstreamModel
 	return &openAIInputTokensCountPrepared{
@@ -466,7 +466,7 @@ func prepareOpenAIInputTokensCountRequest(
 	originalModel := anthropicReq.Model
 	applyOpenAICompatModelNormalization(&anthropicReq)
 	normalizedModel := anthropicReq.Model
-	billingModel := resolveOpenAIForwardModel(account, normalizedModel, strings.TrimSpace(defaultMappedModel))
+	billingModel := resolveOpenAIChatForwardModel(account, normalizedModel, strings.TrimSpace(defaultMappedModel))
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
 	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)

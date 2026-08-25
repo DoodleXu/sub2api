@@ -562,7 +562,7 @@ func (s *OpenAIGatewayService) ForwardImages(
 	switch account.Type {
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
-	case AccountTypeOAuth:
+	case AccountTypeOAuth, AccountTypeSetupToken:
 		return s.forwardOpenAIImagesOAuth(ctx, c, account, parsed, channelMappedModel)
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
@@ -589,6 +589,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}
+	SetOpsUpstreamModel(c, upstreamModel)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
 		"[OpenAI] Images request routing request_model=%s upstream_model=%s endpoint=%s account_type=%s",
@@ -623,7 +624,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
@@ -646,13 +647,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			s.handleFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
-			}
+			shouldDisable := s.handleFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
+			return nil, s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, respBody, upstreamMsg,
+				shouldDisable, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
 		}
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, upstreamModel)
 	}

@@ -525,6 +525,7 @@ type SettingService struct {
 	// instance owns its own cache, no shared package-level state.
 	openAIQuotaAutoPauseSettingsCache atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
 	openAIQuotaAutoPauseSettingsSF    singleflight.Group
+	openAIAPIKeyHealthBreakerCache    atomic.Value // *cachedOpenAIAPIKeyHealthBreakerSettings
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
@@ -1946,6 +1947,31 @@ func (s *SettingService) MigrateOpenAIAllowClaudeCodeCodexPluginSetting(ctx cont
 	}
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
 	s.codexRestrictionPolicyCache.Store(&cachedCodexRestrictionPolicy{expiresAt: 0})
+	return nil
+}
+
+// MigrateGrokDefaultTextModel updates the fork's former Grok fallback to the
+// current upstream default while preserving explicit administrator choices.
+func (s *SettingService) MigrateGrokDefaultTextModel(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyGrokDefaultTextModel)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return nil
+		}
+		return fmt.Errorf("get %s setting: %w", SettingKeyGrokDefaultTextModel, err)
+	}
+	if strings.TrimSpace(value) != "grok-4.5" {
+		return nil
+	}
+	if err := s.settingRepo.Set(ctx, SettingKeyGrokDefaultTextModel, "grok-4.6"); err != nil {
+		return fmt.Errorf("set %s setting: %w", SettingKeyGrokDefaultTextModel, err)
+	}
 	return nil
 }
 

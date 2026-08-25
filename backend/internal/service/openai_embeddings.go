@@ -32,8 +32,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 		return nil, fmt.Errorf("missing model in request")
 	}
 
-	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
+	billingModel := resolveOpenAIChatForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	SetOpsUpstreamModel(c, upstreamModel)
 	upstreamBody := body
 	if upstreamModel != originalModel {
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
@@ -91,7 +92,7 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		failoverErr := s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		if _, ok := failoverErr.(*UpstreamFailoverError); ok {
@@ -129,12 +130,11 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 				Detail:             upstreamDetail,
 			})
 			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
-				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			err := s.newOpenAIAccountFailoverError(account, resp.StatusCode, resp.Header, respBody, upstreamMsg, false, account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode))
+			if err.Reason == "" {
+				err.ResponseHeaders = nil
 			}
+			return nil, err
 		}
 		writeOpenAIEmbeddingsUpstreamResponse(c, resp, respBody, s.responseHeaderFilter)
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)

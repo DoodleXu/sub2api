@@ -158,14 +158,30 @@ func (c *alphaSearchCyberCache) DeleteSessionAccountID(context.Context, int64, s
 	return nil
 }
 
-func (c *alphaSearchCyberCache) SetCyberSessionBlocked(_ context.Context, key string, _ time.Duration) error {
+func (c *alphaSearchCyberCache) SetCyberSessionBlocked(_ context.Context, _ string, keys []string, _ time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.blocked == nil {
 		c.blocked = make(map[string]bool)
 	}
-	c.blocked[key] = true
+	for _, key := range keys {
+		c.blocked[key] = true
+	}
 	return nil
+}
+
+func (c *alphaSearchCyberCache) IsCyberSessionScopeActive(context.Context, string) (bool, error) {
+	return true, nil
+}
+func (c *alphaSearchCyberCache) FindCyberSessionBlocked(_ context.Context, keys []string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range keys {
+		if c.blocked[key] {
+			return key, nil
+		}
+	}
+	return "", nil
 }
 
 func (c *alphaSearchCyberCache) IsCyberSessionBlocked(_ context.Context, key string) (bool, error) {

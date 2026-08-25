@@ -29,6 +29,7 @@ type openAIWSClientFrameConn struct {
 	// The relay observes upstream payloads, while clients must keep seeing the
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
+	restoreToolNames     func([]byte) []byte
 }
 
 func (c *openAIWSClientFrameConn) markTurnStarted() {
@@ -103,11 +104,9 @@ func (c *openAIWSPolicyEnforcingFrameConn) Close() error {
 	return c.inner.Close()
 }
 
-// openAIWSPassthroughPolicyModelForFrame returns the upstream-perspective
-// model name that should be passed to evaluateOpenAIFastPolicy for a single
-// passthrough WS frame. Mirrors the HTTP-side normalization
-// (account.GetMappedModel + normalizeOpenAIModelForUpstream) so the WS path
-// matches model whitelists identically.
+// openAIWSPassthroughPolicyModelForFrame returns the model actually forwarded
+// by a passthrough WS frame. Passthrough only replaces authentication, so an
+// account's ordinary model_mapping and Codex aliases must not rewrite it.
 func openAIWSPassthroughPolicyModelForFrame(account *Account, payload []byte) string {
 	if account == nil || len(payload) == 0 {
 		return ""
@@ -116,7 +115,7 @@ func openAIWSPassthroughPolicyModelForFrame(account *Account, payload []byte) st
 	if original == "" {
 		return ""
 	}
-	return normalizeOpenAIModelForUpstream(account, account.GetMappedModel(original))
+	return original
 }
 
 // openAIWSPassthroughPolicyModelFromSessionFrame returns the upstream model
@@ -148,7 +147,7 @@ func openAIWSPassthroughPolicyModelFromSessionFrame(account *Account, payload []
 	if original == "" {
 		return ""
 	}
-	return normalizeOpenAIModelForUpstream(account, account.GetMappedModel(original))
+	return original
 }
 
 type openAIWSPassthroughUsageMeta struct {
@@ -696,6 +695,9 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 		if c.restoreResponseModel != nil {
 			payload = c.restoreResponseModel(payload)
 		}
+		if c.restoreToolNames != nil {
+			payload = c.restoreToolNames(payload)
+		}
 	}
 	return c.conn.Write(ctx, msgType, payload)
 }
@@ -719,6 +721,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	hooks *OpenAIWSIngressHooks,
 	wsDecision OpenAIWSProtocolDecision,
 ) error {
+	// The same request context survives scheduler failover attempts. Clear any
+	// reverse mapping installed by the prior account before processing frames.
+	setCodexToolNameReverse(c, nil)
 	if s == nil {
 		return errors.New("service is nil")
 	}
@@ -785,6 +790,28 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	capturedSessionModel := openAIWSPassthroughPolicyModelForFrame(account, firstClientMessage)
 	if capturedSessionModel != "" && capturedSessionModel != strings.TrimSpace(gjson.GetBytes(firstClientMessage, "model").String()) {
 		firstClientMessage = s.ReplaceModelInBody(firstClientMessage, capturedSessionModel)
+	}
+	if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(firstClientMessage, account); normalizeErr != nil {
+		return fmt.Errorf("normalize first websocket response.create: %w", normalizeErr)
+	} else if compatibilityChanged {
+		firstClientMessage = normalized
+	}
+	if account.IsOpenAIOAuthLike() {
+		aliasedBody, reverse, aliased, aliasErr := aliasOpenAIOAuthReservedToolNamesBody(firstClientMessage)
+		if aliasErr != nil {
+			return aliasErr
+		}
+		updateCodexToolNameReverseForWSFrame(c, firstClientMessage, reverse)
+		if aliased {
+			firstClientMessage = aliasedBody
+		}
+	}
+	accountScopedFirst, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(firstClientMessage, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+	if scopeErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
+	}
+	if accountScoped {
+		firstClientMessage = accountScopedFirst
 	}
 	usageMeta := newOpenAIWSPassthroughUsageMeta(initialRequestModel, firstClientMessage)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
@@ -1011,6 +1038,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			requestModel, upstreamModel := usageMeta.turnModels("")
 			return replaceOpenAIWSMessageModel(payload, upstreamModel, requestModel)
 		},
+		restoreToolNames: func(payload []byte) []byte {
+			return restoreCodexToolNamesFromContext(c, payload)
+		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: clientFrameConn,
@@ -1039,7 +1069,33 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}()
 			}
 			if isResponseCreate {
-				if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(payload) {
+				if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(payload, account); normalizeErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", normalizeErr)
+				} else if compatibilityChanged {
+					payload = normalized
+				}
+			}
+			if account.IsOpenAIOAuthLike() && (isResponseCreate || eventType == "session.update") {
+				aliasedBody, reverse, aliased, aliasErr := aliasOpenAIOAuthReservedToolNamesBody(payload)
+				if aliasErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, aliasErr.Error(), aliasErr)
+				}
+				updateCodexToolNameReverseForWSFrame(c, payload, reverse)
+				if aliased {
+					payload = aliasedBody
+				}
+			}
+			if isResponseCreate || eventType == "session.update" {
+				accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(payload, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+				if scopeErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
+				}
+				if accountScoped {
+					payload = accountScopedPayload
+				}
+			}
+			if isResponseCreate {
+				if account.IsOpenAIOAuthLike() && isOpenAIResponsesLiteWebSocketPayload(payload) {
 					litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(payload)
 					if liteErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
@@ -1291,6 +1347,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
+				if msgType == coderws.MessageText && writeErr == nil {
+					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+					markOpenAIWSClientVisibleFailure(c, eventType, payload)
+				}
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
 				}
@@ -1352,6 +1412,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	})
 	if cause := context.Cause(ctx); cause != nil {
+		if isOpenAIWSSessionPreempted(ctx) {
+			return errOpenAIWSSessionPreempted
+		}
 		status := coderws.StatusGoingAway
 		reason := "websocket request canceled"
 		if errors.Is(cause, ErrOpenAIWSIngressLeaseLost) {
