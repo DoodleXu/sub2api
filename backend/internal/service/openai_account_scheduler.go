@@ -2440,30 +2440,6 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		// switch. The advanced scheduler intentionally ignores that setting.
 		useUpstreamTokenCost = s.legacyOpenAILowUpstreamRatePriorityEnabled(ctx)
 		decision.Layer = openAIAccountScheduleLayerLoadBalance
-		if s.cfg != nil && s.cfg.Gateway.Scheduling.LoadBatchEnabled {
-			fallbackScheduler := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
-			selection, _, _, _, err := fallbackScheduler.selectByLoadBalance(ctx, OpenAIAccountScheduleRequest{
-				GroupID: groupID, Platform: platform, RequestedModel: requestedModel,
-				RequiredTransport: requiredTransport, RequiredCapability: requiredCapability,
-				RequiredImageCapability: requiredImageCapability, RequireCompact: requireCompact,
-				ExcludedIDs: excludedIDs, RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
-				UseUpstreamTokenCost: useUpstreamTokenCost,
-			})
-			if selection != nil && selection.Account != nil {
-				if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !selection.Account.IsPrivacySet() {
-					if selection.ReleaseFunc != nil {
-						selection.ReleaseFunc()
-					}
-					selection = nil
-				}
-			}
-			if selection != nil && selection.Account != nil {
-				return selection, decision, nil
-			}
-			if err != nil {
-				return nil, decision, err
-			}
-		}
 		if guardianParentAccountID > 0 {
 			if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 				return nil, decision, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
@@ -2503,6 +2479,11 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			for {
 				selection, err := s.selectAccountWithLoadAwareness(ctx, groupID, platform, legacySessionHash, requestedModel, effectiveExcludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost)
 				if err != nil {
+					if errors.Is(err, ErrNoAvailableAccounts) && s.cfg != nil && s.cfg.Gateway.Scheduling.LoadBatchEnabled {
+						if diagnosticErr := s.legacyLoadBatchDiagnosticError(ctx, groupID, platform, requestedModel, excludedIDs, requiredTransport, requiredCapability, requireCompact); diagnosticErr != nil {
+							return nil, decision, diagnosticErr
+						}
+					}
 					return nil, decision, err
 				}
 				if selection == nil || selection.Account == nil {
@@ -2528,6 +2509,11 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		for {
 			selection, err := s.selectAccountWithLoadAwareness(ctx, groupID, platform, legacySessionHash, requestedModel, effectiveExcludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost)
 			if err != nil {
+				if errors.Is(err, ErrNoAvailableAccounts) && s.cfg != nil && s.cfg.Gateway.Scheduling.LoadBatchEnabled {
+					if diagnosticErr := s.legacyLoadBatchDiagnosticError(ctx, groupID, platform, requestedModel, excludedIDs, requiredTransport, requiredCapability, requireCompact); diagnosticErr != nil {
+						return nil, decision, diagnosticErr
+					}
+				}
 				return nil, decision, err
 			}
 			if selection == nil || selection.Account == nil {
@@ -2609,6 +2595,20 @@ func (s *OpenAIGatewayService) legacyOpenAILowUpstreamRatePriorityEnabled(ctx co
 		return s.isOpenAILowUpstreamRatePriorityEnabled(ctx)
 	}
 	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func (s *OpenAIGatewayService) legacyLoadBatchDiagnosticError(ctx context.Context, groupID *int64, platform, requestedModel string, excludedIDs map[int64]struct{}, requiredTransport OpenAIUpstreamTransport, requiredCapability OpenAIEndpointCapability, requireCompact bool) error {
+	fallback := &defaultOpenAIAccountScheduler{service: s, stats: newOpenAIAccountRuntimeStats()}
+	selection, _, _, _, err := fallback.selectByLoadBalance(ctx, OpenAIAccountScheduleRequest{
+		GroupID: groupID, Platform: platform, RequestedModel: requestedModel,
+		RequiredTransport: requiredTransport, RequiredCapability: requiredCapability,
+		RequireCompact: requireCompact, ExcludedIDs: excludedIDs,
+		RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
+	})
+	if selection != nil && selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+	return err
 }
 
 func accountSupportsOpenAICapabilities(account *Account, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {

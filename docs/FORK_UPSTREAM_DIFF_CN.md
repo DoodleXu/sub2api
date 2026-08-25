@@ -1010,5 +1010,5 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 
 ### 候选验证
 
-- 通过：`go test ./... -count=1`、迁移与 repository schema 定向测试、`go build ./...`、`pnpm exec vue-tsc --noEmit`、`pnpm run build`、`git diff --check`。
-- 服务包定向回归通过；完整 `internal/service` 包仍有旧测试 `TestOpenAIGatewayServiceLegacyLowRatePriorityIsIndependentFromAdvancedScheduler` 受全局调度设置缓存污染，单组连续运行通过但全包顺序下不稳定，故候选尚未替换 `main`。
+- 通过：`go test ./... -count=1`、完整 `internal/service` 测试、迁移与 repository schema 定向测试、`go build ./...`、`pnpm exec vue-tsc --noEmit`、`pnpm run build`、`git diff --check`。
+- 已修复旧调度器与高级调度设置缓存隔离、load-batch 诊断路径及公开插件设置注入字段；服务包全量回归稳定通过，候选具备替换 `main` 的条件。
