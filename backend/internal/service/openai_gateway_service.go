@@ -2389,6 +2389,12 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			s.openAIOAuthSchedulingRateMultiplier(ctx),
 			s.openAISchedulingUSDToCNYRate(ctx),
 		)
+		// A transiently stale scheduling-rate snapshot must not disable the
+		// explicitly enabled legacy cost preference. Rebuild with neutral defaults
+		// when the account snapshots themselves contain distinct usable rates.
+		if !rateOrder.enabled {
+			rateOrder = newOpenAILegacyUpstreamRateOrder(eligible, time.Now(), defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
+		}
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		a, b := eligible[i], eligible[j]
@@ -2484,7 +2490,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 	}
 
 	cfg := s.schedulingConfig()
-	preferLowUpstreamRate := s.isOpenAILowUpstreamRatePriorityEnabled(ctx)
+	preferLowUpstreamRate := useUpstreamTokenCost
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 	var stickyAccountID int64
 	if sessionHash != "" && s.cache != nil {
@@ -2647,9 +2653,12 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 		rateOrder = newOpenAILegacyUpstreamRateOrder(
 			candidates,
 			time.Now(),
-			s.openAIOAuthSchedulingRateMultiplier(ctx),
-			s.openAISchedulingUSDToCNYRate(ctx),
+			defaultOpenAIOAuthSchedulingRateMultiplier,
+			defaultOpenAISchedulingUSDToCNYRate,
 		)
+		if !rateOrder.enabled {
+			rateOrder = newOpenAILegacyUpstreamRateOrder(candidates, time.Now(), defaultOpenAIOAuthSchedulingRateMultiplier, defaultOpenAISchedulingUSDToCNYRate)
+		}
 	}
 
 	accountLoads := make([]AccountWithConcurrency, 0, len(candidates))
@@ -2754,6 +2763,15 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
 	if err != nil {
+		fallbackLoadMap := make(map[int64]*AccountLoadInfo, len(accountLoads))
+		for _, accountLoad := range accountLoads {
+			fallbackLoadMap[accountLoad.ID] = &AccountLoadInfo{AccountID: accountLoad.ID}
+		}
+		if selection, _, selectErr := tryAcquireFromLoadMap(fallbackLoadMap); selectErr != nil {
+			return nil, selectErr
+		} else if selection != nil {
+			return selection, nil
+		}
 		ordered := append([]*Account(nil), candidates...)
 		sortAccountsByPriorityAndLastUsed(ordered, false)
 		if rateOrder.enabled {
