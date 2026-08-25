@@ -2447,6 +2447,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				RequiredTransport: requiredTransport, RequiredCapability: requiredCapability,
 				RequiredImageCapability: requiredImageCapability, RequireCompact: requireCompact,
 				ExcludedIDs: excludedIDs, RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
+				UseUpstreamTokenCost: useUpstreamTokenCost,
 			})
 			if selection != nil && selection.Account != nil {
 				if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !selection.Account.IsPrivacySet() {
