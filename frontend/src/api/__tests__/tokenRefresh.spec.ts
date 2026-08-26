@@ -155,7 +155,9 @@ describe('refreshAuthTokens', () => {
     })
     const { refreshAuthTokens } = await import('@/api/tokenRefresh')
 
-    await expect(refreshAuthTokens()).resolves.toMatchObject({ access_token: 'new-access' })
+    await expect(refreshAuthTokens({ failedAccessToken: 'old-access' })).resolves.toMatchObject({
+      access_token: 'new-access'
+    })
 
     expect(request).toHaveBeenCalledTimes(1)
     expect(mockedPost).toHaveBeenCalledTimes(1)
