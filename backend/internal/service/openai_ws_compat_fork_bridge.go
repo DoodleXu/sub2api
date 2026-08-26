@@ -15,8 +15,9 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
+	isLite := (len(legacyLite) > 0 && legacyLite[0]) || isOpenAIResponsesLiteWebSocketPayload(body)
 	changed := false
-	if len(legacyLite) > 0 && legacyLite[0] {
+	if isLite {
 		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
 			return body, false, liteErr
@@ -58,7 +59,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 			}
 			normalized, changed = next, changed || c
 		}
-		next, c, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized)
+		next, c, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized, isLite)
 		if err != nil {
 			return body, false, err
 		}

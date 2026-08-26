@@ -416,6 +416,8 @@ var defaultOpenAICodexSnapshotPersistThrottle = newAccountWriteThrottle(openAICo
 // needs compact support but no compatible account is available.
 var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /responses/compact")
 
+type openAITokenCountSelectionContextKey struct{}
+
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
 	accountRepo           AccountRepository
@@ -1635,11 +1637,8 @@ func (s *OpenAIGatewayService) SelectAccountForModel(ctx context.Context, groupI
 // SelectAccountForTokenCount selects by capability without acquiring a
 // generation slot; token estimation must not consume request concurrency.
 func (s *OpenAIGatewayService) SelectAccountForTokenCount(ctx context.Context, groupID *int64, sessionHash, requestedModel string, capability OpenAIEndpointCapability, platform string) (*Account, error) {
-	// The scheduler path is immutable for this read-only capability query; the
-	// copied service intentionally drops only the concurrency gate.
-	copySvc := *s //nolint:govet
-	copySvc.concurrencyService = nil
-	return copySvc.selectAccountForModelWithLimitContinuationPriority(copySvc.withOpenAIQuotaAutoPauseContext(ctx), groupID, platform, sessionHash, requestedModel, nil, false, 0, capability, false)
+	ctx = context.WithValue(ctx, openAITokenCountSelectionContextKey{}, true)
+	return s.selectAccountForModelWithLimitContinuationPriority(s.withOpenAIQuotaAutoPauseContext(ctx), groupID, platform, sessionHash, requestedModel, nil, false, 0, capability, false)
 }
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
@@ -2501,7 +2500,8 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 			stickyAccountID = accountID
 		}
 	}
-	if s.concurrencyService == nil || !cfg.LoadBatchEnabled {
+	withoutConcurrency := ctx.Value(openAITokenCountSelectionContextKey{}) == true
+	if s.concurrencyService == nil || !cfg.LoadBatchEnabled || withoutConcurrency {
 		account, err := s.selectAccountForModelWithLimitMode(ctx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, stickyAccountID, requiredCapability, preferLowUpstreamRate, limitMode, preloadedPool)
 		if err != nil {
 			return nil, err
@@ -2552,10 +2552,15 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 	}
 
 	// ============ Layer 1: Sticky session ============
+	stickyInvalidated := false
 	if sessionHash != "" && limitMode != openAILimitContinuationSelectionOnly {
 		accountID := stickyAccountID
 		if accountID > 0 && !isExcluded(accountID) {
 			account, err := s.getSchedulableAccount(ctx, accountID)
+			if err != nil {
+				_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+				stickyInvalidated = true
+			}
 			if err == nil {
 				if !openAIAccountMatchesLimitContinuationSelection(account, limitMode) {
 					account = nil
@@ -2565,19 +2570,25 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 				clearSticky := shouldClearStickySession(account, requestedModel)
 				if clearSticky {
 					_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+					stickyInvalidated = true
 				}
 				if !clearSticky && isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, false, requiredCapability) {
 					account = s.recheckSelectedOpenAIAccountFromDB(ctx, account, groupID, platform, requestedModel, requireCompact, requiredCapability)
 					if account == nil {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+						stickyInvalidated = true
 					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+						stickyInvalidated = true
 					} else if s.isOpenAIAccountRequestRuntimeBlockedWithContext(ctx, account, requestedModel) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+						stickyInvalidated = true
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+						stickyInvalidated = true
 					} else if !parentHealthyForShadow(account, s.parentAccountLookup(ctx)) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+						stickyInvalidated = true
 					} else {
 						result, err := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 						if err == nil && result != nil && result.Acquired {
@@ -2755,7 +2766,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForLimitMode(ctx co
 				if selectErr != nil {
 					return nil, true, selectErr
 				}
-				if sessionHash != "" && stickyAccountID == 0 && !gatewayProfitControlGateActive(ctx) {
+				if sessionHash != "" && (stickyAccountID == 0 || stickyInvalidated) && !gatewayProfitControlGateActive(ctx) {
 					_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, fresh.ID, openaiStickySessionTTL)
 				}
 				return selection, true, nil
@@ -2917,7 +2928,7 @@ func (s *OpenAIGatewayService) isOpenAIAccountBlockedBySchedulingThreshold(ctx c
 }
 
 func (s *OpenAIGatewayService) tryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (*AcquireResult, error) {
-	if s.concurrencyService == nil {
+	if s.concurrencyService == nil || ctx.Value(openAITokenCountSelectionContextKey{}) == true {
 		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
 	}
 	return s.concurrencyService.AcquireAccountSlot(ctx, accountID, maxConcurrency)

@@ -19,12 +19,22 @@
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.179:refs/tags/upstream/v0.1.179 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.179^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.179^{}..HEAD
+git fetch upstream refs/tags/v0.1.183:refs/tags/upstream/v0.1.183 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.183^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
+
+### v0.1.183 合并后审核修复
+
+- 令牌计数账号选择改用上下文明确跳过并发占位，不再复制包含 `sync.Once` 的网关服务实例；`go vet -tags=unit ./...` 可直接作为发布门禁。
+- Responses Lite 在 HTTP 与 WebSocket 首帧、后续 `response.create` 的兼容清洗后都保持 `parallel_tool_calls: false`；缓存创建 5m/1h 明细在通用 SSE `message_delta` 解析中按上游显式值更新，包含 `0`。
+- 负载调度仅在粘性会话已被确认失效时重绑新账号，容量饱和时仍保留原会话等待语义；Gin 全局测试模式仅由包级 `TestMain` 设置。
+
+### v0.1.183 合并后审核验证
+
+- 后端定向 unit 覆盖 Responses Lite 首帧、粘性会话失效/容量溢出、SSE 缓存明细和 Gin 模式守卫；`TZ=UTC GOCACHE=/tmp/sub2api-go-cache-v183 go vet -tags=unit ./...` 通过。
 
 本次 `v0.1.179` 合并说明：
 
