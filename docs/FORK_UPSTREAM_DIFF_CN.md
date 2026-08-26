@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-24
+最后更新：2026-08-26
 
 ## 当前对比基线
 
@@ -10,10 +10,10 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `d4b6b1db8` | 本次合并 v0.1.179 前的 fork 基线；版本源保持 `0.1.260` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.179` -> `75f88be5f75c27771836b586f7de1503afa0e3bc` | 合入 2026-08-20 发布的官方 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.179` -> `75f88be5f75c27771836b586f7de1503afa0e3bc` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 29 个冲突路径，其中 8 个上游拆分文件继续保持删除；继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `90f555752` | 本次合并 v0.1.183 前的 fork 基线；版本源保持 `0.1.264` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.183` -> `e8cb019fabf8b55199436229044cbf9aa7a82564` | 合入 2026-08-25 发布的官方 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.183` -> `e8cb019fabf8b55199436229044cbf9aa7a82564` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 10 个冲突路径，其中 3 个内容冲突、7 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 更新本文时建议先刷新引用：
 

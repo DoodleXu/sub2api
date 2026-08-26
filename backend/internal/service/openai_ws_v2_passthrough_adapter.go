@@ -740,6 +740,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if metadataErr != nil {
 		return fmt.Errorf("resolve agent identity credentials for ws redaction: %w", metadataErr)
 	}
+	if isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
+		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(firstClientMessage, account)
+		if liteErr != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
+		}
+		firstClientMessage = liteFirstMessage
+	}
 	redactSensitiveBody := identityMetadata.redactor
 	ctx = withAgentIdentityRequestRedactor(ctx, redactSensitiveBody)
 	taskIDUsed := identityMetadata.taskIDUsed
@@ -1068,6 +1075,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 				}()
 			}
+			responsesLite := isResponseCreate && isOpenAIResponsesLiteWebSocketPayload(payload)
 			if isResponseCreate {
 				if normalized, compatibilityChanged, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(payload, account); normalizeErr != nil {
 					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", normalizeErr)
@@ -1095,8 +1103,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			}
 			if isResponseCreate {
-				if account.IsOpenAIOAuthLike() && isOpenAIResponsesLiteWebSocketPayload(payload) {
-					litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(payload)
+				if responsesLite {
+					litePayload, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(payload, account)
 					if liteErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
 					}

@@ -11,12 +11,20 @@ import (
 // aggregate request pipeline while exposing the upstream v0.1.181 ingress
 // contract used by WS v2. The detailed normalizers remain shared with the
 // existing HTTP path.
-func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account) ([]byte, bool, error) {
+func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account, legacyLite ...bool) ([]byte, bool, error) {
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
-	normalized := body
 	changed := false
+	if len(legacyLite) > 0 && legacyLite[0] {
+		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+		if liteErr != nil {
+			return body, false, liteErr
+		}
+		body = liteBody
+		changed = liteChanged
+	}
+	normalized := body
 	if account.IsOpenAIOAuthLike() {
 		var err error
 		normalized, changed, err = normalizeOpenAIResponsesLegacyIngress(normalized)
@@ -110,7 +118,10 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 	return next, true, err
 }
 
-func normalizeOpenAIParallelToolCallsWithoutTools(body []byte) ([]byte, bool, error) {
+func normalizeOpenAIParallelToolCallsWithoutTools(body []byte, legacyLite ...bool) ([]byte, bool, error) {
+	if len(legacyLite) > 0 && legacyLite[0] && gjson.GetBytes(body, "parallel_tool_calls").Exists() {
+		return body, false, nil
+	}
 	if gjson.GetBytes(body, "tools.#").Int() > 0 || gjson.GetBytes(body, "input.#(type==additional_tools).tools.#").Int() > 0 {
 		return body, false, nil
 	}
