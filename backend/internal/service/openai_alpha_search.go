@@ -234,7 +234,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	}, nil
 }
 
-func openAIAlphaSearchSchedulingModel(account *Account, requestedModel string) string {
+func openAIAlphaSearchSchedulingModel(account *Account, requestedModel string) string { //nolint:unused
 	return canonicalOpenAIAccountSchedulingModel(account, requestedModel)
 }
 

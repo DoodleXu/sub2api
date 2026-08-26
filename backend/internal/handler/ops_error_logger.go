@@ -132,9 +132,7 @@ func startOpsErrorLogWorkers() {
 		go func() {
 			defer opsErrorLogWorkersWg.Done()
 			for {
-				job, ok := <-opsErrorLogQueue
-				if !ok {
-				}
+				job := <-opsErrorLogQueue
 				opsErrorLogQueueLen.Add(-1)
 				opsErrorLogQueueBytes.Add(-job.queuedBytes)
 				batch := make([]opsErrorLogJob, 0, opsErrorLogBatchSize)

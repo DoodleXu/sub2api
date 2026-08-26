@@ -3648,7 +3648,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	if c.Request != nil {
 		candidate := strings.TrimSpace(string(cyberBlockBody))
 		if len(candidate) == 64 && strings.IndexFunc(candidate, func(r rune) bool {
-			return !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'))
+			return (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')
 		}) == -1 {
 			cyberBlockKey = candidate
 		} else if apiKeyID <= 0 && candidate != "" {

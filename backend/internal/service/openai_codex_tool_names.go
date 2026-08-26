@@ -207,7 +207,7 @@ func storeCodexToolNameReverse(c *gin.Context, key string, reverse map[string]st
 	c.Set(key, copyMap)
 }
 
-func mergeCodexToolNameReverse(c *gin.Context, reverse map[string]string) {
+func mergeCodexToolNameReverse(c *gin.Context, reverse map[string]string) { //nolint:unused
 	if c == nil || len(reverse) == 0 {
 		return
 	}

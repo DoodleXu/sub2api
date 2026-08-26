@@ -2070,7 +2070,7 @@ func openAIAdvancedSchedulerSettingRepoKey(repo SettingRepository) string {
 	}
 	v := reflect.ValueOf(repo)
 	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Slice, reflect.UnsafePointer:
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
 		return fmt.Sprintf("%T:%x", repo, v.Pointer())
 	default:
 		return fmt.Sprintf("%T:%v", repo, repo)

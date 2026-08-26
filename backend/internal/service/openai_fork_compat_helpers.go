@@ -13,15 +13,15 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const openAIMissingUsageLogInterval = time.Minute
+const openAIMissingUsageLogInterval = time.Minute //nolint:unused
 
-type openAIMissingUsageLogSampler struct {
+type openAIMissingUsageLogSampler struct { //nolint:unused
 	total      atomic.Uint64
 	suppressed atomic.Uint64
 	lastLog    atomic.Int64
 }
 
-func (s *openAIMissingUsageLogSampler) sample(now time.Time) (bool, uint64, uint64) {
+func (s *openAIMissingUsageLogSampler) sample(now time.Time) (bool, uint64, uint64) { //nolint:unused
 	total := s.total.Add(1)
 	nowNanos := now.UnixNano()
 	for {

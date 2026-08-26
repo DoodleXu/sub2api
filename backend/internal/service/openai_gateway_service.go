@@ -1634,7 +1634,9 @@ func (s *OpenAIGatewayService) SelectAccountForModel(ctx context.Context, groupI
 // SelectAccountForTokenCount selects by capability without acquiring a
 // generation slot; token estimation must not consume request concurrency.
 func (s *OpenAIGatewayService) SelectAccountForTokenCount(ctx context.Context, groupID *int64, sessionHash, requestedModel string, capability OpenAIEndpointCapability, platform string) (*Account, error) {
-	copySvc := *s
+	// The scheduler path is immutable for this read-only capability query; the
+	// copied service intentionally drops only the concurrency gate.
+	copySvc := *s //nolint:govet
 	copySvc.concurrencyService = nil
 	return copySvc.selectAccountForModelWithLimitContinuationPriority(copySvc.withOpenAIQuotaAutoPauseContext(ctx), groupID, platform, sessionHash, requestedModel, nil, false, 0, capability, false)
 }

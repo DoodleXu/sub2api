@@ -40,7 +40,6 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	clientStream := responsesReq.Stream
-	serviceTier := extractOpenAIServiceTierFromBody(body)
 	if RequiresNativeOpenAIResponses(body) {
 		return nil, newResponsesOnlyBuiltInToolFailoverError()
 	}
@@ -96,7 +95,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	// 计费兜底 tier = 最终出站 body（policy filter/force 后）里的 tier；最终值由
 	// resolvedOpenAIUpstreamServiceTier 决定（上游回显优先）。filter 删掉字段后
 	// 这里取到 nil，不再按原请求 Fast 计费。
-	serviceTier = extractOpenAIServiceTierFromBody(chatBody)
+	serviceTier := extractOpenAIServiceTierFromBody(chatBody)
 
 	logger.L().Debug("openai responses: forwarding via raw chat completions",
 		zap.Int64("account_id", account.ID),

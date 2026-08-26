@@ -98,7 +98,7 @@ func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow 
 	return normalized, nil
 }
 
-func stripOpenAIAutoResetCreditManagedExtra(extra map[string]any, stripConfig bool) map[string]any {
+func stripOpenAIAutoResetCreditManagedExtra(extra map[string]any, stripConfig bool) map[string]any { //nolint:unused
 	if extra == nil {
 		return nil
 	}

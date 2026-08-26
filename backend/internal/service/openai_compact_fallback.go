@@ -146,7 +146,7 @@ func isExplicitOpenAIModelAvailabilityMessage(value string) bool {
 	return false
 }
 
-func openAICompactFallbackErrorResponse(resp *http.Response, signal *openAICompactFallbackSignal) (*http.Response, []byte) {
+func openAICompactFallbackErrorResponse(resp *http.Response, signal *openAICompactFallbackSignal) (*http.Response, []byte) { //nolint:unused
 	headers := make(http.Header)
 	if resp != nil {
 		headers = resp.Header.Clone()
@@ -162,7 +162,7 @@ func openAICompactFallbackErrorResponse(resp *http.Response, signal *openAICompa
 	}, payload
 }
 
-func normalizeOpenAICompactFallbackHTTPErrorPayload(signal *openAICompactFallbackSignal) []byte {
+func normalizeOpenAICompactFallbackHTTPErrorPayload(signal *openAICompactFallbackSignal) []byte { //nolint:unused
 	if signal == nil {
 		return nil
 	}
