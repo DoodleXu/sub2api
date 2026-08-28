@@ -742,6 +742,8 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 
 差异包括订阅升级抵扣、退款预览、支付手续费与限额、订阅绑定 API Key、周配额批量重置、高峰倍率、支付金额展示口径修正，以及管理端订单列表独立展示用户 ID。
 
+- 订阅升级抵扣保留原有“按已支付金额与剩余天数折算”的计算方式，但允许原订阅分组与目标套餐分组属于同一平台时跨组抵扣（例如 OpenAI 标准组与轻量组）；跨平台仍拒绝。候选订阅、订单回溯、创建订单和支付履约校验保持同一平台口径。
+
 关键代码：
 
 - `backend/internal/service/payment_subscription_upgrade.go`
