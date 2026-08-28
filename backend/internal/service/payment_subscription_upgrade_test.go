@@ -27,16 +27,90 @@ func TestDaysRemainingFromNowCeilsPartialDays(t *testing.T) {
 }
 
 func TestCalculateSubscriptionUpgradeCreditRejectsCrossGroup(t *testing.T) {
-	svc := &PaymentService{}
-	_, err := svc.calculateSubscriptionUpgradeCredit(context.Background(), 1, &UserSubscription{
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	sourceGroup, err := client.Group.Create().SetName("cross-source").SetPlatform(PlatformOpenAI).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	targetGroup, err := client.Group.Create().SetName("cross-target").SetPlatform(PlatformAnthropic).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	svc := &PaymentService{entClient: client}
+	_, err = svc.calculateSubscriptionUpgradeCredit(ctx, 1, &UserSubscription{
 		UserID:    1,
-		GroupID:   10,
+		GroupID:   sourceGroup.ID,
 		Status:    SubscriptionStatusActive,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}, &dbent.SubscriptionPlan{ID: 2, GroupID: 20, Price: 100})
+	}, &dbent.SubscriptionPlan{ID: 2, GroupID: targetGroup.ID, Price: 100})
 
 	require.Error(t, err)
 	require.Equal(t, "UPGRADE_GROUP_MISMATCH", infraerrors.Reason(err))
+}
+
+func TestSubscriptionUpgradeGroupsSharePlatform(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	standard, err := client.Group.Create().
+		SetName("openai-standard").
+		SetPlatform(PlatformOpenAI).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	light, err := client.Group.Create().
+		SetName("openai-light").
+		SetPlatform(PlatformOpenAI).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+	other, err := client.Group.Create().
+		SetName("anthropic-standard").
+		SetPlatform(PlatformAnthropic).
+		SetSubscriptionType(SubscriptionTypeSubscription).
+		SetStatus(StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	share, err := svc.subscriptionUpgradeGroupsSharePlatform(ctx, standard.ID, light.ID)
+	require.NoError(t, err)
+	require.True(t, share)
+	share, err = svc.subscriptionUpgradeGroupsSharePlatform(ctx, standard.ID, other.ID)
+	require.NoError(t, err)
+	require.False(t, share)
+}
+
+func TestCalculateSubscriptionUpgradeCreditAllowsSamePlatformDifferentGroup(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().SetEmail("same-platform@example.com").SetPasswordHash("hash").SetUsername("same-platform").Save(ctx)
+	require.NoError(t, err)
+	sourceGroup, err := client.Group.Create().SetName("openai-source").SetPlatform(PlatformOpenAI).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	targetGroup, err := client.Group.Create().SetName("openai-target").SetPlatform(PlatformOpenAI).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	now := time.Now()
+	source := &UserSubscription{ID: 901, UserID: user.ID, GroupID: sourceGroup.ID, StartsAt: now.Add(-24 * time.Hour), Status: SubscriptionStatusActive, ExpiresAt: now.Add(10 * 24 * time.Hour)}
+	_, err = client.PaymentOrder.Create().SetUserID(user.ID).SetUserEmail(user.Email).SetUserName(user.Username).
+		SetAmount(100).SetPayAmount(100).SetPaymentType(payment.TypeEasyPay).SetPaymentTradeNo("same-platform-trade").SetOrderType(payment.OrderTypeSubscription).SetSubscriptionGroupID(sourceGroup.ID).
+		SetSubscriptionDays(30).SetStatus(OrderStatusCompleted).SetExpiresAt(now.Add(time.Hour)).SetCreatedAt(now.Add(-24 * time.Hour)).SetPaidAt(now.Add(-24 * time.Hour)).
+		SetCompletedAt(now.Add(-24 * time.Hour)).SetOutTradeNo("same-platform-order").SetRechargeCode("same-platform-order").SetClientIP("127.0.0.1").SetSrcHost("example.com").Save(ctx)
+	require.NoError(t, err)
+	svc := &PaymentService{entClient: client}
+	credit, err := svc.calculateSubscriptionUpgradeCredit(ctx, user.ID, source, &dbent.SubscriptionPlan{ID: 902, GroupID: targetGroup.ID, Price: 200})
+	require.NoError(t, err)
+	require.InDelta(t, 33.33, credit.CreditAmount, 0.02)
+}
+
+func TestValidateSubscriptionUpgradeSourceIdentityAllowsSamePlatformDifferentGroup(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	source, err := client.Group.Create().SetName("identity-source").SetPlatform(PlatformOpenAI).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	target, err := client.Group.Create().SetName("identity-target").SetPlatform(PlatformOpenAI).SetSubscriptionType(SubscriptionTypeSubscription).SetStatus(StatusActive).Save(ctx)
+	require.NoError(t, err)
+	svc := &PaymentService{entClient: client}
+	err = svc.validateSubscriptionUpgradeSourceIdentity(ctx, &UserSubscription{UserID: 1, GroupID: source.ID}, &dbent.PaymentOrder{UserID: 1, SubscriptionGroupID: &target.ID})
+	require.NoError(t, err)
 }
 
 func TestCalculateSubscriptionUpgradeCreditUsesRemainingDaysAndMinimumPayable(t *testing.T) {

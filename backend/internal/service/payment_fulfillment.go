@@ -704,7 +704,7 @@ func (s *PaymentService) loadSubscriptionUpgradeSourceForFulfillment(ctx context
 	subscriptionID := *o.UpgradeFromSubscriptionID
 	sub, err := s.subscriptionSvc.GetByID(ctx, subscriptionID)
 	if err == nil {
-		if err := validateSubscriptionUpgradeSourceForFulfillment(sub, o); err != nil {
+		if err := s.validateSubscriptionUpgradeSourceForFulfillment(ctx, sub, o); err != nil {
 			return nil, false, err
 		}
 		return sub, false, nil
@@ -720,7 +720,7 @@ func (s *PaymentService) loadSubscriptionUpgradeSourceForFulfillment(ctx context
 	if sub.DeletedAt == nil {
 		return nil, false, ErrSubscriptionNotFound
 	}
-	if err := validateSubscriptionUpgradeSourceIdentity(sub, o); err != nil {
+	if err := s.validateSubscriptionUpgradeSourceIdentity(ctx, sub, o); err != nil {
 		return nil, false, err
 	}
 	matched, err := hasMatchingSubscriptionUpgradeAudit(ctx, client, o.ID, subscriptionID)

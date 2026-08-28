@@ -80,7 +80,13 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 		return subscriptionUpgradeCredit{}, infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_ACTIVE", "selected subscription is not active")
 	}
 	if sub.GroupID != targetPlan.GroupID {
-		return subscriptionUpgradeCredit{}, infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
+		matches, err := s.subscriptionUpgradeGroupsSharePlatform(ctx, sub.GroupID, targetPlan.GroupID)
+		if err != nil {
+			return subscriptionUpgradeCredit{}, err
+		}
+		if !matches {
+			return subscriptionUpgradeCredit{}, infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
+		}
 	}
 
 	orders, err := s.entClient.PaymentOrder.Query().
@@ -133,8 +139,8 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 	}, nil
 }
 
-func validateSubscriptionUpgradeSourceForFulfillment(sub *UserSubscription, order *dbent.PaymentOrder) error {
-	if err := validateSubscriptionUpgradeSourceIdentity(sub, order); err != nil {
+func (s *PaymentService) validateSubscriptionUpgradeSourceForFulfillment(ctx context.Context, sub *UserSubscription, order *dbent.PaymentOrder) error {
+	if err := s.validateSubscriptionUpgradeSourceIdentity(ctx, sub, order); err != nil {
 		return err
 	}
 	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
@@ -143,7 +149,7 @@ func validateSubscriptionUpgradeSourceForFulfillment(sub *UserSubscription, orde
 	return nil
 }
 
-func validateSubscriptionUpgradeSourceIdentity(sub *UserSubscription, order *dbent.PaymentOrder) error {
+func (s *PaymentService) validateSubscriptionUpgradeSourceIdentity(ctx context.Context, sub *UserSubscription, order *dbent.PaymentOrder) error {
 	if sub == nil {
 		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_FOUND", "selected subscription is not available")
 	}
@@ -154,9 +160,48 @@ func validateSubscriptionUpgradeSourceIdentity(sub *UserSubscription, order *dbe
 		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_OWNER", "selected subscription does not belong to the order user")
 	}
 	if sub.GroupID != *order.SubscriptionGroupID {
-		return infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
+		matches, err := s.subscriptionUpgradeGroupsSharePlatform(ctx, sub.GroupID, *order.SubscriptionGroupID)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return infraerrors.BadRequest("UPGRADE_GROUP_MISMATCH", "selected subscription cannot be credited toward this plan")
+		}
 	}
 	return nil
+}
+
+func (s *PaymentService) subscriptionUpgradeGroupPlatform(ctx context.Context, groupID int64) (string, error) {
+	if s.groupRepo != nil {
+		g, err := s.groupRepo.GetByID(ctx, groupID)
+		if err != nil {
+			return "", err
+		}
+		if g == nil {
+			return "", ErrGroupNotFound
+		}
+		return g.Platform, nil
+	}
+	if s.entClient == nil {
+		return "", ErrGroupNotFound
+	}
+	g, err := s.entClient.Group.Get(ctx, groupID)
+	if err != nil {
+		return "", err
+	}
+	return g.Platform, nil
+}
+
+func (s *PaymentService) subscriptionUpgradeGroupsSharePlatform(ctx context.Context, sourceGroupID, targetGroupID int64) (bool, error) {
+	sourcePlatform, err := s.subscriptionUpgradeGroupPlatform(ctx, sourceGroupID)
+	if err != nil {
+		return false, err
+	}
+	targetPlatform, err := s.subscriptionUpgradeGroupPlatform(ctx, targetGroupID)
+	if err != nil {
+		return false, err
+	}
+	return sourcePlatform != "" && sourcePlatform == targetPlatform, nil
 }
 
 func subscriptionUpgradeCreditAmount(targetPrice, rawCredit float64) float64 {
