@@ -18,6 +18,13 @@ const (
 	ContextKeyUser ContextKey = "user"
 	// ContextKeyUserRole 当前用户角色（string）
 	ContextKeyUserRole ContextKey = "user_role"
+	// ContextKeyScopes contains scopes granted to a desktop device token.
+	ContextKeyScopes ContextKey = "auth_scopes"
+	// ContextKeyDeviceID identifies a desktop token; empty for browser JWTs.
+	ContextKeyDeviceID ContextKey = "auth_device_id"
+	// ContextKeyDesktopTransportPolicy carries the ingress policy installed by
+	// RequireHTTPS to the token handler and hosted checkout handler.
+	ContextKeyDesktopTransportPolicy ContextKey = "desktop_transport_policy"
 	// ContextKeyAPIKey API密钥上下文键
 	ContextKeyAPIKey ContextKey = "api_key"
 	// ContextKeySubscription 订阅上下文键

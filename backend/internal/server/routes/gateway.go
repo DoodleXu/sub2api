@@ -2,6 +2,7 @@ package routes
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"mime"
@@ -40,6 +41,20 @@ func RegisterGatewayRoutes(
 	endpointNorm := handler.InboundEndpointMiddleware()
 	compositeTarget := compositeTargetPlatformMiddleware(compositeResolver)
 	compositeGeminiTarget := compositeGeminiTargetPlatformMiddleware(compositeResolver)
+	// Public, credential-free image capability discovery. Generation/edit/task
+	// routes below remain API-key protected; this endpoint only advertises the
+	// server-side limits and security contract needed by desktop clients.
+	registerImageCapabilitiesRoute(r, func(ctx context.Context) imageCapabilitiesRuntime {
+		var backendMode func(context.Context) bool
+		if settingService != nil {
+			backendMode = settingService.IsBackendModeEnabled
+		}
+		var asyncHandler *handler.AsyncImageHandler
+		if h != nil {
+			asyncHandler = h.AsyncImage
+		}
+		return imageCapabilitiesRuntimeForHandler(ctx, asyncHandler, backendMode)
+	})
 
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
 	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)

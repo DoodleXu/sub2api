@@ -159,6 +159,9 @@ func ProvideHTTPServer(cfg *config.Config, router *gin.Engine) *http.Server {
 		}
 	}
 
+	// MaxBytesHandler must wrap the handler actually installed on the server.
+	// Keep this assignment after the optional wrapper so every ingress path
+	// (including HTTP/2) receives the same global body limit.
 	server.Handler = httpHandler
 	return server
 }

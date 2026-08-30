@@ -3,6 +3,7 @@ package middleware
 import (
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -20,6 +21,26 @@ func NewOptionalJWTAuthMiddleware(
 	auditService *service.AuditLogService,
 ) OptionalJWTAuthMiddleware {
 	strict := jwtAuth(authService, userService, userService, settingService, auditService)
+	return OptionalJWTAuthMiddleware(func(c *gin.Context) {
+		if strings.TrimSpace(c.GetHeader("Authorization")) == "" {
+			c.Next()
+			return
+		}
+		strict(c)
+	})
+}
+
+// ProvideOptionalJWTAuthMiddleware injects the desktop-session revocation
+// checker in production while retaining the compatibility constructor above.
+func ProvideOptionalJWTAuthMiddleware(
+	authService *service.AuthService,
+	userService *service.UserService,
+	settingService *service.SettingService,
+	auditService *service.AuditLogService,
+	checker *service.DesktopDeviceService,
+	cfg *config.Config,
+) OptionalJWTAuthMiddleware {
+	strict := jwtAuthWithPolicy(authService, userService, userService, settingService, auditService, desktopTransportPolicyFromConfig(cfg), checker)
 	return OptionalJWTAuthMiddleware(func(c *gin.Context) {
 		if strings.TrimSpace(c.GetHeader("Authorization")) == "" {
 			c.Next()

@@ -65,6 +65,11 @@ func enforceSessionBinding(
 	auditService *service.AuditLogService,
 	claims *service.JWTClaims,
 ) bool {
+	if claims != nil && claims.DeviceID != "" {
+		// Desktop tokens use DPoP proof-of-possession and device revocation. They
+		// must remain usable when the same machine changes network or user agent.
+		return true
+	}
 	if settingService == nil || !settingService.IsSessionBindingEnabled(c.Request.Context()) {
 		return true
 	}

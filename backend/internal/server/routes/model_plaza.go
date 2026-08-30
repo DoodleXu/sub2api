@@ -23,6 +23,10 @@ func RegisterModelPlazaRoutes(
 	plaza := v1.Group("/model-plaza")
 	plaza.Use(panelRateLimiter.PublicIP())
 	plaza.Use(gin.HandlerFunc(optionalJWT))
+	// Anonymous/browser requests retain the public plaza behavior. A desktop
+	// token, however, must explicitly receive profile scope before the handler
+	// can query user-specific groups and pricing through OptionalJWTAuth.
+	plaza.Use(middleware.RequireDesktopScope("profile"))
 	plaza.Use(middleware.BackendModeUserGuard(settingService))
 	{
 		plaza.GET("", h.ModelPlaza.Get)

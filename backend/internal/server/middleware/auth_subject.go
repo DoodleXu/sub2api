@@ -26,3 +26,12 @@ func GetUserRoleFromContext(c *gin.Context) (string, bool) {
 	role, ok := value.(string)
 	return role, ok
 }
+
+func GetDeviceIDFromContext(c *gin.Context) (string, bool) {
+	value, exists := c.Get(string(ContextKeyDeviceID))
+	if !exists {
+		return "", false
+	}
+	deviceID, ok := value.(string)
+	return deviceID, ok && deviceID != ""
+}

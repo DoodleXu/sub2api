@@ -108,6 +108,39 @@ type userProfileSourceContext struct {
 	Source   string `json:"source,omitempty"`
 }
 
+// desktopBalanceResponse is intentionally separate from the broad profile
+// DTO. The desktop consent model keeps balance reads behind the dedicated
+// "balance" scope and gives clients a stable, minimal response shape.
+type desktopBalanceResponse struct {
+	Balance        float64   `json:"balance"`
+	FrozenBalance  float64   `json:"frozen_balance"`
+	TotalRecharged float64   `json:"total_recharged"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// GetBalance handles GET /api/v1/user/balance. Browser JWTs remain compatible;
+// desktop tokens are gated by RequireDesktopScope("balance") in the router.
+func (h *UserHandler) GetBalance(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	user, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if user == nil {
+		response.Unauthorized(c, "User not found")
+		return
+	}
+	response.Success(c, desktopBalanceResponse{
+		Balance: user.Balance, FrozenBalance: user.FrozenBalance,
+		TotalRecharged: user.TotalRecharged, UpdatedAt: user.UpdatedAt,
+	})
+}
+
 // GetProfile handles getting user profile
 // GET /api/v1/users/me
 func (h *UserHandler) GetProfile(c *gin.Context) {

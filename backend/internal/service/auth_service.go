@@ -24,19 +24,25 @@ import (
 )
 
 var (
-	ErrInvalidCredentials           = infraerrors.Unauthorized("INVALID_CREDENTIALS", "invalid email or password")
-	ErrUserNotActive                = infraerrors.Forbidden("USER_NOT_ACTIVE", "user is not active")
-	ErrEmailExists                  = infraerrors.Conflict("EMAIL_EXISTS", "email already exists")
-	ErrEmailReserved                = infraerrors.BadRequest("EMAIL_RESERVED", "email is reserved")
-	ErrInvalidToken                 = infraerrors.Unauthorized("INVALID_TOKEN", "invalid token")
-	ErrTokenExpired                 = infraerrors.Unauthorized("TOKEN_EXPIRED", "token has expired")
-	ErrAccessTokenExpired           = infraerrors.Unauthorized("ACCESS_TOKEN_EXPIRED", "access token has expired")
-	ErrTokenTooLarge                = infraerrors.BadRequest("TOKEN_TOO_LARGE", "token too large")
-	ErrTokenRevoked                 = infraerrors.Unauthorized("TOKEN_REVOKED", "token has been revoked")
-	ErrRefreshTokenInvalid          = infraerrors.Unauthorized("REFRESH_TOKEN_INVALID", "invalid refresh token")
-	ErrRefreshTokenExpired          = infraerrors.Unauthorized("REFRESH_TOKEN_EXPIRED", "refresh token has expired")
-	ErrRefreshTokenReused           = infraerrors.Unauthorized("REFRESH_TOKEN_REUSED", "refresh token has been reused")
-	ErrEmailVerifyRequired          = infraerrors.BadRequest("EMAIL_VERIFY_REQUIRED", "email verification is required")
+	ErrInvalidCredentials  = infraerrors.Unauthorized("INVALID_CREDENTIALS", "invalid email or password")
+	ErrUserNotActive       = infraerrors.Forbidden("USER_NOT_ACTIVE", "user is not active")
+	ErrEmailExists         = infraerrors.Conflict("EMAIL_EXISTS", "email already exists")
+	ErrEmailReserved       = infraerrors.BadRequest("EMAIL_RESERVED", "email is reserved")
+	ErrInvalidToken        = infraerrors.Unauthorized("INVALID_TOKEN", "invalid token")
+	ErrTokenExpired        = infraerrors.Unauthorized("TOKEN_EXPIRED", "token has expired")
+	ErrAccessTokenExpired  = infraerrors.Unauthorized("ACCESS_TOKEN_EXPIRED", "access token has expired")
+	ErrTokenTooLarge       = infraerrors.BadRequest("TOKEN_TOO_LARGE", "token too large")
+	ErrTokenRevoked        = infraerrors.Unauthorized("TOKEN_REVOKED", "token has been revoked")
+	ErrRefreshTokenInvalid = infraerrors.Unauthorized("REFRESH_TOKEN_INVALID", "invalid refresh token")
+	ErrRefreshTokenExpired = infraerrors.Unauthorized("REFRESH_TOKEN_EXPIRED", "refresh token has expired")
+	ErrRefreshTokenReused  = infraerrors.Unauthorized("REFRESH_TOKEN_REUSED", "refresh token has been reused")
+	ErrEmailVerifyRequired = infraerrors.BadRequest("EMAIL_VERIFY_REQUIRED", "email verification is required")
+	// Desktop refresh tokens are sender-constrained and may only be rotated via
+	// /desktop/token after a DPoP proof check.  The legacy browser endpoint uses
+	// RefreshTokenPairForBrowser and returns this error before consuming the
+	// token, so a copied desktop refresh token cannot force rotation or family
+	// revocation through the bearer-compatible API.
+	ErrDesktopRefreshRequiresDPoP   = infraerrors.Unauthorized("DESKTOP_DPOP_REQUIRED", "desktop refresh tokens require a DPoP-bound desktop token endpoint")
 	ErrEmailSuffixNotAllowed        = infraerrors.BadRequest("EMAIL_SUFFIX_NOT_ALLOWED", "email suffix is not allowed")
 	ErrEmailDomainRegistrationLimit = infraerrors.BadRequest(
 		"EMAIL_DOMAIN_REGISTRATION_LIMIT",
@@ -66,6 +72,12 @@ type JWTClaims struct {
 	SessionID string `json:"sid,omitempty"`
 	// BindingHash 会话指纹哈希（IP+UA），会话绑定开启时校验；空值表示旧 token（平滑升级）。
 	BindingHash string `json:"bnd,omitempty"`
+	// DeviceID identifies a desktop device session. For desktop tokens it is the
+	// enrolled P-256 public-key JWK thumbprint (not a hardware fingerprint), and
+	// is only present on tokens issued through the desktop device flow.
+	DeviceID string `json:"device_id,omitempty"`
+	// Scopes contains the capabilities granted by the user to a desktop client.
+	Scopes []string `json:"scope,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -1427,9 +1439,17 @@ func (s *AuthService) GenerateToken(ctx context.Context, user *User) (string, er
 
 // generateAccessToken 生成带会话 ID 与绑定指纹的 access token。
 func (s *AuthService) generateAccessToken(user *User, sessionID, bindingHash string) (string, error) {
+	return s.generateAccessTokenWithMetadata(user, sessionID, bindingHash, "", nil, "")
+}
+
+func (s *AuthService) generateAccessTokenWithMetadata(user *User, sessionID, bindingHash, deviceID string, scopes []string, audience string) (string, error) {
 	now := time.Now()
 	var expiresAt time.Time
-	if s.cfg.JWT.AccessTokenExpireMinutes > 0 {
+	if deviceID != "" {
+		// Desktop access tokens are intentionally short-lived; refresh rotation
+		// carries the longer-lived session while revocation remains effective.
+		expiresAt = now.Add(desktopAccessTokenTTL)
+	} else if s.cfg.JWT.AccessTokenExpireMinutes > 0 {
 		expiresAt = now.Add(time.Duration(s.cfg.JWT.AccessTokenExpireMinutes) * time.Minute)
 	} else {
 		// 向后兼容：使用旧的expire_hour配置
@@ -1443,11 +1463,16 @@ func (s *AuthService) generateAccessToken(user *User, sessionID, bindingHash str
 		TokenVersion: resolvedTokenVersion(user),
 		SessionID:    sessionID,
 		BindingHash:  bindingHash,
+		DeviceID:     deviceID,
+		Scopes:       append([]string(nil), scopes...),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 		},
+	}
+	if strings.TrimSpace(audience) != "" {
+		claims.Audience = jwt.ClaimStrings{audience}
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -1696,6 +1721,21 @@ type TokenPairWithUser struct {
 // GenerateTokenPair 生成Access Token和Refresh Token对
 // familyID: 可选的Token家族ID，用于Token轮转时保持家族关系
 func (s *AuthService) GenerateTokenPair(ctx context.Context, user *User, familyID string) (*TokenPair, error) {
+	return s.generateTokenPair(ctx, user, familyID, "", nil, "")
+}
+
+// GenerateDeviceTokenPair issues a token pair bound to a registered desktop
+// device. The device metadata is copied to both JWT claims and refresh-token
+// state so rotation cannot silently drop the granted scope or audience.
+func (s *AuthService) GenerateDeviceTokenPair(ctx context.Context, user *User, familyID, deviceID string, scopes []string, audience string) (*TokenPair, error) {
+	return s.generateTokenPair(ctx, user, familyID, deviceID, scopes, audience)
+}
+
+func (s *AuthService) generateTokenPair(ctx context.Context, user *User, familyID, deviceID string, scopes []string, audience string) (*TokenPair, error) {
+	return s.generateTokenPairWithAbsoluteExpiry(ctx, user, familyID, deviceID, scopes, audience, time.Time{})
+}
+
+func (s *AuthService) generateTokenPairWithAbsoluteExpiry(ctx context.Context, user *User, familyID, deviceID string, scopes []string, audience string, absoluteExpiresAt time.Time) (*TokenPair, error) {
 	// 检查 refreshTokenCache 是否可用
 	if s.refreshTokenCache == nil {
 		return nil, errors.New("refresh token cache not configured")
@@ -1711,27 +1751,46 @@ func (s *AuthService) GenerateTokenPair(ctx context.Context, user *User, familyI
 		familyID = hex.EncodeToString(familyBytes)
 	}
 
-	// 生成Access Token（携带会话ID与绑定指纹）
-	accessToken, err := s.generateAccessToken(user, familyID, sessionBindingHashFromContext(ctx))
+	// Browser sessions may use the optional IP/UA binding. Desktop sessions are
+	// already cryptographically bound to their P-256 key through DPoP; carrying
+	// the browser fingerprint would incorrectly revoke a laptop whenever its
+	// network changes.
+	bindingHash := sessionBindingHashFromContext(ctx)
+	if deviceID != "" {
+		bindingHash = ""
+	}
+	accessToken, err := s.generateAccessTokenWithMetadata(user, familyID, bindingHash, deviceID, scopes, audience)
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
 	// 生成Refresh Token
-	refreshToken, err := s.generateRefreshToken(ctx, user, familyID)
+	refreshToken, err := s.generateRefreshTokenWithAbsoluteExpiry(ctx, user, familyID, deviceID, scopes, audience, absoluteExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
 
+	expiresIn := s.GetAccessTokenExpiresIn()
+	if deviceID != "" {
+		expiresIn = int(desktopAccessTokenTTL / time.Second)
+	}
 	return &TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		ExpiresIn:    s.GetAccessTokenExpiresIn(),
+		ExpiresIn:    expiresIn,
 	}, nil
 }
 
 // generateRefreshToken 生成并存储Refresh Token
 func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, familyID string) (string, error) {
+	return s.generateRefreshTokenWithMetadata(ctx, user, familyID, "", nil, "")
+}
+
+func (s *AuthService) generateRefreshTokenWithMetadata(ctx context.Context, user *User, familyID, deviceID string, scopes []string, audience string) (string, error) {
+	return s.generateRefreshTokenWithAbsoluteExpiry(ctx, user, familyID, deviceID, scopes, audience, time.Time{})
+}
+
+func (s *AuthService) generateRefreshTokenWithAbsoluteExpiry(ctx context.Context, user *User, familyID, deviceID string, scopes []string, audience string, absoluteExpiresAt time.Time) (string, error) {
 	// 生成随机Token
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -1751,16 +1810,41 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 		familyID = hex.EncodeToString(familyBytes)
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	ttl := time.Duration(s.cfg.JWT.RefreshTokenExpireDays) * 24 * time.Hour
+	lastUsedAt := time.Time{}
+	if deviceID != "" {
+		// Desktop refresh tokens rotate within a 30-day idle window and a
+		// separate 90-day absolute window. Never extend the latter on refresh.
+		ttl = desktopRefreshIdleTTL
+		lastUsedAt = now
+		if absoluteExpiresAt.IsZero() {
+			absoluteExpiresAt = now.Add(desktopRefreshAbsoluteTTL)
+		}
+		if remaining := time.Until(absoluteExpiresAt); remaining < ttl {
+			ttl = remaining
+		}
+		if ttl <= 0 {
+			return "", ErrRefreshTokenExpired
+		}
+	}
 
+	bindingHash := sessionBindingHashFromContext(ctx)
+	if deviceID != "" {
+		bindingHash = ""
+	}
 	data := &RefreshTokenData{
-		UserID:       user.ID,
-		TokenVersion: resolvedTokenVersion(user),
-		FamilyID:     familyID,
-		BindingHash:  sessionBindingHashFromContext(ctx),
-		CreatedAt:    now,
-		ExpiresAt:    now.Add(ttl),
+		UserID:            user.ID,
+		TokenVersion:      resolvedTokenVersion(user),
+		FamilyID:          familyID,
+		BindingHash:       bindingHash,
+		DeviceID:          deviceID,
+		Scopes:            append([]string(nil), scopes...),
+		Audience:          audience,
+		CreatedAt:         now,
+		LastUsedAt:        lastUsedAt,
+		AbsoluteExpiresAt: absoluteExpiresAt,
+		ExpiresAt:         now.Add(ttl),
 	}
 
 	// 存储Token数据
@@ -1776,6 +1860,13 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 
 	// 添加到家族Token集合
 	if err := s.refreshTokenCache.AddToFamilyTokenSet(ctx, familyID, tokenHash, ttl); err != nil {
+		if errors.Is(err, ErrRefreshTokenFamilyRevoked) {
+			// A family revoke can race the token write between StoreRefreshToken
+			// and the legacy family-set registration. Remove the just-written token
+			// and stop the rotation; callers must re-authenticate.
+			_ = s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash)
+			return "", ErrRefreshTokenFamilyRevoked
+		}
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to add token to family set: %v", err)
 		// 不影响主流程
 	}
@@ -1786,6 +1877,17 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 // RefreshTokenPair 使用Refresh Token刷新Token对
 // 实现Token轮转：每次刷新都会生成新的Refresh Token，旧Token立即失效
 func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string) (*TokenPairWithUser, error) {
+	return s.refreshTokenPair(ctx, refreshToken, true)
+}
+
+// RefreshTokenPairForBrowser is used exclusively by the legacy web refresh
+// endpoint. It preserves browser refresh behavior while refusing to consume a
+// sender-constrained desktop refresh token without its device proof.
+func (s *AuthService) RefreshTokenPairForBrowser(ctx context.Context, refreshToken string) (*TokenPairWithUser, error) {
+	return s.refreshTokenPair(ctx, refreshToken, false)
+}
+
+func (s *AuthService) refreshTokenPair(ctx context.Context, refreshToken string, allowDesktop bool) (*TokenPairWithUser, error) {
 	// 检查 refreshTokenCache 是否可用
 	if s.refreshTokenCache == nil {
 		return nil, ErrRefreshTokenInvalid
@@ -1802,16 +1904,55 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 	data, err := s.refreshTokenCache.GetRefreshToken(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, ErrRefreshTokenNotFound) {
-			// Token不存在，可能是已被使用（Token轮转）或已过期
+			// A production Redis cache keeps a short-lived tombstone for consumed
+			// tokens. Consult it before returning so a replay after the first
+			// request has completed still revokes the entire family.
+			if consumer, ok := s.refreshTokenCache.(AtomicRefreshTokenConsumer); ok {
+				consumed, reused, consumeErr := consumer.ConsumeRefreshToken(ctx, tokenHash)
+				if consumeErr == nil && reused && consumed != nil && consumed.FamilyID != "" {
+					// A consumed desktop token is still sender-constrained even though
+					// the active Redis value has been replaced by a replay tombstone.
+					// The browser-compatible endpoint cannot verify its DPoP proof, so
+					// do not let a copied old token trigger family revocation (a simple
+					// denial-of-service against the legitimate desktop session).
+					if !allowDesktop && strings.TrimSpace(consumed.DeviceID) != "" {
+						return nil, ErrDesktopRefreshRequiresDPoP
+					}
+					if revokeErr := s.refreshTokenCache.DeleteTokenFamily(ctx, consumed.FamilyID); revokeErr != nil {
+						logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke reused refresh-token family %s: %v", consumed.FamilyID, revokeErr)
+					}
+					return nil, ErrRefreshTokenReused
+				}
+				if consumeErr != nil && !errors.Is(consumeErr, ErrRefreshTokenNotFound) {
+					logger.LegacyPrintf("service.auth", "[Auth] Error checking consumed refresh token: %v", consumeErr)
+					return nil, ErrServiceUnavailable
+				}
+			}
+			// Token不存在，可能是已被使用（Token轮转）或已过期。
 			logger.LegacyPrintf("service.auth", "[Auth] Refresh token not found, possible reuse attack")
 			return nil, ErrRefreshTokenInvalid
 		}
 		logger.LegacyPrintf("service.auth", "[Auth] Error getting refresh token: %v", err)
 		return nil, ErrServiceUnavailable
 	}
+	if data != nil && data.DeviceID != "" && !allowDesktop {
+		// Do this before any consume/delete operation. A caller that only copied
+		// the desktop refresh token therefore cannot rotate it or trigger replay
+		// handling on the sender-constrained family.
+		return nil, ErrDesktopRefreshRequiresDPoP
+	}
 
-	// 检查Token是否过期
-	if time.Now().After(data.ExpiresAt) {
+	// 检查 idle/absolute 过期边界。旧 Web refresh token 只有 ExpiresAt，
+	// 因而保持原有行为；桌面 token 额外要求两个窗口都未过期。
+	now := time.Now().UTC()
+	if data.DeviceID != "" && data.AbsoluteExpiresAt.IsZero() && !data.CreatedAt.IsZero() {
+		// Backfill metadata written by an earlier desktop build without extending
+		// its lifetime beyond the original enrollment timestamp.
+		data.AbsoluteExpiresAt = data.CreatedAt.Add(desktopRefreshAbsoluteTTL)
+	}
+	idleExpired := !data.ExpiresAt.IsZero() && now.After(data.ExpiresAt)
+	absoluteExpired := data.DeviceID != "" && !data.AbsoluteExpiresAt.IsZero() && now.After(data.AbsoluteExpiresAt)
+	if idleExpired || absoluteExpired {
 		// 删除过期Token
 		_ = s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash)
 		return nil, ErrRefreshTokenExpired
@@ -1853,15 +1994,55 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 		}
 	}
 
-	// Token轮转：立即使旧Token失效
-	if err := s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash); err != nil {
-		logger.LegacyPrintf("service.auth", "[Auth] Failed to delete old refresh token: %v", err)
-		// 继续处理，不影响主流程
+	// Token轮转：生产 Redis cache exposes an optional atomic consume operation.
+	// It closes the Get→Delete race where two concurrent requests could both
+	// validate the same old token and each mint a new pair. Existing in-memory
+	// and test caches do not implement the optional interface and retain the
+	// historical best-effort delete behavior for compatibility.
+	if consumer, ok := s.refreshTokenCache.(AtomicRefreshTokenConsumer); ok {
+		consumed, reused, consumeErr := consumer.ConsumeRefreshToken(ctx, tokenHash)
+		if consumeErr != nil {
+			if errors.Is(consumeErr, ErrRefreshTokenNotFound) {
+				return nil, ErrRefreshTokenInvalid
+			}
+			logger.LegacyPrintf("service.auth", "[Auth] Error consuming refresh token: %v", consumeErr)
+			return nil, ErrServiceUnavailable
+		}
+		if reused {
+			// The tombstone retains only hashed-token metadata and the family id;
+			// revoke every token in that family before reporting replay. This also
+			// races safely with a first request that is about to store its successor:
+			// StoreRefreshToken/AddToFamilyTokenSet reject the family sentinel.
+			if consumed != nil && consumed.FamilyID != "" {
+				if revokeErr := s.refreshTokenCache.DeleteTokenFamily(ctx, consumed.FamilyID); revokeErr != nil {
+					logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke reused refresh-token family %s: %v", consumed.FamilyID, revokeErr)
+				}
+			}
+			return nil, ErrRefreshTokenReused
+		}
+		if consumed != nil {
+			// Use the atomically consumed snapshot for metadata propagation. It is
+			// the same token key that was validated above, but avoids a stale cache
+			// implementation accidentally dropping device/scope/audience claims.
+			data = consumed
+		}
+	} else {
+		if err := s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash); err != nil {
+			logger.LegacyPrintf("service.auth", "[Auth] Failed to delete old refresh token: %v", err)
+			// 继续处理，不影响主流程
+		}
 	}
 
 	// 生成新的Token对，保持同一个家族ID
-	pair, err := s.GenerateTokenPair(ctx, user, data.FamilyID)
+	pair, err := s.generateTokenPairWithAbsoluteExpiry(ctx, user, data.FamilyID, data.DeviceID, data.Scopes, data.Audience, data.AbsoluteExpiresAt)
 	if err != nil {
+		if errors.Is(err, ErrRefreshTokenFamilyRevoked) {
+			// A concurrent replay/administrative revoke may mark the family after
+			// this request consumed the old token but before the successor is
+			// stored. Do not expose that internal cache state as a 503; force the
+			// client through a fresh authorization instead.
+			return nil, ErrRefreshTokenReused
+		}
 		return nil, err
 	}
 	return &TokenPairWithUser{
@@ -1870,8 +2051,26 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 	}, nil
 }
 
-// RevokeRefreshToken 撤销单个Refresh Token
+// RevokeRefreshToken 撤销单个Refresh Token。
+//
+// This method retains the historical cache-only semantics used by internal
+// callers and older integrations.  Browser-facing routes should call
+// RevokeRefreshTokenForBrowser so a sender-constrained desktop token cannot be
+// revoked through a bearer-compatible endpoint.
 func (s *AuthService) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
+	if s.refreshTokenCache == nil {
+		return nil // No-op if cache not configured
+	}
+	if !strings.HasPrefix(refreshToken, refreshTokenPrefix) {
+		return ErrRefreshTokenInvalid
+	}
+	return s.refreshTokenCache.DeleteRefreshToken(ctx, hashToken(refreshToken))
+}
+
+// RevokeRefreshTokenForBrowser is used by the legacy browser logout route.
+// It checks token metadata before deleting anything, preserving desktop DPoP
+// sender-constraining even when a caller copied only the refresh token.
+func (s *AuthService) RevokeRefreshTokenForBrowser(ctx context.Context, refreshToken string) error {
 	if s.refreshTokenCache == nil {
 		return nil // No-op if cache not configured
 	}
@@ -1880,6 +2079,13 @@ func (s *AuthService) RevokeRefreshToken(ctx context.Context, refreshToken strin
 	}
 
 	tokenHash := hashToken(refreshToken)
+	if data, err := s.refreshTokenCache.GetRefreshToken(ctx, tokenHash); err == nil {
+		if data != nil && data.DeviceID != "" {
+			return ErrDesktopRefreshRequiresDPoP
+		}
+	} else if !errors.Is(err, ErrRefreshTokenNotFound) {
+		return err
+	}
 	return s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash)
 }
 
