@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,14 @@ var (
 	ErrImageTaskNotFound    = infraerrors.New(http.StatusNotFound, "IMAGE_TASK_NOT_FOUND", "image task not found")
 	ErrImageTaskForbidden   = infraerrors.New(http.StatusForbidden, "IMAGE_TASK_FORBIDDEN", "image task does not belong to this API key")
 	ErrImageTaskUnavailable = infraerrors.New(http.StatusServiceUnavailable, "IMAGE_TASK_UNAVAILABLE", "image task storage is unavailable")
+	// User history can be removed only after the asynchronous execution reaches
+	// a terminal state.  Rejecting a live task avoids racing a late completion
+	// transition that could otherwise recreate the just-deleted history row.
+	ErrImageTaskDeleteNotReady = infraerrors.New(http.StatusConflict, "IMAGE_TASK_DELETE_NOT_READY", "image task can only be deleted after it finishes")
+	// ErrImageTaskAssetsExpired deliberately uses 410 rather than 404 so a
+	// client can distinguish a valid historical task from an asset whose
+	// short-lived access grant has elapsed.
+	ErrImageTaskAssetsExpired = infraerrors.New(http.StatusGone, "IMAGE_TASK_ASSETS_EXPIRED", "image task assets have expired")
 )
 
 type imageTaskCompletionReconcileResult int
@@ -119,8 +128,42 @@ type ImageTaskAdminPage struct {
 	Stats      ImageTaskAdminStats
 }
 
+// ImageTaskUserQuery is the authenticated user's history filter. UserID is
+// always populated from the JWT subject by the handler; it is never accepted
+// from query parameters, preventing horizontal history enumeration.
+type ImageTaskUserQuery struct {
+	UserID  int64
+	Status  string
+	Cursor  string
+	Limit   int
+	StartAt int64
+	EndAt   int64
+}
+
+type ImageTaskUserPage struct {
+	Tasks      []*ImageTaskRecord
+	NextCursor string
+	HasMore    bool
+}
+
 type ImageTaskAdminStore interface {
 	ListAdmin(ctx context.Context, query ImageTaskAdminQuery) (*ImageTaskAdminPage, error)
+}
+
+// ImageTaskUserStore is an optional durable-history capability. Keeping it
+// separate from ImageTaskStore preserves compatibility with lightweight Redis
+// test implementations and makes the user-facing history endpoint fail closed
+// when persistence is not wired.
+type ImageTaskUserStore interface {
+	ListUser(ctx context.Context, query ImageTaskUserQuery) (*ImageTaskUserPage, error)
+	GetUser(ctx context.Context, userID int64, id string) (*ImageTaskRecord, error)
+}
+
+// ImageTaskUserDeleteStore is optional so existing lightweight stores remain
+// source-compatible. Implementations must enforce the same user predicate as
+// GetUser and remove both durable history and hot Redis state.
+type ImageTaskUserDeleteStore interface {
+	DeleteUser(ctx context.Context, userID int64, id string) error
 }
 
 type imageTaskAdminCursor struct {
@@ -461,6 +504,153 @@ func (s *ImageTaskService) ListAdmin(ctx context.Context, query ImageTaskAdminQu
 	return page, nil
 }
 
+// ListUser returns only tasks owned by userID. The repository implementation
+// applies the same predicate in SQL/Redis; the service also rejects a missing
+// identity so a caller can never accidentally request a global history page.
+func (s *ImageTaskService) ListUser(ctx context.Context, query ImageTaskUserQuery) (*ImageTaskUserPage, error) {
+	if s == nil || s.store == nil || query.UserID <= 0 {
+		return nil, ErrImageTaskUnavailable
+	}
+	store, ok := s.store.(ImageTaskUserStore)
+	if !ok {
+		return nil, ErrImageTaskUnavailable
+	}
+	if query.Limit <= 0 {
+		query.Limit = 50
+	}
+	if query.Limit > 100 {
+		query.Limit = 100
+	}
+	query.Status = strings.TrimSpace(query.Status)
+	if query.Status != "" && query.Status != "all" && query.Status != ImageTaskStatusProcessing && query.Status != ImageTaskStatusCompleted && query.Status != ImageTaskStatusFailed {
+		return nil, infraerrors.BadRequest("INVALID_IMAGE_TASK_STATUS", "invalid image task status")
+	}
+	if query.StartAt < 0 || query.EndAt < 0 || (query.StartAt > 0 && query.EndAt > 0 && query.StartAt >= query.EndAt) {
+		return nil, infraerrors.BadRequest("INVALID_IMAGE_TASK_DATE_RANGE", "invalid image task date range")
+	}
+	if _, _, err := DecodeImageTaskAdminCursor(query.Cursor); err != nil {
+		return nil, err
+	}
+	page, err := store.ListUser(ctx, query)
+	if err != nil {
+		return nil, ErrImageTaskUnavailable.WithCause(err)
+	}
+	return page, nil
+}
+
+// GetUser reads durable history by JWT user ownership, independent of the API
+// key that originally admitted the task. This is what lets a desktop client
+// show one coherent history after the user rotates or revokes an API key.
+func (s *ImageTaskService) GetUser(ctx context.Context, userID int64, id string) (*ImageTaskRecord, error) {
+	if s == nil || s.store == nil || userID <= 0 {
+		return nil, ErrImageTaskUnavailable
+	}
+	store, ok := s.store.(ImageTaskUserStore)
+	if !ok {
+		return nil, ErrImageTaskUnavailable
+	}
+	task, err := store.GetUser(ctx, userID, strings.TrimSpace(id))
+	if err != nil {
+		if errors.Is(err, ErrImageTaskNotFound) {
+			return nil, ErrImageTaskNotFound
+		}
+		return nil, ErrImageTaskUnavailable.WithCause(err)
+	}
+	if task == nil || task.UserID != userID {
+		return nil, ErrImageTaskNotFound
+	}
+	s.scheduleFailedPendingObjectCleanup(task)
+	return task, nil
+}
+
+// DeleteUser removes one terminal task from the authenticated user's history.
+// Object identities are deleted before the database/Redis manifest so a
+// storage failure does not strand an inaccessible row or leak an orphaned
+// object. The operation is intentionally terminal-only: a processing task may
+// still race a detached completion transition and is therefore a 409.
+func (s *ImageTaskService) DeleteUser(ctx context.Context, userID int64, id string) error {
+	if s == nil || s.store == nil || userID <= 0 {
+		return ErrImageTaskUnavailable
+	}
+	store, ok := s.store.(ImageTaskUserDeleteStore)
+	if !ok {
+		return ErrImageTaskUnavailable
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrImageTaskNotFound
+	}
+	task, err := s.GetUser(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if task == nil || task.UserID != userID {
+		return ErrImageTaskNotFound
+	}
+	if task.Status != ImageTaskStatusCompleted && task.Status != ImageTaskStatusFailed {
+		return ErrImageTaskDeleteNotReady
+	}
+	keys := append([]string(nil), task.ResultObjectKeys...)
+	keys = append(keys, task.PendingObjectKeys...)
+	if len(keys) > 0 {
+		uploader := s.uploaderForTaskRecord(task)
+		if uploader == nil {
+			// Do not remove the manifest when the binding used to create its
+			// objects is unavailable; an operator can restore that binding and
+			// retry deletion without losing the object identities.
+			return ErrImageTaskUnavailable
+		}
+		if err := uploader.DeleteKeys(ctx, keys); err != nil {
+			return ErrImageTaskUnavailable.WithCause(err)
+		}
+	}
+	if err := store.DeleteUser(ctx, userID, id); err != nil {
+		if errors.Is(err, ErrImageTaskNotFound) {
+			return ErrImageTaskNotFound
+		}
+		if errors.Is(err, ErrImageTaskDeleteNotReady) {
+			return ErrImageTaskDeleteNotReady
+		}
+		return ErrImageTaskUnavailable.WithCause(err)
+	}
+	s.forgetTaskUploader(id)
+	return nil
+}
+
+// ResolveResultURLs issues fresh object-store URLs for a historical task. It
+// never returns ResultObjectKeys to callers. ExpiresAt is the short runtime
+// lease for processing tasks; once a task is completed/failed, its durable
+// history remains readable until the user deletes it (or the configured object
+// store lifecycle removes the physical object).
+func (s *ImageTaskService) ResolveResultURLs(ctx context.Context, task *ImageTaskRecord) ([]string, error) {
+	if s == nil || task == nil {
+		return nil, ErrImageTaskNotFound
+	}
+	if task.Status == ImageTaskStatusProcessing && task.ExpiresAt > 0 && time.Now().Unix() >= task.ExpiresAt {
+		return nil, ErrImageTaskAssetsExpired
+	}
+	if len(task.ResultObjectKeys) == 0 {
+		return imageTaskResultURLs(task.Result), nil
+	}
+	uploader := s.uploaderForTaskRecord(task)
+	if uploader == nil {
+		return nil, ErrImageTaskUnavailable
+	}
+	urls, err := uploader.ResolveURLs(ctx, task.ResultObjectKeys)
+	if err != nil {
+		return nil, ErrImageTaskUnavailable.WithCause(err)
+	}
+	ordered := make([]string, 0, len(task.ResultObjectKeys))
+	for _, key := range task.ResultObjectKeys {
+		value := strings.TrimSpace(urls[strings.TrimSpace(key)])
+		if value == "" {
+			return nil, ErrImageTaskUnavailable
+		}
+		ordered = append(ordered, value)
+	}
+	return ordered, nil
+}
+
 func (s *ImageTaskService) Get(ctx context.Context, owner ImageTaskOwner, id string) (*ImageTask, error) {
 	if s == nil || s.store == nil {
 		return nil, ErrImageTaskUnavailable
@@ -784,6 +974,46 @@ func firstImageTaskURL(result json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(response.Data[0].URL)
+}
+
+func imageTaskResultURLs(result json.RawMessage) []string {
+	if len(result) == 0 || !json.Valid(result) {
+		return nil
+	}
+	var response struct {
+		Data []struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(result, &response) != nil {
+		return nil
+	}
+	urls := make([]string, 0, len(response.Data))
+	for _, item := range response.Data {
+		if value := safeImageTaskResultURL(item.URL); value != "" {
+			urls = append(urls, value)
+		}
+	}
+	return urls
+}
+
+func safeImageTaskResultURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil || !strings.EqualFold(parsed.Scheme, "https") || strings.TrimSpace(parsed.Hostname()) == "" {
+		return ""
+	}
+	return value
+}
+
+// ImageTaskResultURLs returns the already-public URLs from a legacy task
+// payload. New durable tasks should use ImageTaskService.ResolveResultURLs so
+// access grants are re-issued by the object store.
+func ImageTaskResultURLs(result json.RawMessage) []string {
+	return imageTaskResultURLs(result)
 }
 
 func imageTaskErrorJSON(errorType, message string) json.RawMessage {

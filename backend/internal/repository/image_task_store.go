@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -112,6 +113,110 @@ func (s *imageTaskStore) Get(ctx context.Context, id string) (*service.ImageTask
 		return nil, err
 	}
 	return &task, nil
+}
+
+// GetUser first checks Redis for the hot task manifest, then falls back to the
+// durable PostgreSQL history row. The user predicate is part of both lookups;
+// callers never receive a task belonging to another account.
+func (s *imageTaskStore) GetUser(ctx context.Context, userID int64, id string) (*service.ImageTaskRecord, error) {
+	if userID <= 0 || strings.TrimSpace(id) == "" {
+		return nil, service.ErrImageTaskNotFound
+	}
+	if s.rdb != nil {
+		runtimeTask, err := s.Get(ctx, id)
+		if err == nil {
+			if runtimeTask.UserID != userID {
+				return nil, service.ErrImageTaskNotFound
+			}
+			return runtimeTask, nil
+		}
+		if !errors.Is(err, service.ErrImageTaskNotFound) {
+			return nil, err
+		}
+	}
+	if s.db == nil {
+		return nil, service.ErrImageTaskNotFound
+	}
+	var historyTask service.ImageTaskRecord
+	var err error
+	var completedAt sql.NullInt64
+	var resultJSON, errorJSON, resultObjectKeysJSON []byte
+	err = s.db.QueryRowContext(ctx, `
+SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,
+       status, http_status, result_json, error_json, result_object_keys, storage_binding_id,
+       EXTRACT(EPOCH FROM created_at)::bigint,
+       CASE WHEN completed_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM completed_at)::bigint END,
+       EXTRACT(EPOCH FROM expires_at)::bigint
+FROM image_task_history
+WHERE task_id = $1 AND user_id = $2`, strings.TrimSpace(id), userID).
+		Scan(&historyTask.ID, &historyTask.UserID, &historyTask.APIKeyID, &historyTask.Platform, &historyTask.Operation, &historyTask.Model, &historyTask.ImageCount,
+			&historyTask.Status, &historyTask.HTTPStatus, &resultJSON, &errorJSON, &resultObjectKeysJSON, &historyTask.StorageBindingID,
+			&historyTask.CreatedAt, &completedAt, &historyTask.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrImageTaskNotFound
+		}
+		return nil, err
+	}
+	historyTask.Result = resultJSON
+	historyTask.Error = errorJSON
+	if len(resultObjectKeysJSON) > 0 {
+		if err := json.Unmarshal(resultObjectKeysJSON, &historyTask.ResultObjectKeys); err != nil {
+			return nil, fmt.Errorf("decode image task result object keys: %w", err)
+		}
+	}
+	if completedAt.Valid {
+		value := completedAt.Int64
+		historyTask.CompletedAt = &value
+	}
+	return &historyTask, nil
+}
+
+// DeleteUser removes one terminal task from both durable history and the hot
+// Redis manifest. The ownership lookup happens before any delete so a caller
+// can never remove another user's task by guessing its ID. Processing tasks
+// are rejected here as a second line of defence in case a future caller skips
+// the service-level guard.
+func (s *imageTaskStore) DeleteUser(ctx context.Context, userID int64, id string) error {
+	if s == nil || userID <= 0 || strings.TrimSpace(id) == "" {
+		return service.ErrImageTaskNotFound
+	}
+	if s.rdb == nil && s.db == nil {
+		return service.ErrImageTaskUnavailable
+	}
+	id = strings.TrimSpace(id)
+	task, err := s.GetUser(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if task == nil || task.UserID != userID {
+		return service.ErrImageTaskNotFound
+	}
+	if task.Status != service.ImageTaskStatusCompleted && task.Status != service.ImageTaskStatusFailed {
+		return service.ErrImageTaskDeleteNotReady
+	}
+	if s.db != nil {
+		// Hard deletion is intentional: no user-facing tombstone or object key
+		// survives after the authenticated delete completes. A zero-row delete
+		// is tolerated because the ownership snapshot above proves the task was
+		// visible and the operation is idempotent under concurrent retries.
+		if _, err := s.db.ExecContext(ctx, `
+DELETE FROM image_task_history
+WHERE task_id = $1 AND user_id = $2`, id, userID); err != nil {
+			return err
+		}
+	}
+	if s.rdb != nil {
+		pipe := s.rdb.TxPipeline()
+		pipe.Del(ctx, imageTaskKey(id))
+		for _, status := range imageTaskStatuses {
+			pipe.ZRem(ctx, imageTaskStatusIndex(status), id)
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListPending scans a bounded batch of durable task manifests. The service
@@ -287,6 +392,216 @@ func (s *imageTaskStore) ListAdmin(ctx context.Context, query service.ImageTaskA
 		}
 	}
 	return page, nil
+}
+
+// ListUser mirrors the admin history query but always constrains rows to the
+// authenticated user. PostgreSQL is the source of truth when configured;
+// Redis indexes provide a bounded fallback for lightweight/local deployments.
+func (s *imageTaskStore) ListUser(ctx context.Context, query service.ImageTaskUserQuery) (*service.ImageTaskUserPage, error) {
+	if query.UserID <= 0 {
+		return nil, service.ErrImageTaskNotFound
+	}
+	if query.Limit <= 0 {
+		query.Limit = 50
+	}
+	if query.Limit > 100 {
+		query.Limit = 100
+	}
+	if s.db != nil {
+		return s.listUserHistory(ctx, query)
+	}
+	if s.rdb == nil {
+		return nil, service.ErrImageTaskUnavailable
+	}
+	if err := s.ensureAdminIndexes(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.cleanupAdminIndexes(ctx); err != nil {
+		return nil, err
+	}
+	statuses := imageTaskStatuses
+	if query.Status != "" && query.Status != "all" {
+		statuses = []string{query.Status}
+	}
+	cursorCreatedAt, cursorID, err := service.DecodeImageTaskAdminCursor(query.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	tasks := make([]*service.ImageTaskRecord, 0, query.Limit+1)
+	for _, status := range statuses {
+		statusTasks, err := s.listUserStatusTasks(ctx, query.UserID, status, query.Limit, cursorID != "", cursorCreatedAt, cursorID, query.StartAt, query.EndAt)
+		if err != nil {
+			return nil, err
+		}
+		for _, task := range statusTasks {
+			if task == nil {
+				continue
+			}
+			if _, ok := seen[task.ID]; ok {
+				continue
+			}
+			seen[task.ID] = struct{}{}
+			tasks = append(tasks, task)
+		}
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].CreatedAt == tasks[j].CreatedAt {
+			return tasks[i].ID > tasks[j].ID
+		}
+		return tasks[i].CreatedAt > tasks[j].CreatedAt
+	})
+	hasMore := len(tasks) > query.Limit
+	if hasMore {
+		tasks = tasks[:query.Limit]
+	}
+	page := &service.ImageTaskUserPage{Tasks: tasks, HasMore: hasMore}
+	if hasMore && len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		page.NextCursor = service.EncodeImageTaskAdminCursor(last.CreatedAt, last.ID)
+	}
+	return page, nil
+}
+
+func (s *imageTaskStore) listUserStatusTasks(ctx context.Context, userID int64, status string, limit int, hasCursor bool, cursorCreatedAt int64, cursorID string, startAt, endAt int64) ([]*service.ImageTaskRecord, error) {
+	const batchSize int64 = 256
+	maxScore, minScore := "+inf", "-inf"
+	if endAt > 0 {
+		maxScore = strconv.FormatInt(endAt-1, 10)
+	}
+	if startAt > 0 {
+		minScore = strconv.FormatInt(startAt, 10)
+	}
+	if hasCursor {
+		cursorMax := strconv.FormatInt(cursorCreatedAt, 10)
+		if endAt <= 0 || cursorCreatedAt < endAt {
+			maxScore = cursorMax
+		}
+	}
+	tasks := make([]*service.ImageTaskRecord, 0, limit+1)
+	var offset int64
+	for {
+		entries, err := s.rdb.ZRevRangeByScoreWithScores(ctx, imageTaskStatusIndex(status), &redis.ZRangeBy{Max: maxScore, Min: minScore, Offset: offset, Count: batchSize}).Result()
+		if err != nil {
+			return nil, err
+		}
+		if len(entries) == 0 {
+			break
+		}
+		offset += int64(len(entries))
+		for _, entry := range entries {
+			task, getErr := s.Get(ctx, fmt.Sprint(entry.Member))
+			if getErr != nil {
+				if errors.Is(getErr, service.ErrImageTaskNotFound) {
+					continue
+				}
+				return nil, getErr
+			}
+			if task.UserID != userID || task.Status != status {
+				continue
+			}
+			if hasCursor && (task.CreatedAt > cursorCreatedAt || (task.CreatedAt == cursorCreatedAt && task.ID >= cursorID)) {
+				continue
+			}
+			tasks = append(tasks, task)
+			if len(tasks) > limit {
+				return tasks, nil
+			}
+		}
+		if int64(len(entries)) < batchSize {
+			break
+		}
+	}
+	return tasks, nil
+}
+
+func (s *imageTaskStore) listUserHistory(ctx context.Context, query service.ImageTaskUserQuery) (*service.ImageTaskUserPage, error) {
+	cursorCreatedAt, cursorID, err := service.DecodeImageTaskAdminCursor(query.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	where := []string{"user_id = $1"}
+	args := []any{query.UserID}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if query.Status != "" && query.Status != "all" {
+		where = append(where, "status = "+addArg(query.Status))
+	}
+	if query.StartAt > 0 {
+		where = append(where, "created_at >= to_timestamp("+addArg(query.StartAt)+")")
+	}
+	if query.EndAt > 0 {
+		where = append(where, "created_at < to_timestamp("+addArg(query.EndAt)+")")
+	}
+	if cursorID != "" {
+		createdArg := addArg(cursorCreatedAt)
+		idArg := addArg(cursorID)
+		where = append(where, "(created_at < to_timestamp("+createdArg+") OR (created_at = to_timestamp("+createdArg+") AND task_id < "+idArg+"))")
+	}
+	limitArg := addArg(query.Limit + 1)
+	rows, err := s.db.QueryContext(ctx, `
+SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,
+       status, http_status, result_json, error_json, result_object_keys, storage_binding_id,
+       EXTRACT(EPOCH FROM created_at)::bigint,
+       CASE WHEN completed_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM completed_at)::bigint END,
+       EXTRACT(EPOCH FROM expires_at)::bigint
+FROM image_task_history
+WHERE `+strings.Join(where, " AND ")+`
+ORDER BY created_at DESC, task_id DESC
+LIMIT `+limitArg, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	tasks := make([]*service.ImageTaskRecord, 0, query.Limit+1)
+	for rows.Next() {
+		task, scanErr := scanImageTaskHistoryRow(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	page := &service.ImageTaskUserPage{HasMore: len(tasks) > query.Limit}
+	if page.HasMore {
+		tasks = tasks[:query.Limit]
+	}
+	page.Tasks = tasks
+	if page.HasMore && len(tasks) > 0 {
+		last := tasks[len(tasks)-1]
+		page.NextCursor = service.EncodeImageTaskAdminCursor(last.CreatedAt, last.ID)
+	}
+	return page, nil
+}
+
+type imageTaskHistoryRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanImageTaskHistoryRow(scanner imageTaskHistoryRowScanner) (*service.ImageTaskRecord, error) {
+	var task service.ImageTaskRecord
+	var completedAt sql.NullInt64
+	var resultJSON, errorJSON, resultObjectKeysJSON []byte
+	if err := scanner.Scan(&task.ID, &task.UserID, &task.APIKeyID, &task.Platform, &task.Operation, &task.Model, &task.ImageCount,
+		&task.Status, &task.HTTPStatus, &resultJSON, &errorJSON, &resultObjectKeysJSON, &task.StorageBindingID, &task.CreatedAt, &completedAt, &task.ExpiresAt); err != nil {
+		return nil, err
+	}
+	task.Result = resultJSON
+	task.Error = errorJSON
+	if len(resultObjectKeysJSON) > 0 {
+		if err := json.Unmarshal(resultObjectKeysJSON, &task.ResultObjectKeys); err != nil {
+			return nil, fmt.Errorf("decode image task result object keys: %w", err)
+		}
+	}
+	if completedAt.Valid {
+		value := completedAt.Int64
+		task.CompletedAt = &value
+	}
+	return &task, nil
 }
 
 func (s *imageTaskStore) listAdminStatusTasks(ctx context.Context, status string, limit int, hasCursor bool, cursorCreatedAt int64, cursorID string, startAt, endAt int64) ([]*service.ImageTaskRecord, error) {

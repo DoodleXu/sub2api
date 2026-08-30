@@ -31,6 +31,16 @@ type AsyncImageHandler struct {
 	failureTimeout    time.Duration
 }
 
+// AsyncImageCapability is the small runtime snapshot consumed by the public
+// capabilities endpoint.  Keep this separate from ImageTaskService so the
+// route layer does not need to know how object-storage settings are resolved.
+// Enabled controls admission of new tasks; Pollable controls whether existing
+// task records can still be read after the feature is switched off.
+type AsyncImageCapability struct {
+	Enabled  bool
+	Pollable bool
+}
+
 const (
 	defaultImageTaskCompletionTimeout  = 2 * time.Minute
 	defaultImageTaskFailureTimeout     = 15 * time.Second
@@ -110,6 +120,34 @@ func (h *AsyncImageHandler) enabled() bool {
 // feature is switched off, so an in-flight task is never stranded.
 func (h *AsyncImageHandler) pollable() bool {
 	return h != nil && h.tasks != nil && h.tasks.Pollable()
+}
+
+// Capability returns a point-in-time view of the async image task runtime.
+// Calling it is intentionally side-effect free from the handler's perspective;
+// the injected storage resolver may refresh its own short-lived cache.
+func (h *AsyncImageHandler) Capability() AsyncImageCapability {
+	if h == nil {
+		return AsyncImageCapability{}
+	}
+	return AsyncImageCapability{Enabled: h.enabled(), Pollable: h.pollable()}
+}
+
+// ImageResultDownloadLimit returns the effective result-image byte limit used
+// by object-storage archiving. The route layer uses it to keep the public
+// capability contract aligned with runtime validation instead of duplicating
+// a stale constant.
+func (h *AsyncImageHandler) ImageResultDownloadLimit(ctx context.Context) int64 {
+	const defaultLimit int64 = 32 << 20
+	if h == nil || h.openAI == nil {
+		return defaultLimit
+	}
+	if h.openAI.imageStorageSettings != nil {
+		return h.openAI.imageStorageSettings.MaxDownloadBytes(ctx)
+	}
+	if h.openAI.cfg != nil && h.openAI.cfg.ImageStorage.MaxDownloadByte > 0 {
+		return h.openAI.cfg.ImageStorage.MaxDownloadByte
+	}
+	return defaultLimit
 }
 
 // Submit accepts the same payload as the synchronous Images endpoint and

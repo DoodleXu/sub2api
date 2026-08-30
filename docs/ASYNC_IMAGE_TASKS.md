@@ -202,8 +202,40 @@ For URL responses, `image_url` mirrors the first `data[].url` for simple clients
 }
 ```
 
-All submit and poll responses include `Cache-Control: no-store`, preventing a CDN from caching the `processing` state. Tasks and results expire 24 hours after their latest state update. A task executes for at most 30 minutes.
+All submit and poll responses include `Cache-Control: no-store`, preventing a CDN from caching the `processing` state. The `expires_at` field is a 24-hour runtime lease for processing tasks (and remains in the response for compatibility); completed/failed history is retained in PostgreSQL until the user deletes it. Physical objects remain subject to the configured bucket lifecycle rule. A task executes for at most 30 minutes.
 
 The submission handler admits only a bounded number of detached tasks per process and per API key. This limit applies before a background goroutine and Redis task are created, so a fast submitter cannot build an unbounded in-process queue. After a restart, the reconciliation worker scans all `processing` records, including tasks that crashed before producing an object manifest, and marks them failed after the execution timeout.
 
 Task ownership is scoped to both user and API key. Unknown task IDs and IDs owned by another key both return `404`, avoiding task-existence disclosure. Polling remains available when the completed generation used the key's remaining balance; normal authentication, disabled-key, user, IP, and group checks still apply.
+
+## Authenticated user history and downloads
+
+The user panel (and the desktop helper) can read a task history without retaining
+the API key that originally submitted each task:
+
+```text
+GET /api/v1/user/image-tasks
+GET /api/v1/user/image-tasks/{task_id}
+GET /api/v1/user/image-tasks/{task_id}/assets/{index}
+DELETE /api/v1/user/image-tasks/{task_id}
+```
+
+These routes require the normal user JWT. The server takes the user ID only from
+that JWT; `user_id` is not a query parameter. Both the Redis hot path and the
+`image_task_history` PostgreSQL fallback apply the ownership predicate, so key
+rotation/revocation does not expose another account's history. `status`,
+`limit` (maximum 100), `cursor`, `start_at`, and `end_at` are optional list
+filters. Responses use `Cache-Control: no-store` and return only a safe task
+projection—API-key IDs, raw object keys, prompts, and storage credentials are
+never included.
+
+For durable tasks, the asset route resolves the persisted object identity at
+read time and returns a fresh HTTPS URL; it does not redirect or return the
+object key. Only a still-processing task whose runtime lease has elapsed
+returns `410 IMAGE_TASK_ASSETS_EXPIRED`; completed/failed tasks continue to
+resolve fresh URLs after the 24-hour lease. Legacy tasks that have no object
+manifest expose only existing HTTPS result URLs. Clients should download the
+URL promptly and must not persist the presigned query string; use the task
+route again when a link expires. `DELETE` removes a terminal task and its
+associated result/pending objects for the authenticated user; processing tasks
+return `409 IMAGE_TASK_DELETE_NOT_READY` to avoid a late completion race.

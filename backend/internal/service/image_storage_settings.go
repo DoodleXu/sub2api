@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,24 @@ func (s *ImageStorageSettingService) Resolver() ImageStorageResolver {
 	}
 }
 
+// MaxDownloadBytes exposes the effective per-result download limit to public
+// capability documents. It intentionally does not require object storage to
+// be enabled: clients need the configured validation contract even while
+// async admission is temporarily unavailable.
+func (s *ImageStorageSettingService) MaxDownloadBytes(ctx context.Context) int64 {
+	if s == nil {
+		return defaultImageMaxDownloadBytes
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cfg, err := s.effectiveConfig(ctx)
+	if err != nil || cfg == nil || cfg.MaxDownloadByte <= 0 {
+		return defaultImageMaxDownloadBytes
+	}
+	return cfg.MaxDownloadByte
+}
+
 func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 	if s == nil {
 		return nil, false
@@ -134,6 +153,12 @@ func (s *ImageStorageSettingService) resolve() (*ImageResultUploader, bool) {
 	if !cfg.IsConfigured() {
 		logger.L().Warn("image_storage is enabled but not fully configured; async image tasks are disabled",
 			zap.Strings("missing_keys", cfg.MissingCredentialKeys()))
+		return nil, false
+	}
+	if s.factory == nil {
+		s.resolved = false
+		s.retryAt = time.Now().Add(imageStorageResolveRetryInterval)
+		logger.L().Error("image_storage.client_build_failed; factory is not configured")
 		return nil, false
 	}
 
@@ -382,6 +407,11 @@ func normalizeImageStorageSettings(in *ImageStorageSettings) {
 	in.AccessKeyID = strings.TrimSpace(in.AccessKeyID)
 	in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
 	in.PublicBaseURL = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.PublicBaseURL), "/"))
+	if in.PublicBaseURL != "" {
+		if parsed, err := url.Parse(in.PublicBaseURL); err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || strings.TrimSpace(parsed.Hostname()) == "" {
+			in.PublicBaseURL = ""
+		}
+	}
 
 	in.Prefix = strings.TrimSpace(in.Prefix)
 	if in.Prefix == "" {
@@ -418,6 +448,11 @@ func normalizeImageStorageConfig(in *config.ImageStorageConfig) {
 	in.AccessKeyID = strings.TrimSpace(in.AccessKeyID)
 	in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
+	if in.PublicBaseURL != "" {
+		if parsed, err := url.Parse(in.PublicBaseURL); err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || strings.TrimSpace(parsed.Hostname()) == "" {
+			in.PublicBaseURL = ""
+		}
+	}
 	in.Prefix = strings.TrimSpace(in.Prefix)
 	if in.Prefix == "" {
 		in.Prefix = "images/"

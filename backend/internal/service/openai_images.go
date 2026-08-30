@@ -9,11 +9,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -25,6 +30,7 @@ import (
 	"github.com/imroc/req/v3"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	_ "golang.org/x/image/webp"
 )
 
 const (
@@ -37,8 +43,13 @@ const (
 	openAIChatGPTStartURL                  = "https://chatgpt.com/"
 	openAIChatGPTFilesURL                  = "https://chatgpt.com/backend-api/files"
 	openAIImageBackendUserAgent            = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-	openAIImageMaxDownloadBytes            = 20 << 20 // 20MB per image download
-	openAIImageMaxUploadPartSize           = 20 << 20 // 20MB per multipart upload part
+	openAIImageMaxDownloadBytes            = 20 << 20                         // 20MB per image download
+	openAIImageMaxUploadPartSize           = 20 << 20                         // 20MB per multipart upload part
+	openAIImageMaxReferenceCount           = 8                                // product limit for source/reference images
+	openAIImageMaxUploadCount              = openAIImageMaxReferenceCount + 1 // references plus one optional mask
+	openAIImageMaxUploadBytes              = 80 << 20                         // aggregate multipart image bytes
+	openAIImageMaxDimension                = 16384
+	openAIImageMaxPixels                   = int64(100_000_000)
 	openAIImagesResponsesMainModel         = "gpt-5.4-mini"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )
@@ -89,6 +100,8 @@ type OpenAIImagesRequest struct {
 	MaskUpload         *OpenAIImagesUpload
 	Body               []byte
 	bodyHash           string
+	uploadBytes        int64 // parser-only aggregate image byte budget
+	remoteUploadCount  int   // remote URLs reserve their per-image limit until fetched
 }
 
 func (r *OpenAIImagesRequest) ModerationBody() []byte {
@@ -282,7 +295,15 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 			}
 			for _, item := range images.Array() {
 				if imageURL := strings.TrimSpace(item.Get("image_url").String()); imageURL != "" {
+					if len(req.InputImageURLs) >= openAIImageMaxReferenceCount {
+						return fmt.Errorf("too many image references (maximum %d)", openAIImageMaxReferenceCount)
+					}
+					inputBytes, err := accountOpenAIImageInputURL(req, imageURL)
+					if err != nil {
+						return fmt.Errorf("images[].image_url is invalid: %w", err)
+					}
 					req.InputImageURLs = append(req.InputImageURLs, imageURL)
+					_ = inputBytes // accounted by accountOpenAIImageInputURL
 					continue
 				}
 				if item.Get("file_id").Exists() {
@@ -291,6 +312,13 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 			}
 		}
 		if maskImageURL := strings.TrimSpace(gjson.GetBytes(body, "mask.image_url").String()); maskImageURL != "" {
+			if len(req.InputImageURLs) > openAIImageMaxReferenceCount {
+				return fmt.Errorf("too many image references (maximum %d)", openAIImageMaxReferenceCount)
+			}
+			_, err := accountOpenAIImageInputURL(req, maskImageURL)
+			if err != nil {
+				return fmt.Errorf("mask.image_url is invalid: %w", err)
+			}
 			req.MaskImageURL = maskImageURL
 			req.HasMask = true
 		}
@@ -332,38 +360,66 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
+		fileName := strings.TrimSpace(part.FileName())
+		declaredPartContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
+		if fileName != "" && name != "mask" && name != "image" && !strings.HasPrefix(name, "image[") {
+			_ = part.Close()
+			return fmt.Errorf("unsupported multipart file field %q", name)
+		}
+		data, err := readOpenAIImageMultipartPart(part, openAIImageMaxUploadPartSize)
 		_ = part.Close()
 		if err != nil {
 			return fmt.Errorf("read multipart field %s: %w", name, err)
 		}
 
-		fileName := strings.TrimSpace(part.FileName())
 		if fileName != "" {
-			partContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
-			if name == "mask" && len(data) > 0 {
-				req.HasMask = true
-				width, height := parseOpenAIImageDimensions(part.Header)
-				maskUpload := OpenAIImagesUpload{
-					FieldName:   name,
-					FileName:    fileName,
-					ContentType: partContentType,
-					Data:        data,
-					Width:       width,
-					Height:      height,
+			partContentType := declaredPartContentType
+			if name == "mask" || name == "image" || strings.HasPrefix(name, "image[") {
+				canonicalType, width, height, validationErr := validateOpenAIImageUpload(data, partContentType)
+				if validationErr != nil {
+					return fmt.Errorf("multipart field %s: %w", name, validationErr)
 				}
-				req.MaskUpload = &maskUpload
-			}
-			if name == "image" || strings.HasPrefix(name, "image[") {
-				width, height := parseOpenAIImageDimensions(part.Header)
-				req.Uploads = append(req.Uploads, OpenAIImagesUpload{
-					FieldName:   name,
-					FileName:    fileName,
-					ContentType: partContentType,
-					Data:        data,
-					Width:       width,
-					Height:      height,
-				})
+				partContentType = canonicalType
+				if name == "image" || strings.HasPrefix(name, "image[") {
+					if len(req.Uploads) >= openAIImageMaxReferenceCount {
+						return fmt.Errorf("too many image references (maximum %d)", openAIImageMaxReferenceCount)
+					}
+				} else if len(req.Uploads)+boolToInt(req.MaskUpload != nil) >= openAIImageMaxUploadCount {
+					return fmt.Errorf("too many image uploads (maximum %d, including one optional mask)", openAIImageMaxUploadCount)
+				}
+				if req.uploadBytes+int64(len(data)) > openAIImageMaxUploadBytes {
+					return fmt.Errorf("image uploads exceed %d bytes in total", openAIImageMaxUploadBytes)
+				}
+				req.uploadBytes += int64(len(data))
+				if name == "image" || strings.HasPrefix(name, "image[") {
+					if width <= 0 || height <= 0 {
+						return fmt.Errorf("multipart field %s has invalid image dimensions", name)
+					}
+				}
+				if name == "mask" && req.MaskUpload != nil {
+					return fmt.Errorf("multipart field mask may only be provided once")
+				}
+				if name == "mask" && len(data) > 0 {
+					req.HasMask = true
+					req.MaskUpload = &OpenAIImagesUpload{
+						FieldName:   name,
+						FileName:    fileName,
+						ContentType: partContentType,
+						Data:        data,
+						Width:       width,
+						Height:      height,
+					}
+				}
+				if name == "image" || strings.HasPrefix(name, "image[") {
+					req.Uploads = append(req.Uploads, OpenAIImagesUpload{
+						FieldName:   name,
+						FileName:    fileName,
+						ContentType: partContentType,
+						Data:        data,
+						Width:       width,
+						Height:      height,
+					})
+				}
 			}
 			continue
 		}
@@ -437,8 +493,118 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 	return nil
 }
 
-func parseOpenAIImageDimensions(_ textproto.MIMEHeader) (int, int) {
-	return 0, 0
+// uploadBytes is a parser-only accounting field and is intentionally not
+// serialized or exposed to callers.
+//
+// Keeping these fields on the request lets multipart validation enforce both a
+// per-part and aggregate limit before the body is forwarded upstream.
+func readOpenAIImageMultipartPart(part io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		limit = openAIImageMaxUploadPartSize
+	}
+	data, err := io.ReadAll(io.LimitReader(part, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("image upload exceeds %d bytes", limit)
+	}
+	return data, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func validateOpenAIImageUpload(data []byte, declaredContentType string) (string, int, int, error) {
+	if len(data) == 0 {
+		return "", 0, 0, fmt.Errorf("image upload is empty")
+	}
+	detectedType, ok := detectImageContentType(data)
+	if !ok {
+		return "", 0, 0, fmt.Errorf("image upload is not a supported PNG, JPEG, WebP, or GIF")
+	}
+	declared := normalizeImageContentType(declaredContentType)
+	if declared != "" && declared != "application/octet-stream" && declared != detectedType {
+		return "", 0, 0, fmt.Errorf("declared content type %q does not match image bytes (%s)", declared, detectedType)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("decode image header: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return "", 0, 0, fmt.Errorf("image dimensions must be positive")
+	}
+	if config.Width > openAIImageMaxDimension || config.Height > openAIImageMaxDimension {
+		return "", 0, 0, fmt.Errorf("image dimensions exceed %dx%d", openAIImageMaxDimension, openAIImageMaxDimension)
+	}
+	if int64(config.Width) > openAIImageMaxPixels/int64(config.Height) {
+		return "", 0, 0, fmt.Errorf("image pixel count exceeds %d", openAIImageMaxPixels)
+	}
+	return detectedType, config.Width, config.Height, nil
+}
+
+func validateOpenAIImageInputURL(rawURL string) error {
+	_, err := validateOpenAIImageInputURLSize(rawURL)
+	return err
+}
+
+func validateOpenAIImageInputURLSize(rawURL string) (int64, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return 0, fmt.Errorf("URL is empty")
+	}
+	if strings.HasPrefix(strings.ToLower(rawURL), "data:") {
+		uploader := &ImageResultUploader{maxDownloadBytes: openAIImageMaxUploadPartSize}
+		data, _, err := uploader.decodeImageDataURL(rawURL)
+		if err != nil {
+			return 0, err
+		}
+		if _, _, _, err := validateOpenAIImageUpload(data, ""); err != nil {
+			return 0, err
+		}
+		return int64(len(data)), nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return 0, fmt.Errorf("parse URL: %w", err)
+	}
+	if err := validateImageDownloadURL(parsed); err != nil {
+		return 0, err
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(parsed.Hostname()), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || host == "metadata.google.internal" {
+		return 0, fmt.Errorf("URL host is not allowed")
+	}
+	return 0, nil
+}
+
+// accountOpenAIImageInputURL adds a bounded byte reservation for a reference
+// URL. Remote URLs cannot be sized safely without fetching them, and they are
+// forwarded to the provider, so reserving the per-image limit closes the
+// aggregate-budget bypass while retaining the documented HTTPS URL contract.
+// Data URLs return their exact decoded size and therefore consume only their
+// actual bytes.
+func accountOpenAIImageInputURL(req *OpenAIImagesRequest, rawURL string) (int64, error) {
+	if req == nil {
+		return 0, fmt.Errorf("image request is required")
+	}
+	size, err := validateOpenAIImageInputURLSize(rawURL)
+	if err != nil {
+		return 0, err
+	}
+	if size == 0 {
+		req.remoteUploadCount++
+		size = openAIImageMaxUploadPartSize
+	}
+	if req.uploadBytes > openAIImageMaxUploadBytes-size {
+		return 0, fmt.Errorf("image inputs exceed %d bytes in total", openAIImageMaxUploadBytes)
+	}
+	req.uploadBytes += size
+	return size, nil
 }
 
 func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {

@@ -239,6 +239,100 @@ func TestImageTaskStoreListsAdminTasksByStatusAndCursor(t *testing.T) {
 	require.Equal(t, "imgtask_failed", failed.Tasks[0].ID)
 }
 
+func TestImageTaskStoreListsUserTasksWithCursorAndOwnership(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb, nil)
+	ctx := context.Background()
+	for _, task := range []*service.ImageTaskRecord{
+		{ID: "imgtask_user_old", UserID: 7, Status: service.ImageTaskStatusCompleted, CreatedAt: 10},
+		{ID: "imgtask_user_new", UserID: 7, Status: service.ImageTaskStatusProcessing, CreatedAt: 30},
+		{ID: "imgtask_other", UserID: 8, Status: service.ImageTaskStatusCompleted, CreatedAt: 40},
+	} {
+		require.NoError(t, store.Save(ctx, task, time.Hour))
+	}
+	userStore, ok := store.(service.ImageTaskUserStore)
+	require.True(t, ok)
+
+	first, err := userStore.ListUser(ctx, service.ImageTaskUserQuery{UserID: 7, Status: "all", Limit: 1})
+	require.NoError(t, err)
+	require.True(t, first.HasMore)
+	require.Equal(t, []string{"imgtask_user_new"}, []string{first.Tasks[0].ID})
+
+	second, err := userStore.ListUser(ctx, service.ImageTaskUserQuery{UserID: 7, Status: "all", Cursor: first.NextCursor, Limit: 10})
+	require.NoError(t, err)
+	require.False(t, second.HasMore)
+	require.Equal(t, []string{"imgtask_user_old"}, []string{second.Tasks[0].ID})
+
+	_, err = userStore.GetUser(ctx, 7, "imgtask_other")
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
+}
+
+func TestImageTaskStoreGetsUserHistoryFromPostgresAfterRedisExpiry(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewImageTaskStore(rdb, db)
+	columns := []string{"task_id", "user_id", "api_key_id", "platform", "operation", "model", "image_count", "status", "http_status", "result_json", "error_json", "result_object_keys", "storage_binding_id", "created_at", "completed_at", "expires_at"}
+	mock.ExpectQuery(`SELECT task_id, user_id, api_key_id, platform, operation, model, image_count,`).
+		WithArgs("imgtask_history_user", int64(7)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow("imgtask_history_user", int64(7), int64(9), "openai", "generation", "gpt-image-2", 1, "completed", 200, []byte(`{"data":[]}`), nil, []byte(`[]`), "binding-a", int64(100), int64(101), int64(200)))
+	userStore, ok := store.(service.ImageTaskUserStore)
+	require.True(t, ok)
+	task, err := userStore.GetUser(context.Background(), 7, "imgtask_history_user")
+	require.NoError(t, err)
+	require.Equal(t, "imgtask_history_user", task.ID)
+	require.Equal(t, "binding-a", task.StorageBindingID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestImageTaskStoreDeleteUserRemovesTerminalRuntimeAndIndexes(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb, nil)
+	ctx := context.Background()
+	task := &service.ImageTaskRecord{
+		ID: "imgtask_delete", UserID: 7, Status: service.ImageTaskStatusCompleted, CreatedAt: 10,
+	}
+	require.NoError(t, store.Save(ctx, task, time.Hour))
+	userStore, ok := store.(service.ImageTaskUserStore)
+	require.True(t, ok)
+	deleteStore, ok := store.(service.ImageTaskUserDeleteStore)
+	require.True(t, ok)
+	require.NoError(t, deleteStore.DeleteUser(ctx, 7, task.ID))
+	_, err := userStore.GetUser(ctx, 7, task.ID)
+	require.ErrorIs(t, err, service.ErrImageTaskNotFound)
+	_, err = rdb.ZScore(ctx, imageTaskStatusIndex(service.ImageTaskStatusCompleted), task.ID).Result()
+	require.ErrorIs(t, err, redis.Nil)
+
+	// Wrong-user deletion is rejected before any Redis key is touched.
+	other := &service.ImageTaskRecord{ID: "imgtask_other", UserID: 8, Status: service.ImageTaskStatusFailed, CreatedAt: 11}
+	require.NoError(t, store.Save(ctx, other, time.Hour))
+	require.ErrorIs(t, deleteStore.DeleteUser(ctx, 7, other.ID), service.ErrImageTaskNotFound)
+	_, err = userStore.GetUser(ctx, 8, other.ID)
+	require.NoError(t, err)
+}
+
+func TestImageTaskStoreDeleteUserRejectsProcessing(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	store := NewImageTaskStore(rdb, nil)
+	ctx := context.Background()
+	task := &service.ImageTaskRecord{ID: "imgtask_processing_delete", UserID: 7, Status: service.ImageTaskStatusProcessing}
+	require.NoError(t, store.Save(ctx, task, time.Hour))
+	deleteStore, ok := store.(service.ImageTaskUserDeleteStore)
+	require.True(t, ok)
+	require.ErrorIs(t, deleteStore.DeleteUser(ctx, 7, task.ID), service.ErrImageTaskDeleteNotReady)
+	_, err := store.Get(ctx, task.ID)
+	require.NoError(t, err)
+}
+
 func TestImageTaskStoreCleansExpiredAdminIndexMembers(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})

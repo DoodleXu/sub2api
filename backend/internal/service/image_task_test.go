@@ -203,3 +203,130 @@ func TestImageTaskServiceRejectsInvalidAdminCursorAsBadRequest(t *testing.T) {
 	require.Equal(t, "INVALID_IMAGE_TASK_CURSOR", infraerrors.Reason(err))
 	require.False(t, store.listAdminCalled)
 }
+
+type imageTaskUserMemoryStore struct {
+	imageTaskMemoryStore
+	tasks map[string]*ImageTaskRecord
+}
+
+func (s *imageTaskUserMemoryStore) ListUser(_ context.Context, query ImageTaskUserQuery) (*ImageTaskUserPage, error) {
+	page := &ImageTaskUserPage{}
+	for _, task := range s.tasks {
+		if task != nil && task.UserID == query.UserID && (query.Status == "" || query.Status == "all" || task.Status == query.Status) {
+			copy := *task
+			page.Tasks = append(page.Tasks, &copy)
+		}
+	}
+	return page, nil
+}
+
+func (s *imageTaskUserMemoryStore) GetUser(_ context.Context, userID int64, id string) (*ImageTaskRecord, error) {
+	task := s.tasks[id]
+	if task == nil || task.UserID != userID {
+		return nil, ErrImageTaskNotFound
+	}
+	copy := *task
+	return &copy, nil
+}
+
+func (s *imageTaskUserMemoryStore) DeleteUser(_ context.Context, userID int64, id string) error {
+	task := s.tasks[id]
+	if task == nil || task.UserID != userID {
+		return ErrImageTaskNotFound
+	}
+	if task.Status == ImageTaskStatusProcessing {
+		return ErrImageTaskDeleteNotReady
+	}
+	delete(s.tasks, id)
+	return nil
+}
+
+func TestImageTaskServiceUserHistoryUsesJWTUserOwnership(t *testing.T) {
+	store := &imageTaskUserMemoryStore{
+		imageTaskMemoryStore: imageTaskMemoryStore{},
+		tasks: map[string]*ImageTaskRecord{
+			"imgtask_a": {ID: "imgtask_a", UserID: 7, APIKeyID: 11, Status: ImageTaskStatusCompleted},
+			"imgtask_b": {ID: "imgtask_b", UserID: 8, APIKeyID: 22, Status: ImageTaskStatusCompleted},
+		},
+	}
+	svc := NewImageTaskService(store)
+
+	page, err := svc.ListUser(context.Background(), ImageTaskUserQuery{UserID: 7, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Tasks, 1)
+	require.Equal(t, int64(7), page.Tasks[0].UserID)
+
+	task, err := svc.GetUser(context.Background(), 7, "imgtask_a")
+	require.NoError(t, err)
+	require.Equal(t, "imgtask_a", task.ID)
+	_, err = svc.GetUser(context.Background(), 7, "imgtask_b")
+	require.ErrorIs(t, err, ErrImageTaskNotFound)
+}
+
+func TestImageTaskServiceResolveResultURLsKeepsTerminalHistoryAndRejectsExpiredProcessing(t *testing.T) {
+	storage := &resolvingImageStorage{urls: map[string]string{"images/imgtask_a-0.png": "https://cdn.example.test/fresh.png"}}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	uploader.SetBindingID("binding-a")
+	store := &imageTaskUserMemoryStore{tasks: map[string]*ImageTaskRecord{
+		"imgtask_a": {ID: "imgtask_a", UserID: 7, Status: ImageTaskStatusCompleted, StorageBindingID: "binding-a", ResultObjectKeys: []string{"images/imgtask_a-0.png"}, ExpiresAt: time.Now().Add(time.Hour).Unix()},
+	}}
+	svc := NewImageTaskServiceWithUploader(store, uploader, time.Hour, time.Minute)
+	t.Cleanup(svc.Close)
+	urls, err := svc.ResolveResultURLs(context.Background(), store.tasks["imgtask_a"])
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://cdn.example.test/fresh.png"}, urls)
+
+	expired := *store.tasks["imgtask_a"]
+	expired.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+	urls, err = svc.ResolveResultURLs(context.Background(), &expired)
+	require.NoError(t, err)
+	require.Equal(t, []string{"https://cdn.example.test/fresh.png"}, urls)
+
+	expired.Status = ImageTaskStatusProcessing
+	_, err = svc.ResolveResultURLs(context.Background(), &expired)
+	require.ErrorIs(t, err, ErrImageTaskAssetsExpired)
+}
+
+func TestImageTaskServiceDeleteUserRemovesTerminalObjectsAndHistory(t *testing.T) {
+	storage := &fakeImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 0, nil)
+	uploader.SetBindingID("binding-a")
+	store := &imageTaskUserMemoryStore{tasks: map[string]*ImageTaskRecord{
+		"imgtask_delete": {
+			ID: "imgtask_delete", UserID: 7, Status: ImageTaskStatusCompleted,
+			StorageBindingID: "binding-a", ResultObjectKeys: []string{"images/result.png"},
+			PendingObjectKeys: []string{"images/pending.png"},
+		},
+		"imgtask_processing": {ID: "imgtask_processing", UserID: 7, Status: ImageTaskStatusProcessing},
+	}}
+	svc := NewImageTaskServiceWithUploader(store, uploader, time.Hour, time.Minute)
+	t.Cleanup(svc.Close)
+
+	require.NoError(t, svc.DeleteUser(context.Background(), 7, "imgtask_delete"))
+	require.ElementsMatch(t, []string{"images/result.png", "images/pending.png"}, storage.deleted)
+	_, ok := store.tasks["imgtask_delete"]
+	require.False(t, ok)
+
+	require.ErrorIs(t, svc.DeleteUser(context.Background(), 7, "imgtask_processing"), ErrImageTaskDeleteNotReady)
+	require.ErrorIs(t, svc.DeleteUser(context.Background(), 8, "imgtask_processing"), ErrImageTaskNotFound)
+}
+
+type resolvingImageStorage struct {
+	urls map[string]string
+}
+
+func (s *resolvingImageStorage) Save(context.Context, string, string, []byte) (string, error) {
+	return "https://cdn.example.test/uploaded.png", nil
+}
+
+func (s *resolvingImageStorage) Delete(context.Context, string) error { return nil }
+
+func (s *resolvingImageStorage) ResolveURLs(_ context.Context, keys []string) (map[string]string, error) {
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value := s.urls[key]; value != "" {
+			result[key] = value
+		}
+	}
+	return result, nil
+}

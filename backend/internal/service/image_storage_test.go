@@ -281,6 +281,37 @@ func TestImageResultUploaderRejectsOversizedImageDataURL(t *testing.T) {
 	require.Empty(t, storage.saved)
 }
 
+func TestImageResultUploaderRejectsOversizedB64JSONBeforeDecode(t *testing.T) {
+	storage := &fakeImageStorage{}
+	uploader := NewImageResultUploader(storage, "images/", 3, nil)
+	payload := base64.StdEncoding.EncodeToString([]byte("four"))
+
+	_, err := uploader.Rewrite(context.Background(), "imgtask_b64_large", json.RawMessage(
+		`{"data":[{"b64_json":"`+payload+`"}]}`,
+	))
+	require.ErrorContains(t, err, "decoded b64_json exceeds 3 bytes")
+	require.Empty(t, storage.saved)
+}
+
+func TestImageResultUploaderRejectsRedirectToPrivateAddress(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{"https://127.0.0.1/private"}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    request,
+		}, nil
+	})}
+	uploader := NewImageResultUploader(&fakeImageStorage{}, "images/", 0, client)
+	_, err := uploader.Rewrite(context.Background(), "imgtask_redirect_private", json.RawMessage(
+		`{"data":[{"url":"https://images.example.test/start"}]}`,
+	))
+	require.Error(t, err)
+	require.Equal(t, 1, calls, "redirect target must be rejected before transport")
+}
+
 func TestImageResultUploaderB64JSONTakesPrecedenceOverDataURL(t *testing.T) {
 	storage := &fakeImageStorage{}
 	uploader := NewImageResultUploader(storage, "images/", 0, nil)

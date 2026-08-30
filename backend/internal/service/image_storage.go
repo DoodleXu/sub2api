@@ -59,10 +59,115 @@ type ImageResultUploader struct {
 	bindingID        string
 }
 
+// ResolveURLs converts durable object keys to short-lived access URLs. The
+// optional interface is intentionally checked at the boundary so an uploader
+// backed by a write-only store cannot accidentally expose object keys or stale
+// completion URLs through the user history API.
+func (u *ImageResultUploader) ResolveURLs(ctx context.Context, keys []string) (map[string]string, error) {
+	if u == nil || u.storage == nil {
+		return nil, errors.New("image object storage is unavailable")
+	}
+	resolver, ok := u.storage.(ImageStorageObjectURLResolver)
+	if !ok {
+		return nil, errors.New("image object storage cannot issue access URLs")
+	}
+	cleaned, err := u.normalizeObjectKeys(keys)
+	if err != nil {
+		return nil, err
+	}
+	if len(cleaned) == 0 {
+		return map[string]string{}, nil
+	}
+	resolved, err := resolver.ResolveURLs(ctx, cleaned)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
+		return nil, errors.New("image object storage returned no access URLs")
+	}
+	for key, rawURL := range resolved {
+		value := strings.TrimSpace(rawURL)
+		if value == "" {
+			continue
+		}
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.User != nil || !strings.EqualFold(parsed.Scheme, "https") || strings.TrimSpace(parsed.Hostname()) == "" {
+			return nil, errors.New("image object storage returned an invalid access URL")
+		}
+		resolved[key] = value
+	}
+	return resolved, nil
+}
+
+// DeleteKeys removes only object identities in this uploader's configured
+// namespace. It is used by authenticated user-history deletion and deliberately
+// does not accept arbitrary bucket keys, even though ImageStorage itself is a
+// low-level interface.
+func (u *ImageResultUploader) DeleteKeys(ctx context.Context, keys []string) error {
+	if u == nil || u.storage == nil {
+		return errors.New("image object storage is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cleaned, err := u.normalizeObjectKeys(keys)
+	if err != nil {
+		return err
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, imageStorageCleanupTimeout)
+	defer cancel()
+	var deleteErr error
+	for _, key := range cleaned {
+		if err := u.storage.Delete(deleteCtx, key); err != nil {
+			deleteErr = errors.Join(deleteErr, fmt.Errorf("delete image object %q: %w", key, err))
+		}
+	}
+	return deleteErr
+}
+
+func (u *ImageResultUploader) normalizeObjectKeys(keys []string) ([]string, error) {
+	cleaned := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	prefix := strings.TrimSpace(u.prefix)
+	for _, rawKey := range keys {
+		key := strings.TrimSpace(rawKey)
+		if key == "" {
+			return nil, errors.New("image object key is empty")
+		}
+		if prefix != "" {
+			prefixBoundary := prefix
+			if !strings.HasSuffix(prefixBoundary, "/") {
+				prefixBoundary += "/"
+			}
+			if !strings.HasPrefix(key, prefixBoundary) {
+				return nil, errors.New("image object key is outside the configured prefix")
+			}
+		}
+		if strings.Contains(key, "..") {
+			return nil, errors.New("image object key contains an unsafe path segment")
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		cleaned = append(cleaned, key)
+	}
+	return cleaned, nil
+}
+
 // NewImageResultUploader 构造一个 uploader；storage 为 nil 时 Rewrite 直接透传。
 func NewImageResultUploader(storage ImageStorage, prefix string, maxDownloadBytes int64, httpClient *http.Client) *ImageResultUploader {
 	if httpClient == nil {
 		httpClient = defaultImageDownloadHTTPClient()
+	} else {
+		// A caller-supplied client may otherwise follow a 30x response to an
+		// unvalidated HTTP/private target before download() gets a chance to
+		// inspect the final URL. Clone and wrap it so redirect destinations are
+		// checked before each hop while preserving deterministic test transports.
+		httpClient = hardenedImageDownloadHTTPClient(httpClient)
 	}
 	if maxDownloadBytes <= 0 {
 		maxDownloadBytes = defaultImageMaxDownloadBytes
@@ -73,6 +178,63 @@ func NewImageResultUploader(storage ImageStorage, prefix string, maxDownloadByte
 		prefix:           prefix,
 		maxDownloadBytes: maxDownloadBytes,
 	}
+}
+
+func hardenedImageDownloadHTTPClient(base *http.Client) *http.Client {
+	if base == nil {
+		return defaultImageDownloadHTTPClient()
+	}
+	client := *base
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = validatedImageDownloadRoundTripper{base: transport}
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= maxImageDownloadRedirects {
+			return errors.New("too many image download redirects")
+		}
+		if next == nil || next.URL == nil {
+			return errors.New("image download redirect URL is missing")
+		}
+		if err := validateImageDownloadURL(next.URL); err != nil {
+			return err
+		}
+		// Do not carry caller credentials or a signed URL as a Referer to a
+		// redirected origin. The image downloader currently sends no headers,
+		// but this remains a defence-in-depth guarantee for future callers.
+		next.Header.Del("Referer")
+		for key := range next.Header {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "accept", "accept-encoding", "user-agent":
+			default:
+				next.Header.Del(key)
+			}
+		}
+		if previousRedirect != nil {
+			return previousRedirect(next, via)
+		}
+		return nil
+	}
+	return &client
+}
+
+type validatedImageDownloadRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (t validatedImageDownloadRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request == nil || request.URL == nil {
+		return nil, errors.New("image download request URL is missing")
+	}
+	if err := validateImageDownloadURL(request.URL); err != nil {
+		return nil, err
+	}
+	if t.base == nil {
+		return nil, errors.New("image download transport is unavailable")
+	}
+	return t.base.RoundTrip(request)
 }
 
 // SetBindingID associates the uploader with the effective object-store
@@ -288,9 +450,24 @@ func (u *ImageResultUploader) fetchImageBytes(ctx context.Context, item map[stri
 		var b64 string
 		if err := json.Unmarshal(raw, &b64); err == nil {
 			if b64 = strings.TrimSpace(b64); b64 != "" {
-				data, err := base64.StdEncoding.DecodeString(b64)
+				// Decode through a bounded reader. DecodeString allocates the
+				// complete decoded payload before the caller can enforce the
+				// per-image limit, so a malicious/buggy upstream response could
+				// amplify memory usage several times over the configured limit.
+				limit := u.maxDownloadBytes
+				if limit <= 0 {
+					limit = defaultImageMaxDownloadBytes
+				}
+				if encodedLimit := base64EncodedLengthLimit(limit); int64(len(b64)) > encodedLimit {
+					return nil, "", fmt.Errorf("decoded b64_json exceeds %d bytes", limit)
+				}
+				decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(b64))
+				data, err := io.ReadAll(io.LimitReader(decoder, limit+1))
 				if err != nil {
 					return nil, "", fmt.Errorf("decode b64_json: %w", err)
+				}
+				if int64(len(data)) > limit {
+					return nil, "", fmt.Errorf("decoded b64_json exceeds %d bytes", limit)
 				}
 				contentType, ok := detectImageContentType(data)
 				if !ok {
@@ -312,6 +489,22 @@ func (u *ImageResultUploader) fetchImageBytes(ctx context.Context, item map[stri
 		}
 	}
 	return nil, "", errors.New("image item has neither b64_json nor url")
+}
+
+// base64EncodedLengthLimit returns a conservative upper bound for the encoded
+// representation of a payload with at most limit decoded bytes. The extra
+// quartet leaves room for padding; it is deliberately an upper bound so valid
+// payloads are never rejected while pathological strings are rejected before
+// a decoder can allocate a large result.
+func base64EncodedLengthLimit(limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	// ceil(limit/3)*4, with overflow protection for an invalidly huge limit.
+	if limit > (1<<62)-4 {
+		return (1 << 63) - 1
+	}
+	return ((limit + 2) / 3) * 4
 }
 
 func (u *ImageResultUploader) decodeImageDataURL(rawURL string) ([]byte, string, error) {
