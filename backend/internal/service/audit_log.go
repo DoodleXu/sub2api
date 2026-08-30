@@ -129,6 +129,10 @@ func auditNormalizeBodyKey(key string) string {
 var auditBodySensitiveExactKeys = func() map[string]struct{} {
 	builtin := []string{
 		"code", "codes", "pin", "cvv",
+		// Desktop device authorization values are one-time credentials. They may
+		// appear in approval/token request bodies and must never be retained in
+		// audit records, even in redacted form.
+		"user_code", "device_code", "code_verifier", "code_challenge",
 		"authorization", "cookie", "x-api-key",
 		"key",
 		// 字符串值内嵌完整凭证的字段：
@@ -257,5 +261,5 @@ func RedactAuditQuery(rawQuery string) string {
 	if rawQuery == "" {
 		return ""
 	}
-	return logredact.RedactText(rawQuery, "api_key", "apikey", "token", "secret", "key")
+	return logredact.RedactText(rawQuery, "api_key", "apikey", "token", "secret", "key", "user_code", "device_code", "code_verifier", "code_challenge")
 }

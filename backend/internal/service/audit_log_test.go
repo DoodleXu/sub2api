@@ -62,6 +62,19 @@ func TestRedactAuditBody_JSONRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestRedactAuditBody_DesktopAuthorizationValues(t *testing.T) {
+	raw := []byte(`{"user_code":"ABCD-EFGH","device_code":"device-secret","code_verifier":"pkce-secret","code_challenge":"challenge-secret","client_id":"sub2api-desktop"}`)
+	out := RedactAuditBody(raw, "application/json")
+	for _, secret := range []string{"ABCD-EFGH", "device-secret", "pkce-secret", "challenge-secret"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("desktop authorization value leaked in audit body: %q (%s)", secret, out)
+		}
+	}
+	if !strings.Contains(out, "sub2api-desktop") {
+		t.Fatalf("non-secret client id should remain visible: %s", out)
+	}
+}
+
 // 裸键 "session"（Ollama Cloud 会话保存的请求体字段）值整体就是浏览器 Cookie 明文，
 // 必须命中键级脱敏；session_id 等运行态标识不受影响，保留以便追责。
 func TestRedactAuditBody_BareSessionKeyRedacted(t *testing.T) {
