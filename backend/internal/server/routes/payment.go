@@ -27,6 +27,12 @@ func RegisterPaymentRoutes(
 	authenticated := v1.Group("/payment")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	// The legacy payment API returns provider/order material and contains
+	// mutations such as cancellation and refund requests. Keep it browser-only;
+	// desktop sessions use the narrow /desktop/checkout-sessions bridge below,
+	// where the browser performs the provider interaction and the device only
+	// receives an opaque status.
+	authenticated.Use(middleware.RequireBrowserSession())
 	// 面板全局按用户限流
 	authenticated.Use(panelRateLimiter.Global())
 	{
