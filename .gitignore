@@ -33,6 +33,8 @@ backend/.gocache/
 # ===================
 node_modules/
 frontend/node_modules/
+desktop/frontend/node_modules/
+.pnpm-store/
 frontend/dist/
 frontend/package-lock.json
 *.local
@@ -123,6 +125,8 @@ CLAUDE.md
 scripts
 !backend/scripts/
 !backend/scripts/resolve-version.sh
+!desktop/frontend/scripts/
+!desktop/frontend/scripts/check-wails-bindings.mjs
 .code-review-state
 #openspec/
 code-reviews/

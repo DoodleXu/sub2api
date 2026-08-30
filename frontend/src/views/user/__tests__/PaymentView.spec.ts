@@ -22,6 +22,7 @@ const showInfo = vi.hoisted(() => vi.fn())
 const showWarning = vi.hoisted(() => vi.fn())
 const getCheckoutInfo = vi.hoisted(() => vi.fn())
 const getSubscriptionUpgradeOptions = vi.hoisted(() => vi.fn())
+const activateDesktopCheckout = vi.hoisted(() => vi.fn())
 const bridgeInvoke = vi.hoisted(() => vi.fn())
 
 vi.mock('vue-router', async () => {
@@ -82,6 +83,7 @@ vi.mock('@/api/payment', () => ({
   paymentAPI: {
     getCheckoutInfo,
     getSubscriptionUpgradeOptions,
+    activateDesktopCheckout,
   },
 }))
 
@@ -574,6 +576,7 @@ describe('PaymentView payment recovery', () => {
     showError.mockReset()
     showInfo.mockReset()
     showWarning.mockReset()
+    activateDesktopCheckout.mockReset()
     bridgeInvoke.mockReset()
     window.localStorage.clear()
     ;(window as Window & { WeixinJSBridge?: { invoke: typeof bridgeInvoke } }).WeixinJSBridge = undefined
@@ -671,6 +674,67 @@ describe('PaymentView payment recovery', () => {
 
     expect(wrapper.find('[data-test="method-selector"]').text()).toBe('ldc')
   })
+
+  it('cleans the desktop checkout id before activation and reuses the existing payment launch flow', async () => {
+    routeState.query = {
+      checkout_session_id: 'desktop-session-opaque',
+      tab: 'recharge',
+    }
+    const events: string[] = []
+    routerReplace.mockImplementationOnce(async () => {
+      events.push('replace')
+    })
+    activateDesktopCheckout.mockImplementationOnce(async () => {
+      events.push('activate')
+      return {
+        data: {
+          order_id: 991,
+          amount: 25,
+          pay_amount: 25,
+          fee_rate: 0,
+          expires_at: '2099-01-01T00:10:00.000Z',
+          payment_type: 'alipay',
+          qr_code: 'https://pay.example.test/desktop-qr',
+        },
+      }
+    })
+    getCheckoutInfo.mockResolvedValue(checkoutInfoFixture({
+      methods: {
+        alipay: checkoutInfoFixture().data.methods.wxpay,
+      },
+      method_order: ['alipay'],
+    }))
+
+    const wrapper = shallowMount(PaymentView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          PaymentStatusPanel: {
+            props: ['paymentType', 'qrCode'],
+            template: '<div data-test="desktop-checkout-payment">{{ paymentType }}|{{ qrCode }}</div>',
+          },
+          Teleport: true,
+          Transition: false,
+        },
+      },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(events).toEqual(['replace', 'activate'])
+    expect(routerReplace).toHaveBeenCalledWith({
+      path: '/purchase',
+      query: { tab: 'recharge' },
+    })
+    expect(activateDesktopCheckout).toHaveBeenCalledWith('desktop-session-opaque')
+    expect(createOrder).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="desktop-checkout-payment"]').text()).toBe(
+      'alipay|https://pay.example.test/desktop-qr',
+    )
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).not.toContain(
+      'desktop-session-opaque',
+    )
+  })
 })
 
 describe('PaymentView WeChat JSAPI flow', () => {
@@ -689,6 +753,7 @@ describe('PaymentView WeChat JSAPI flow', () => {
     showError.mockReset()
     showInfo.mockReset()
     showWarning.mockReset()
+    activateDesktopCheckout.mockReset()
     getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture())
     getSubscriptionUpgradeOptions.mockReset().mockResolvedValue({ data: { options: [] } })
     bridgeInvoke.mockReset()

@@ -412,6 +412,8 @@ interface CreateOrderOptions {
   upgradeFromSubscriptionId?: number
   isResume?: boolean
   mobileQrFallbackAttempted?: boolean
+  /** Use a result returned by a hosted checkout activation without creating another order. */
+  createdResult?: CreateOrderResult
 }
 
 interface WeixinJSBridgeLike {
@@ -1005,26 +1007,33 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
   errorHintMessage.value = ''
   const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
   try {
-    const payload = buildCreateOrderPayload({
-      amount: orderAmount,
-      paymentType: requestType,
-      orderType,
-      planId,
-      upgradeFromSubscriptionId: options.upgradeFromSubscriptionId,
-      origin: typeof window !== 'undefined' ? window.location.origin : '',
-      isMobile: isMobileDevice(),
-      isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
-      forceQRCode: !!(checkout.value.alipay_force_qrcode && normalizeVisibleMethod(requestType) === 'alipay'),
-      mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
-    })
-    if (options.openid) {
-      payload.openid = options.openid
-    }
-    if (options.wechatResumeToken) {
-      payload.wechat_resume_token = options.wechatResumeToken
-    }
+    let result: CreateOrderResult & { resume_token?: string }
+    if (options.createdResult) {
+      // Desktop checkout activation already created the provider order. Reuse
+      // the returned result so a browser refresh cannot create a duplicate.
+      result = options.createdResult
+    } else {
+      const payload = buildCreateOrderPayload({
+        amount: orderAmount,
+        paymentType: requestType,
+        orderType,
+        planId,
+        upgradeFromSubscriptionId: options.upgradeFromSubscriptionId,
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+        isMobile: isMobileDevice(),
+        isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
+        forceQRCode: !!(checkout.value.alipay_force_qrcode && normalizeVisibleMethod(requestType) === 'alipay'),
+        mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
+      })
+      if (options.openid) {
+        payload.openid = options.openid
+      }
+      if (options.wechatResumeToken) {
+        payload.wechat_resume_token = options.wechatResumeToken
+      }
 
-    const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+      result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    }
     const openWindow = (url: string) => {
       const win = window.open(url, 'paymentPopup', getPaymentPopupFeatures())
       if (!win || win.closed) {
@@ -1111,7 +1120,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           resetPayment()
         } else if (errMsg && !errMsg.includes('ok')) {
           resetPayment()
-          const fallbackApplied = await attemptMobileQrFallback(
+          const fallbackApplied = !options.createdResult && await attemptMobileQrFallback(
             { reason: 'WECHAT_JSAPI_FAILED', message: errMsg },
             {
               orderAmount,
@@ -1132,7 +1141,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         }
       } catch (err: unknown) {
         resetPayment()
-        const fallbackApplied = await attemptMobileQrFallback(err, {
+        const fallbackApplied = !options.createdResult && await attemptMobileQrFallback(err, {
           orderAmount,
           orderType,
           planId,
@@ -1162,7 +1171,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     } else if (apiErr.reason === 'CANCEL_RATE_LIMITED') {
       errorMessage.value = t('payment.errors.cancelRateLimited')
       errorHintMessage.value = ''
-    } else if (await attemptMobileQrFallback(err, {
+    } else if (!options.createdResult && await attemptMobileQrFallback(err, {
       orderAmount,
       orderType,
       planId,
@@ -1350,6 +1359,58 @@ async function resumeWechatPaymentFromQuery() {
   }
 }
 
+/**
+ * A desktop client only places an opaque checkout session id in the browser
+ * URL. Once the signed-in browser loads this page, remove that id before
+ * activation so refresh/back navigation cannot replay the capability. The
+ * activation response is then routed through createOrder's existing payment
+ * launch logic; `createdResult` makes that path display/redirect the existing
+ * order without issuing a second create-order request.
+ */
+async function activateDesktopCheckoutFromQuery(): Promise<void> {
+  const rawSessionID = route.query.checkout_session_id
+  const sessionID = typeof rawSessionID === 'string' ? rawSessionID.trim() : ''
+  if (!sessionID) {
+    return
+  }
+
+  const cleanedQuery = { ...route.query }
+  delete cleanedQuery.checkout_session_id
+  await router.replace({ path: route.path, query: cleanedQuery })
+
+  try {
+    const response = await paymentAPI.activateDesktopCheckout(sessionID)
+    const activated = response.data as CreateOrderResult & {
+      order_type?: string
+      plan_id?: number
+    }
+    if (!activated || !Number.isFinite(activated.order_id) || activated.order_id <= 0) {
+      throw new Error('Invalid desktop checkout activation response')
+    }
+
+    const paymentType = (activated.payment_type || selectedMethod.value || '').trim()
+    const orderType: OrderType = activated.order_type === 'subscription' ? 'subscription' : 'balance'
+    const planID = Number.isInteger(activated.plan_id) && (activated.plan_id || 0) > 0
+      ? activated.plan_id
+      : undefined
+    const orderAmount = Number.isFinite(activated.amount) ? activated.amount : validAmount.value
+
+    await createOrder(orderAmount, orderType, planID, {
+      paymentType,
+      createdResult: activated,
+    })
+  } catch (err: unknown) {
+    errorMessage.value = extractI18nErrorMessage(
+      err,
+      t,
+      'payment.errors',
+      extractApiErrorMessage(err, t('payment.result.failed')),
+    )
+    errorHintMessage.value = ''
+    appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
+  }
+}
+
 onMounted(async () => {
   try {
     const res = await paymentAPI.getCheckoutInfo()
@@ -1382,6 +1443,7 @@ onMounted(async () => {
         removeRecoverySnapshot()
       }
     }
+    await activateDesktopCheckoutFromQuery()
     await resumeWechatPaymentFromQuery()
     if (checkout.value.balance_disabled) {
       activeTab.value = 'subscription'

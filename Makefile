@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
+.PHONY: build build-backend build-frontend build-desktop test test-backend test-frontend test-frontend-critical test-desktop desktop-frontend
 
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
@@ -26,6 +26,17 @@ build-backend:
 build-frontend:
 	@pnpm --dir frontend run build
 
+# Build the Wails client independently from the server's Vue bundle. The
+# Wails CLI is intentionally not required for the ordinary repository build;
+# native packaging is performed by .github/workflows/desktop.yml on the
+# platform runners.
+desktop-frontend:
+	@pnpm --dir desktop/frontend install --frozen-lockfile
+	@pnpm --dir desktop/frontend run build
+
+build-desktop: desktop-frontend
+	@cd desktop && GOCACHE=$${GOCACHE:-/tmp/sub2api-desktop-cache} go build ./...
+
 # 运行测试（后端 + 前端）
 test: test-backend test-frontend
 
@@ -39,3 +50,8 @@ test-frontend:
 
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
+
+test-desktop:
+	@pnpm --dir desktop/frontend install --frozen-lockfile
+	@pnpm --dir desktop/frontend run typecheck
+	@cd desktop && GOCACHE=$${GOCACHE:-/tmp/sub2api-desktop-cache} go test ./...

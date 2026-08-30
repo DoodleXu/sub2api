@@ -32,6 +32,13 @@ export const paymentAPI = {
     return apiClient.get<CheckoutInfoResponse>('/payment/checkout-info')
   },
 
+  /** Activate an opaque desktop checkout session in the authenticated browser. */
+  activateDesktopCheckout(sessionID: string) {
+    return apiClient.post<CreateOrderResult>(
+      `/desktop/checkout-sessions/${encodeURIComponent(sessionID)}/activate`,
+    )
+  },
+
   /** Get payment method limits and fee rates */
   getLimits() {
     return apiClient.get<MethodLimitsResponse>('/payment/limits')

@@ -29,4 +29,10 @@ describe('payment api', () => {
       resume_token: 'resume-token-123',
     })
   })
+
+  it('activates an opaque desktop checkout session without sending provider data', async () => {
+    await paymentAPI.activateDesktopCheckout('opaque/session id')
+
+    expect(post).toHaveBeenCalledWith('/desktop/checkout-sessions/opaque%2Fsession%20id/activate')
+  })
 })
