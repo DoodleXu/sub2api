@@ -89,28 +89,34 @@ type CreateOrderRequest struct {
 }
 
 type CreateOrderResponse struct {
-	OrderID                       int64                           `json:"order_id"`
-	Amount                        float64                         `json:"amount"`
-	PayAmount                     float64                         `json:"pay_amount"`
-	FeeRate                       float64                         `json:"fee_rate"`
-	Status                        string                          `json:"status"`
-	ResultType                    payment.CreatePaymentResultType `json:"result_type,omitempty"`
-	PaymentType                   string                          `json:"payment_type"`
-	OutTradeNo                    string                          `json:"out_trade_no,omitempty"`
-	PayURL                        string                          `json:"pay_url,omitempty"`
-	QRCode                        string                          `json:"qr_code,omitempty"`
-	ClientSecret                  string                          `json:"client_secret,omitempty"`
-	IntentID                      string                          `json:"intent_id,omitempty"`
-	Currency                      string                          `json:"currency,omitempty"`
-	CountryCode                   string                          `json:"country_code,omitempty"`
-	PaymentEnv                    string                          `json:"payment_env,omitempty"`
-	OAuth                         *payment.WechatOAuthInfo        `json:"oauth,omitempty"`
-	JSAPI                         *payment.WechatJSAPIPayload     `json:"jsapi,omitempty"`
-	JSAPIPayload                  *payment.WechatJSAPIPayload     `json:"jsapi_payload,omitempty"`
-	ExpiresAt                     time.Time                       `json:"expires_at"`
-	PaymentMode                   string                          `json:"payment_mode,omitempty"`
-	ResumeToken                   string                          `json:"resume_token,omitempty"`
-	AlipayMobilePrecreateDeepLink bool                            `json:"alipay_mobile_precreate_deep_link,omitempty"`
+	OrderID     int64                           `json:"order_id"`
+	Amount      float64                         `json:"amount"`
+	PayAmount   float64                         `json:"pay_amount"`
+	FeeRate     float64                         `json:"fee_rate"`
+	Status      string                          `json:"status"`
+	ResultType  payment.CreatePaymentResultType `json:"result_type,omitempty"`
+	PaymentType string                          `json:"payment_type"`
+	// Preserve the order selection when a hosted checkout is resumed from a
+	// desktop client. The fields are metadata only and contain no provider
+	// credential material.
+	OrderType                     string                      `json:"order_type,omitempty"`
+	PlanID                        int64                       `json:"plan_id,omitempty"`
+	UpgradeFromSubscriptionID     int64                       `json:"upgrade_from_subscription_id,omitempty"`
+	OutTradeNo                    string                      `json:"out_trade_no,omitempty"`
+	PayURL                        string                      `json:"pay_url,omitempty"`
+	QRCode                        string                      `json:"qr_code,omitempty"`
+	ClientSecret                  string                      `json:"client_secret,omitempty"`
+	IntentID                      string                      `json:"intent_id,omitempty"`
+	Currency                      string                      `json:"currency,omitempty"`
+	CountryCode                   string                      `json:"country_code,omitempty"`
+	PaymentEnv                    string                      `json:"payment_env,omitempty"`
+	OAuth                         *payment.WechatOAuthInfo    `json:"oauth,omitempty"`
+	JSAPI                         *payment.WechatJSAPIPayload `json:"jsapi,omitempty"`
+	JSAPIPayload                  *payment.WechatJSAPIPayload `json:"jsapi_payload,omitempty"`
+	ExpiresAt                     time.Time                   `json:"expires_at"`
+	PaymentMode                   string                      `json:"payment_mode,omitempty"`
+	ResumeToken                   string                      `json:"resume_token,omitempty"`
+	AlipayMobilePrecreateDeepLink bool                        `json:"alipay_mobile_precreate_deep_link,omitempty"`
 }
 
 type SubscriptionUpgradeOption struct {

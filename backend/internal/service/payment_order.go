@@ -132,6 +132,13 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err != nil {
 		return nil, err
 	}
+	if upgradeCredit != nil && plan != nil {
+		s.subscriptionSvc.InvalidateUpgradeFreeze(upgradeCredit.SubscriptionID)
+		// 风险告警异步进入 Ops 系统日志；告警失败不能阻断支付下单。
+		if source, sourceErr := s.subscriptionSvc.GetByID(ctx, upgradeCredit.SubscriptionID); sourceErr == nil {
+			s.emitSubscriptionUpgradeRiskAlert(ctx, order, source, plan, upgradeCredit)
+		}
+	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
 		update := s.entClient.PaymentOrder.UpdateOneID(order.ID).
@@ -681,11 +688,14 @@ func (s *PaymentService) buildWeChatOAuthRequiredResponse(ctx context.Context, r
 	}
 
 	return &CreateOrderResponse{
-		Amount:      amount,
-		PayAmount:   payAmount,
-		FeeRate:     feeRate,
-		ResultType:  payment.CreatePaymentResultOAuthRequired,
-		PaymentType: req.PaymentType,
+		Amount:                    amount,
+		PayAmount:                 payAmount,
+		FeeRate:                   feeRate,
+		ResultType:                payment.CreatePaymentResultOAuthRequired,
+		PaymentType:               req.PaymentType,
+		OrderType:                 req.OrderType,
+		PlanID:                    req.PlanID,
+		UpgradeFromSubscriptionID: req.UpgradeFromSubscriptionID,
 		OAuth: &payment.WechatOAuthInfo{
 			AuthorizeURL: authorizeURL,
 			AppID:        appID,
@@ -845,26 +855,29 @@ func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err 
 
 func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse, resultType payment.CreatePaymentResultType) *CreateOrderResponse {
 	return &CreateOrderResponse{
-		OrderID:      order.ID,
-		Amount:       order.Amount,
-		PayAmount:    payAmount,
-		FeeRate:      order.FeeRate,
-		Status:       OrderStatusPending,
-		ResultType:   resultType,
-		PaymentType:  req.PaymentType,
-		OutTradeNo:   order.OutTradeNo,
-		PayURL:       pr.PayURL,
-		QRCode:       pr.QRCode,
-		ClientSecret: pr.ClientSecret,
-		IntentID:     pr.IntentID,
-		Currency:     pr.Currency,
-		CountryCode:  pr.CountryCode,
-		PaymentEnv:   pr.PaymentEnv,
-		OAuth:        pr.OAuth,
-		JSAPI:        pr.JSAPI,
-		JSAPIPayload: pr.JSAPI,
-		ExpiresAt:    order.ExpiresAt,
-		PaymentMode:  sel.PaymentMode,
+		OrderID:                   order.ID,
+		Amount:                    order.Amount,
+		PayAmount:                 payAmount,
+		FeeRate:                   order.FeeRate,
+		Status:                    OrderStatusPending,
+		ResultType:                resultType,
+		PaymentType:               req.PaymentType,
+		OrderType:                 req.OrderType,
+		PlanID:                    req.PlanID,
+		UpgradeFromSubscriptionID: req.UpgradeFromSubscriptionID,
+		OutTradeNo:                order.OutTradeNo,
+		PayURL:                    pr.PayURL,
+		QRCode:                    pr.QRCode,
+		ClientSecret:              pr.ClientSecret,
+		IntentID:                  pr.IntentID,
+		Currency:                  pr.Currency,
+		CountryCode:               pr.CountryCode,
+		PaymentEnv:                pr.PaymentEnv,
+		OAuth:                     pr.OAuth,
+		JSAPI:                     pr.JSAPI,
+		JSAPIPayload:              pr.JSAPI,
+		ExpiresAt:                 order.ExpiresAt,
+		PaymentMode:               sel.PaymentMode,
 	}
 }
 

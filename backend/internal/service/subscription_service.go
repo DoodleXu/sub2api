@@ -8,9 +8,11 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -29,21 +31,22 @@ var MaxExpiresAt = time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC)
 const MaxValidityDays = 36500
 
 var (
-	ErrSubscriptionNotFound         = infraerrors.NotFound("SUBSCRIPTION_NOT_FOUND", "subscription not found")
-	ErrSubscriptionExpired          = infraerrors.Forbidden("SUBSCRIPTION_EXPIRED", "subscription has expired")
-	ErrSubscriptionSuspended        = infraerrors.Forbidden("SUBSCRIPTION_SUSPENDED", "subscription is suspended")
-	ErrSubscriptionAlreadyExists    = infraerrors.Conflict("SUBSCRIPTION_ALREADY_EXISTS", "subscription already exists for this user and group")
-	ErrSubscriptionAssignConflict   = infraerrors.Conflict("SUBSCRIPTION_ASSIGN_CONFLICT", "subscription exists but request conflicts with existing assignment semantics")
-	ErrSubscriptionNotRevoked       = infraerrors.Conflict("SUBSCRIPTION_NOT_REVOKED", "subscription is not revoked")
-	ErrSubscriptionRestoreConflict  = infraerrors.Conflict("SUBSCRIPTION_RESTORE_CONFLICT", "subscription already exists for this user and group")
-	ErrGroupNotSubscriptionType     = infraerrors.BadRequest("GROUP_NOT_SUBSCRIPTION_TYPE", "group is not a subscription type")
-	ErrInvalidInput                 = infraerrors.BadRequest("INVALID_INPUT", "at least one of resetDaily, resetWeekly, or resetMonthly must be true")
-	ErrDailyLimitExceeded           = infraerrors.TooManyRequests("DAILY_LIMIT_EXCEEDED", "daily usage limit exceeded")
-	ErrWeeklyLimitExceeded          = infraerrors.TooManyRequests("WEEKLY_LIMIT_EXCEEDED", "weekly usage limit exceeded")
-	ErrMonthlyLimitExceeded         = infraerrors.TooManyRequests("MONTHLY_LIMIT_EXCEEDED", "monthly usage limit exceeded")
-	ErrSubscriptionNilInput         = infraerrors.BadRequest("SUBSCRIPTION_NIL_INPUT", "subscription input cannot be nil")
-	ErrAdjustWouldExpire            = infraerrors.BadRequest("ADJUST_WOULD_EXPIRE", "adjustment would result in expired subscription (remaining days must be > 0)")
-	ErrSubscriptionBindingAmbiguous = infraerrors.BadRequest("SUBSCRIPTION_AMBIGUOUS", "multiple active subscriptions match; subscription_id is required")
+	ErrSubscriptionNotFound          = infraerrors.NotFound("SUBSCRIPTION_NOT_FOUND", "subscription not found")
+	ErrSubscriptionExpired           = infraerrors.Forbidden("SUBSCRIPTION_EXPIRED", "subscription has expired")
+	ErrSubscriptionSuspended         = infraerrors.Forbidden("SUBSCRIPTION_SUSPENDED", "subscription is suspended")
+	ErrSubscriptionAlreadyExists     = infraerrors.Conflict("SUBSCRIPTION_ALREADY_EXISTS", "subscription already exists for this user and group")
+	ErrSubscriptionAssignConflict    = infraerrors.Conflict("SUBSCRIPTION_ASSIGN_CONFLICT", "subscription exists but request conflicts with existing assignment semantics")
+	ErrSubscriptionNotRevoked        = infraerrors.Conflict("SUBSCRIPTION_NOT_REVOKED", "subscription is not revoked")
+	ErrSubscriptionRestoreConflict   = infraerrors.Conflict("SUBSCRIPTION_RESTORE_CONFLICT", "subscription already exists for this user and group")
+	ErrGroupNotSubscriptionType      = infraerrors.BadRequest("GROUP_NOT_SUBSCRIPTION_TYPE", "group is not a subscription type")
+	ErrInvalidInput                  = infraerrors.BadRequest("INVALID_INPUT", "at least one of resetDaily, resetWeekly, or resetMonthly must be true")
+	ErrDailyLimitExceeded            = infraerrors.TooManyRequests("DAILY_LIMIT_EXCEEDED", "daily usage limit exceeded")
+	ErrWeeklyLimitExceeded           = infraerrors.TooManyRequests("WEEKLY_LIMIT_EXCEEDED", "weekly usage limit exceeded")
+	ErrMonthlyLimitExceeded          = infraerrors.TooManyRequests("MONTHLY_LIMIT_EXCEEDED", "monthly usage limit exceeded")
+	ErrSubscriptionNilInput          = infraerrors.BadRequest("SUBSCRIPTION_NIL_INPUT", "subscription input cannot be nil")
+	ErrAdjustWouldExpire             = infraerrors.BadRequest("ADJUST_WOULD_EXPIRE", "adjustment would result in expired subscription (remaining days must be > 0)")
+	ErrSubscriptionBindingAmbiguous  = infraerrors.BadRequest("SUBSCRIPTION_AMBIGUOUS", "multiple active subscriptions match; subscription_id is required")
+	ErrSubscriptionUpgradeInProgress = infraerrors.Conflict("SUBSCRIPTION_UPGRADE_IN_PROGRESS", "subscription is reserved for a pending upgrade")
 )
 
 // SubscriptionService 订阅服务
@@ -62,6 +65,14 @@ type SubscriptionService struct {
 	maintenanceQueue           *SubscriptionMaintenanceQueue
 	subCacheInvalidationCancel context.CancelFunc
 	now                        func() time.Time
+	upgradeFreezeMu            sync.Mutex
+	upgradeFreezeCache         map[int64]subscriptionUpgradeFreezeEntry
+}
+
+type subscriptionUpgradeFreezeEntry struct {
+	frozen      bool
+	frozenUntil time.Time
+	expiresAt   time.Time
 }
 
 // NewSubscriptionService 创建订阅服务
@@ -72,6 +83,7 @@ func NewSubscriptionService(groupRepo GroupRepository, userSubRepo UserSubscript
 		billingCacheService: billingCacheService,
 		entClient:           entClient,
 		now:                 time.Now,
+		upgradeFreezeCache:  make(map[int64]subscriptionUpgradeFreezeEntry),
 	}
 	svc.initSubCache(cfg)
 	svc.initMaintenanceQueue(cfg)
@@ -1212,6 +1224,58 @@ func (s *SubscriptionService) CheckUsageLimits(ctx context.Context, sub *UserSub
 		return ErrMonthlyLimitExceeded
 	}
 	return nil
+}
+
+// RejectIfUpgradeReserved blocks new gateway usage while an upgrade order is
+// awaiting payment or fulfillment. A short in-process cache prevents a query
+// on every request while keeping the reservation bounded by the order timeout.
+func (s *SubscriptionService) RejectIfUpgradeReserved(ctx context.Context, subscriptionID int64) error {
+	if s == nil || s.entClient == nil || subscriptionID <= 0 {
+		return nil
+	}
+	now := time.Now()
+	s.upgradeFreezeMu.Lock()
+	if entry, ok := s.upgradeFreezeCache[subscriptionID]; ok && now.Before(entry.frozenUntil) {
+		s.upgradeFreezeMu.Unlock()
+		if entry.frozen {
+			return ErrSubscriptionUpgradeInProgress
+		}
+		return nil
+	}
+	delete(s.upgradeFreezeCache, subscriptionID)
+	s.upgradeFreezeMu.Unlock()
+
+	order, err := s.entClient.PaymentOrder.Query().Where(
+		paymentorder.UpgradeFromSubscriptionIDEQ(subscriptionID),
+		paymentorder.UpgradeClaimActiveEQ(true),
+		paymentorder.StatusIn("pending", "paid", "recharging"),
+	).Order(dbent.Desc(paymentorder.FieldUpdatedAt)).First(ctx)
+	if err != nil {
+		if dbent.IsNotFound(err) {
+			s.upgradeFreezeMu.Lock()
+			s.upgradeFreezeCache[subscriptionID] = subscriptionUpgradeFreezeEntry{frozenUntil: now.Add(2 * time.Second)}
+			s.upgradeFreezeMu.Unlock()
+			return nil
+		}
+		return err
+	}
+	until := order.ExpiresAt
+	if until.Before(now.Add(time.Minute)) {
+		until = now.Add(time.Minute)
+	}
+	s.upgradeFreezeMu.Lock()
+	s.upgradeFreezeCache[subscriptionID] = subscriptionUpgradeFreezeEntry{frozen: true, frozenUntil: until, expiresAt: order.ExpiresAt}
+	s.upgradeFreezeMu.Unlock()
+	return ErrSubscriptionUpgradeInProgress
+}
+
+func (s *SubscriptionService) InvalidateUpgradeFreeze(subscriptionID int64) {
+	if s == nil || subscriptionID <= 0 {
+		return
+	}
+	s.upgradeFreezeMu.Lock()
+	delete(s.upgradeFreezeCache, subscriptionID)
+	s.upgradeFreezeMu.Unlock()
 }
 
 // ValidateAndCheckLimits 合并验证+限额检查（中间件热路径专用）

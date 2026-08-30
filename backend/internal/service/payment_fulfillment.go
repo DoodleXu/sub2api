@@ -988,17 +988,26 @@ func (s *PaymentService) markFailed(ctx context.Context, oid int64, lease *payme
 	now := time.Now()
 	r := psErrMsg(cause)
 	// The lease version prevents a stale worker from overwriting a newer owner.
-	c, e := s.entClient.PaymentOrder.Update().
+	update := s.entClient.PaymentOrder.Update().
 		Where(
 			paymentorder.IDEQ(oid),
 			paymentorder.StatusEQ(OrderStatusRecharging),
 			paymentorder.UpdatedAtEQ(lease.version),
 		).
-		SetStatus(OrderStatusFailed).SetFailedAt(now).SetFailedReason(r).Save(ctx)
+		SetStatus(OrderStatusFailed).SetFailedAt(now).SetFailedReason(r)
+	if infraerrors.Reason(cause) == "UPGRADE_CREDIT_STALE" || infraerrors.Reason(cause) == "UPGRADE_SOURCE_QUOTA_EXHAUSTED" {
+		// Release the source reservation so the original subscription is usable
+		// while support handles the paid order.
+		update.SetUpgradeClaimActive(false)
+	}
+	c, e := update.Save(ctx)
 	if e != nil {
 		slog.Error("mark FAILED", "orderID", oid, "error", e)
 	}
 	if c > 0 {
+		if o, err := s.entClient.PaymentOrder.Get(ctx, oid); err == nil && o.UpgradeFromSubscriptionID != nil && s.subscriptionSvc != nil {
+			s.subscriptionSvc.InvalidateUpgradeFreeze(*o.UpgradeFromSubscriptionID)
+		}
 		s.writeAuditLog(ctx, oid, "FULFILLMENT_FAILED", "system", map[string]any{"reason": r})
 	}
 }

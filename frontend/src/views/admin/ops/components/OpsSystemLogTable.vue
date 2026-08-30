@@ -158,6 +158,18 @@ const formatSystemLogDetail = (row: OpsSystemLog) => {
   const err = getExtraString(extra, 'err') || getExtraString(extra, 'error')
   if (err) parts.push(`error=${err}`)
 
+  // Payment and security risk events carry structured identifiers in extra;
+  // surface the stable fields in the table so an operator can triage without
+  // opening raw logs or correlating by timestamp.
+  const riskCode = getExtraString(extra, 'risk_code')
+  const orderID = getExtraString(extra, 'order_id')
+  const subscriptionID = getExtraString(extra, 'subscription_id') || getExtraString(extra, 'source_subscription_id')
+  const targetGroupID = getExtraString(extra, 'target_group_id')
+  if (riskCode) parts.push(`risk=${riskCode}`)
+  if (orderID) parts.push(`order=${orderID}`)
+  if (subscriptionID) parts.push(`subscription=${subscriptionID}`)
+  if (targetGroupID) parts.push(`target_group=${targetGroupID}`)
+
   // 用空格拼接，交给 CSS 自动换行，尽量“填满再换行”。
   return parts.join('  ')
 }

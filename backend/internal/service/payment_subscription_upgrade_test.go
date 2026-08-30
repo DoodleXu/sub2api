@@ -20,6 +20,12 @@ func TestSubscriptionUpgradePayableHasMinimum(t *testing.T) {
 	require.Equal(t, 12.35, subscriptionUpgradeCreditAmount(100, 12.345))
 }
 
+func TestSubscriptionUpgradeTargetMustBeMoreExpensive(t *testing.T) {
+	require.Error(t, validateSubscriptionUpgradeTargetPrice(10, 10))
+	require.Error(t, validateSubscriptionUpgradeTargetPrice(9.99, 10))
+	require.NoError(t, validateSubscriptionUpgradeTargetPrice(10.01, 10))
+}
+
 func TestDaysRemainingFromNowCeilsPartialDays(t *testing.T) {
 	require.Equal(t, 2, daysRemainingFromNow(time.Now().Add(25*time.Hour)))
 	require.Equal(t, 1, daysRemainingFromNow(time.Now().Add(1*time.Minute)))
@@ -169,6 +175,11 @@ func TestCalculateSubscriptionUpgradeCreditUsesRemainingDaysAndMinimumPayable(t 
 	require.Equal(t, 99.99, credit.CreditAmount)
 	require.GreaterOrEqual(t, credit.CreditDays, 19)
 	require.LessOrEqual(t, credit.CreditDays, 20)
+	_, err = svc.calculateSubscriptionUpgradeCredit(ctx, user.ID, &UserSubscription{
+		ID: 55, UserID: user.ID, GroupID: group.ID, Status: SubscriptionStatusActive,
+		ExpiresAt: time.Now().Add(20 * 24 * time.Hour),
+	}, &dbent.SubscriptionPlan{ID: 100, GroupID: group.ID, Price: 100})
+	require.Equal(t, "UPGRADE_SAME_PLAN_NOT_ALLOWED", infraerrors.Reason(err))
 
 	order, err := client.PaymentOrder.Query().Where(paymentorder.UserIDEQ(user.ID)).Only(ctx)
 	require.NoError(t, err)
@@ -399,7 +410,7 @@ func TestCreateOrderAppliesSubscriptionUpgradeCreditAndMinimumPayable(t *testing
 		SetPaymentType(payment.TypeEasyPay).
 		SetPaymentTradeNo("trade-upgrade-create-source").
 		SetOrderType(payment.OrderTypeSubscription).
-		SetPlanID(1).
+		SetPlanID(999).
 		SetSubscriptionGroupID(group.ID).
 		SetSubscriptionDays(30).
 		SetStatus(OrderStatusCompleted).

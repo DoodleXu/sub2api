@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 )
 
 const minimumSubscriptionUpgradePayable = 0.01
+
+const subscriptionUpgradeRiskUsageThreshold = 0.90
 
 type subscriptionUpgradeCredit struct {
 	SubscriptionID int64
@@ -118,6 +122,11 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 	if err != nil {
 		return subscriptionUpgradeCredit{}, err
 	}
+	for _, order := range orders {
+		if order != nil && order.PlanID != nil && *order.PlanID == targetPlan.ID {
+			return subscriptionUpgradeCredit{}, infraerrors.BadRequest("UPGRADE_SAME_PLAN_NOT_ALLOWED", "the same subscription plan must be renewed instead of upgraded")
+		}
+	}
 	paidAmount, paidDays := subscriptionUpgradePaidTotals(orders)
 	if paidDays <= 0 || paidAmount <= 0 {
 		return subscriptionUpgradeCredit{}, nil
@@ -128,6 +137,9 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 		return subscriptionUpgradeCredit{}, nil
 	}
 	unit := decimal.NewFromFloat(paidAmount).Div(decimal.NewFromInt(int64(paidDays)))
+	if err := validateSubscriptionUpgradeTargetPrice(targetPlan.Price, unit.InexactFloat64()); err != nil {
+		return subscriptionUpgradeCredit{}, err
+	}
 	rawCredit := unit.Mul(decimal.NewFromInt(int64(remainingDays))).Round(2).InexactFloat64()
 	if rawCredit <= 0 {
 		return subscriptionUpgradeCredit{}, nil
@@ -139,6 +151,13 @@ func (s *PaymentService) calculateSubscriptionUpgradeCredit(ctx context.Context,
 	}, nil
 }
 
+func validateSubscriptionUpgradeTargetPrice(targetPrice, sourceUnitPrice float64) error {
+	if targetPrice <= sourceUnitPrice {
+		return infraerrors.BadRequest("UPGRADE_TARGET_NOT_HIGHER", "target subscription plan must be strictly more expensive than the source plan")
+	}
+	return nil
+}
+
 func (s *PaymentService) validateSubscriptionUpgradeSourceForFulfillment(ctx context.Context, sub *UserSubscription, order *dbent.PaymentOrder) error {
 	if err := s.validateSubscriptionUpgradeSourceIdentity(ctx, sub, order); err != nil {
 		return err
@@ -146,7 +165,91 @@ func (s *PaymentService) validateSubscriptionUpgradeSourceForFulfillment(ctx con
 	if sub.Status != SubscriptionStatusActive || !sub.ExpiresAt.After(time.Now()) {
 		return infraerrors.BadRequest("UPGRADE_SUBSCRIPTION_NOT_ACTIVE", "selected subscription is no longer active")
 	}
+	group := sub.Group
+	if group == nil && s.groupRepo != nil {
+		group, _ = s.groupRepo.GetByID(ctx, sub.GroupID)
+	}
+	if group != nil {
+		if (group.DailyLimitUSD != nil && sub.DailyUsageUSD >= *group.DailyLimitUSD) ||
+			(group.WeeklyLimitUSD != nil && sub.WeeklyUsageUSD >= *group.WeeklyLimitUSD) ||
+			(group.MonthlyLimitUSD != nil && sub.MonthlyUsageUSD >= *group.MonthlyLimitUSD) {
+			return infraerrors.Conflict("UPGRADE_SOURCE_QUOTA_EXHAUSTED", "source subscription quota was exhausted before fulfillment; please create a new order")
+		}
+	}
+	if order.PlanID != nil && s.configService != nil {
+		plan, err := s.configService.GetPlan(ctx, *order.PlanID)
+		if err != nil {
+			return infraerrors.BadRequest("UPGRADE_PLAN_NOT_AVAILABLE", "upgrade target plan is no longer available")
+		}
+		current, err := s.calculateSubscriptionUpgradeCredit(ctx, order.UserID, sub, plan)
+		if err != nil {
+			return err
+		}
+		if order.UpgradeCreditDays == nil || current.SubscriptionID != sub.ID || current.CreditDays != *order.UpgradeCreditDays || math.Abs(current.CreditAmount-order.UpgradeCreditAmount) > 0.005 {
+			return infraerrors.Conflict("UPGRADE_CREDIT_STALE", "subscription upgrade credit changed after the order was created; please create a new order")
+		}
+	}
 	return nil
+}
+
+// emitSubscriptionUpgradeRiskAlert records a structured warning in the Ops
+// system-log sink. It is deliberately best-effort: an alert failure must never
+// make an otherwise valid payment order fail.
+func (s *PaymentService) emitSubscriptionUpgradeRiskAlert(ctx context.Context, order *dbent.PaymentOrder, sub *UserSubscription, plan *dbent.SubscriptionPlan, credit *subscriptionUpgradeCredit) {
+	if order == nil || sub == nil || plan == nil || credit == nil {
+		return
+	}
+	group := sub.Group
+	if group == nil && s.groupRepo != nil {
+		group, _ = s.groupRepo.GetByID(ctx, sub.GroupID)
+	}
+	reasons := make([]string, 0, 4)
+	usageRatio := func(used float64, limit *float64, name string) float64 {
+		if limit == nil || *limit <= 0 {
+			return 0
+		}
+		ratio := used / *limit
+		if ratio >= subscriptionUpgradeRiskUsageThreshold {
+			reasons = append(reasons, fmt.Sprintf("%s_usage_%.0f%%", name, ratio*100))
+		}
+		return ratio
+	}
+	dailyRatio, weeklyRatio, monthlyRatio := 0.0, 0.0, 0.0
+	if group != nil {
+		dailyRatio = usageRatio(sub.DailyUsageUSD, group.DailyLimitUSD, "daily")
+		weeklyRatio = usageRatio(sub.WeeklyUsageUSD, group.WeeklyLimitUSD, "weekly")
+		monthlyRatio = usageRatio(sub.MonthlyUsageUSD, group.MonthlyLimitUSD, "monthly")
+	}
+	creditRatio := 0.0
+	if plan.Price > 0 {
+		creditRatio = credit.CreditAmount / plan.Price
+		if creditRatio >= subscriptionUpgradeRiskUsageThreshold {
+			reasons = append(reasons, fmt.Sprintf("credit_%.0f%%", creditRatio*100))
+		}
+	}
+	if subscriptionUpgradePayableAmount(plan.Price, credit.CreditAmount) <= minimumSubscriptionUpgradePayable {
+		reasons = append(reasons, "minimum_payable")
+	}
+	if len(reasons) == 0 {
+		return
+	}
+	slog.WarnContext(ctx, "high-risk subscription upgrade detected",
+		"component", "payment.upgrade_risk",
+		"risk_code", "SUBSCRIPTION_UPGRADE_HIGH_RISK",
+		"order_id", order.ID,
+		"user_id", order.UserID,
+		"subscription_id", sub.ID,
+		"plan_id", plan.ID,
+		"group_id", sub.GroupID,
+		"reasons", reasons,
+		"daily_usage_ratio", dailyRatio,
+		"weekly_usage_ratio", weeklyRatio,
+		"monthly_usage_ratio", monthlyRatio,
+		"credit_ratio", creditRatio,
+		"credit_amount", credit.CreditAmount,
+		"credit_days", credit.CreditDays,
+		"payable_amount", subscriptionUpgradePayableAmount(plan.Price, credit.CreditAmount),
+	)
 }
 
 func (s *PaymentService) validateSubscriptionUpgradeSourceIdentity(ctx context.Context, sub *UserSubscription, order *dbent.PaymentOrder) error {

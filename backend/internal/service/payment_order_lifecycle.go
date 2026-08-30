@@ -136,6 +136,9 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 		return "", fmt.Errorf("update order status: %w", err)
 	}
 	if c > 0 {
+		if o.UpgradeFromSubscriptionID != nil && s.subscriptionSvc != nil {
+			s.subscriptionSvc.InvalidateUpgradeFreeze(*o.UpgradeFromSubscriptionID)
+		}
 		auditAction := "ORDER_CANCELLED"
 		if fs == OrderStatusExpired {
 			auditAction = "ORDER_EXPIRED"

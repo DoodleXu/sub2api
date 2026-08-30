@@ -173,6 +173,14 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
+		if !billingInfoRequest && subscriptionService != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
+			if frozenSub, freezeLookupErr := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey); freezeLookupErr == nil {
+				if freezeErr := subscriptionService.RejectIfUpgradeReserved(c.Request.Context(), frozenSub.ID); freezeErr != nil {
+					AbortWithError(c, 409, "SUBSCRIPTION_UPGRADE_IN_PROGRESS", freezeErr.Error())
+					return
+				}
+			}
+		}
 		if cfg.RunMode == config.RunModeSimple {
 			c.Set(string(ContextKeyAPIKey), apiKey)
 			c.Set(string(ContextKeyUser), AuthSubject{
@@ -231,6 +239,10 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 
 			// 订阅模式：验证订阅限额
 			if subscription != nil {
+				if freezeErr := subscriptionService.RejectIfUpgradeReserved(c.Request.Context(), subscription.ID); freezeErr != nil {
+					AbortWithError(c, 409, "SUBSCRIPTION_UPGRADE_IN_PROGRESS", freezeErr.Error())
+					return
+				}
 				needsMaintenance, validateErr := subscriptionService.ValidateAndCheckLimits(subscription, apiKey.Group)
 				if needsMaintenance {
 					refreshed, maintenanceErr := subscriptionService.EnsureWindowMaintenance(c.Request.Context(), subscription)

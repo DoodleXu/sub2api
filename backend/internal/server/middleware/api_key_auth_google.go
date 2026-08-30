@@ -125,6 +125,16 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 
+		// 即使简易模式跳过额度计算，也不能绕过升级期间的来源订阅冻结。
+		if subscriptionService != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
+			if frozenSub, freezeLookupErr := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey); freezeLookupErr == nil {
+				if freezeErr := subscriptionService.RejectIfUpgradeReserved(c.Request.Context(), frozenSub.ID); freezeErr != nil {
+					abortWithGoogleError(c, 409, freezeErr.Error())
+					return
+				}
+			}
+		}
+
 		// 简易模式：跳过余额和订阅检查
 		if cfg.RunMode == config.RunModeSimple {
 			c.Set(string(ContextKeyAPIKey), apiKey)
@@ -161,6 +171,10 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			subscription, err := resolveAPIKeySubscription(c.Request.Context(), subscriptionService, apiKey)
 			if err != nil {
 				abortWithGoogleError(c, 403, "No active subscription found for this group")
+				return
+			}
+			if freezeErr := subscriptionService.RejectIfUpgradeReserved(c.Request.Context(), subscription.ID); freezeErr != nil {
+				abortWithGoogleError(c, 409, freezeErr.Error())
 				return
 			}
 
