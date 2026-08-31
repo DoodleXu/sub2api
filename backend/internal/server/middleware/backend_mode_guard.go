@@ -1,9 +1,6 @@
 package middleware
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -39,8 +36,6 @@ func backendModeAllowsAuthPath(path string) bool {
 		"/auth/passkey/login/finish",
 		"/auth/logout",
 		"/auth/refresh",
-		"/auth/device/logout",
-		"/desktop/logout",
 	} {
 		if strings.HasSuffix(path, suffix) {
 			return true
@@ -78,37 +73,6 @@ func backendModeAllowsAuthPath(path string) bool {
 	return strings.Contains(path, "/auth/oauth/pending/")
 }
 
-const maxDesktopTokenGuardBody = 16 << 10
-
-func isDesktopTokenPath(path string) bool {
-	path = strings.ToLower(strings.TrimSpace(path))
-	return strings.HasSuffix(path, "/auth/device/token") || strings.HasSuffix(path, "/desktop/token")
-}
-
-// backendModeAllowsDesktopRefresh permits rotation of an already-issued
-// desktop session while keeping the device-code enrollment grant disabled.
-// The token endpoint intentionally multiplexes both grant types, so the guard
-// has to inspect the small JSON request and restore it for Gin's binder.
-func backendModeAllowsDesktopRefresh(c *gin.Context) bool {
-	if c == nil || c.Request == nil || c.Request.Body == nil {
-		return false
-	}
-	body := c.Request.Body
-	data, err := io.ReadAll(io.LimitReader(body, maxDesktopTokenGuardBody+1))
-	_ = body.Close()
-	c.Request.Body = io.NopCloser(bytes.NewReader(data))
-	if err != nil || len(data) > maxDesktopTokenGuardBody {
-		return false
-	}
-	var request struct {
-		GrantType string `json:"grant_type"`
-	}
-	if err := json.Unmarshal(data, &request); err != nil {
-		return false
-	}
-	return strings.TrimSpace(request.GrantType) == "refresh_token"
-}
-
 // BackendModeAuthGuard selectively blocks auth endpoints when backend mode is enabled.
 // Allows the minimal auth surface admins still need in backend mode, including
 // OAuth callbacks and pending continuations. Handler-level backend mode checks
@@ -119,17 +83,7 @@ func BackendModeAuthGuard(settingService *service.SettingService) gin.HandlerFun
 			c.Next()
 			return
 		}
-		path := c.Request.URL.Path
-		if isDesktopTokenPath(path) {
-			if backendModeAllowsDesktopRefresh(c) {
-				c.Next()
-				return
-			}
-			response.Forbidden(c, "Backend mode is active. New desktop enrollment is disabled.")
-			c.Abort()
-			return
-		}
-		if backendModeAllowsAuthPath(path) {
+		if backendModeAllowsAuthPath(c.Request.URL.Path) {
 			c.Next()
 			return
 		}

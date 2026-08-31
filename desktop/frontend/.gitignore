@@ -1,7 +1,0 @@
-# Vite output is embedded by the Go build. Keep only the source placeholder in
-# git; hashed assets and the generated index must never make the worktree
-# dirty after a local build.
-dist/*
-!dist/.gitkeep
-node_modules/
-*.local

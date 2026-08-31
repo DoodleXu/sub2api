@@ -711,11 +711,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Browser refresh is intentionally separate from the sender-constrained
-	// desktop token endpoint. The service checks the cached token metadata before
-	// consuming it, so a copied desktop refresh token cannot force rotation via
-	// this legacy bearer-compatible route.
-	result, err := h.authService.RefreshTokenPairForBrowser(c.Request.Context(), req.RefreshToken)
+	result, err := h.authService.RefreshTokenPair(c.Request.Context(), req.RefreshToken)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -754,7 +750,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 
 	// 如果提供了Refresh Token，撤销它
 	if req.RefreshToken != "" {
-		if err := h.authService.RevokeRefreshTokenForBrowser(c.Request.Context(), req.RefreshToken); err != nil {
+		if err := h.authService.RevokeRefreshToken(c.Request.Context(), req.RefreshToken); err != nil {
 			slog.Debug("failed to revoke refresh token", "error", err)
 			// 不影响登出流程
 		}

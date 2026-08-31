@@ -173,9 +173,6 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
-	clientCapabilitiesHandler *ClientCapabilitiesHandler,
-	desktopDeviceHandler *DesktopDeviceHandler,
-	desktopCheckoutHandler *DesktopCheckoutHandler,
 	authHandler *AuthHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
@@ -203,40 +200,34 @@ func ProvideHandlers(
 	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
 	return &Handlers{
-		ClientCapabilities: clientCapabilitiesHandler,
-		DesktopDevice:      desktopDeviceHandler,
-		DesktopCheckout:    desktopCheckoutHandler,
-		Auth:               authHandler,
-		User:               userHandler,
-		APIKey:             apiKeyHandler,
-		Usage:              usageHandler,
-		Redeem:             redeemHandler,
-		Subscription:       subscriptionHandler,
-		Announcement:       announcementHandler,
-		DailyCheckin:       dailyCheckinHandler,
-		ChannelMonitor:     channelMonitorUserHandler,
-		ChannelMonitorV2:   channelMonitorV2Handler,
-		Admin:              adminHandlers,
-		Gateway:            gatewayHandler,
-		OpenAIGateway:      openaiGatewayHandler,
-		Setting:            settingHandler,
-		Totp:               totpHandler,
-		Passkey:            passkeyHandler,
-		Payment:            paymentHandler,
-		PaymentWebhook:     paymentWebhookHandler,
-		AvailableChannel:   availableChannelHandler,
-		ModelPlaza:         modelPlazaHandler,
-		AsyncImage:         asyncImageHandler,
-		BatchImage:         batchImageHandler,
+		Auth:             authHandler,
+		User:             userHandler,
+		APIKey:           apiKeyHandler,
+		Usage:            usageHandler,
+		Redeem:           redeemHandler,
+		Subscription:     subscriptionHandler,
+		Announcement:     announcementHandler,
+		DailyCheckin:     dailyCheckinHandler,
+		ChannelMonitor:   channelMonitorUserHandler,
+		ChannelMonitorV2: channelMonitorV2Handler,
+		Admin:            adminHandlers,
+		Gateway:          gatewayHandler,
+		OpenAIGateway:    openaiGatewayHandler,
+		Setting:          settingHandler,
+		Totp:             totpHandler,
+		Passkey:          passkeyHandler,
+		Payment:          paymentHandler,
+		PaymentWebhook:   paymentWebhookHandler,
+		AvailableChannel: availableChannelHandler,
+		ModelPlaza:       modelPlazaHandler,
+		AsyncImage:       asyncImageHandler,
+		BatchImage:       batchImageHandler,
 	}
 }
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
-	ProvideClientCapabilitiesHandler,
-	NewDesktopDeviceHandler,
-	NewDesktopCheckoutHandler,
 	NewAuthHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
@@ -301,9 +292,3 @@ var ProviderSet = wire.NewSet(
 	ProvideAdminHandlers,
 	ProvideHandlers,
 )
-
-// ProvideClientCapabilitiesHandler injects build metadata without coupling the
-// handler to the command package's Wire setup.
-func ProvideClientCapabilitiesHandler(settingService *service.SettingService, buildInfo BuildInfo, apiKeyService *service.APIKeyService) *ClientCapabilitiesHandler {
-	return NewClientCapabilitiesHandler(settingService, buildInfo, apiKeyService)
-}

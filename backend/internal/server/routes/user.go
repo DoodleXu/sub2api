@@ -35,52 +35,18 @@ func RegisterUserRoutes(
 		// 用户接口
 		user := authenticated.Group("/user")
 		{
-			if h != nil && h.DesktopDevice != nil {
-				// Browser approval never returns credentials to the desktop client.
-				// A device token may read its own device list, but it must not be
-				// able to approve a second authorization request. Approval is an
-				// interactive browser consent action and therefore explicitly
-				// rejects all desktop JWTs.
-				user.GET("/device/approval", servermiddleware.RequireBrowserSession(), h.DesktopDevice.ApprovalDetails)
-				user.POST("/device/approve", servermiddleware.RequireBrowserSession(), h.DesktopDevice.Approve)
-				devices := user.Group("/devices")
-				devices.GET("", servermiddleware.RequireDesktopScope("profile"), h.DesktopDevice.List)
-				devices.DELETE("/:device_id", servermiddleware.RequireDesktopScope("profile"), servermiddleware.RequireOwnDesktopDevice("device_id"), h.DesktopDevice.Revoke)
-			}
-			// The profile DTO includes the current account balance. Require both
-			// consent scopes so a profile-only desktop grant cannot read balance
-			// data through this composite response.
-			user.GET("/profile", servermiddleware.RequireDesktopScopes("profile", "balance"), h.User.GetProfile)
-			user.GET("/balance", servermiddleware.RequireDesktopScope("balance"), h.User.GetBalance)
-			// A device grant must never be able to rotate the account password,
-			// alter profile/identity bindings, or mutate MFA/passkey state. Those
-			// operations remain available to the browser session only.
-			user.PUT("/password", servermiddleware.RequireBrowserSession(), h.User.ChangePassword)
-			user.PUT("", servermiddleware.RequireBrowserSession(), h.User.UpdateProfile)
-			user.GET("/aff", servermiddleware.RequireDesktopScope("profile"), h.User.GetAffiliate)
-			// Balance scope is read-only. Quota transfers remain an interactive
-			// browser operation and are never exposed through a desktop grant.
-			user.POST("/aff/transfer", servermiddleware.RequireBrowserSession(), h.User.TransferAffiliateQuota)
-			user.POST("/account-bindings/email/send-code", servermiddleware.RequireBrowserSession(), h.User.SendEmailBindingCode)
-			user.POST("/account-bindings/email", servermiddleware.RequireBrowserSession(), h.User.BindEmailIdentity)
-			user.DELETE("/account-bindings/:provider", servermiddleware.RequireBrowserSession(), h.User.UnbindIdentity)
-			user.POST("/auth-identities/bind/start", servermiddleware.RequireBrowserSession(), h.User.StartIdentityBinding)
-			user.GET("/api-keys/:id/usage/daily", panelRateLimiter.Heavy(), servermiddleware.RequireDesktopScope("usage"), h.Usage.GetMyAPIKeyDailyUsage)
-			user.GET("/platform-quotas", servermiddleware.RequireDesktopScope("usage"), h.User.GetMyPlatformQuotas)
-
-			// 生图任务历史只按 JWT 用户归属读取；资产 URL 在读取时重新签发，
-			// 不把 API Key 或对象键暴露给桌面客户端。
-			imageTasks := user.Group("/image-tasks")
-			imageTasks.Use(panelRateLimiter.Heavy())
-			imageTasks.Use(servermiddleware.RequireDesktopScope("images"))
-			{
-				imageTasks.GET("", h.AsyncImage.ListUser)
-				imageTasks.GET("/:task_id/assets/:index", h.AsyncImage.GetUserAsset)
-				imageTasks.GET("/:task_id", h.AsyncImage.GetUser)
-				imageTasks.DELETE("/:task_id", h.AsyncImage.DeleteUser)
-			}
-
-			user.GET("/checkin/status", servermiddleware.RequireDesktopScope("checkin"), h.DailyCheckin.Status)
+			user.GET("/profile", h.User.GetProfile)
+			user.PUT("/password", h.User.ChangePassword)
+			user.PUT("", h.User.UpdateProfile)
+			user.GET("/aff", h.User.GetAffiliate)
+			user.POST("/aff/transfer", h.User.TransferAffiliateQuota)
+			user.POST("/account-bindings/email/send-code", h.User.SendEmailBindingCode)
+			user.POST("/account-bindings/email", h.User.BindEmailIdentity)
+			user.DELETE("/account-bindings/:provider", h.User.UnbindIdentity)
+			user.POST("/auth-identities/bind/start", h.User.StartIdentityBinding)
+			user.GET("/api-keys/:id/usage/daily", panelRateLimiter.Heavy(), h.Usage.GetMyAPIKeyDailyUsage)
+			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
+			user.GET("/checkin/status", h.DailyCheckin.Status)
 			user.POST("/checkin", rateLimiter.LimitWithOptions("user-checkin", 6, time.Minute, ratelimitmiddleware.RateLimitOptions{
 				FailureMode: ratelimitmiddleware.RateLimitFailClose,
 				KeyFunc: func(c *gin.Context) string {
@@ -90,12 +56,11 @@ func RegisterUserRoutes(
 					}
 					return "ip:" + c.ClientIP()
 				},
-			}), servermiddleware.RequireDesktopScope("checkin"), h.DailyCheckin.CheckIn)
+			}), h.DailyCheckin.CheckIn)
 
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")
 			{
-				notifyEmail.Use(servermiddleware.RequireBrowserSession())
 				notifyEmail.POST("/send-code", h.User.SendNotifyEmailCode)
 				notifyEmail.POST("/verify", h.User.VerifyNotifyEmail)
 				notifyEmail.PUT("/toggle", h.User.ToggleNotifyEmail)
@@ -105,7 +70,6 @@ func RegisterUserRoutes(
 			// TOTP 双因素认证
 			totp := user.Group("/totp")
 			{
-				totp.Use(servermiddleware.RequireBrowserSession())
 				totp.GET("/status", h.Totp.GetStatus)
 				totp.GET("/verification-method", h.Totp.GetVerificationMethod)
 				totp.POST("/send-code", h.Totp.SendVerifyCode)
@@ -118,7 +82,6 @@ func RegisterUserRoutes(
 
 			passkeys := user.Group("/passkeys")
 			{
-				passkeys.Use(servermiddleware.RequireBrowserSession())
 				passkeys.GET("", h.Passkey.List)
 				passkeys.POST("/register/begin", h.Passkey.BeginRegistration)
 				passkeys.POST("/register/finish", h.Passkey.FinishRegistration)
@@ -130,64 +93,60 @@ func RegisterUserRoutes(
 		// API Key管理
 		keys := authenticated.Group("/keys")
 		{
-			keys.GET("", servermiddleware.RequireDesktopScope("api_keys"), h.APIKey.List)
-			keys.GET("/:id", servermiddleware.RequireDesktopScope("api_keys"), h.APIKey.GetByID)
-			keys.POST("", servermiddleware.RejectDesktopToken(), h.APIKey.Create)
-			keys.PUT("/:id", servermiddleware.RejectDesktopToken(), h.APIKey.Update)
-			keys.DELETE("/:id", servermiddleware.RejectDesktopToken(), h.APIKey.Delete)
+			keys.GET("", h.APIKey.List)
+			keys.GET("/:id", h.APIKey.GetByID)
+			keys.POST("", h.APIKey.Create)
+			keys.PUT("/:id", h.APIKey.Update)
+			keys.DELETE("/:id", h.APIKey.Delete)
 		}
 
 		// 用户可用分组（非管理员接口）
 		groups := authenticated.Group("/groups")
 		{
-			groups.GET("/available", servermiddleware.RequireDesktopScope("profile"), h.APIKey.GetAvailableGroups)
-			groups.GET("/rates", servermiddleware.RequireDesktopScope("profile"), h.APIKey.GetUserGroupRates)
+			groups.GET("/available", h.APIKey.GetAvailableGroups)
+			groups.GET("/rates", h.APIKey.GetUserGroupRates)
 		}
 
 		// 用户可用渠道（非管理员接口）
 		channels := authenticated.Group("/channels")
 		{
-			channels.GET("/available", servermiddleware.RequireDesktopScope("profile"), h.AvailableChannel.List)
+			channels.GET("/available", h.AvailableChannel.List)
 		}
 
 		// 使用记录（聚合统计属重查询，叠加更严格的按用户限流）
 		usage := authenticated.Group("/usage")
 		usage.Use(panelRateLimiter.Heavy())
 		{
-			usage.GET("", servermiddleware.RequireDesktopScope("usage"), h.Usage.List)
-			usage.GET("/errors", servermiddleware.RequireDesktopScope("usage"), h.Usage.ListErrors)
-			usage.GET("/errors/:id", servermiddleware.RequireDesktopScope("usage"), h.Usage.GetErrorDetail)
-			usage.GET("/:id", servermiddleware.RequireDesktopScope("usage"), h.Usage.GetByID)
-			usage.GET("/stats", servermiddleware.RequireDesktopScope("usage"), h.Usage.Stats)
+			usage.GET("", h.Usage.List)
+			usage.GET("/errors", h.Usage.ListErrors)
+			usage.GET("/errors/:id", h.Usage.GetErrorDetail)
+			usage.GET("/:id", h.Usage.GetByID)
+			usage.GET("/stats", h.Usage.Stats)
 			// User dashboard endpoints
-			usage.GET("/dashboard/stats", servermiddleware.RequireDesktopScope("usage"), h.Usage.DashboardStats)
-			usage.GET("/dashboard/trend", servermiddleware.RequireDesktopScope("usage"), h.Usage.DashboardTrend)
-			usage.GET("/dashboard/models", servermiddleware.RequireDesktopScope("usage"), h.Usage.DashboardModels)
-			usage.GET("/dashboard/snapshot-v2", servermiddleware.RequireDesktopScope("usage"), h.Usage.DashboardSnapshotV2)
-			usage.POST("/dashboard/api-keys-usage", servermiddleware.RequireDesktopScope("usage"), h.Usage.DashboardAPIKeysUsage)
+			usage.GET("/dashboard/stats", h.Usage.DashboardStats)
+			usage.GET("/dashboard/trend", h.Usage.DashboardTrend)
+			usage.GET("/dashboard/models", h.Usage.DashboardModels)
+			usage.GET("/dashboard/snapshot-v2", h.Usage.DashboardSnapshotV2)
+			usage.POST("/dashboard/api-keys-usage", h.Usage.DashboardAPIKeysUsage)
 		}
 
 		// 公告（用户可见）
 		announcements := authenticated.Group("/announcements")
 		{
-			announcements.GET("", servermiddleware.RequireDesktopScope("profile"), h.Announcement.List)
-			announcements.POST("/:id/read", servermiddleware.RequireDesktopScope("profile"), h.Announcement.MarkRead)
+			announcements.GET("", h.Announcement.List)
+			announcements.POST("/:id/read", h.Announcement.MarkRead)
 		}
 
-		// 卡密兑换 changes account balance and is intentionally browser-only. The
-		// desktop client receives only the dedicated hosted checkout session API.
+		// 卡密兑换
 		redeem := authenticated.Group("/redeem")
 		{
-			redeem.Use(servermiddleware.RequireBrowserSession())
 			redeem.POST("", h.Redeem.Redeem)
 			redeem.GET("/history", h.Redeem.GetHistory)
 		}
 
-		// Subscription listing and mutations can expose order/account state. Keep
-		// the existing panel surface browser-only; desktop checkout is opaque.
+		// 用户订阅
 		subscriptions := authenticated.Group("/subscriptions")
 		{
-			subscriptions.Use(servermiddleware.RequireBrowserSession())
 			subscriptions.GET("", h.Subscription.List)
 			subscriptions.GET("/active", h.Subscription.GetActive)
 			subscriptions.GET("/progress", h.Subscription.GetProgress)
@@ -197,7 +156,6 @@ func RegisterUserRoutes(
 		// 渠道监控（用户只读）
 		monitors := authenticated.Group("/channel-monitors")
 		{
-			monitors.Use(servermiddleware.RequireDesktopScope("usage"))
 			monitors.GET("", h.ChannelMonitor.List)
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
@@ -206,7 +164,6 @@ func RegisterUserRoutes(
 		monitorV2 := authenticated.Group("/channel-monitor-v2")
 		monitorV2.Use(panelRateLimiter.Heavy())
 		monitorV2.Use(channelMonitorModeV2Guard(settingService))
-		monitorV2.Use(servermiddleware.RequireDesktopScope("usage"))
 		{
 			monitorV2.GET("/dimensions", h.ChannelMonitorV2.Dimensions)
 			monitorV2.GET("/snapshot", h.ChannelMonitorV2.Snapshot)

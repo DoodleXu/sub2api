@@ -6,7 +6,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -397,81 +396,6 @@ func TestBackendModeAuthGuard(t *testing.T) {
 			r.ServeHTTP(w, req)
 
 			require.Equal(t, tc.wantStatus, w.Code)
-		})
-	}
-}
-
-func TestBackendModeAuthGuardDesktopTokenGrants(t *testing.T) {
-	tests := []struct {
-		name       string
-		path       string
-		body       string
-		wantStatus int
-	}{
-		{
-			name:       "canonical_refresh_is_allowed_and_body_is_restored",
-			path:       "/api/v1/desktop/token",
-			body:       `{"grant_type":"refresh_token","refresh_token":"opaque"}`,
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "compatibility_refresh_is_allowed",
-			path:       "/api/v1/auth/device/token",
-			body:       `{"grant_type":"refresh_token"}`,
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "canonical_device_code_is_blocked",
-			path:       "/api/v1/desktop/token",
-			body:       `{"grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name:       "compatibility_device_code_is_blocked",
-			path:       "/api/v1/auth/device/token",
-			body:       `{"grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name:       "missing_grant_type_is_blocked",
-			path:       "/api/v1/desktop/token",
-			body:       `{"refresh_token":"opaque"}`,
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name:       "malformed_body_is_blocked",
-			path:       "/api/v1/desktop/token",
-			body:       `{`,
-			wantStatus: http.StatusForbidden,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
-			r := gin.New()
-			r.Use(BackendModeAuthGuard(newBackendModeSettingService(t, "true")))
-			r.POST("/*path", func(c *gin.Context) {
-				var payload struct {
-					GrantType string `json:"grant_type"`
-				}
-				if err := c.ShouldBindJSON(&payload); err != nil {
-					c.Status(http.StatusBadRequest)
-					return
-				}
-				c.JSON(http.StatusOK, payload)
-			})
-
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
-			req.Header.Set("Content-Type", "application/json")
-			r.ServeHTTP(w, req)
-
-			require.Equal(t, tc.wantStatus, w.Code)
-			if tc.wantStatus == http.StatusOK {
-				require.Contains(t, w.Body.String(), `"grant_type":"refresh_token"`)
-			}
 		})
 	}
 }

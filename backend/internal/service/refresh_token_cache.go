@@ -10,27 +10,14 @@ import (
 // This is used to abstract away the underlying cache implementation (e.g., redis.Nil).
 var ErrRefreshTokenNotFound = errors.New("refresh token not found")
 
-// ErrRefreshTokenFamilyRevoked is returned by cache implementations that
-// atomically reject a token write after reuse/explicit family revocation.
-// It is deliberately a plain error so existing HTTP error mappings remain
-// unchanged; AuthService translates it to a refresh-token failure.
-var ErrRefreshTokenFamilyRevoked = errors.New("refresh token family revoked")
-
 // RefreshTokenData 存储在Redis中的Refresh Token数据
 type RefreshTokenData struct {
 	UserID       int64     `json:"user_id"`
 	TokenVersion int64     `json:"token_version"`          // 用于检测密码更改后的Token失效
 	FamilyID     string    `json:"family_id"`              // Token家族ID，用于防重放攻击
 	BindingHash  string    `json:"binding_hash,omitempty"` // 会话指纹哈希（IP+UA），会话绑定开启时校验
-	DeviceID     string    `json:"device_id,omitempty"`    // 桌面设备公钥 JWK thumbprint（普通登录为空）
-	Scopes       []string  `json:"scopes,omitempty"`       // 桌面客户端获批的 scope 集合
-	Audience     string    `json:"audience,omitempty"`     // 桌面客户端 token audience
 	CreatedAt    time.Time `json:"created_at"`
-	// Desktop sessions use both an idle window and an absolute lifetime. Web
-	// sessions leave these fields zero and retain the existing expiry behavior.
-	LastUsedAt        time.Time `json:"last_used_at,omitempty"`
-	AbsoluteExpiresAt time.Time `json:"absolute_expires_at,omitempty"`
-	ExpiresAt         time.Time `json:"expires_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // RefreshTokenCache 管理Refresh Token的Redis缓存
@@ -84,17 +71,4 @@ type RefreshTokenCache interface {
 	// IsTokenInFamily 检查Token是否属于指定家族
 	// 用于验证Token家族关系
 	IsTokenInFamily(ctx context.Context, familyID string, tokenHash string) (bool, error)
-}
-
-// AtomicRefreshTokenConsumer is an optional capability implemented by the
-// production Redis cache. It atomically consumes a refresh token after the
-// caller has validated its claims. The returned reused flag is true when the
-// token was already consumed by an earlier rotation; the accompanying data
-// lets the caller revoke that token family without retaining raw tokens.
-//
-// It is intentionally separate from RefreshTokenCache so existing in-memory
-// and test implementations remain source-compatible. Callers must retain the
-// legacy delete path when this capability is unavailable.
-type AtomicRefreshTokenConsumer interface {
-	ConsumeRefreshToken(ctx context.Context, tokenHash string) (data *RefreshTokenData, reused bool, err error)
 }

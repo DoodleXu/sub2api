@@ -21,18 +21,6 @@ func NewAdminAuthMiddleware(
 	return AdminAuthMiddleware(adminAuth(authService, userService, settingService, auditService))
 }
 
-// ProvideAdminAuthMiddleware is the Wire entry point with desktop-session
-// revocation checking enabled for JWT-based admin requests.
-func ProvideAdminAuthMiddleware(
-	authService *service.AuthService,
-	userService *service.UserService,
-	settingService *service.SettingService,
-	auditService *service.AuditLogService,
-	_ *service.DesktopDeviceService,
-) AdminAuthMiddleware {
-	return AdminAuthMiddleware(adminAuth(authService, userService, settingService, auditService))
-}
-
 // adminAuth 管理员认证中间件实现
 // 支持两种认证方式（通过不同的 header 区分）：
 // 1. Admin API Key: x-api-key: <admin-api-key>
@@ -182,13 +170,6 @@ func validateJWTForAdmin(
 			return false
 		}
 		AbortWithError(c, 401, "INVALID_TOKEN", "Invalid token")
-		return false
-	}
-	// Desktop grants are deliberately user-surface only. Even when the account
-	// also has an admin role, a device authorization must never inherit the
-	// browser session's unrestricted admin privileges.
-	if claims.DeviceID != "" {
-		AbortWithError(c, 403, "DESKTOP_ADMIN_FORBIDDEN", "Desktop device tokens cannot access admin APIs")
 		return false
 	}
 

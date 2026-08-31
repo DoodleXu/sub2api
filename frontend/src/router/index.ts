@@ -52,19 +52,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    // The desktop device flow opens this page in the system browser.  It is
-    // intentionally reachable before authentication so the guard can send an
-    // unauthenticated visitor through the normal login page and back here with
-    // the one-time code intact.
-    path: '/device',
-    name: 'DesktopDeviceApproval',
-    component: () => import('@/views/auth/DesktopDeviceApprovalView.vue'),
-    meta: {
-      requiresAuth: false,
-      title: 'Confirm desktop device'
-    }
-  },
-  {
     path: '/register',
     name: 'Register',
     component: () => import('@/views/auth/RegisterView.vue'),
@@ -844,7 +831,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/device', '/key-usage', '/setup', '/email-unsubscribe', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/email-unsubscribe', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',

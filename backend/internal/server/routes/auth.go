@@ -1,10 +1,8 @@
 package routes
 
 import (
-	"context"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/middleware"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -23,84 +21,9 @@ func RegisterAuthRoutes(
 	redisClient *redis.Client,
 	settingService *service.SettingService,
 	panelRateLimiter *servermiddleware.PanelRateLimiter,
-	configs ...*config.Config,
 ) {
 	// 创建速率限制器
 	rateLimiter := middleware.NewRateLimiter(redisClient)
-	var transportPolicy servermiddleware.DesktopTransportPolicy
-	if len(configs) > 0 && configs[0] != nil {
-		transportPolicy = servermiddleware.DesktopTransportPolicyForConfig(configs[0].Server.TrustedProxies, configs[0].Server.FrontendURL)
-	}
-
-	// Public capability discovery is deliberately outside the auth guard so a
-	// fresh desktop client can bootstrap even before a user session exists.
-	if h != nil && h.ClientCapabilities != nil && h.AsyncImage != nil {
-		// Keep the bootstrap document aligned with the same runtime resolver used
-		// by the async image routes. This avoids a client seeing `async_images=true`
-		// here and then receiving a 404 from the gateway because object storage was
-		// disabled or became unavailable.
-		h.ClientCapabilities.SetImageTaskCapabilityResolver(func(context.Context) (bool, bool) {
-			state := h.AsyncImage.Capability()
-			return state.Enabled, state.Pollable
-		})
-	}
-	if h != nil && h.ClientCapabilities != nil && settingService != nil {
-		h.ClientCapabilities.SetBackendModeResolver(settingService.IsBackendModeEnabled)
-	}
-	if h != nil && h.ClientCapabilities != nil {
-		v1.GET("/client/capabilities", h.ClientCapabilities.Get)
-		// Keep generic profiles publicly discoverable. When api_key_id is
-		// supplied, run the normal JWT/DPoP verifier first and require the
-		// api_keys consent scope for desktop tokens; the handler then checks key
-		// ownership before returning the non-secret profile metadata.
-		v1.GET("/client/integration-profiles", requireHTTPSForKeySpecificProfile(transportPolicy), authenticateKeySpecificProfile(jwtAuth), servermiddleware.RequireDesktopScope("api_keys"), h.ClientCapabilities.IntegrationProfiles)
-	}
-	if h != nil && h.DesktopDevice != nil {
-		// Canonical desktop protocol paths. /auth/device/* below remains as a
-		// compatibility alias for existing helper builds.
-		desktop := v1.Group("/desktop")
-		desktop.Use(servermiddleware.BackendModeAuthGuard(settingService))
-		desktop.Use(servermiddleware.RequireHTTPS(transportPolicy))
-		desktop.POST("/device-authorizations", rateLimiter.LimitWithOptions("desktop-device-authorize", 10, time.Minute, middleware.RateLimitOptions{
-			FailureMode: middleware.RateLimitFailClose,
-		}), h.DesktopDevice.Authorize)
-		desktop.POST("/token", rateLimiter.LimitWithOptions("desktop-device-token", 30, time.Minute, middleware.RateLimitOptions{
-			FailureMode: middleware.RateLimitFailClose,
-		}), h.DesktopDevice.Token)
-		desktop.POST("/logout", rateLimiter.LimitWithOptions("desktop-device-logout", 20, time.Minute, middleware.RateLimitOptions{
-			FailureMode: middleware.RateLimitFailClose,
-		}), h.DesktopDevice.Logout)
-	}
-	if h != nil && h.DesktopCheckout != nil {
-		// Desktop checkout is authenticated and independently consented through
-		// the billing scope. Browser JWTs remain compatible with the existing
-		// panel behavior, while a device token cannot use this route without an
-		// explicit billing grant.
-		checkout := v1.Group("/desktop/checkout-sessions")
-		checkout.Use(gin.HandlerFunc(jwtAuth))
-		checkout.Use(servermiddleware.BackendModeUserGuard(settingService))
-		checkout.Use(servermiddleware.RequireHTTPS(transportPolicy))
-		checkout.Use(servermiddleware.RequireDesktopScope("billing"))
-		if panelRateLimiter != nil {
-			checkout.Use(panelRateLimiter.Global())
-		}
-		checkout.POST("", rateLimiter.LimitWithOptions("desktop-checkout-create", 10, time.Minute, middleware.RateLimitOptions{
-			FailureMode: middleware.RateLimitFailClose,
-		}), h.DesktopCheckout.Create)
-		checkout.GET("/:session_id", rateLimiter.LimitWithOptions("desktop-checkout-get", 60, time.Minute, middleware.RateLimitOptions{
-			FailureMode: middleware.RateLimitFailClose,
-		}), h.DesktopCheckout.Get)
-		// Activation is deliberately restricted to an interactive browser JWT.
-		// A desktop token may reserve and poll a session, but it must never receive
-		// provider client secrets or payment redirect material.
-		checkout.POST("/:session_id/activate",
-			servermiddleware.RequireBrowserSession(),
-			rateLimiter.LimitWithOptions("desktop-checkout-activate", 10, time.Minute, middleware.RateLimitOptions{
-				FailureMode: middleware.RateLimitFailClose,
-			}),
-			h.DesktopCheckout.Activate,
-		)
-	}
 
 	// 公开接口
 	auth := v1.Group("/auth")
@@ -115,19 +38,6 @@ func RegisterAuthRoutes(
 		KeyFunc:     func(c *gin.Context) string { return c.FullPath() + ":" + c.ClientIP() },
 	})
 	{
-		if h != nil && h.DesktopDevice != nil {
-			device := auth.Group("/device")
-			device.Use(servermiddleware.RequireHTTPS(transportPolicy))
-			device.POST("/authorize", rateLimiter.LimitWithOptions("desktop-device-authorize", 10, time.Minute, middleware.RateLimitOptions{
-				FailureMode: middleware.RateLimitFailClose,
-			}), h.DesktopDevice.Authorize)
-			device.POST("/token", rateLimiter.LimitWithOptions("desktop-device-token", 30, time.Minute, middleware.RateLimitOptions{
-				FailureMode: middleware.RateLimitFailClose,
-			}), h.DesktopDevice.Token)
-			device.POST("/logout", rateLimiter.LimitWithOptions("desktop-device-logout", 20, time.Minute, middleware.RateLimitOptions{
-				FailureMode: middleware.RateLimitFailClose,
-			}), h.DesktopDevice.Logout)
-		}
 		// 注册/登录/2FA/验证码发送均属于高风险入口，增加服务端兜底限流（Redis 故障时 fail-close）
 		auth.POST("/register", rateLimiter.LimitWithOptions("auth-register", 5, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
@@ -364,37 +274,9 @@ func RegisterAuthRoutes(
 	// 面板全局按用户限流
 	authenticated.Use(panelRateLimiter.Global())
 	{
-		authenticated.GET("/auth/me", servermiddleware.RequireDesktopScopes("profile", "balance"), h.Auth.GetCurrentUser)
+		authenticated.GET("/auth/me", h.Auth.GetCurrentUser)
 		// 撤销所有会话（需要认证）
-		authenticated.POST("/auth/revoke-all-sessions", servermiddleware.RequireBrowserSession(), h.Auth.RevokeAllSessions)
-		authenticated.POST("/auth/oauth/bind-token", servermiddleware.RequireBrowserSession(), h.Auth.PrepareOAuthBindAccessTokenCookie)
-	}
-}
-
-// authenticateKeySpecificProfile preserves the unauthenticated bootstrap form
-// while making the query form an authenticated request. Calling jwtAuth from a
-// middleware (rather than from the final handler) keeps Gin's handler index and
-// c.Next semantics intact for both branches.
-func authenticateKeySpecificProfile(jwtAuth servermiddleware.JWTAuthMiddleware) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if _, present := c.GetQuery("api_key_id"); !present {
-			c.Next()
-			return
-		}
-		gin.HandlerFunc(jwtAuth)(c)
-	}
-}
-
-// requireHTTPSForKeySpecificProfile leaves the credential-free bootstrap form
-// available to local/legacy callers, but protects the query form before any
-// JWT or DPoP credential is accepted.  In particular, a browser Bearer token
-// must not be sent over cleartext merely because the route is also public.
-func requireHTTPSForKeySpecificProfile(policy servermiddleware.DesktopTransportPolicy) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if _, present := c.GetQuery("api_key_id"); !present {
-			c.Next()
-			return
-		}
-		servermiddleware.RequireHTTPS(policy)(c)
+		authenticated.POST("/auth/revoke-all-sessions", h.Auth.RevokeAllSessions)
+		authenticated.POST("/auth/oauth/bind-token", h.Auth.PrepareOAuthBindAccessTokenCookie)
 	}
 }

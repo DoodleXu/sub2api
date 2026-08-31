@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"strings"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -60,17 +59,6 @@ func ProvideNotificationEmailService(settingRepo SettingRepository, emailService
 	svc.SetUserRepository(userRepo)
 	svc.SetBroadcastRepository(broadcastRepo)
 	svc.StartBroadcastWorker()
-	return svc
-}
-
-// ProvideCheckoutSessionService injects the server's configured public origin
-// into the hosted desktop checkout bridge. The service defaults to the pinned
-// first-party origin when the deployment has not configured server.frontend_url.
-func ProvideCheckoutSessionService(redisClient *redis.Client, orders CheckoutOrderService, cfg *config.Config) *CheckoutSessionService {
-	svc := NewCheckoutSessionService(redisClient, orders)
-	if cfg != nil && strings.TrimSpace(cfg.Server.FrontendURL) != "" {
-		svc.SetPublicOrigin(cfg.Server.FrontendURL)
-	}
 	return svc
 }
 
@@ -905,7 +893,6 @@ func ProvideAPIKeyService(
 var ProviderSet = wire.NewSet(
 	// Core services
 	ProvideAuthService,
-	NewDesktopDeviceService,
 	NewPasskeyService,
 	NewUserService,
 	ProvideAPIKeyService,
@@ -1019,8 +1006,6 @@ var ProviderSet = wire.NewSet(
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,
-	wire.Bind(new(CheckoutOrderService), new(*PaymentService)),
-	ProvideCheckoutSessionService,
 	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,

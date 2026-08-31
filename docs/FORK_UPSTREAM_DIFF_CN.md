@@ -2,12 +2,12 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-29
+最后更新：2026-08-30
 
 ## 2026-08-30 订阅升级反滥用控制与 API Key 换组告警
 
 - 订阅升级服务端要求目标套餐单价严格高于来源订阅的已付日均单价；同套餐/低价套餐不再产生折抵升级订单。
-- 升级订单履约前重新计算来源订阅的折抵金额和剩余天数，并拒绝已耗尽日/周/月额度的来源；待支付/履约中的升级订单通过 `upgrade_claim_active` 在 API Key 认证中冻结来源订阅用量（带短 TTL 缓存并在取消、失败、下单后失效），避免继续消耗后再折抵。快照变化时以 `UPGRADE_CREDIT_STALE` 拒绝履约并释放占用，要求重新下单；创建订单时继续使用持久化占用避免并发重复申领。
+- 升级订单履约前重新计算来源订阅的折抵金额和剩余天数，并拒绝已耗尽日/周/月额度的来源；待支付/履约中的升级订单通过 `upgrade_claim_active` 在 API Key 认证中冻结来源订阅用量，避免继续消耗后再折抵。快照变化时以 `UPGRADE_CREDIT_STALE` 拒绝履约并释放占用，要求重新下单；创建订单时继续使用持久化占用避免并发重复申领。
 - 当来源订阅日/周/月额度使用率达到 90%、折抵达到目标价 90% 或应付金额触及最低支付额时，写入结构化 `payment.upgrade_risk` WARN 事件，包含订单、用户、订阅、套餐和风险原因（不含支付凭据）。
 - 用户自助编辑 API Key 时，禁止将仍绑定有效订阅的 Key 切换到非订阅/钱包分组；管理员专用的 `AdminUpdateAPIKeyGroupID` 不受该自助限制。拦截事件写入 `api_key.binding_risk` WARN 并保留现有审计日志。
 - 管理端 `/admin/ops` 的“系统日志”表展示上述风险事件，并在详情中显示 `risk_code`、订单/订阅和目标分组；事件同时保留在 `ops_system_logs`，并按现有日志配置输出到服务标准日志。
@@ -33,37 +33,6 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
-
-## 2026-08-29 桌面客户端能力与设备授权
-
-本 fork 新增跨 Windows/macOS 桌面辅助客户端的无密码设备授权协议。客户端先读取公开能力文档，再使用一次性短期 device code + S256 PKCE 完成浏览器批准；服务端仅保存 P-256 公钥及 RFC 7638 风格 SHA-256 thumbprint，不采集或伪造 MAC、硬盘序列号等硬件指纹。桌面发行物是统一构建，不把账号、JWT 或 API Key 写入二进制。
-
-- 公开发现接口：`GET /api/v1/client/capabilities` 与 `GET /api/v1/client/integration-profiles`。无查询参数时只返回协议版本、路由、可申请 scopes、支付开关和图片 API 能力，不返回 Provider 凭据或 API Key；能力、模型默认值和参数限制仍由后端下发。带 `api_key_id` 时必须通过 JWT/DPoP（桌面 token 还需 `api_keys` scope）并由服务端校验 Key 所有权，仅返回非敏感状态与通用集成 profile，避免未授权 Key ID 枚举。
-- 设备流程：`POST /api/v1/desktop/device-authorizations`、`POST /api/v1/desktop/token`、`POST /api/v1/desktop/logout`；旧构建可使用 `/api/v1/auth/device/{authorize,token,logout}` 别名。授权码 TTL 为 5 分钟、轮询间隔 5 秒、兑换仅允许一次；兑换后的 `device_id` 直接使用设备 P-256 公钥 JWK thumbprint（不另造随机设备标识），token audience 固定为 `sub2api-api`，access token TTL 为 10 分钟，refresh token 每次轮转并保留 device/scopes 元数据。
-- 设备绑定：仅接受 P-256 `EC` 公钥，拒绝私钥成员；会话记录保存公钥 JWK、nonce、scope、audience、保护级别和撤销时间。DPoP 验证器支持 ES256、nonce、`htu`/`htm`、`iat`、`jti` 重放缓存和 access-token hash；撤销以 PostgreSQL 持久记录为权威、Redis 为加速，并在 Redis/数据库不可用时 fail-closed。当前客户端使用系统 Keychain/Credential Manager/Secret Service（显示 `os` 保护级别），尚未宣称 Secure Enclave/TPM 硬件绑定；凭证通常按 OS 用户/ACL 隔离，复制到另一台机器或另一 OS 用户通常不能继承，但同一用户恶意进程仍可能调用 helper，不能将其描述为硬件或签名隔离。
-- 后台模式 token 边界：`/api/v1/desktop/token` 与兼容 `/api/v1/auth/device/token` 在后台模式下只允许 `grant_type=refresh_token`，首次 device-code 兑换、缺失或非法 JSON 均被拒绝；logout 仍保留用于撤销既有设备会话。
-- 用户端点：登录浏览器批准 `POST /api/v1/user/device/approve`；设备列表/撤销为 `GET /api/v1/user/devices` 与 `DELETE /api/v1/user/devices/:device_id`。桌面 token 只能撤销自身 `device_id`，跨设备撤销仍保留给浏览器会话（浏览器端不受该自限约束）。`profile` 端点因返回余额而要求同时授予 `profile` 与 `balance`，另提供只读 `GET /api/v1/user/balance`；`usage`、`checkin`、`images`、`api_keys` scope 分别限制面板查询。API Key 创建/编辑/删除及密码、身份绑定、TOTP、Passkey 等安全变更仅允许交互式浏览器会话。
-- 充值边界：现有 `/api/v1/payment/*` 订单/Provider 接口和 `/api/v1/redeem` 保持浏览器会话专用，设备 token 不直接访问。桌面端新增 `POST/GET /api/v1/desktop/checkout-sessions[/:session_id]`，以 15 分钟、用户/设备绑定的 Redis opaque session 预约并轮询订单状态；激活动作在同源系统浏览器中完成，桌面端绝不接收或持久化 pay URL、二维码、client secret 或 resume token。
-- 生图与历史：无凭据的 `GET /v1/images/capabilities` 返回协议限制、上传安全约束和异步存储的运行时可用性；OpenAI-compatible `/v1/images/generations`、`/v1/images/edits` 及异步任务路由仍按 API Key、分组、Provider 映射和模型配置执行实际权限检查，不把能力文档中的模型 `enabled` 视为账号级保证。用户历史与安全下载端点按 JWT 用户归属返回并重新签发资源，不把长期 presigned URL 当历史数据；`backend/migrations/234_desktop_devices.sql` 保存当前设备/DPoP 绑定，`backend/migrations/236_desktop_sessions.sql` 增加独立 refresh-family 会话账本并由触发器同步重绑定、撤销和最近活动，`backend/migrations/235_image_task_history_user_created_index.sql` 为用户历史扫描增加有界索引。
-- 传输与部署边界：发布桌面客户端固定使用 `https://ai.clol.site`；服务端部署可通过受控配置设置自身 first-party origin，但必须与客户端发布环境匹配。`X-Forwarded-*` 只有来自 `server.trusted_proxies` 的 peer 才会采信，未配置可信代理时转发头请求 fail-closed，不能把任意 Host 拼进支付回跳 URL。正式环境必须配置真实反向代理 CIDR 并验证 TLS/Origin。
-
-关键代码：
-
-- `backend/internal/handler/client_capabilities_handler.go`
-- `backend/internal/handler/desktop_device_handler.go`
-- `backend/internal/handler/desktop_checkout_handler.go`
-- `backend/internal/handler/image_task_user_handler.go`
-- `backend/internal/service/desktop_device_service.go`
-- `backend/internal/service/checkout_session_service.go`
-- `backend/internal/server/middleware/desktop_dpop.go`
-- `backend/internal/server/middleware/desktop_scope.go`
-- `backend/internal/server/routes/auth.go`
-- `backend/internal/server/routes/payment.go`
-- `backend/internal/server/routes/user.go`
-- `desktop/`
-- `.github/workflows/desktop.yml`
-
-验证：桌面模块执行 `go test ./...`、`go vet ./...`，前端执行 `pnpm run typecheck` 与 `pnpm run build`；后端契约包执行 `go test -tags=unit ... -run '^$'` 编译检查，并定向覆盖设备授权/DPoP、scope、checkout、图片历史和 refresh-token 测试。完整 Redis/PostgreSQL、原生 Wails 安装/升级和签名/公证仍需 CI/部署凭据环境复核；当前 workflow 仅产出 Windows x64 与 macOS arm64 私有 artifacts，未启用公开签名发布。
 
 ### v0.1.183 合并后审核修复
 
@@ -722,8 +691,6 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 - 2026-07-31 起，管理后台“生图管理”拆分为“生图队列”和“生图结果”：队列复用 Redis 异步任务记录和现有执行器，只读展示状态、耗时、失败原因和结果链接，支持状态筛选、游标分页和可见页面两秒轮询；结果页继续按配置前缀列举异步图片桶对象，提供分页、容量、更新时间、预签名预览和下载。接口强制限制在异步图片前缀内，复用备份桶时不能浏览 `backups/`。
 - 2026-08-11 起，生图结果页的对象统计改为返回当前异步图片前缀下的完整图片总数；对象列表按 S3 `LastModified`（写入桶时间）倒序排列，使用“写入时间 + 对象键”游标分页，确保最新图片在首页、最老图片在最后一页。完整前缀清单按前缀使用短 TTL 缓存并通过 singleflight 合并并发加载，翻页复用同一份已排序清单；上传、删除或不确定上传会使匹配前缀缓存失效，避免每页重复全量扫描和排序。
 - 2026-08-02 起，生图队列在执行态 Redis TTL 键之外写入 PostgreSQL `image_task_history` 历史表，后台可查看已完成/失败/处理中全部历史记录，并通过 `start_date`/`end_date` 与浏览器时区按日期筛选；历史结果仍只投影安全运营元数据，不暴露 prompt 或内部对象键。创建和终态转换使用 PostgreSQL 事务包住待提交历史状态，再执行 Redis 写入/CAS；Redis 写入失败时事务回滚，数据库提交结果不明确时使用独立短超时清理或按 Redis 现态对账。若 Redis key 在转换窗口内过期，历史记录落为 `failed/task_expired`，不恢复为永久 `processing`。
-- 2026-08-29 起，用户侧新增 JWT 归属的 `/api/v1/user/image-tasks` 列表、详情、`/assets/{index}` 资产 URL 和 `DELETE /{task_id}` 删除接口；列表与详情不接受任意 `user_id`，服务端在 Redis/`image_task_history` 两条读取路径同时执行 `user_id` 约束，API Key 轮换后仍可查看本人历史。`expires_at` 仅约束仍在 processing 的运行时租约，completed/failed 历史在 PostgreSQL 中持续保留至用户删除；删除仅允许终态（processing 返回 409），按原存储绑定清理结果/待清理对象后再移除 Redis 与 SQL 清单。资产接口只按持久化对象键在读取时重新签发 HTTPS URL，拒绝跨前缀键、对象键路径穿越和不安全 URL，不把 API Key、对象键或旧签名 URL 返回给客户端；兼容旧任务时仅保留 HTTPS 公共 URL。物理对象仍受配置的桶 lifecycle 规则约束，严格无限期保留需单独调整运营策略。OpenAI 图片编辑输入新增 magic MIME、声明类型一致性、20 MiB 单文件、80 MiB 总量、最多 8 张参考图（另加 1 个可选 mask）、16,384 边长和 100 MP 像素上限；全局 HTTP `MaxBytesHandler` 继续覆盖实际安装到 Server 的 handler。迁移 `235_image_task_history_user_created_index.sql` 为用户历史游标查询增加 `(user_id, created_at DESC, task_id DESC)` 索引（避开并行 desktop 的 234 编号）。
-- 2026-08-29 起，桌面 `imagestore.FileStore.Download` 只接受 HTTPS 图片地址，默认传输层关闭环境代理并在连接前解析、固定公网 IP；每次重定向重新校验并限制次数，跨重定向清除凭据/Referer 头。响应按大小、声明 MIME 与 magic、`image.DecodeConfig` 尺寸（最长边 16,384、100 MP 像素）校验后才写盘；图片和元数据均经临时文件 `fsync + rename` 原子落盘，失败不会留下可见半文件。Windows/macOS 交叉编译与定向测试覆盖该边界。
 - 生图队列复用管理后台统一的表格、筛选、开关和弹窗组件：页面标题只由全局顶栏展示，任务内容使用不透明表面和可换行的停止原因；自动轮询仅原位更新数据，首次加载后不再反复切换骨架屏。
 - 管理页除异步上传/删除/生命周期读取权限外，还要求对象存储凭证具有 `ListBucket`/`ListObjectsV2` 权限；页面本身只读，对象保留与删除继续由异步任务补偿和桶生命周期规则负责。
 - 创作台把提交时的 API Key ID、端点和 `imgtask_*` 保存到本地会话，用原 Key 恢复轮询；结果 URL 会写入浏览器 Cache Storage，避免预签名 URL 到期影响已打开会话；若桶 CORS 拒绝脚本读取，则保留当前预签名直链用于 `<img>` 展示且不把签名持久化到本地会话。
