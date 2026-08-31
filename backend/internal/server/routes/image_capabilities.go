@@ -4,13 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
 // imageCapabilities is intentionally a public, credential-free description of
-// the Images API.  A desktop client can use it before selecting a key, while
+// the Images API. Clients can use it before selecting a key, while
 // the actual generation/edit endpoints continue to enforce API-key, group and
 // provider policy.  Keep limits here in sync with the shared OpenAI image
 // parser; accepting a request here never bypasses those runtime validators.
@@ -81,19 +80,17 @@ type imageCapabilitiesRuntime struct {
 	MaxDownloadBytes   int64
 }
 
-type imageCapabilitiesResolver func(context.Context) imageCapabilitiesRuntime
-
-// registerImageCapabilitiesRoute installs the stable public endpoint. It is
+// RegisterImageCapabilitiesRoute installs the stable public endpoint. It is
 // kept as a small route helper so the gateway registration remains readable
 // and the response can be unit-tested without constructing the entire server.
-func registerImageCapabilitiesRoute(r *gin.Engine, resolvers ...imageCapabilitiesResolver) {
+func RegisterImageCapabilitiesRoute(r *gin.Engine, resolvers ...func(context.Context) imageCapabilitiesRuntime) {
 	if r == nil {
 		return
 	}
 	// Gateway routes are registered on the engine root (the OpenAI-compatible
 	// surface uses /v1 rather than /api/v1), therefore keep the public contract
 	// at /v1/images/capabilities.
-	var resolver imageCapabilitiesResolver
+	var resolver func(context.Context) imageCapabilitiesRuntime
 	if len(resolvers) > 0 {
 		resolver = resolvers[0]
 	}
@@ -113,8 +110,7 @@ func registerImageCapabilitiesRoute(r *gin.Engine, resolvers ...imageCapabilitie
 }
 
 // ImageCapabilitiesHandler is exported for focused route tests and for
-// embedders that register gateway routes themselves. The normal server uses
-// registerImageCapabilitiesRoute above.
+// embedders that register gateway routes themselves.
 func ImageCapabilitiesHandler(c *gin.Context) {
 	// Preserve the historical exported handler contract for embedders that call
 	// it directly. RegisterGatewayRoutes always installs the runtime-aware
@@ -167,20 +163,4 @@ func imageCapabilitiesPayload(runtime imageCapabilitiesRuntime) imageCapabilitie
 		BackendMode: runtime.BackendModeEnabled,
 		ServerTime:  time.Now().UTC().Format(time.RFC3339),
 	}
-}
-
-// imageCapabilitiesRuntimeForHandler adapts the handler's exported snapshot
-// to this package's response model while keeping route registration testable.
-func imageCapabilitiesRuntimeForHandler(ctx context.Context, async *handler.AsyncImageHandler, backendMode func(context.Context) bool) imageCapabilitiesRuntime {
-	runtime := imageCapabilitiesRuntime{RuntimeKnown: true}
-	if async != nil {
-		state := async.Capability()
-		runtime.AsyncEnabled = state.Enabled
-		runtime.AsyncPollable = state.Pollable
-		runtime.MaxDownloadBytes = async.ImageResultDownloadLimit(ctx)
-	}
-	if backendMode != nil {
-		runtime.BackendModeEnabled = backendMode(ctx)
-	}
-	return runtime
 }

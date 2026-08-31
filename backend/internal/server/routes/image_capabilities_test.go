@@ -76,7 +76,7 @@ func TestImageCapabilitiesRouteUsesRuntimeResolver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	seenContext := false
-	registerImageCapabilitiesRoute(router, func(ctx context.Context) imageCapabilitiesRuntime {
+	RegisterImageCapabilitiesRoute(router, func(ctx context.Context) imageCapabilitiesRuntime {
 		seenContext = ctx != nil
 		return imageCapabilitiesRuntime{
 			RuntimeKnown:       true,

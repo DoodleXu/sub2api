@@ -206,59 +206,6 @@ WHERE ns.nspname = 'public'
 	requireIndex(t, tx, "image_task_history", "idx_image_task_history_status_created")
 	requireIndex(t, tx, "image_task_history", "idx_image_task_history_user_created")
 
-	// desktop_devices: durable ownership, DPoP public-key binding and the
-	// partial active-session index used by device enrollment/revocation.
-	var desktopDevicesRegclass sql.NullString
-	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.desktop_devices')").Scan(&desktopDevicesRegclass))
-	require.True(t, desktopDevicesRegclass.Valid, "expected desktop_devices table to exist")
-	requireColumn(t, tx, "desktop_devices", "device_id", "character varying", 64, false)
-	requireColumn(t, tx, "desktop_devices", "user_id", "bigint", 0, false)
-	requireColumn(t, tx, "desktop_devices", "client_id", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_devices", "public_key_thumbprint", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_devices", "public_key_jwk", "jsonb", 0, false)
-	requireColumn(t, tx, "desktop_devices", "dpop_nonce", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_devices", "protection_level", "character varying", 32, false)
-	requireColumn(t, tx, "desktop_devices", "scopes", "jsonb", 0, false)
-	requireColumn(t, tx, "desktop_devices", "audience", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_devices", "session_id", "character varying", 128, false)
-	requireIndex(t, tx, "desktop_devices", "desktop_devices_pkey")
-	requireIndex(t, tx, "desktop_devices", "desktop_devices_session_id_key")
-	requireIndex(t, tx, "desktop_devices", "idx_desktop_devices_user_created")
-	requireIndex(t, tx, "desktop_devices", "idx_desktop_devices_active")
-	requireForeignKeyOnDelete(t, tx, "desktop_devices", "user_id", "users", "CASCADE")
-	var desktopActiveIndexDef string
-	require.NoError(t, tx.QueryRowContext(context.Background(), `
-SELECT pg_get_indexdef(i.indexrelid)
-FROM pg_class idx
-JOIN pg_index i ON i.indexrelid = idx.oid
-JOIN pg_class tbl ON tbl.oid = i.indrelid
-JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-WHERE ns.nspname = 'public'
-  AND tbl.relname = 'desktop_devices'
-  AND idx.relname = 'idx_desktop_devices_active'
-`).Scan(&desktopActiveIndexDef))
-	require.Contains(t, desktopActiveIndexDef, "revoked_at")
-	require.Contains(t, desktopActiveIndexDef, "IS NULL")
-
-	// desktop_sessions: normalized refresh-family ledger mirrored from the
-	// compatibility device table by migration 236.
-	var desktopSessionsRegclass sql.NullString
-	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.desktop_sessions')").Scan(&desktopSessionsRegclass))
-	require.True(t, desktopSessionsRegclass.Valid, "expected desktop_sessions table to exist")
-	requireColumn(t, tx, "desktop_sessions", "session_id", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_sessions", "device_id", "character varying", 64, false)
-	requireColumn(t, tx, "desktop_sessions", "user_id", "bigint", 0, false)
-	requireColumn(t, tx, "desktop_sessions", "refresh_family_id", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_sessions", "scopes", "jsonb", 0, false)
-	requireColumn(t, tx, "desktop_sessions", "audience", "character varying", 128, false)
-	requireColumn(t, tx, "desktop_sessions", "idle_expires_at", "timestamp with time zone", 0, true)
-	requireColumn(t, tx, "desktop_sessions", "absolute_expires_at", "timestamp with time zone", 0, true)
-	requireIndex(t, tx, "desktop_sessions", "desktop_sessions_pkey")
-	requireIndex(t, tx, "desktop_sessions", "idx_desktop_sessions_user_created")
-	requireIndex(t, tx, "desktop_sessions", "idx_desktop_sessions_device_active")
-	requireIndex(t, tx, "desktop_sessions", "idx_desktop_sessions_family")
-	requireForeignKeyOnDelete(t, tx, "desktop_sessions", "device_id", "desktop_devices", "CASCADE")
-
 	// security_secrets table should exist
 	var securitySecretsRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.security_secrets')").Scan(&securitySecretsRegclass))
