@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
@@ -86,17 +85,16 @@ func TestAPIKeyResolveBindingSubscriptionGroupRejectsAmbiguousActiveSubscription
 	require.ErrorIs(t, err, ErrSubscriptionBindingAmbiguous)
 }
 
-func TestAPIKeyGuardBlocksActiveSubscriptionSwitchToStandardGroup(t *testing.T) {
-	oldSubscriptionID := int64(99)
-	oldGroupID := int64(10)
+func TestAPIKeyResolveBindingStandardGroupAllowsSwitchFromSubscriptionKey(t *testing.T) {
 	newGroupID := int64(20)
 	svc := &APIKeyService{
 		groupRepo: &apiKeyBindingGroupRepoStub{group: &Group{ID: newGroupID, Status: StatusActive, SubscriptionType: SubscriptionTypeStandard}},
-		userSubRepo: &apiKeyBindingUserSubRepoStub{byID: map[int64]*UserSubscription{
-			oldSubscriptionID: {ID: oldSubscriptionID, UserID: 42, GroupID: oldGroupID, Status: SubscriptionStatusActive, ExpiresAt: time.Now().Add(time.Hour)},
-		}},
 	}
 
-	err := svc.guardSubscriptionBindingChange(context.Background(), &APIKey{ID: 7, UserID: 42, GroupID: &oldGroupID, SubscriptionID: &oldSubscriptionID}, &newGroupID, nil)
-	require.ErrorIs(t, err, ErrAPIKeySubscriptionSwitchBlocked)
+	resolvedGroupID, resolvedSubscriptionID, err := svc.resolveAPIKeyBinding(context.Background(), &User{ID: 42}, &newGroupID, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, resolvedGroupID)
+	require.Equal(t, newGroupID, *resolvedGroupID)
+	require.Nil(t, resolvedSubscriptionID)
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"sort"
 	"strconv"
@@ -25,18 +24,17 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound                  = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed                 = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrSubscriptionNotAllowed          = infraerrors.Forbidden("SUBSCRIPTION_NOT_ALLOWED", "user is not allowed to bind this subscription")
-	ErrSubscriptionRequiredForAPIKey   = infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "subscription_id is required when binding a subscription group")
-	ErrAPIKeyBindingMismatch           = infraerrors.BadRequest("API_KEY_BINDING_MISMATCH", "subscription_id does not belong to group_id")
-	ErrAPIKeySubscriptionSwitchBlocked = infraerrors.Forbidden("API_KEY_SUBSCRIPTION_SWITCH_BLOCKED", "an active subscription-bound key cannot be switched to a non-subscription group")
-	ErrAPIKeyExists                    = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort                  = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars              = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited               = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrAPIKeyAuthOverloaded            = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
-	ErrInvalidIPPattern                = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound                = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed               = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrSubscriptionNotAllowed        = infraerrors.Forbidden("SUBSCRIPTION_NOT_ALLOWED", "user is not allowed to bind this subscription")
+	ErrSubscriptionRequiredForAPIKey = infraerrors.BadRequest("SUBSCRIPTION_REQUIRED", "subscription_id is required when binding a subscription group")
+	ErrAPIKeyBindingMismatch         = infraerrors.BadRequest("API_KEY_BINDING_MISMATCH", "subscription_id does not belong to group_id")
+	ErrAPIKeyExists                  = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort                = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars            = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited             = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyAuthOverloaded          = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
+	ErrInvalidIPPattern              = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -514,53 +512,6 @@ func (s *APIKeyService) resolveAPIKeyBinding(ctx context.Context, user *User, gr
 	return &resolvedGroupID, nil, nil
 }
 
-// guardSubscriptionBindingChange prevents a user from bypassing an active
-// subscription's quota by moving the same API key to a wallet/unlimited group.
-// Administrative reassignment uses AdminUpdateAPIKeyGroupID and is intentionally
-// outside this self-service guard.
-func (s *APIKeyService) guardSubscriptionBindingChange(ctx context.Context, key *APIKey, groupID, subscriptionID *int64) error {
-	if key == nil || key.SubscriptionID == nil || (groupID == nil && subscriptionID == nil) {
-		return nil
-	}
-	// subscription_id-only updates are valid when switching between two
-	// subscription entitlements; resolveAPIKeyBinding validates ownership and
-	// activity below. Only a non-subscription target is blocked.
-	if groupID == nil && subscriptionID != nil {
-		return nil
-	}
-	active, err := s.userSubRepo.GetByID(ctx, *key.SubscriptionID)
-	if err != nil || active == nil || !active.IsActive() {
-		return nil
-	}
-	if subscriptionID != nil && *subscriptionID == *key.SubscriptionID {
-		return nil
-	}
-	if groupID == nil {
-		return ErrAPIKeySubscriptionSwitchBlocked
-	}
-	group, err := s.groupRepo.GetByID(ctx, *groupID)
-	if err != nil {
-		return fmt.Errorf("get target group: %w", err)
-	}
-	if group == nil || !group.IsSubscriptionType() {
-		sourceGroupID := int64(0)
-		if key.GroupID != nil {
-			sourceGroupID = *key.GroupID
-		}
-		slog.WarnContext(ctx, "blocked API key subscription binding switch",
-			"component", "api_key.binding_risk",
-			"risk_code", "API_KEY_SUBSCRIPTION_SWITCH_BLOCKED",
-			"api_key_id", key.ID,
-			"user_id", key.UserID,
-			"source_subscription_id", *key.SubscriptionID,
-			"source_group_id", sourceGroupID,
-			"target_group_id", *groupID,
-		)
-		return ErrAPIKeySubscriptionSwitchBlocked
-	}
-	return nil
-}
-
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
 	if err := validateCreateAPIKeyRequest(req); err != nil {
@@ -897,9 +848,6 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	if req.GroupID != nil || req.SubscriptionID != nil {
-		if err := s.guardSubscriptionBindingChange(ctx, apiKey, req.GroupID, req.SubscriptionID); err != nil {
-			return nil, err
-		}
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
 			return nil, fmt.Errorf("get user: %w", err)
