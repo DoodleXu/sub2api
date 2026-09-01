@@ -7077,10 +7077,11 @@ func (s *OpenAIGatewayService) nonStreamingTerminalFailureFailover(c *gin.Contex
 	if account == nil || resp == nil || c == nil || c.Writer == nil || c.Writer.Written() || IsResponseCommitted(c) {
 		return nil
 	}
-	shouldFailover := false
-	if terminalType == "response.failed" {
+	var shouldFailover bool
+	switch terminalType {
+	case "response.failed":
 		shouldFailover = openAIStreamFailedEventShouldFailover(payload, message)
-	} else if terminalType == "error" {
+	case "error":
 		shouldFailover = openAIStreamErrorEventShouldFailover(payload, message)
 	}
 	if !shouldFailover {
