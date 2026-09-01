@@ -47,6 +47,14 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
+	// cyber_policy is a request-scoped content-safety rejection. It must be
+	// surfaced to the caller and recorded for ops, but it is not evidence that
+	// the upstream credential or account is unhealthy. Keep it out of all
+	// account cooldown/disable transitions, including the shared WS/stream
+	// terminal path.
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return statusCode, false
+	}
 	switch statusCode {
 	case http.StatusForbidden:
 		if !openAIStream403AccountFailure(payload, message) {

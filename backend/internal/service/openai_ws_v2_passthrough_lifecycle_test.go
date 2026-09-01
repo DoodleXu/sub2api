@@ -347,6 +347,35 @@ func TestPassthroughLifecycle_NonCyberFailureKeepsAccountSideEffects(t *testing.
 	}
 }
 
+func TestPassthroughLifecycle_CyberErrorEventSkipsFailureAccountSideEffects(t *testing.T) {
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+	upstream := newStagedPassthroughConn()
+	upstream.Send(`{"type":"error","error":{"type":"authentication_error","code":"cyber_policy","status_code":401,"message":"request blocked"}}`)
+	repo := &openAIStream403AccountRepo{}
+	svc := newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream)
+	svc.rateLimitService = NewRateLimitService(repo, nil, svc.cfg, nil, nil)
+	account := passthroughLifecycleAccount()
+
+	server, serverErr := startPassthroughLifecycleServer(t, controlCtx, svc, account)
+	defer server.Close()
+	clientConn := dialPassthroughLifecycleClient(t, server)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	event, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "error", gjson.GetBytes(event, "type").String())
+	require.Zero(t, repo.setErrorCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+
+	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case <-serverErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cyber error side-effect test did not exit")
+	}
+}
+
 func TestPassthroughLifecycle_CyberSkipsFailureAccountSideEffects(t *testing.T) {
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)

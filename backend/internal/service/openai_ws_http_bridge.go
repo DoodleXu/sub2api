@@ -242,15 +242,11 @@ func skipOpenAIWSJSONValue(payload []byte, i int) int {
 	return len(payload)
 }
 
-func prepareOpenAIWSHTTPBridgeBody(args ...any) ([]byte, error) {
-	var account *Account
-	var payload []byte
-	if len(args) == 1 {
-		payload, _ = args[0].([]byte)
-	} else if len(args) >= 2 {
-		account, _ = args[0].(*Account)
-		payload, _ = args[1].([]byte)
-	}
+func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
+	return prepareOpenAIWSHTTPBridgeBodyForAccount(nil, payload)
+}
+
+func prepareOpenAIWSHTTPBridgeBodyForAccount(account *Account, payload []byte) ([]byte, error) {
 	var body map[string]any
 	if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
 		return nil, err
@@ -446,7 +442,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	redactSensitiveBody := identityMetadata.redactor
 
-	body, err := prepareOpenAIWSHTTPBridgeBody(account, payload)
+	body, err := prepareOpenAIWSHTTPBridgeBodyForAccount(account, payload)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
@@ -986,7 +982,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 }
 
 func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, seedPayload, currentPayload []byte, originalModel string) (string, error) {
-	body, err := prepareOpenAIWSHTTPBridgeBody(account, seedPayload)
+	body, err := prepareOpenAIWSHTTPBridgeBodyForAccount(account, seedPayload)
 	if err != nil {
 		return "", err
 	}

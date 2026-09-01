@@ -366,6 +366,9 @@ func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx cont
 	if eventType != "error" {
 		return
 	}
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return
+	}
 	status := openAIWSPayloadTransientStatus(payload)
 	if status != 0 {
 		if status == http.StatusTooManyRequests {
@@ -379,6 +382,12 @@ func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx cont
 // failures and transient failures. Its return value lets stream callers avoid
 // applying the same transition twice for an error/response.failed pair.
 func (s *OpenAIGatewayService) handleOpenAIWSFailureAccountSideEffects(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) bool {
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		// The event was handled as a request-scoped cyber-policy terminal
+		// result. Returning true prevents paired error/response.failed frames
+		// from attempting account state transitions a second time.
+		return true
+	}
 	message := extractOpenAISSEErrorMessage(payload)
 	status := openAIStreamFailureStatus(payload, message)
 	switch status {

@@ -288,6 +288,20 @@ func TestOpenAIStream403PostOutputAccountSideEffectsIgnoreRequestPermissionError
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
 
+func TestOpenAIStreamCyberPolicySkipsAccountSideEffects(t *testing.T) {
+	repo := &openAIStream403AccountRepo{}
+	svc := &OpenAIGatewayService{rateLimitService: &RateLimitService{accountRepo: repo}}
+	account := &Account{ID: 927, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
+	payload := []byte(`{"type":"response.failed","response":{"error":{"type":"authentication_error","code":"cyber_policy","status_code":401,"message":"request blocked"}}}`)
+
+	status, disabled := svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, payload, "request blocked", nil)
+
+	require.Equal(t, http.StatusUnauthorized, status)
+	require.False(t, disabled)
+	require.Zero(t, repo.setErrorCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
 func TestOpenAIStream403ExplicitCredentialAuthAppliesAccountSideEffects(t *testing.T) {
 	repo := &openAIStream403AccountRepo{}
 	rateLimits := &RateLimitService{accountRepo: repo}

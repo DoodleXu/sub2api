@@ -111,6 +111,16 @@ func TestOpenAIWSCyberPolicyMark_NonCyberPayload(t *testing.T) {
 	require.False(t, hit, "detectOpenAICyberPolicy should return false for non-cyber_policy error code")
 }
 
+func TestParseOpenAIWSErrorEventFields_ResponseFailedUsesNestedError(t *testing.T) {
+	payload := []byte(`{"type":"response.failed","response":{"error":{"code":"cyber_policy","type":"authentication_error","message":"request blocked"}}}`)
+
+	code, errType, message := parseOpenAIWSErrorEventFields(payload)
+
+	require.Equal(t, "cyber_policy", code)
+	require.Equal(t, "authentication_error", errType)
+	require.Equal(t, "request blocked", message)
+}
+
 func TestOpenAIForwardResultSucceededForScheduling_TerminalEvents(t *testing.T) {
 	tests := []struct {
 		name     string

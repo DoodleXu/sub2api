@@ -219,7 +219,23 @@ func parseOpenAIWSErrorEventFields(message []byte) (code string, errType string,
 		return "", "", ""
 	}
 	values := gjson.GetManyBytes(message, "error.code", "error.type", "error.message")
-	return strings.TrimSpace(values[0].String()), strings.TrimSpace(values[1].String()), strings.TrimSpace(values[2].String())
+	code = strings.TrimSpace(values[0].String())
+	errType = strings.TrimSpace(values[1].String())
+	errMessage = strings.TrimSpace(values[2].String())
+	// response.failed carries its error under response.error, while error
+	// events use the top-level error object. Fill each missing field from the
+	// nested shape so mixed envelopes cannot hide a cyber_policy code.
+	nested := gjson.GetManyBytes(message, "response.error.code", "response.error.type", "response.error.message")
+	if code == "" {
+		code = strings.TrimSpace(nested[0].String())
+	}
+	if errType == "" {
+		errType = strings.TrimSpace(nested[1].String())
+	}
+	if errMessage == "" {
+		errMessage = strings.TrimSpace(nested[2].String())
+	}
+	return code, errType, errMessage
 }
 
 func summarizeOpenAIWSErrorEventFieldsFromRaw(codeRaw, errTypeRaw, errMessageRaw string) (code string, errType string, errMessage string) {
