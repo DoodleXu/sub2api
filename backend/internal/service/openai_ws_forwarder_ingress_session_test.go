@@ -1122,7 +1122,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBridg
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
 			cfg := &config.Config{}
 			cfg.Security.URLAllowlist.Enabled = false
 			cfg.Security.URLAllowlist.AllowInsecureHTTP = true

@@ -132,7 +132,6 @@ func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *tes
 }
 
 func TestOpenAIGatewayService_OAuthResponsesPromotesSystemMessageWithoutDuplication(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	const systemPrompt = "Unique system prefix for Responses token accounting."
 	const existingInstructions = "Existing instructions."

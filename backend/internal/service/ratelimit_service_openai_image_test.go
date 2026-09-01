@@ -119,7 +119,7 @@ func TestOpenAIGatewayServiceForwardImages_ImageRateLimitReturnsFailoverAndCools
 	require.Equal(t, openAIImageGenerationRateLimitKey, repo.modelRateLimitCalls[0].scope)
 }
 
-func TestOpenAIGatewayServiceForwardImages_TextFallbackCoolsImageCapability(t *testing.T) {
+func TestOpenAIGatewayServiceForwardImages_TextFallbackDoesNotCoolImageCapability(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat"}`)
 	upstreamSSE := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"model\":\"gpt-5.4-mini\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Here's a polished image prompt for your request.\"}]}]}}\n\n"
@@ -152,7 +152,6 @@ func TestOpenAIGatewayServiceForwardImages_TextFallbackCoolsImageCapability(t *t
 		},
 	}
 
-	before := time.Now()
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
 
 	require.Nil(t, result)
@@ -160,10 +159,5 @@ func TestOpenAIGatewayServiceForwardImages_TextFallbackCoolsImageCapability(t *t
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.False(t, failoverErr.RetryableOnSameAccount)
-	require.Len(t, repo.modelRateLimitCalls, 1)
-	call := repo.modelRateLimitCalls[0]
-	require.Equal(t, account.ID, call.accountID)
-	require.Equal(t, openAIImageGenerationRateLimitKey, call.scope)
-	require.Equal(t, openAIImagesOAuthUnavailableReason, call.reason)
-	require.WithinDuration(t, before.Add(openAIImagesOAuthUnavailableCooldown), call.resetAt, time.Second)
+	require.Empty(t, repo.modelRateLimitCalls, "model text fallback is prompt-dependent and must not cool the account")
 }

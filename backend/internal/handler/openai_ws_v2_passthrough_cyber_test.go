@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -312,7 +313,14 @@ func TestOpenAIResponsesWebSocketV2PassthroughNonCyberTurnAllowsFollowup(t *test
 	}
 	select {
 	case second := <-secondUpstreamFrame:
-		require.JSONEq(t, secondPayload, string(second))
+		generatedEventID := gjson.GetBytes(second, "event_id").String()
+		require.True(t, strings.HasPrefix(generatedEventID, "evt_"), "follow-up must receive a relay correlation event_id")
+		var forwarded map[string]any
+		require.NoError(t, json.Unmarshal(second, &forwarded))
+		delete(forwarded, "event_id")
+		forwardedWithoutEventID, err := json.Marshal(forwarded)
+		require.NoError(t, err)
+		require.JSONEq(t, secondPayload, string(forwardedWithoutEventID))
 	default:
 		t.Fatal("non-cyber follow-up did not reach upstream")
 	}

@@ -263,7 +263,6 @@ func TestCCBufferedFromNativeAnthropic_HappyPathStillConverts(t *testing.T) {
 }
 
 func TestCCBufferedFromNativeAnthropic_ToolArgumentsAreValidJSON(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	svc := newNativeAnthropicHangTestService(5)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -298,7 +297,6 @@ func TestCCBufferedFromNativeAnthropic_ToolArgumentsAreValidJSON(t *testing.T) {
 }
 
 func TestResponsesBufferedFromNativeAnthropic_ToolArgumentsAreValidJSON(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	svc := newNativeAnthropicHangTestService(5)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

@@ -211,7 +211,6 @@ func startPassthroughLifecycleServerWithHooks(
 }
 
 func TestPassthroughLifecycle_CyberTerminalEventsMarkBeforeAfterTurn(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name        string
@@ -304,7 +303,6 @@ func TestPassthroughLifecycle_CyberTerminalEventsMarkBeforeAfterTurn(t *testing.
 }
 
 func TestPassthroughLifecycle_NonCyberFailureKeepsAccountSideEffects(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
 	upstream := newStagedPassthroughConn()
@@ -350,7 +348,6 @@ func TestPassthroughLifecycle_NonCyberFailureKeepsAccountSideEffects(t *testing.
 }
 
 func TestPassthroughLifecycle_CyberSkipsFailureAccountSideEffects(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
 	upstream := newStagedPassthroughConn()
@@ -380,7 +377,6 @@ func TestPassthroughLifecycle_CyberSkipsFailureAccountSideEffects(t *testing.T) 
 }
 
 func TestPassthroughLifecycle_CloseReasonTruncationPreservesUTF8(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
 	upstream := newStagedPassthroughConn()

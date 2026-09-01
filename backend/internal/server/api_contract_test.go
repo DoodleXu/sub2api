@@ -648,8 +648,9 @@ func TestAPIContracts(t *testing.T) {
 							"account_id": 200,
 								"request_id": "req_123",
 								"model": "claude-3",
-								"request_type": "stream",
-								"openai_ws_mode": false,
+							"request_type": "stream",
+							"native_compaction_v2": false,
+							"openai_ws_mode": false,
 								"group_id": null,
 								"subscription_id": null,
 							"input_tokens": 10,
@@ -1026,6 +1027,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
 					"openai_scheduling_usd_to_cny_rate": 7.2,
+					"openai_ttft_mode": "",
 					"openai_codex_client_version":       "",
 					"openai_codex_client_version_synced": "",
 					"openai_codex_version_auto_sync_enabled": true,
@@ -1044,6 +1046,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_balance_recharge_multiplier": 0,
 					"payment_subscription_usd_to_cny_rate": 0,
 					"payment_recharge_fee_rate": 0,
+					"payment_recharge_gift_enabled": false,
+					"payment_recharge_gift_tiers": null,
 					"payment_load_balance_strategy": "",
 					"payment_product_name_prefix": "",
 					"payment_product_name_suffix": "",
@@ -1151,6 +1155,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_low_upstream_rate_priority_enabled": false,
 					"openai_oauth_scheduling_rate_multiplier": 1,
 					"openai_scheduling_usd_to_cny_rate": 7.2,
+					"openai_ttft_mode": "",
 					"session_binding_enabled": false,
 					"step_up_enabled": false,
 					"registration_enabled": true,
@@ -1370,6 +1375,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_balance_recharge_multiplier": 0,
 					"payment_subscription_usd_to_cny_rate": 0,
 					"payment_recharge_fee_rate": 0,
+					"payment_recharge_gift_enabled": false,
+					"payment_recharge_gift_tiers": null,
 					"payment_load_balance_strategy": "",
 					"payment_product_name_prefix": "",
 					"payment_product_name_suffix": "",
@@ -2163,6 +2170,10 @@ func (s *stubAccountRepo) UpdateWithAccountBillingSettings(
 	rateMultiplier *float64,
 ) error {
 	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) ResetQuotaUsedAndClearRateLimitCooldown(context.Context, int64) error {
+	return nil
 }
 
 func (s *stubAccountRepo) Delete(ctx context.Context, id int64) error {

@@ -269,7 +269,6 @@ func TestBuildAntigravityCompatGeminiBody_ConfiguresMixedToolInvocations(t *test
 }
 
 func TestAntigravityCompatChatMixedBuiltInToolsEnableServerSideInvocations(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{antigravityCompatSuccessResponse()}}
 	svc := newAntigravityCompatService(config.GatewayConfig{MaxLineSize: defaultMaxLineSize}, upstream)
 	body := []byte(`{

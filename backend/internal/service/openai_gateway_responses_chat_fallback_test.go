@@ -62,7 +62,6 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 
 // Scenario: 第三方无推理模型不收到兼容档位。
 func TestForwardResponses_ForceChatCompletionsOmitsNoneReasoningEffort(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"company-coding-model","input":"hello","reasoning":{"effort":"none"},"stream":false}`)
 	rec := httptest.NewRecorder()

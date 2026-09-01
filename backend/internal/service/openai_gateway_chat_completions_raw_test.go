@@ -676,7 +676,6 @@ func TestForwardAsRawChatCompletions_StripsEmptyToolCallIdentity(t *testing.T) {
 // 不能再记成 HTTP 200 成功，必须回带类型化的上游截断错误，由 handler 补 SSE error
 // 帧并计入 SLA 失败。
 func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -716,7 +715,6 @@ func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *t
 
 // 上游 200 但一个 SSE 字节都没发：响应头尚未提交，应换号重试而不是回 200 空流。
 func TestForwardAsRawChatCompletions_EmptyStreamBeforeOutputTriggersFailover(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -750,7 +748,6 @@ func TestForwardAsRawChatCompletions_EmptyStreamBeforeOutputTriggersFailover(t *
 // 传输层错误（Cloudflare edge reset 等）在写出后同样不能记成功，且分类要区别于
 // 干净 EOF，便于 ops 分辨 reset 与静默截断。
 func TestForwardAsRawChatCompletions_StreamReadErrorAfterOutputFailsRequest(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -785,7 +782,6 @@ func TestForwardAsRawChatCompletions_StreamReadErrorAfterOutputFailsRequest(t *t
 // 边界：缺 [DONE] 但收到了 usage 帧 —— 生成已完整，只是尾巴丢失。必须继续按成功
 // 计费，否则会误伤那些跑完就直接 EOF 的兼容上游并白送 token。
 func TestForwardAsRawChatCompletions_MissingDoneWithUsageStillSucceeds(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -819,7 +815,6 @@ func TestForwardAsRawChatCompletions_MissingDoneWithUsageStillSucceeds(t *testin
 
 // 边界：缺 [DONE] 与 usage，但末帧带 finish_reason —— 生成正常结束，同样不判截断。
 func TestForwardAsRawChatCompletions_MissingDoneWithFinishReasonStillSucceeds(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -867,7 +862,6 @@ func (w *openAIRawStreamDisconnectedWriter) WriteString(string) (int, error) {
 // 客户端已断开时上游随后截断：两者不可区分，沿用既有语义按已收用量正常收尾计费，
 // 不得把客户端离场记成上游故障。
 func TestForwardAsRawChatCompletions_ClientDisconnectTruncationStillBills(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
@@ -898,7 +892,6 @@ func TestForwardAsRawChatCompletions_ClientDisconnectTruncationStillBills(t *tes
 
 // 客户端取消会连带取消上游请求，上游读因此报 context.Canceled：同样不判为上游截断。
 func TestForwardAsRawChatCompletions_ClientCancelTruncationStillBills(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()

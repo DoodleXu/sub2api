@@ -796,7 +796,6 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

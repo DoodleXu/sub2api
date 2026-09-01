@@ -118,7 +118,6 @@ func TestHandleResponsesBufferedStreamingResponse_RestoresNamespaceTool(t *testi
 
 func TestHandleResponsesBufferedStreamingResponse_ToolArgumentsAreValidJSON(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

@@ -208,7 +208,6 @@ func TestResolveGrokCacheIdentityIDEHeaderPriority(t *testing.T) {
 // side-calls share the main turn's server-side cache prefix instead of
 // replaying the full conversation at full price on every call.
 func TestResolveGrokCacheIdentitySideCallSharesParentCacheKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	parentSession := "6f1c2f46-0f5e-4f9d-9d4e-2f0f1c3d5b7a"
 
 	mainTurn := newGrokCacheTestContext(910)
