@@ -4,6 +4,16 @@
 
 最后更新：2026-09-01
 
+## 2026-09-01 当日修改审核修复
+
+- 审核基线固定为 `refs/tags/upstream/v0.1.184`（`e98ef32eb29aecd30d1def615912ec4dc93173f3`）；今日 fork 提交为 `af9b45157`，上游合并提交为 `5f656898c`。继续采用“移植行为、不恢复上游拆分文件”的聚合模块策略。
+- 补齐合并后遗漏的 OpenAI/Composite 路由兼容层：Composite 按 group 隔离模型归属、缓存失效与 fallback；Responses reasoning 回放清洗；TTFT/Images OAuth cooldown 设置路由；WebSocket 与非流式终态 failover；Grok metadata 数字精度保持；service tier 以实际计费账户为准。
+- 恢复国产配额探测器的 singleflight 共享抓取与成功/失败缓存 TTL；SMTP `use_tls` 支持省略与显式 `false` 的三态语义，并对测试邮件站点名做 HTML 转义；UpdateGroup 对 nil 字段执行真正的部分更新，保留 fork 组策略。
+- 用量日志领域模型、SQL 查询/插入/批量写入、统计过滤、DTO 和夹具统一为 63 参数契约，贯通 `requested_reasoning_effort` 与 `native_compaction_v2`，历史 NULL/旧记录保持可读；未执行生产迁移。
+- UsageProgressBar 恢复 75/90 阈值、fixed/auto 标签布局契约；保留签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全及 OpenAI 调度/计费等 fork 定制能力。
+- 验证结果：后端 `go test -tags=unit ./... -count=1`、`go vet -tags=unit ./...`、`make test-integration` 全部通过；前端 frozen install、lint、typecheck、Vitest（272 个文件/1974 项）和 build 全部通过。`golangci-lint` 当前环境未安装，未宣称通过；浏览器视觉验收未执行（本轮无新增前端业务范围）。
+- 本轮未执行生产 D1 migration、Worker 部署、GitHub push、tag 或 release；提交按逻辑拆分并保留在本地工作树。
+
 ## 2026-08-30 订阅升级反滥用控制与 API Key 换组告警
 
 - 订阅升级服务端要求目标套餐单价严格高于来源订阅的已付日均单价；同套餐/低价套餐不再产生折抵升级订单。
