@@ -135,6 +135,9 @@ type UsageLog struct {
 	// OpenAI: "low" / "medium" / "high" / "xhigh"; Claude: "low" / "medium" / "high" / "max".
 	// Nil means not provided / not applicable.
 	ReasoningEffort *string
+	// RequestedReasoningEffort is the client-requested effort before policy and
+	// model mapping. It falls back to ReasoningEffort for historical rows.
+	RequestedReasoningEffort *string
 	// InboundEndpoint is the client-facing API endpoint path, e.g. /v1/chat/completions.
 	InboundEndpoint *string
 	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
@@ -177,8 +180,10 @@ type UsageLog struct {
 	RequestType  RequestType
 	Stream       bool
 	OpenAIWSMode bool
-	DurationMs   *int
-	FirstTokenMs *int
+	// NativeCompactionV2 marks requests using the native OpenAI remote compaction protocol.
+	NativeCompactionV2 bool
+	DurationMs         *int
+	FirstTokenMs       *int
 	// ImageFirstOutputMs records the first partial or final image output delay.
 	// It is independent from FirstTokenMs so mixed text+image responses retain
 	// their original text TTFT semantics.
