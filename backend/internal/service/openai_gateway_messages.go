@@ -196,8 +196,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
-			SkipDefaultInstructions: true,
-			PreserveToolCallIDs:     true,
+			SkipDefaultInstructions:             true,
+			PreserveToolCallIDs:                 true,
+			OmitPromotedSystemMessagesFromInput: true,
 		})
 		if codexResult.Error != nil {
 			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", codexResult.Error.Error())

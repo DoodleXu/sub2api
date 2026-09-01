@@ -271,22 +271,24 @@ type OpenAIForwardResult struct {
 	ServiceTier *string
 	// ReasoningEffort is extracted from request body (reasoning.effort) or derived from model suffix.
 	// Stored for usage records display; nil means not provided / not applicable.
-	ReasoningEffort        *string
-	Stream                 bool
-	OpenAIWSMode           bool
-	UpstreamTerminalEvent  string
-	ResponseHeaders        http.Header
-	DeferredResponseStatus int
-	DeferredResponseBody   []byte
-	Duration               time.Duration
-	FirstTokenMs           *int
-	ImageFirstOutputMs     *int
-	ClientDisconnect       bool
-	ImageCount             int
-	ImageSize              string
-	ImageInputSize         string
-	ImageOutputSize        string
-	ImageOutputSizes       []string
+	ReasoningEffort *string
+	// RequestedReasoningEffort is the client-requested effort before mapping.
+	RequestedReasoningEffort *string
+	Stream                   bool
+	OpenAIWSMode             bool
+	UpstreamTerminalEvent    string
+	ResponseHeaders          http.Header
+	DeferredResponseStatus   int
+	DeferredResponseBody     []byte
+	Duration                 time.Duration
+	FirstTokenMs             *int
+	ImageFirstOutputMs       *int
+	ClientDisconnect         bool
+	ImageCount               int
+	ImageSize                string
+	ImageInputSize           string
+	ImageOutputSize          string
+	ImageOutputSizes         []string
 	// ImageResponseBody is populated only for successful non-streaming image
 	// responses so the gateway handler can archive the original JSON without
 	// changing the client-visible payload.
@@ -326,6 +328,14 @@ func SetActualOpenAIUpstreamEndpoint(c *gin.Context, endpoint string) {
 	}
 	if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
 		c.Set(openAIUpstreamEndpointContextKey, endpoint)
+	}
+}
+
+// ClearActualOpenAIUpstreamEndpoint clears the endpoint recorded by a prior
+// account attempt. A Gin context is shared across failover attempts.
+func ClearActualOpenAIUpstreamEndpoint(c *gin.Context) {
+	if c != nil {
+		c.Set(openAIUpstreamEndpointContextKey, "")
 	}
 }
 
@@ -3354,6 +3364,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		body = normalizedBody
 	}
 	if account.IsOpenAI() && !shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
+		replayedBody, replayChanged, replayErr := normalizeOpenAIResponsesReasoningContentReplay(body)
+		if replayErr != nil {
+			return nil, fmt.Errorf("normalize OpenAI reasoning content replay: %w", replayErr)
+		}
+		if replayChanged {
+			body = replayedBody
+		}
 		compatBody, compatChanged, compatErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, account)
 		if compatErr != nil {
 			return nil, fmt.Errorf("normalize OpenAI Responses compatibility body: %w", compatErr)
@@ -3410,7 +3427,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
-		keepToolCallNamespaces := shouldKeepOpenAIResponsesToolCallNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath)
+		keepToolCallNamespaces := shouldKeepOpenAIResponsesToolCallNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath, body)
 		body, err = stripOpenAIResponsesInputNamespaces(body, keepToolCallNamespaces)
 		if err != nil {
 			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
@@ -3727,11 +3744,21 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		codexResult := codexTransformResult{}
 		if compatMessagesBridge {
-			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{IsCodexCLI: isCodexCLI, IsCompact: isCompactRequest, SkipDefaultInstructions: true, PreserveToolCallIDs: true})
+			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
+				IsCodexCLI:                          isCodexCLI,
+				IsCompact:                           isCompactRequest,
+				SkipDefaultInstructions:             true,
+				PreserveToolCallIDs:                 true,
+				OmitPromotedSystemMessagesFromInput: true,
+			})
 			ensureCodexOAuthInstructionsField(decoded)
 			markDecodedModified()
 		} else {
-			codexResult = applyCodexOAuthTransform(decoded, isCodexCLI, isCompactRequest)
+			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
+				IsCodexCLI:                          isCodexCLI,
+				IsCompact:                           isCompactRequest,
+				OmitPromotedSystemMessagesFromInput: !compatMessagesBridge,
+			})
 		}
 		if codexResult.Modified {
 			markDecodedModified()
@@ -5521,6 +5548,19 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 	if account != nil {
 		statusCode, _ = s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payload, message, nil)
 	}
+	return s.recordOpenAIStreamUpstreamErrorWithStatus(c, account, passthrough, upstreamRequestID, kind, payload, message, statusCode)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamErrorWithStatus(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamRequestID string,
+	kind string,
+	payload []byte,
+	message string,
+	statusCode int,
+) string {
 	detail := ""
 	if len(payload) > 0 && s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
@@ -5559,11 +5599,23 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 	message string,
 	responseHeaders ...http.Header,
 ) *UpstreamFailoverError {
+	return s.newOpenAIStreamFailoverErrorWithModel(c, account, passthrough, upstreamRequestID, payload, message, "", responseHeaders...)
+}
+
+func (s *OpenAIGatewayService) newOpenAIStreamFailoverErrorWithModel(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamRequestID string,
+	payload []byte,
+	message string,
+	canonicalModel string,
+	responseHeaders ...http.Header,
+) *UpstreamFailoverError {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "OpenAI stream disconnected before completion"
 	}
-	statusCode := openAIStreamFailureStatus(payload, message)
 	clientStatusCode := 0
 	clientMessage := ""
 	if isOpenAIUpstreamCapacityShedEvent(payload) {
@@ -5574,10 +5626,8 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 	if len(responseHeaders) > 0 && responseHeaders[0] != nil {
 		headers = responseHeaders[0].Clone()
 	}
-	// 流内 failed 事件承载于 HTTP 200，响应头是正常配额快照而非限流信号，
-	// 不写账号级限流/封禁状态；重试与切号由 failover 引擎按
-	// StatusCode/RetryableOnSameAccount 决定。
-	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "failover", payload, message)
+	statusCode, _ := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payload, message, headers, canonicalModel)
+	message = s.recordOpenAIStreamUpstreamErrorWithStatus(c, account, passthrough, upstreamRequestID, "failover", payload, message, statusCode)
 	errType := "upstream_error"
 	if statusCode == http.StatusTooManyRequests {
 		errType = "rate_limit_error"
@@ -5742,7 +5792,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthroughWithAccount(
 	// stream=false was requested. Without this conversion the client would
 	// receive raw SSE text or a terminal event with empty output.
 	if isEventStreamResponse(resp.Header) {
-		return s.handlePassthroughSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handlePassthroughSSEToJSON(resp, c, account, body, originalModel, mappedModel)
 	}
 
 	usage := &OpenAIUsage{}
@@ -5793,9 +5843,26 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthroughWithAccount(
 // response for the passthrough path. It mirrors handleSSEToJSON while
 // preserving passthrough payloads, except compact-only model remapping may
 // rewrite model fields back to the original requested model.
-func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
+func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, args ...any) (*openaiNonStreamingResultPassthrough, error) {
+	var account *Account
+	var body []byte
+	var originalModel, mappedModel string
+	if len(args) == 3 {
+		body, _ = args[0].([]byte)
+		originalModel, _ = args[1].(string)
+		mappedModel, _ = args[2].(string)
+	} else if len(args) >= 4 {
+		account, _ = args[0].(*Account)
+		body, _ = args[1].([]byte)
+		originalModel, _ = args[2].(string)
+		mappedModel, _ = args[3].(string)
+	}
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
+	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
+		ok = false
+	}
 
 	usage := &OpenAIUsage{}
 	if ok {
@@ -5824,14 +5891,17 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 		body = restoredBody
 	} else {
-		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
-		if terminalOK && terminalType == "response.failed" {
+		// terminal event was handled above
+		if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 			msg := extractOpenAISSEErrorMessage(terminalPayload)
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
 			if signal := newOpenAICompactFallbackSignal(c, terminalPayload, msg); signal != nil {
 				return nil, signal
+			}
+			if account != nil && ((terminalType == "response.failed" && openAIStreamFailedEventShouldFailover(terminalPayload, msg)) || (terminalType == "error" && openAIStreamErrorEventShouldFailover(terminalPayload, msg))) {
+				return nil, s.newOpenAIStreamFailoverError(c, account, true, resp.Header.Get("X-Request-Id"), terminalPayload, msg, resp.Header)
 			}
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
@@ -6922,6 +6992,10 @@ func isEventStreamResponse(header http.Header) bool {
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
+	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
+		ok = false
+	}
 
 	usage := &OpenAIUsage{}
 	if ok {
@@ -6955,14 +7029,17 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 		body = restoredBody
 	} else {
-		terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
-		if terminalOK && terminalType == "response.failed" {
+		// terminal event was handled above
+		if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 			msg := extractOpenAISSEErrorMessage(terminalPayload)
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
 			if signal := newOpenAICompactFallbackSignal(c, terminalPayload, msg); signal != nil {
 				return nil, signal
+			}
+			if failover := s.nonStreamingTerminalFailureFailover(c, resp, account, false, terminalType, terminalPayload, msg); failover != nil {
+				return nil, failover
 			}
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
@@ -6994,6 +7071,22 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 		searchCount:      countGrokNativeSearchCallsFromSSEBody(bodyText),
 	}, nil
+}
+
+func (s *OpenAIGatewayService) nonStreamingTerminalFailureFailover(c *gin.Context, resp *http.Response, account *Account, passthrough bool, terminalType string, payload []byte, message string) *UpstreamFailoverError {
+	if account == nil || resp == nil || c == nil || c.Writer == nil || c.Writer.Written() || IsResponseCommitted(c) {
+		return nil
+	}
+	shouldFailover := false
+	if terminalType == "response.failed" {
+		shouldFailover = openAIStreamFailedEventShouldFailover(payload, message)
+	} else if terminalType == "error" {
+		shouldFailover = openAIStreamErrorEventShouldFailover(payload, message)
+	}
+	if !shouldFailover {
+		return nil
+	}
+	return s.newOpenAIStreamFailoverError(c, account, passthrough, resp.Header.Get("X-Request-Id"), payload, message, resp.Header)
 }
 
 func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {
@@ -7853,6 +7946,8 @@ type OpenAIRecordUsageInput struct {
 	PricingAt time.Time
 	// CyberBlocked 为 true 时把该用量行标记为 cyber（request_type=cyber），计费逻辑不变。
 	CyberBlocked bool
+	// NativeCompactionV2 marks native remote compaction requests for usage analytics.
+	NativeCompactionV2 bool
 	ChannelUsageFields
 }
 
@@ -7876,6 +7971,7 @@ type CyberPolicyUsageInput struct {
 	IPAddress          string
 	SessionID          string
 	RequestPayloadHash string
+	NativeCompactionV2 bool
 	APIKeyService      APIKeyQuotaUpdater
 	ChannelUsageFields
 }
@@ -7914,6 +8010,7 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		APIKeyService:      in.APIKeyService,
 		ChannelUsageFields: in.ChannelUsageFields,
 		CyberBlocked:       true,
+		NativeCompactionV2: in.NativeCompactionV2,
 	}); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber usage record failed: request_id=%s err=%v", in.RequestID, err)
 	}
@@ -7956,7 +8053,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	account := input.Account
 	subscription := input.Subscription
 	ApplyOpenAIImageBillingResolution(result)
-	ApplyOpenAIServiceTierBillingResolution(result)
 
 	// OpenAI input_tokens 是总输入，包含缓存读取和缓存写入明细。
 	// 将三类 token 拆成互斥桶，避免缓存写入同时按普通输入和 cache_write 重复计费。
@@ -8015,10 +8111,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.Model,
 	)
 	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels)
-	serviceTier := ""
-	if result.ServiceTier != nil {
-		serviceTier = strings.TrimSpace(*result.ServiceTier)
-	}
 	billingAccount := account
 	if account.IsShadow() {
 		billingAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
@@ -8027,6 +8119,11 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		}
 	}
 	longContextBillingGate := openAILongContextBillingGate(billingAccount)
+	ApplyOpenAIServiceTierBillingResolution(billingAccount, result)
+	serviceTier := ""
+	if result.ServiceTier != nil {
+		serviceTier = strings.TrimSpace(*result.ServiceTier)
+	}
 	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate, pricingAt)
 	if err != nil {
 		// 上游已经完成时不能只返回异步错误，否则既没有扣费，也没有可追溯记录。
@@ -8089,30 +8186,32 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	usageLog := &UsageLog{
-		UserID:                user.ID,
-		APIKeyID:              apiKey.ID,
-		AccountID:             account.ID,
-		RequestID:             requestID,
-		Model:                 result.Model,
-		RequestedModel:        requestedModel,
-		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
-		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
-		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
-		ServiceTier:           result.ServiceTier,
-		ReasoningEffort:       result.ReasoningEffort,
-		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
-		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:           actualInputTokens,
-		OutputTokens:          result.Usage.OutputTokens,
-		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:       result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:     result.Usage.ImageOutputTokens,
-		ImageCount:            result.ImageCount,
-		ImageSize:             optionalTrimmedStringPtr(result.ImageSize),
-		ImageInputSize:        optionalTrimmedStringPtr(result.ImageInputSize),
-		ImageOutputSize:       optionalTrimmedStringPtr(result.ImageOutputSize),
-		ImageSizeSource:       optionalTrimmedStringPtr(result.ImageSizeSource),
-		ImageSizeBreakdown:    result.ImageSizeBreakdown,
+		UserID:                   user.ID,
+		APIKeyID:                 apiKey.ID,
+		AccountID:                account.ID,
+		RequestID:                requestID,
+		Model:                    result.Model,
+		RequestedModel:           requestedModel,
+		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
+		UpstreamResponseModel:    optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch:    upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ServiceTier:              result.ServiceTier,
+		ReasoningEffort:          result.ReasoningEffort,
+		RequestedReasoningEffort: coalesceRequestedReasoningEffort(result.RequestedReasoningEffort, result.ReasoningEffort),
+		NativeCompactionV2:       input.NativeCompactionV2,
+		InboundEndpoint:          optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:         optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:              actualInputTokens,
+		OutputTokens:             result.Usage.OutputTokens,
+		CacheCreationTokens:      result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:          result.Usage.CacheReadInputTokens,
+		ImageOutputTokens:        result.Usage.ImageOutputTokens,
+		ImageCount:               result.ImageCount,
+		ImageSize:                optionalTrimmedStringPtr(result.ImageSize),
+		ImageInputSize:           optionalTrimmedStringPtr(result.ImageInputSize),
+		ImageOutputSize:          optionalTrimmedStringPtr(result.ImageOutputSize),
+		ImageSizeSource:          optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeBreakdown:       result.ImageSizeBreakdown,
 	}
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
@@ -8275,46 +8374,48 @@ func (s *OpenAIGatewayService) recordOpenAIPricingPendingUsage(
 		)
 	}
 	usageLog := &UsageLog{
-		UserID:                input.User.ID,
-		APIKeyID:              input.APIKey.ID,
-		AccountID:             input.Account.ID,
-		RequestID:             requestID,
-		Model:                 result.Model,
-		RequestedModel:        requestedModel,
-		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
-		UpstreamResponseModel: optionalTrimmedStringPtr(result.UpstreamResponseModel),
-		UpstreamModelMismatch: upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
-		ChannelID:             optionalInt64Ptr(input.ChannelID),
-		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
-		BillingMode:           &billingMode,
-		ServiceTier:           result.ServiceTier,
-		ReasoningEffort:       result.ReasoningEffort,
-		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
-		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),
-		InputTokens:           actualInputTokens,
-		OutputTokens:          result.Usage.OutputTokens,
-		CacheCreationTokens:   result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:       result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:     result.Usage.ImageOutputTokens,
-		RateMultiplier:        rateMultiplier,
-		AccountRateMultiplier: &accountRateMultiplier,
-		BillingType:           BillingTypeBalance,
-		Stream:                result.Stream,
-		OpenAIWSMode:          result.OpenAIWSMode,
-		DurationMs:            &durationMs,
-		FirstTokenMs:          result.FirstTokenMs,
-		ImageFirstOutputMs:    result.ImageFirstOutputMs,
-		UserAgent:             optionalTrimmedStringPtr(input.UserAgent),
-		IPAddress:             optionalTrimmedStringPtr(input.IPAddress),
-		ImageCount:            result.ImageCount,
-		ImageSize:             optionalTrimmedStringPtr(result.ImageSize),
-		ImageInputSize:        optionalTrimmedStringPtr(result.ImageInputSize),
-		ImageOutputSize:       optionalTrimmedStringPtr(result.ImageOutputSize),
-		ImageSizeSource:       optionalTrimmedStringPtr(result.ImageSizeSource),
-		ImageSizeBreakdown:    result.ImageSizeBreakdown,
-		VideoCount:            result.VideoCount,
-		VideoResolution:       optionalTrimmedStringPtr(result.VideoResolution),
-		CreatedAt:             time.Now(),
+		UserID:                   input.User.ID,
+		APIKeyID:                 input.APIKey.ID,
+		AccountID:                input.Account.ID,
+		RequestID:                requestID,
+		Model:                    result.Model,
+		RequestedModel:           requestedModel,
+		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
+		UpstreamResponseModel:    optionalTrimmedStringPtr(result.UpstreamResponseModel),
+		UpstreamModelMismatch:    upstreamModelMismatch(sentModel, result.UpstreamResponseModel),
+		ChannelID:                optionalInt64Ptr(input.ChannelID),
+		ModelMappingChain:        optionalTrimmedStringPtr(input.ModelMappingChain),
+		BillingMode:              &billingMode,
+		ServiceTier:              result.ServiceTier,
+		ReasoningEffort:          result.ReasoningEffort,
+		RequestedReasoningEffort: coalesceRequestedReasoningEffort(result.RequestedReasoningEffort, result.ReasoningEffort),
+		NativeCompactionV2:       input.NativeCompactionV2,
+		InboundEndpoint:          optionalTrimmedStringPtr(input.InboundEndpoint),
+		UpstreamEndpoint:         optionalTrimmedStringPtr(input.UpstreamEndpoint),
+		InputTokens:              actualInputTokens,
+		OutputTokens:             result.Usage.OutputTokens,
+		CacheCreationTokens:      result.Usage.CacheCreationInputTokens,
+		CacheReadTokens:          result.Usage.CacheReadInputTokens,
+		ImageOutputTokens:        result.Usage.ImageOutputTokens,
+		RateMultiplier:           rateMultiplier,
+		AccountRateMultiplier:    &accountRateMultiplier,
+		BillingType:              BillingTypeBalance,
+		Stream:                   result.Stream,
+		OpenAIWSMode:             result.OpenAIWSMode,
+		DurationMs:               &durationMs,
+		FirstTokenMs:             result.FirstTokenMs,
+		ImageFirstOutputMs:       result.ImageFirstOutputMs,
+		UserAgent:                optionalTrimmedStringPtr(input.UserAgent),
+		IPAddress:                optionalTrimmedStringPtr(input.IPAddress),
+		ImageCount:               result.ImageCount,
+		ImageSize:                optionalTrimmedStringPtr(result.ImageSize),
+		ImageInputSize:           optionalTrimmedStringPtr(result.ImageInputSize),
+		ImageOutputSize:          optionalTrimmedStringPtr(result.ImageOutputSize),
+		ImageSizeSource:          optionalTrimmedStringPtr(result.ImageSizeSource),
+		ImageSizeBreakdown:       result.ImageSizeBreakdown,
+		VideoCount:               result.VideoCount,
+		VideoResolution:          optionalTrimmedStringPtr(result.VideoResolution),
+		CreatedAt:                time.Now(),
 	}
 	if result.VideoDurationSeconds > 0 {
 		usageLog.VideoDurationSeconds = &result.VideoDurationSeconds

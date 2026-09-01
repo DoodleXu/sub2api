@@ -22,7 +22,11 @@ type channelMonitorV2GroupAuthorizer interface {
 	GetAvailableGroups(ctx context.Context, userID int64) ([]service.Group, error)
 }
 
-func NewChannelMonitorV2Handler(svc *service.ChannelMonitorV2Service, apiKeyService *service.APIKeyService) *ChannelMonitorV2Handler {
+func NewChannelMonitorV2Handler(svc *service.ChannelMonitorV2Service, apiKeyServices ...*service.APIKeyService) *ChannelMonitorV2Handler {
+	var apiKeyService *service.APIKeyService
+	if len(apiKeyServices) > 0 {
+		apiKeyService = apiKeyServices[0]
+	}
 	return &ChannelMonitorV2Handler{service: svc, apiKeyService: apiKeyService}
 }
 

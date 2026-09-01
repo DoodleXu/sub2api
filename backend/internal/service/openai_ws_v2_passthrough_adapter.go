@@ -1358,6 +1358,27 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if msgType == coderws.MessageText && writeErr == nil {
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
+					if eventType == "error" || eventType == "response.failed" {
+						code, errType, _ := parseOpenAIWSErrorEventFields(payload)
+						if !strings.EqualFold(strings.TrimSpace(code), "cyber_policy") {
+							status := int(gjson.GetBytes(payload, "error.status_code").Int())
+							if status == 0 {
+								status = int(gjson.GetBytes(payload, "response.error.status_code").Int())
+							}
+							if status == 0 {
+								status = int(gjson.GetBytes(payload, "error.status").Int())
+							}
+							if status == 0 {
+								status = int(gjson.GetBytes(payload, "response.error.status").Int())
+							}
+							if status == 0 {
+								status = openAIWSErrorHTTPStatusFromRaw(code, errType)
+							}
+							if status > 0 {
+								s.handleOpenAIAccountUpstreamError(ctx, account, status, handshakeHeaders, payload, usageMeta.requestModelForFrame(payload))
+							}
+						}
+					}
 				}
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
@@ -1371,7 +1392,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if !ok {
 					return
 				}
-				_ = clientConn.Close(status, reason)
+				_ = clientConn.Close(status, truncateOpenAIWSCloseReason(reason))
 				_ = clientConn.CloseNow()
 			},
 			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error) {
@@ -1429,7 +1450,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			status = coderws.StatusTryAgainLater
 			reason = "websocket ingress capacity lease lost; please reconnect"
 		}
-		_ = clientConn.Close(status, reason)
+		_ = clientConn.Close(status, truncateOpenAIWSCloseReason(reason))
 		_ = clientConn.CloseNow()
 		return NewOpenAIWSClientCloseError(status, reason, cause)
 	}

@@ -67,8 +67,10 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
 	}
 
-	convertedEffort := chatReq.ReasoningEffort
-	reasoningEffort := &convertedEffort
+	var reasoningEffort *string
+	if convertedEffort := strings.TrimSpace(chatReq.ReasoningEffort); convertedEffort != "" {
+		reasoningEffort = &convertedEffort
+	}
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 	serviceTier := extractOpenAIServiceTierFromBody(body)
 
@@ -159,7 +161,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		ServiceTier:                 serviceTier,
 		Stream:                      false,
 		Duration:                    time.Since(startTime),
 	}, nil
@@ -220,7 +222,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+			ServiceTier:                 serviceTier,
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
 			FirstTokenMs:                scan.FirstTokenMs,
@@ -256,7 +258,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		ServiceTier:                 serviceTier,
 		Stream:                      true,
 		Duration:                    time.Since(startTime),
 		FirstTokenMs:                scan.FirstTokenMs,

@@ -2611,12 +2611,23 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.SubscriptionType != "" {
 		group.SubscriptionType = input.SubscriptionType
 	}
-	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
-	// 前端始终发送这三个字段，无需 nil 守卫
-	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
-	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
-	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
-	group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD = applySubscriptionLimitPolicy(group.SubscriptionType, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD)
+	// 限额字段：nil 表示本次未修改；负数表示"无限制"，0 表示"不允许用量"，
+	// 正数表示具体限额。部分更新不能把未提供的字段清空。
+	if input.DailyLimitUSD != nil {
+		group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
+	}
+	if input.WeeklyLimitUSD != nil {
+		group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
+	}
+	if input.MonthlyLimitUSD != nil {
+		group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	}
+	// Standard groups historically allow the generic limits; only apply the
+	// subscription policy when the group is/was an explicit subscription type or
+	// when this request explicitly changes the subscription type.
+	if input.SubscriptionType != "" || group.IsSubscriptionType() {
+		group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD = applySubscriptionLimitPolicy(group.SubscriptionType, group.DailyLimitUSD, group.WeeklyLimitUSD, group.MonthlyLimitUSD)
+	}
 	if input.LongContextPricingEnabled != nil {
 		group.LongContextPricingEnabled = *input.LongContextPricingEnabled
 	}
@@ -5477,7 +5488,7 @@ func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) erro
 		return infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_NO_QUOTA_RESET",
 			"cannot reset quota for a spark shadow account; manage it on the parent account")
 	}
-	return s.accountRepo.ResetQuotaUsed(ctx, id)
+	return s.accountRepo.ResetQuotaUsedAndClearRateLimitCooldown(ctx, id)
 }
 
 // EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，

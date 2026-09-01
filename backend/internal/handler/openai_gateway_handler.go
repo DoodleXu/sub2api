@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
@@ -60,6 +61,20 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
 	return err != nil && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
+}
+
+func openAIWSIngressEndedByClient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if coderws.CloseStatus(err) == coderws.StatusNormalClosure {
+		return true
+	}
+	var closeErr *service.OpenAIWSClientCloseError
+	if !errors.As(err, &closeErr) {
+		return false
+	}
+	return closeErr.StatusCode() == coderws.StatusNormalClosure || errors.Is(err, context.Canceled)
 }
 
 func openAIWSTurnBillingModel(result *service.OpenAIForwardResult, mapping service.ChannelMappingResult, requestedModel, upstreamModel string) string {
@@ -1438,7 +1453,30 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 }
 
-func resolveOpenAIMessagesMetadataSession(sessionHash, promptCacheKey, reqModel string, body []byte) (string, string) {
+func resolveOpenAIMessagesMetadataSession(args ...any) (string, string) {
+	var c *gin.Context
+	var sessionHash, promptCacheKey, reqModel string
+	var body []byte
+	if len(args) == 4 {
+		sessionHash, _ = args[0].(string)
+		promptCacheKey, _ = args[1].(string)
+		reqModel, _ = args[2].(string)
+		body, _ = args[3].([]byte)
+	} else if len(args) >= 5 {
+		c, _ = args[0].(*gin.Context)
+		sessionHash, _ = args[1].(string)
+		promptCacheKey, _ = args[2].(string)
+		reqModel, _ = args[3].(string)
+		body, _ = args[4].([]byte)
+	}
+	// An explicit OpenAI prompt-cache signal remains authoritative. Otherwise
+	// Claude Code's stable session header must win over the body-derived hash so
+	// parent/subagent turns keep one routing affinity across changing payloads.
+	if promptCacheKey == "" && c != nil {
+		if claudeSessionID := strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id")); claudeSessionID != "" {
+			return service.DeriveSessionHashFromSeed(claudeSessionID), promptCacheKey
+		}
+	}
 	// Anthropic metadata.user_id 只作为账号粘性信号。上游 GPT/Codex 缓存键
 	// 交给 ForwardAsAnthropic 从 cache_control 或完整消息 digest 派生，避免
 	// 固定 metadata key 压住后续 turn 的缓存滚动。
@@ -2615,7 +2653,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return
 			}
 
-			if shouldReportOpenAIWSProxyAccountFailure(err) {
+			if shouldReportOpenAIWSProxyAccountFailure(err) && !openAIWSIngressEndedByClient(err) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, wsForwardModel, false, nil), false, nil, err)
 			}
 			closeStatus, closeReason := summarizeWSCloseErrorForLog(err)
@@ -3195,6 +3233,9 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 	reason = strings.TrimSpace(reason)
 	if len(reason) > 120 {
 		reason = reason[:120]
+		for len(reason) > 0 && !utf8.ValidString(reason) {
+			reason = reason[:len(reason)-1]
+		}
 	}
 	_ = conn.Close(status, reason)
 	_ = conn.CloseNow()

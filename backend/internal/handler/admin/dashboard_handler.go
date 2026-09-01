@@ -333,14 +333,19 @@ func (h *DashboardHandler) GetUsageTrend(c *gin.Context) {
 		response.BadRequest(c, "Invalid upstream_model_mismatch value, use true or false")
 		return
 	}
-	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || strings.TrimSpace(model) != "" || requestType != nil || stream != nil || billingType != nil || upstreamModelMismatch != nil
+	nativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
+	usesRawLogs := userID > 0 || apiKeyID > 0 || accountID > 0 || groupID > 0 || strings.TrimSpace(model) != "" || requestType != nil || stream != nil || nativeCompactionV2 != nil || billingType != nil || upstreamModelMismatch != nil
 	if usesRawLogs && !validateDashboardDetailRange(c, startTime, endTime) {
 		return
 	}
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	trend, hit, err := h.getUsageTrendCached(queryCtx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, upstreamModelMismatch)
+	trend, hit, err := h.getUsageTrendCached(queryCtx, startTime, endTime, granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, nativeCompactionV2, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get usage trend")
 		return
@@ -437,7 +442,12 @@ func (h *DashboardHandler) GetModelStats(c *gin.Context) {
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	stats, hit, err := h.getModelStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, billingType, upstreamModelMismatch)
+	modelNativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
+	stats, hit, err := h.getModelStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, modelSource, requestType, stream, modelNativeCompactionV2, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get model statistics")
 		return
@@ -532,7 +542,12 @@ func (h *DashboardHandler) GetGroupStats(c *gin.Context) {
 
 	queryCtx, cancel := dashboardDetailContext(c)
 	defer cancel()
-	stats, hit, err := h.getGroupStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, billingType, upstreamModelMismatch)
+	groupNativeCompactionV2, err := parseOptionalBoolDashboardFilter(c, "native_compaction_v2")
+	if err != nil {
+		response.BadRequest(c, "Invalid native_compaction_v2 value, use true or false")
+		return
+	}
+	stats, hit, err := h.getGroupStatsCached(queryCtx, startTime, endTime, userID, apiKeyID, accountID, groupID, requestType, stream, groupNativeCompactionV2, billingType, upstreamModelMismatch)
 	if err != nil {
 		respondDashboardDetailError(c, err, "Failed to get group statistics")
 		return

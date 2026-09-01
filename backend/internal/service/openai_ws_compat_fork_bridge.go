@@ -26,12 +26,19 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 		changed = liteChanged
 	}
 	normalized := body
+	if next, reasoningChanged, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
+		return body, false, err
+	} else {
+		normalized, changed = next, changed || reasoningChanged
+	}
 	if account.IsOpenAIOAuthLike() {
 		var err error
-		normalized, changed, err = normalizeOpenAIResponsesLegacyIngress(normalized)
+		var legacyChanged bool
+		normalized, legacyChanged, err = normalizeOpenAIResponsesLegacyIngress(normalized)
 		if err != nil {
 			return body, false, err
 		}
+		changed = changed || legacyChanged
 		var oauthChanged bool
 		normalized, oauthChanged, err = normalizeOpenAIOAuthResponsesCompatibilityBody(normalized)
 		if err != nil {

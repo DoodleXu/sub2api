@@ -242,7 +242,15 @@ func skipOpenAIWSJSONValue(payload []byte, i int) int {
 	return len(payload)
 }
 
-func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, error) {
+func prepareOpenAIWSHTTPBridgeBody(args ...any) ([]byte, error) {
+	var account *Account
+	var payload []byte
+	if len(args) == 1 {
+		payload, _ = args[0].([]byte)
+	} else if len(args) >= 2 {
+		account, _ = args[0].(*Account)
+		payload, _ = args[1].([]byte)
+	}
 	var body map[string]any
 	if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
 		return nil, err

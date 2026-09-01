@@ -75,6 +75,10 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
+	if strings.EqualFold(strings.TrimSpace(chatReq.ReasoningEffort), "none") {
+		chatReq.ReasoningEffort = ""
+		reasoningEffort = nil
+	}
 	chatReq.Model = upstreamModel
 	if clientStream {
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
@@ -249,7 +253,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		ServiceTier:                 serviceTier,
 		Stream:                      false,
 		Duration:                    time.Since(startTime),
 	}, nil
@@ -320,7 +324,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+			ServiceTier:                 serviceTier,
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
 			FirstTokenMs:                scan.FirstTokenMs,
@@ -335,7 +339,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 			UpstreamModel:               upstreamModel,
 			ReasoningEffort:             reasoningEffort,
 			UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-			ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+			ServiceTier:                 serviceTier,
 			Stream:                      true,
 			Duration:                    time.Since(startTime),
 			FirstTokenMs:                scan.FirstTokenMs,
@@ -366,7 +370,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		UpstreamModel:               upstreamModel,
 		ReasoningEffort:             reasoningEffort,
 		UpstreamResponseServiceTier: observedUpstreamResponseServiceTier(c),
-		ServiceTier:                 resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		ServiceTier:                 serviceTier,
 		Stream:                      true,
 		Duration:                    time.Since(startTime),
 		FirstTokenMs:                scan.FirstTokenMs,

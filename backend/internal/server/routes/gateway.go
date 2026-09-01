@@ -513,6 +513,17 @@ func RegisterGatewayRoutes(
 
 }
 
+// dispatchCodexModelsGateway keeps the live Codex manifest endpoint limited to
+// OpenAI groups; other platforms use the generated compatibility manifest.
+// Keeping this decision in one helper avoids route aliases drifting apart.
+func dispatchCodexModelsGateway(c *gin.Context, openAIHandler, generatedHandler gin.HandlerFunc) {
+	if getGroupPlatform(c) == service.PlatformOpenAI {
+		openAIHandler(c)
+		return
+	}
+	generatedHandler(c)
+}
+
 // getGroupPlatform extracts the group platform from the API Key stored in context.
 func getGroupPlatform(c *gin.Context) string {
 	apiKey, ok := middleware.GetAPIKeyFromContext(c)

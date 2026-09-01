@@ -38,7 +38,14 @@ func openAIStreamCredentialAuthFailure(payload []byte) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(c *gin.Context, account *Account, payload []byte, message string, headers http.Header) (int, bool) {
+func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
+	c *gin.Context,
+	account *Account,
+	payload []byte,
+	message string,
+	headers http.Header,
+	canonicalModel ...string,
+) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
 	switch statusCode {
 	case http.StatusForbidden:
@@ -51,10 +58,14 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(c *g
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
 		}
-		if statusCode == http.StatusTooManyRequests {
-			headers = nil
+		model := firstNonEmpty(canonicalModel...)
+		if model == "" {
+			model = firstNonEmpty(gjson.GetBytes(payload, "model").String(), gjson.GetBytes(payload, "response.model").String())
 		}
-		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, headers, payload)
+		if statusCode == http.StatusTooManyRequests {
+			headers = openAIWSSemantic429Headers(account, model, headers)
+		}
+		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, headers, payload, model)
 	default:
 		return statusCode, false
 	}

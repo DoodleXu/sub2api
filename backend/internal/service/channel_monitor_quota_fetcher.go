@@ -141,19 +141,7 @@ func (f *ChannelMonitorQuotaFetcher) Fetch(ctx context.Context, accountID int64)
 	// 避免某个监控的取消波及共享同一账号的其他监控。
 	key := "monitor-quota:" + strconv.FormatInt(accountID, 10)
 	ch := f.flight.DoChan(key, func() (any, error) {
-		if cached, ok := f.cachedSnapshot(accountID, time.Now()); ok {
-			return cached, nil
-		}
-		fetchCtx, cancel := context.WithTimeout(context.Background(), monitorQuotaFetchTimeout)
-		defer cancel()
-		snapshot := f.fetchUncached(fetchCtx, accountID, time.Now())
-		// 失败也进短 TTL 负缓存：凭据失效/故障期间不必每次调度都打上游。
-		ttl := monitorQuotaFetchCacheTTL
-		if !snapshot.Success {
-			ttl = monitorQuotaErrorCacheTTL
-		}
-		f.storeSnapshot(accountID, snapshot, time.Now().Add(ttl))
-		return snapshot, nil
+		return f.fetchShared(accountID), nil
 	})
 	select {
 	case <-ctx.Done():
@@ -165,6 +153,24 @@ func (f *ChannelMonitorQuotaFetcher) Fetch(ctx context.Context, accountID int64)
 		}
 		return snapshot
 	}
+}
+
+// fetchShared executes the context-independent portion of a singleflight
+// request. It rechecks the cache because another caller may have populated it
+// after the outer fast path but before this flight started.
+func (f *ChannelMonitorQuotaFetcher) fetchShared(accountID int64) *domain.MonitorQuotaSnapshot {
+	if cached, ok := f.cachedSnapshot(accountID, time.Now()); ok {
+		return cached
+	}
+	fetchCtx, cancel := context.WithTimeout(context.Background(), monitorQuotaFetchTimeout)
+	defer cancel()
+	snapshot := f.fetchUncached(fetchCtx, accountID, time.Now())
+	ttl := monitorQuotaFetchCacheTTL
+	if !snapshot.Success {
+		ttl = monitorQuotaErrorCacheTTL
+	}
+	f.storeSnapshot(accountID, snapshot, time.Now().Add(ttl))
+	return snapshot
 }
 
 func (f *ChannelMonitorQuotaFetcher) cachedSnapshot(accountID int64, now time.Time) (*domain.MonitorQuotaSnapshot, bool) {

@@ -8,11 +8,26 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+const openAIWSClientCloseReasonMaxBytes = 120
+
+func truncateOpenAIWSCloseReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) <= openAIWSClientCloseReasonMaxBytes {
+		return reason
+	}
+	reason = reason[:openAIWSClientCloseReasonMaxBytes]
+	for len(reason) > 0 && !utf8.ValidString(reason) {
+		reason = reason[:len(reason)-1]
+	}
+	return reason
+}
 
 func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled
@@ -254,6 +269,9 @@ func markOpenAIWSClientVisibleFailure(c *gin.Context, eventType string, payload 
 	if status == 0 {
 		status = openAIWSErrorHTTPStatusFromRaw(code, errType)
 	}
+	if strings.EqualFold(code, "cyber_policy") {
+		status = http.StatusOK
+	}
 	if errType == "" {
 		errType = "upstream_error"
 	}
@@ -262,6 +280,30 @@ func markOpenAIWSClientVisibleFailure(c *gin.Context, eventType string, payload 
 	}
 	if message == "" {
 		message = "upstream websocket request failed"
+	}
+	if strings.EqualFold(code, "cyber_policy") {
+		inputTokens := int(gjson.GetBytes(payload, prefix+".usage.input_tokens").Int())
+		outputTokens := int(gjson.GetBytes(payload, prefix+".usage.output_tokens").Int())
+		if inputTokens == 0 {
+			inputTokens = int(gjson.GetBytes(payload, "usage.input_tokens").Int())
+		}
+		if inputTokens == 0 {
+			inputTokens = int(gjson.GetBytes(payload, "response.usage.input_tokens").Int())
+		}
+		if outputTokens == 0 {
+			outputTokens = int(gjson.GetBytes(payload, "usage.output_tokens").Int())
+		}
+		if outputTokens == 0 {
+			outputTokens = int(gjson.GetBytes(payload, "response.usage.output_tokens").Int())
+		}
+		MarkOpsCyberPolicy(c, CyberPolicyMark{
+			Code:           "cyber_policy",
+			Message:        message,
+			Body:           truncateString(string(payload), 4096),
+			UpstreamStatus: status,
+			UpstreamInTok:  inputTokens,
+			UpstreamOutTok: outputTokens,
+		})
 	}
 	MarkOpsStreamFailure(c, errType, code, message, status)
 }

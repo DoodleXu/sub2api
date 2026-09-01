@@ -1969,7 +1969,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 
 const (
 	openAIImagesOAuthUnavailableDefaultCooldown = 30 * time.Minute
-	openAIImagesOAuthUnavailableReason          = "openai_images_oauth_tool_unavailable"
+	// Keep the pre-configurable name as an alias for fork callers and tests that
+	// still refer to the original fixed cooldown contract.
+	openAIImagesOAuthUnavailableCooldown = openAIImagesOAuthUnavailableDefaultCooldown
+	openAIImagesOAuthUnavailableReason   = "openai_images_oauth_tool_unavailable"
 )
 
 // shouldCoolOpenAIImagesToolForError decides whether an image_generation_unavailable
