@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -29,6 +30,8 @@ const (
 	// 0/未配置 = 关闭换算（订阅按 price 数值直付），显式配置后 CNY 通道订阅按 price × rate 收款。
 	SettingSubscriptionUSDToCNYRate      = "SUBSCRIPTION_USD_TO_CNY_RATE"
 	SettingRechargeFeeRate               = "RECHARGE_FEE_RATE"
+	SettingRechargeGiftEnabled           = "PAYMENT_RECHARGE_GIFT_ENABLED"
+	SettingRechargeGiftTiers             = "PAYMENT_RECHARGE_GIFT_TIERS"
 	SettingProductNamePrefix             = "PRODUCT_NAME_PREFIX"
 	SettingProductNameSuffix             = "PRODUCT_NAME_SUFFIX"
 	SettingHelpImageURL                  = "PAYMENT_HELP_IMAGE_URL"
@@ -62,6 +65,8 @@ type PaymentConfig struct {
 	// SubscriptionUSDToCNYRate 为 0 时订阅换算关闭（兼容存量行为）。
 	SubscriptionUSDToCNYRate float64 `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate          float64 `json:"recharge_fee_rate"`
+	RechargeGiftEnabled      bool `json:"recharge_gift_enabled"`
+	RechargeGiftTiers        []RechargeGiftTier `json:"recharge_gift_tiers"`
 	LoadBalanceStrategy      string  `json:"load_balance_strategy"`
 	ProductNamePrefix        string  `json:"product_name_prefix"`
 	ProductNameSuffix        string  `json:"product_name_suffix"`
@@ -82,6 +87,11 @@ type PaymentConfig struct {
 	AlipayMobilePrecreateDeepLink bool `json:"alipay_mobile_precreate_deep_link"`
 }
 
+type RechargeGiftTier struct {
+	Threshold float64 `json:"threshold"`
+	Percent float64 `json:"percent"`
+}
+
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
 	Enabled                   *bool    `json:"enabled"`
@@ -95,6 +105,8 @@ type UpdatePaymentConfigRequest struct {
 	BalanceRechargeMultiplier *float64 `json:"balance_recharge_multiplier"`
 	SubscriptionUSDToCNYRate  *float64 `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate           *float64 `json:"recharge_fee_rate"`
+	RechargeGiftEnabled       *bool `json:"recharge_gift_enabled"`
+	RechargeGiftTiers         *[]RechargeGiftTier `json:"recharge_gift_tiers"`
 	LoadBalanceStrategy       *string  `json:"load_balance_strategy"`
 	ProductNamePrefix         *string  `json:"product_name_prefix"`
 	ProductNameSuffix         *string  `json:"product_name_suffix"`
@@ -227,7 +239,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 	keys := []string{
 		SettingPaymentEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
-		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingLoadBalanceStrategy,
+		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingRechargeGiftEnabled, SettingRechargeGiftTiers, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
 		SettingHelpImageURL, SettingHelpText,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
@@ -258,6 +270,7 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		BalanceRechargeMultiplier: normalizeBalanceRechargeMultiplier(pcParseFloat(vals[SettingBalanceRechargeMult], defaultBalanceRechargeMultiplier)),
 		SubscriptionUSDToCNYRate:  normalizeSubscriptionUSDToCNYRate(pcParseFloat(vals[SettingSubscriptionUSDToCNYRate], 0)),
 		RechargeFeeRate:           pcParseFloat(vals[SettingRechargeFeeRate], 0),
+		RechargeGiftEnabled:       vals[SettingRechargeGiftEnabled] == "true",
 		LoadBalanceStrategy:       vals[SettingLoadBalanceStrategy],
 		ProductNamePrefix:         vals[SettingProductNamePrefix],
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
@@ -272,6 +285,14 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
+	}
+	if raw := vals[SettingRechargeGiftTiers]; raw != "" {
+		var tiers []RechargeGiftTier
+		if json.Unmarshal([]byte(raw), &tiers) == nil {
+			for _, tier := range tiers {
+				if tier.Threshold > 0 && tier.Percent > 0 && tier.Percent <= 100 { cfg.RechargeGiftTiers = append(cfg.RechargeGiftTiers, tier) }
+			}
+		}
 	}
 	cfg.AlipayMobilePrecreateDeepLink = pcEnvBoolOverride(
 		SettingAlipayMobilePrecreateDeepLink,
@@ -351,6 +372,13 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 			return infraerrors.BadRequest("INVALID_RECHARGE_FEE_RATE", "recharge fee rate allows at most 2 decimal places")
 		}
 	}
+	if req.RechargeGiftTiers != nil {
+		for _, tier := range *req.RechargeGiftTiers {
+			if math.IsNaN(tier.Threshold) || math.IsInf(tier.Threshold, 0) || tier.Threshold <= 0 || math.IsNaN(tier.Percent) || math.IsInf(tier.Percent, 0) || tier.Percent <= 0 || tier.Percent > 100 {
+				return infraerrors.BadRequest("INVALID_RECHARGE_GIFT_TIERS", "recharge gift tiers must use positive thresholds and percentages between 0 and 100")
+			}
+		}
+	}
 	m := make(map[string]string)
 	if req.Enabled != nil {
 		m[SettingPaymentEnabled] = formatBoolOrEmpty(req.Enabled)
@@ -384,6 +412,11 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.RechargeFeeRate != nil {
 		m[SettingRechargeFeeRate] = formatNonNegativeFloat(req.RechargeFeeRate)
+	}
+	if req.RechargeGiftEnabled != nil { m[SettingRechargeGiftEnabled] = formatBoolOrEmpty(req.RechargeGiftEnabled) }
+	if req.RechargeGiftTiers != nil {
+		b, _ := json.Marshal(*req.RechargeGiftTiers)
+		m[SettingRechargeGiftTiers] = string(b)
 	}
 	if req.LoadBalanceStrategy != nil {
 		m[SettingLoadBalanceStrategy] = derefStr(req.LoadBalanceStrategy)

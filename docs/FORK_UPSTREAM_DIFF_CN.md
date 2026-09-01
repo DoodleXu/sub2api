@@ -2,7 +2,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-08-31
+最后更新：2026-09-01
 
 ## 2026-08-30 订阅升级反滥用控制与 API Key 换组告警
 
@@ -23,10 +23,17 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `90f555752` | 本次合并 v0.1.183 前的 fork 基线；版本源保持 `0.1.264` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.183` -> `e8cb019fabf8b55199436229044cbf9aa7a82564` | 合入 2026-08-25 发布的官方 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.183` -> `e8cb019fabf8b55199436229044cbf9aa7a82564` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 10 个冲突路径，其中 3 个内容冲突、7 个 modify/delete 冲突；拆分文件保持删除，增量行为迁入 fork 聚合模块。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `0e45fd3fe` | 本次合并 v0.1.184 前的 fork 基线；版本源保持 `0.1.267` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.184` -> `e98ef32eb29aecd30d1def615912ec4dc93173f3` | 合入 2026-08-31 发布的官方 release；没有越过该 release 标签合并 main |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.1.184` -> `e98ef32eb29aecd30d1def615912ec4dc93173f3` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 62 个冲突路径，其中 37 个内容冲突、25 个 modify/delete 冲突；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+
+### v0.1.184 合并记录
+
+- 合入 Codex 路由模型目录与能力同步、原生 compaction 用量记录、映射前推理强度展示、公共分组访问控制、智谱 GLM Coding Plan、Ollama Cloud 用量窗口、可配置 OpenAI 图像工具冷却和管理员 TTFT 设置等上游能力。
+- 上游新增行为涉及网关稳定性、WebSocket、额度重置、时区解析、计费 service tier、Grok/Anthropic 兼容与支付展示；fork 聚合模块保留既有人民币成本、账号归档、图片历史、Web Console、运营中心和高级调度语义。
+- 上游拆分的 handler/service/repository 文件继续保持删除，增量行为以 fork 聚合文件为承载；`backend/cmd/server/VERSION` 保持 fork 的 `0.1.267`。
+- 合并前 `git merge-tree --write-tree` 识别 62 个冲突路径（37 个内容、25 个 modify/delete），按聚合结构与 fork 定制保留方案处理；本次未推送、未发布。
 
 更新本文时建议先刷新引用：
 

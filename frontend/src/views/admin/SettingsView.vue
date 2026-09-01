@@ -5301,6 +5301,32 @@
                   </p>
                 </div>
 
+              <!-- OpenAI Responses 首 token 统计 -->
+              <div class="border-b border-gray-100 pb-5 dark:border-dark-700 md:col-span-2">
+                <label
+                  for="openai-ttft-mode"
+                  class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.gatewayForwarding.openaiTTFTMode") }}
+                </label>
+                <select
+                  id="openai-ttft-mode"
+                  v-model="form.openai_ttft_mode"
+                  class="input mt-2 w-full"
+                  data-testid="openai-ttft-mode"
+                >
+                  <option value="semantic">
+                    {{ t("admin.settings.gatewayForwarding.openaiTTFTModeSemantic") }}
+                  </option>
+                  <option value="visible">
+                    {{ t("admin.settings.gatewayForwarding.openaiTTFTModeVisible") }}
+                  </option>
+                </select>
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.gatewayForwarding.openaiTTFTModeHint") }}
+                </p>
+              </div>
+
               <!-- Fingerprint Unification -->
               <div class="flex items-center justify-between">
                 <div>
@@ -8076,6 +8102,14 @@
                       }}
                     </p>
                   </div>
+                  <div class="sm:col-span-2">
+                    <div class="flex items-center justify-between">
+                      <label class="input-label">{{ t('admin.settings.payment.rechargeGift') }}</label>
+                      <Toggle v-model="form.payment_recharge_gift_enabled" />
+                    </div>
+                    <textarea v-model="form.payment_recharge_gift_tiers_json" class="input mt-2 min-h-20 font-mono text-xs" :disabled="!form.payment_recharge_gift_enabled" placeholder='[{"threshold":30,"percent":2},{"threshold":500,"percent":12}]' />
+                    <p class="mt-0.5 text-xs text-gray-400">{{ t('admin.settings.payment.rechargeGiftHint') }}</p>
+                  </div>
                   <div>
                     <label class="input-label"
                       >{{ t("admin.settings.payment.orderTimeout") }}
@@ -10319,6 +10353,8 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
+  payment_recharge_gift_enabled: false,
+  payment_recharge_gift_tiers_json: "[]",
   payment_enabled_types: [],
   payment_help_image_url: "",
   payment_help_text: "",
@@ -10503,6 +10539,7 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_weight_session_sticky: "",
 
   // Gateway forwarding behavior
+  openai_ttft_mode: "semantic",
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
   enable_cch_signing: false,
@@ -11582,6 +11619,15 @@ function serializeCodexRowsToJSON(rows: CodexClientRow[]): string {
   return entries.length > 0 ? JSON.stringify(entries) : "";
 }
 
+function parseRechargeGiftTiers(raw: string): { threshold: number; percent: number }[] {
+  try {
+    const value = JSON.parse(raw || "[]")
+    if (!Array.isArray(value)) return []
+    return value.map((item) => ({ threshold: Number(item?.threshold), percent: Number(item?.percent) }))
+      .filter((item) => Number.isFinite(item.threshold) && item.threshold > 0 && Number.isFinite(item.percent) && item.percent > 0 && item.percent <= 100)
+  } catch { return [] }
+}
+
 function addCodexBlacklistRow(): void {
   codexBlacklistRows.value.push({ originator: "", uaContains: "" });
 }
@@ -11620,6 +11666,7 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    form.payment_recharge_gift_tiers_json = JSON.stringify(settings.payment_recharge_gift_tiers || [], null, 2)
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -12307,6 +12354,8 @@ async function saveSettings() {
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
+      openai_ttft_mode:
+        form.openai_ttft_mode === "visible" ? "visible" : "semantic",
       enable_fingerprint_unification: form.enable_fingerprint_unification,
       enable_metadata_passthrough: form.enable_metadata_passthrough,
       enable_cch_signing: form.enable_cch_signing,
@@ -12360,6 +12409,8 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_recharge_gift_enabled: form.payment_recharge_gift_enabled,
+      payment_recharge_gift_tiers: parseRechargeGiftTiers(form.payment_recharge_gift_tiers_json),
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,

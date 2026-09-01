@@ -71,6 +71,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		}
 	} else if req.OrderType == payment.OrderTypeBalance {
 		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+		orderAmount = decimal.NewFromFloat(orderAmount).Add(decimal.NewFromFloat(calculateRechargeGift(req.Amount, cfg.RechargeGiftEnabled, cfg.RechargeGiftTiers))).Round(2).InexactFloat64()
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
