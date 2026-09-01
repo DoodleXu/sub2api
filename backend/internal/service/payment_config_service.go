@@ -63,16 +63,16 @@ type PaymentConfig struct {
 	BalanceDisabled           bool     `json:"balance_disabled"`
 	BalanceRechargeMultiplier float64  `json:"balance_recharge_multiplier"`
 	// SubscriptionUSDToCNYRate 为 0 时订阅换算关闭（兼容存量行为）。
-	SubscriptionUSDToCNYRate float64 `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate          float64 `json:"recharge_fee_rate"`
-	RechargeGiftEnabled      bool `json:"recharge_gift_enabled"`
+	SubscriptionUSDToCNYRate float64            `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate          float64            `json:"recharge_fee_rate"`
+	RechargeGiftEnabled      bool               `json:"recharge_gift_enabled"`
 	RechargeGiftTiers        []RechargeGiftTier `json:"recharge_gift_tiers"`
-	LoadBalanceStrategy      string  `json:"load_balance_strategy"`
-	ProductNamePrefix        string  `json:"product_name_prefix"`
-	ProductNameSuffix        string  `json:"product_name_suffix"`
-	HelpImageURL             string  `json:"help_image_url"`
-	HelpText                 string  `json:"help_text"`
-	StripePublishableKey     string  `json:"stripe_publishable_key,omitempty"`
+	LoadBalanceStrategy      string             `json:"load_balance_strategy"`
+	ProductNamePrefix        string             `json:"product_name_prefix"`
+	ProductNameSuffix        string             `json:"product_name_suffix"`
+	HelpImageURL             string             `json:"help_image_url"`
+	HelpText                 string             `json:"help_text"`
+	StripePublishableKey     string             `json:"stripe_publishable_key,omitempty"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled bool   `json:"cancel_rate_limit_enabled"`
@@ -89,29 +89,29 @@ type PaymentConfig struct {
 
 type RechargeGiftTier struct {
 	Threshold float64 `json:"threshold"`
-	Percent float64 `json:"percent"`
+	Percent   float64 `json:"percent"`
 }
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
 type UpdatePaymentConfigRequest struct {
-	Enabled                   *bool    `json:"enabled"`
-	MinAmount                 *float64 `json:"min_amount"`
-	MaxAmount                 *float64 `json:"max_amount"`
-	DailyLimit                *float64 `json:"daily_limit"`
-	OrderTimeoutMin           *int     `json:"order_timeout_minutes"`
-	MaxPendingOrders          *int     `json:"max_pending_orders"`
-	EnabledTypes              []string `json:"enabled_payment_types"`
-	BalanceDisabled           *bool    `json:"balance_disabled"`
-	BalanceRechargeMultiplier *float64 `json:"balance_recharge_multiplier"`
-	SubscriptionUSDToCNYRate  *float64 `json:"subscription_usd_to_cny_rate"`
-	RechargeFeeRate           *float64 `json:"recharge_fee_rate"`
-	RechargeGiftEnabled       *bool `json:"recharge_gift_enabled"`
+	Enabled                   *bool               `json:"enabled"`
+	MinAmount                 *float64            `json:"min_amount"`
+	MaxAmount                 *float64            `json:"max_amount"`
+	DailyLimit                *float64            `json:"daily_limit"`
+	OrderTimeoutMin           *int                `json:"order_timeout_minutes"`
+	MaxPendingOrders          *int                `json:"max_pending_orders"`
+	EnabledTypes              []string            `json:"enabled_payment_types"`
+	BalanceDisabled           *bool               `json:"balance_disabled"`
+	BalanceRechargeMultiplier *float64            `json:"balance_recharge_multiplier"`
+	SubscriptionUSDToCNYRate  *float64            `json:"subscription_usd_to_cny_rate"`
+	RechargeFeeRate           *float64            `json:"recharge_fee_rate"`
+	RechargeGiftEnabled       *bool               `json:"recharge_gift_enabled"`
 	RechargeGiftTiers         *[]RechargeGiftTier `json:"recharge_gift_tiers"`
-	LoadBalanceStrategy       *string  `json:"load_balance_strategy"`
-	ProductNamePrefix         *string  `json:"product_name_prefix"`
-	ProductNameSuffix         *string  `json:"product_name_suffix"`
-	HelpImageURL              *string  `json:"help_image_url"`
-	HelpText                  *string  `json:"help_text"`
+	LoadBalanceStrategy       *string             `json:"load_balance_strategy"`
+	ProductNamePrefix         *string             `json:"product_name_prefix"`
+	ProductNameSuffix         *string             `json:"product_name_suffix"`
+	HelpImageURL              *string             `json:"help_image_url"`
+	HelpText                  *string             `json:"help_text"`
 
 	// Cancel rate limit settings
 	CancelRateLimitEnabled *bool   `json:"cancel_rate_limit_enabled"`
@@ -290,7 +290,9 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		var tiers []RechargeGiftTier
 		if json.Unmarshal([]byte(raw), &tiers) == nil {
 			for _, tier := range tiers {
-				if tier.Threshold > 0 && tier.Percent > 0 && tier.Percent <= 100 { cfg.RechargeGiftTiers = append(cfg.RechargeGiftTiers, tier) }
+				if tier.Threshold > 0 && tier.Percent > 0 && tier.Percent <= 100 {
+					cfg.RechargeGiftTiers = append(cfg.RechargeGiftTiers, tier)
+				}
 			}
 		}
 	}
@@ -413,7 +415,9 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	if req.RechargeFeeRate != nil {
 		m[SettingRechargeFeeRate] = formatNonNegativeFloat(req.RechargeFeeRate)
 	}
-	if req.RechargeGiftEnabled != nil { m[SettingRechargeGiftEnabled] = formatBoolOrEmpty(req.RechargeGiftEnabled) }
+	if req.RechargeGiftEnabled != nil {
+		m[SettingRechargeGiftEnabled] = formatBoolOrEmpty(req.RechargeGiftEnabled)
+	}
 	if req.RechargeGiftTiers != nil {
 		b, _ := json.Marshal(*req.RechargeGiftTiers)
 		m[SettingRechargeGiftTiers] = string(b)

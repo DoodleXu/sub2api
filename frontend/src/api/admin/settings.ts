@@ -665,8 +665,8 @@ export interface SystemSettings {
   payment_balance_recharge_multiplier: number;
   payment_subscription_usd_to_cny_rate: number;
   payment_recharge_fee_rate: number;
-  payment_recharge_gift_enabled: boolean;
-  payment_recharge_gift_tiers: { threshold: number; percent: number }[];
+  payment_recharge_gift_enabled?: boolean;
+  payment_recharge_gift_tiers?: { threshold: number; percent: number }[];
   payment_load_balance_strategy: string;
   payment_product_name_prefix: string;
   payment_product_name_suffix: string;

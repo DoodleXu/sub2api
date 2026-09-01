@@ -10,10 +10,14 @@ import (
 )
 
 func calculateRechargeGift(paymentAmount float64, enabled bool, tiers []RechargeGiftTier) float64 {
-	if !enabled || paymentAmount <= 0 { return 0 }
+	if !enabled || paymentAmount <= 0 {
+		return 0
+	}
 	percent := 0.0
 	for _, tier := range tiers {
-		if paymentAmount >= tier.Threshold && tier.Percent > percent { percent = tier.Percent }
+		if paymentAmount >= tier.Threshold && tier.Percent > percent {
+			percent = tier.Percent
+		}
 	}
 	return decimal.NewFromFloat(paymentAmount).Mul(decimal.NewFromFloat(percent)).Div(decimal.NewFromInt(100)).Round(2).InexactFloat64()
 }

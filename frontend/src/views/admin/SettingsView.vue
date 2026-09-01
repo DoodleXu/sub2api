@@ -10260,6 +10260,8 @@ type SettingsForm = Omit<
   aliyun_captcha_access_key_secret: string;
   linuxdo_connect_client_secret: string;
   dingtalk_connect_client_secret: string;
+  payment_recharge_gift_tiers_json: string;
+  payment_recharge_gift_enabled: boolean;
   wechat_connect_app_secret: string;
   wechat_connect_open_app_secret: string;
   wechat_connect_mp_app_secret: string;
@@ -10353,7 +10355,7 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
-  payment_recharge_gift_enabled: false,
+  payment_recharge_gift_enabled: false as boolean,
   payment_recharge_gift_tiers_json: "[]",
   payment_enabled_types: [],
   payment_help_image_url: "",
