@@ -11621,13 +11621,20 @@ function serializeCodexRowsToJSON(rows: CodexClientRow[]): string {
   return entries.length > 0 ? JSON.stringify(entries) : "";
 }
 
-function parseRechargeGiftTiers(raw: string): { threshold: number; percent: number }[] {
+function parseRechargeGiftTiers(raw: string): { threshold: number; percent: number }[] | null {
   try {
     const value = JSON.parse(raw || "[]")
-    if (!Array.isArray(value)) return []
-    return value.map((item) => ({ threshold: Number(item?.threshold), percent: Number(item?.percent) }))
-      .filter((item) => Number.isFinite(item.threshold) && item.threshold > 0 && Number.isFinite(item.percent) && item.percent > 0 && item.percent <= 100)
-  } catch { return [] }
+    if (!Array.isArray(value)) return null
+    const tiers: { threshold: number; percent: number }[] = []
+    for (const item of value) {
+      const tier = { threshold: Number(item?.threshold), percent: Number(item?.percent) }
+      if (!Number.isFinite(tier.threshold) || tier.threshold <= 0 || !Number.isFinite(tier.percent) || tier.percent <= 0 || tier.percent > 100) {
+        return null
+      }
+      tiers.push(tier)
+    }
+    return tiers
+  } catch { return null }
 }
 
 function addCodexBlacklistRow(): void {
@@ -12057,6 +12064,19 @@ async function saveSettings() {
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
 
+    const normalizedRechargeGiftTiers = parseRechargeGiftTiers(
+      form.payment_recharge_gift_tiers_json,
+    );
+    if (normalizedRechargeGiftTiers === null) {
+      appStore.showError(
+        localText(
+          "充值满赠档位必须是有效的 JSON 数组。",
+          "Recharge gift tiers must be a valid JSON array.",
+        ),
+      );
+      return;
+    }
+
     const normalizedLoginAgreementDocuments =
       normalizeLoginAgreementDocumentsForSave();
     if (form.login_agreement_enabled && normalizedLoginAgreementDocuments.length === 0) {
@@ -12412,7 +12432,7 @@ async function saveSettings() {
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
       payment_recharge_gift_enabled: form.payment_recharge_gift_enabled,
-      payment_recharge_gift_tiers: parseRechargeGiftTiers(form.payment_recharge_gift_tiers_json),
+      payment_recharge_gift_tiers: normalizedRechargeGiftTiers,
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
