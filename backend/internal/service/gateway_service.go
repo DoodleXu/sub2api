@@ -10417,8 +10417,12 @@ func (s *GatewayService) calculateRecordUsageCost(
 	multiplier float64,
 	imageMultiplier float64,
 	pricingAt time.Time,
-	opts *recordUsageOpts,
+	optsList ...*recordUsageOpts,
 ) *CostBreakdown {
+	var opts *recordUsageOpts
+	if len(optsList) > 0 {
+		opts = optsList[0]
+	}
 	// 图片生成：渠道定价为 token 计费时走 token 路径，否则走图片计费
 	if result.ImageCount > 0 {
 		if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil && resolved.Mode == BillingModeToken {

@@ -149,6 +149,12 @@ func ProvideBatchImageHandler(batchService *service.BatchImagePublicService, dow
 	return h
 }
 
+// ProvideChannelMonitorV2APIKeyServices adapts the singleton API key service
+// to the variadic dependency accepted by ChannelMonitorV2Handler.
+func ProvideChannelMonitorV2APIKeyServices(apiKeyService *service.APIKeyService) []*service.APIKeyService {
+	return []*service.APIKeyService{apiKeyService}
+}
+
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
 func ProvideSystemHandler(updateService *service.UpdateService, lockService *service.SystemOperationLockService) *admin.SystemHandler {
 	return admin.NewSystemHandler(updateService, lockService)
@@ -237,6 +243,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementHandler,
 	NewDailyCheckinHandler,
 	NewChannelMonitorUserHandler,
+	ProvideChannelMonitorV2APIKeyServices,
 	NewChannelMonitorV2Handler,
 	ProvideGatewayHandler,
 	ProvideOpenAIGatewayHandler,

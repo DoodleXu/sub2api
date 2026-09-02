@@ -2,7 +2,22 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-01
+最后更新：2026-09-02
+
+## 2026-09-02 合并上游 v0.2.0
+
+- 以 `refs/tags/upstream/v0.2.0`（`aa236488351eb71e120fc2b6fb32e36b0374c918`）为同步目标，采用“移植行为、不恢复上游拆分文件”的聚合模块策略。
+- 合入 OpenAI Fast 分组策略、免费 Fast 按 Standard 价格计费、按模型 reasoning effort 映射及超限拒绝/降级、Kimi 原生 Responses、Claude Fable 5.1、定时自动化无 call ID 启动、模型定价弹窗与 API Key 缓存身份修复。
+- 保留 fork 的 `backend/cmd/server/VERSION=0.1.268`、Agent Identity 脱敏、Responses Lite、图片/WS 逐轮计费、人民币成本、账号归档、签到、运营中心、Web 创作台、生图管理及高级调度语义。
+- `admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_forward.go`、`openai_gateway_passthrough.go`、`openai_gateway_request_body.go`、`openai_gateway_usage.go` 继续保持删除；上游 Fast、CN Responses、计费行为迁入 fork 聚合模块。
+- 保留上游 WebSocket terminal 前关闭失败判定、API Key 缺省不合成 `instructions`、Anthropic fallback beta 清理和 `model_not_found` 冷却语义；Kimi 适配测试改为原生 Responses 契约。
+- 本次合并前预检识别 17 个冲突路径（11 个内容、6 个 modify/delete），已按冲突方案处理；迁移文件按完整文件名保留，未执行生产迁移、部署或远程推送。
+
+### v0.2.0 合并验证
+
+- 已重新生成 Wire；`TZ=UTC go test -tags=unit -count=1 ./...` 后端全量 unit 通过，包含合并后补齐的国产协议与 WebSocket 中继回归。
+- 前端 `npm run typecheck` 与 `npm run test:run` 通过（274 个测试文件、1995 个用例）；测试期间仅有既有 Browserslist、localStorage 与预期 jsdom stderr 提示。
+- 合并提交前 `git diff --cached --check` 通过；未执行生产迁移、部署、远程推送、tag 或 release。
 
 ## 2026-09-01 当日修改审核修复
 
@@ -36,10 +51,10 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `0e45fd3fe` | 本次合并 v0.1.184 前的 fork 基线；版本源保持 `0.1.267` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.1.184` -> `e98ef32eb29aecd30d1def615912ec4dc93173f3` | 合入 2026-08-31 发布的官方 release；没有越过该 release 标签合并 main |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.1.184` -> `e98ef32eb29aecd30d1def615912ec4dc93173f3` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 62 个冲突路径，其中 37 个内容冲突、25 个 modify/delete 冲突；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `2fb64657c` | 合并 v0.2.0 前的 fork 基线；版本源保持 `0.1.268` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.0` -> `aa236488351eb71e120fc2b6fb32e36b0374c918` | 已合入 2026-09-02 发布的官方 release |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.0` -> `aa236488351eb71e120fc2b6fb32e36b0374c918` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 17 个冲突路径，其中 11 个内容冲突、6 个 modify/delete 冲突；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
 
