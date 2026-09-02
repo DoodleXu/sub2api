@@ -19,6 +19,13 @@
 - 前端 `npm run typecheck` 与 `npm run test:run` 通过（274 个测试文件、1995 个用例）；测试期间仅有既有 Browserslist、localStorage 与预期 jsdom stderr 提示。
 - 合并提交前 `git diff --cached --check` 通过；未执行生产迁移、部署、远程推送、tag 或 release。
 
+### v0.2.0 合并后审核修复
+
+- 修复 WebSocket v2 relay 未保留上游终态 `service_tier` 的计费元数据缺口；原生 WS、ingress WS 与 passthrough WS 现在统一向 `OpenAIForwardResult` 传递实际上游终态 service tier，避免把请求侧 priority 错当成实际上游计费档位。
+- 补齐 WS 各入口的 `requested_reasoning_effort` 传播，保留策略降级前的用户原始请求值，贯通逐轮用量日志与最终转发结果。
+- 恢复上游先发裸 `error`、随后 EOF/断连时的 pending turn 终态结算，避免错误响应已经透传但逐轮计费/用量回调永远不触发；新增回归测试并将 idle-timeout 测试时钟计数改为原子操作以消除 race。
+- 审核修复验证：后端 `TZ=UTC go test -tags=unit -count=1 ./...`、`TZ=UTC go vet -tags=unit ./...`、WS relay 定向 race 测试全部通过；前端 `npm run typecheck`、`npm run lint:check`、Vitest（274 个文件、1995 个用例）和 `npm run build` 全部通过。未执行生产迁移、部署、远程推送、tag 或 release。
+
 ## 2026-09-01 当日修改审核修复
 
 - 审核基线固定为 `refs/tags/upstream/v0.1.184`（`e98ef32eb29aecd30d1def615912ec4dc93173f3`）；今日 fork 提交为 `af9b45157`，上游合并提交为 `5f656898c`。继续采用“移植行为、不恢复上游拆分文件”的聚合模块策略。

@@ -38,6 +38,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	requestedReasoningEffort := CanonicalRequestedReasoningEffortFromReqBody(reqBody, originalModel, mappedModel)
 	responseModelObserver := &upstreamResponseModelObserver{}
 	identityMetadata, metadataErr := s.agentIdentityRequestMetadata(ctx, account)
 	if metadataErr != nil {
@@ -832,6 +833,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ImageOutputSizes:              imageCounter.Sizes(),
 		ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTier(reqBody)),
 		ReasoningEffort:               extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+		RequestedReasoningEffort:      requestedReasoningEffort,
 		Stream:                        reqStream,
 		OpenAIWSMode:                  true,
 		UpstreamTerminalEvent:         upstreamTerminalEvent,

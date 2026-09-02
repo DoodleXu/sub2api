@@ -200,7 +200,7 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
 		{
 			msgType: coderws.MessageText,
-			payload: []byte(`{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`),
+			payload: []byte(`{"type":"response.completed","response":{"id":"resp_123","service_tier":"default","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`),
 		},
 	}, true)
 
@@ -213,6 +213,7 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.Equal(t, "gpt-5.3-codex", result.RequestModel)
 	require.Equal(t, "resp_123", result.RequestID)
 	require.Equal(t, "response.completed", result.TerminalEventType)
+	require.Equal(t, "default", result.ResponseServiceTier)
 	require.Equal(t, 7, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, 2, result.Usage.CacheReadInputTokens)
@@ -229,7 +230,7 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	clientWrites := clientConn.Writes()
 	require.Len(t, clientWrites, 1)
 	require.Equal(t, coderws.MessageText, clientWrites[0].msgType)
-	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`, string(clientWrites[0].payload))
+	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","service_tier":"default","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`, string(clientWrites[0].payload))
 }
 
 func TestRelay_BeforeWriteClientCanRedactPayload(t *testing.T) {
@@ -422,10 +423,10 @@ func TestRelay_IdleTimeoutDoesNotCloseClientOnError(t *testing.T) {
 	defer cancel()
 
 	now := time.Now()
-	callCount := 0
+	var callCount atomic.Int32
 	nowFn := func() time.Time {
-		callCount++
-		if callCount <= 5 {
+		count := callCount.Add(1)
+		if count <= 5 {
 			return now
 		}
 		return now.Add(time.Hour)
@@ -1009,6 +1010,33 @@ func TestRelay_UpstreamErrorEventPassthroughRaw(t *testing.T) {
 	require.Len(t, clientWrites, 1)
 	require.Equal(t, coderws.MessageText, clientWrites[0].msgType)
 	require.Equal(t, errorEvent, clientWrites[0].payload)
+}
+
+func TestRelay_UpstreamBareErrorThenEOFSettlesTurn(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`),
+	}}, true)
+
+	var turns []RelayTurnResult
+	firstPayload := []byte(`{"type":"response.create","model":"gpt-4o","input":[]}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result, relayExit := Relay(ctx, clientConn, upstreamConn, firstPayload, RelayOptions{
+		OnTurnComplete: func(turn RelayTurnResult) {
+			turns = append(turns, turn)
+		},
+	})
+	require.Nil(t, relayExit)
+	require.Equal(t, "error", result.TerminalEventType)
+	require.Len(t, turns, 1)
+	require.Equal(t, "error", turns[0].TerminalEventType)
+	require.Equal(t, uint64(1), turns[0].TurnSequence)
+	require.Empty(t, turns[0].RequestID)
 }
 
 func TestRelay_PreservesFirstMessageType(t *testing.T) {

@@ -151,23 +151,50 @@ func openAIWSPassthroughPolicyModelFromSessionFrame(account *Account, payload []
 }
 
 type openAIWSPassthroughUsageMeta struct {
-	mu        sync.Mutex
-	turns     map[uint64]openAIWSPassthroughTurnMeta
-	latest    openAIWSPassthroughTurnMeta
-	hasLatest bool
+	mu                              sync.Mutex
+	turns                           map[uint64]openAIWSPassthroughTurnMeta
+	latest                          openAIWSPassthroughTurnMeta
+	hasLatest                       bool
+	pendingRequestedReasoningEffort *string
 
 	// 仅在 client->upstream filter / write callback goroutine 中读写。
 	sessionRequestModel string
 }
 
 type openAIWSPassthroughTurnMeta struct {
-	requestModel    string
-	upstreamModel   string
-	serviceTier     *string
-	reasoningEffort *string
-	imageModel      string
-	imageSizeTier   string
-	imageInputSize  string
+	requestModel             string
+	upstreamModel            string
+	serviceTier              *string
+	reasoningEffort          *string
+	requestedReasoningEffort *string
+	imageModel               string
+	imageSizeTier            string
+	imageInputSize           string
+}
+
+func (m *openAIWSPassthroughUsageMeta) capturePendingRequestedReasoningEffort(value *string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if value == nil || strings.TrimSpace(*value) == "" {
+		m.pendingRequestedReasoningEffort = nil
+		return
+	}
+	v := strings.TrimSpace(*value)
+	m.pendingRequestedReasoningEffort = &v
+}
+
+func (m *openAIWSPassthroughUsageMeta) consumePendingRequestedReasoningEffort() *string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value := m.pendingRequestedReasoningEffort
+	m.pendingRequestedReasoningEffort = nil
+	return value
 }
 
 func newOpenAIWSPassthroughUsageMeta(initialRequestModel string, firstFrame []byte) *openAIWSPassthroughUsageMeta {
@@ -231,10 +258,11 @@ func (m *openAIWSPassthroughUsageMeta) captureWrittenTurnWithRequestModel(
 		upstreamModel = strings.TrimSpace(gjson.GetBytes(policyOutput, "model").String())
 	}
 	meta := openAIWSPassthroughTurnMeta{
-		requestModel:    requestModel,
-		upstreamModel:   upstreamModel,
-		serviceTier:     extractOpenAIServiceTierFromBody(policyOutput),
-		reasoningEffort: extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, requestModel),
+		requestModel:             requestModel,
+		upstreamModel:            upstreamModel,
+		serviceTier:              extractOpenAIServiceTierFromBody(policyOutput),
+		reasoningEffort:          extractOpenAIReasoningEffortFromBody(policyOutput, mappedModel, requestModel),
+		requestedReasoningEffort: m.consumePendingRequestedReasoningEffort(),
 	}
 	if IsImageGenerationIntent(openAIResponsesEndpoint, requestModel, policyOutput) {
 		imageCfg, _ := resolveOpenAIResponsesImageBillingConfigDetailedFromBody(policyOutput, requestModel)
@@ -750,6 +778,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	redactSensitiveBody := identityMetadata.redactor
 	ctx = withAgentIdentityRequestRedactor(ctx, redactSensitiveBody)
 	taskIDUsed := identityMetadata.taskIDUsed
+	initialRequestedReasoningEffort := CanonicalRequestedReasoningEffort(firstClientMessage)
 	if next, policyErr := applyOpenAIWSReasoningEffortPolicy(firstClientMessage, hooks); policyErr != nil {
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, policyErr.Error(), policyErr)
 	} else {
@@ -821,6 +850,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		firstClientMessage = accountScopedFirst
 	}
 	usageMeta := newOpenAIWSPassthroughUsageMeta(initialRequestModel, firstClientMessage)
+	usageMeta.capturePendingRequestedReasoningEffort(initialRequestedReasoningEffort)
 	updatedFirst, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, capturedSessionModel, firstClientMessage)
 	if policyErr != nil {
 		return fmt.Errorf("apply openai fast policy on first ws frame: %w", policyErr)
@@ -1103,6 +1133,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			}
 			if isResponseCreate {
+				usageMeta.capturePendingRequestedReasoningEffort(CanonicalRequestedReasoningEffort(payload))
 				if responsesLite {
 					litePayload, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(payload, account)
 					if liteErr != nil {
@@ -1315,8 +1346,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					UpstreamModel:                 turnUpstreamModel,
 					UpstreamResponseModel:         turn.ResponseModel,
 					UpstreamResponseModelConflict: turn.ResponseModelConflict,
+					UpstreamResponseServiceTier:   turn.ResponseServiceTier,
 					ServiceTier:                   turnMeta.serviceTier,
 					ReasoningEffort:               turnMeta.reasoningEffort,
+					RequestedReasoningEffort:      turnMeta.requestedReasoningEffort,
 					Stream:                        true,
 					OpenAIWSMode:                  true,
 					UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(turn.TerminalEventType),
@@ -1470,8 +1503,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		UpstreamModel:                 resultUpstreamModel,
 		UpstreamResponseModel:         relayResult.ResponseModel,
 		UpstreamResponseModelConflict: relayResult.ResponseModelConflict,
+		UpstreamResponseServiceTier:   relayResult.ResponseServiceTier,
 		ServiceTier:                   latestTurnMeta.serviceTier,
 		ReasoningEffort:               latestTurnMeta.reasoningEffort,
+		RequestedReasoningEffort:      latestTurnMeta.requestedReasoningEffort,
 		Stream:                        true,
 		OpenAIWSMode:                  true,
 		UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(relayResult.TerminalEventType),

@@ -33,6 +33,7 @@ type RelayResult struct {
 	RequestModel            string
 	ResponseModel           string
 	ResponseModelConflict   bool
+	ResponseServiceTier     string
 	Usage                   Usage
 	RequestID               string
 	TerminalEventType       string
@@ -50,6 +51,7 @@ type RelayTurnResult struct {
 	RequestModel          string
 	ResponseModel         string
 	ResponseModelConflict bool
+	ResponseServiceTier   string
 	Usage                 Usage
 	RequestID             string
 	TerminalEventType     string
@@ -101,21 +103,23 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	turnMu             sync.Mutex
-	usage              Usage
-	requestModelMu     sync.RWMutex
-	requestModel       string
-	lastResponseID     string
-	lastResponseModel  string
-	responseConflict   bool
-	terminalEventType  string
-	firstTokenMs       *int
-	imageFirstOutputMs *int
-	imageTracker       relayImageOutputTracker
-	turnTimingByID     map[string]*relayTurnTiming
-	pendingTurns       []*relayTurnTiming
-	nextTurnSequence   uint64
-	activeTurn         *relayTurnTiming
+	turnMu                  sync.Mutex
+	usage                   Usage
+	requestModelMu          sync.RWMutex
+	requestModel            string
+	lastResponseID          string
+	lastResponseModel       string
+	lastResponseServiceTier string
+	responseConflict        bool
+	terminalEventType       string
+	firstTokenMs            *int
+	imageFirstOutputMs      *int
+	imageTracker            relayImageOutputTracker
+	turnTimingByID          map[string]*relayTurnTiming
+	pendingTurns            []*relayTurnTiming
+	nextTurnSequence        uint64
+	activeTurn              *relayTurnTiming
+	pendingBareError        *observedUpstreamEvent
 }
 
 type relayExitSignal struct {
@@ -126,34 +130,36 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
-	turnSequence     uint64
-	abortedSequence  uint64
-	requestModel     string
-	terminal         bool
-	eventType        string
-	responseID       string
-	usage            Usage
-	startedAt        time.Time
-	responseModel    string
-	responseConflict bool
-	duration         time.Duration
-	firstToken       *int
-	imageFirstOutput *int
-	imageCount       int
+	turnSequence        uint64
+	abortedSequence     uint64
+	requestModel        string
+	terminal            bool
+	eventType           string
+	responseID          string
+	usage               Usage
+	startedAt           time.Time
+	responseModel       string
+	responseConflict    bool
+	responseServiceTier string
+	duration            time.Duration
+	firstToken          *int
+	imageFirstOutput    *int
+	imageCount          int
 }
 
 type relayTurnTiming struct {
-	sequence              uint64
-	clientEventID         string
-	responseID            string
-	requestModel          string
-	startAt               time.Time
-	firstTokenMs          *int
-	firstResponseModel    string
-	terminalResponseModel string
-	responseModelConflict bool
-	imageFirstOutputMs    *int
-	imageTracker          relayImageOutputTracker
+	sequence                    uint64
+	clientEventID               string
+	responseID                  string
+	requestModel                string
+	startAt                     time.Time
+	firstTokenMs                *int
+	firstResponseModel          string
+	terminalResponseModel       string
+	responseModelConflict       bool
+	terminalResponseServiceTier string
+	imageFirstOutputMs          *int
+	imageTracker                relayImageOutputTracker
 }
 
 func Relay(
@@ -608,6 +614,10 @@ func runUpstreamToClient(
 		observedEvent := observedUpstreamEvent{}
 		switch msgType {
 		case coderws.MessageText:
+			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			if shouldFinalizePendingBareError(state, payload, eventType) {
+				emitTurnComplete(onTurnComplete, state, finalizePendingBareError(state, nowFn()))
+			}
 			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
@@ -830,17 +840,29 @@ func observeUpstreamMessage(
 		}
 	}
 	if !isTerminalEvent(eventType) {
+		if eventType == "error" {
+			state.terminalEventType = eventType
+			if observed.responseID == "" {
+				observed.responseID = openAIWSRelayActiveTurnID(state)
+			}
+			pending := observed
+			state.pendingBareError = &pending
+		}
 		return observed
 	}
+	observeRelayTurnResponseServiceTier(turnTiming, firstRelayResponseServiceTier(message))
 	observed.terminal = true
 	state.terminalEventType = eventType
+	state.pendingBareError = nil
 	if responseID != "" {
 		state.lastResponseID = responseID
 		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, responseID); ok {
 			observed.responseModel = relayTurnResponseModel(&turnTiming)
 			observed.responseConflict = turnTiming.responseModelConflict
+			observed.responseServiceTier = turnTiming.terminalResponseServiceTier
 			state.lastResponseModel = observed.responseModel
 			state.responseConflict = observed.responseConflict
+			state.lastResponseServiceTier = observed.responseServiceTier
 			duration := now.Sub(turnTiming.startAt)
 			if duration < 0 {
 				duration = 0
@@ -866,7 +888,7 @@ func emitTurnComplete(
 		return
 	}
 	responseID := strings.TrimSpace(observed.responseID)
-	if responseID == "" {
+	if responseID == "" && observed.eventType != "error" {
 		return
 	}
 	requestModel := observed.requestModel
@@ -878,6 +900,7 @@ func emitTurnComplete(
 		RequestModel:          requestModel,
 		ResponseModel:         observed.responseModel,
 		ResponseModelConflict: observed.responseConflict,
+		ResponseServiceTier:   observed.responseServiceTier,
 		Usage:                 observed.usage,
 		RequestID:             responseID,
 		TerminalEventType:     observed.eventType,
@@ -903,6 +926,31 @@ func firstRelayResponseModel(message []byte) string {
 		}
 	}
 	return ""
+}
+
+func firstRelayResponseServiceTier(message []byte) string {
+	if len(message) == 0 {
+		return ""
+	}
+	values := gjson.GetManyBytes(message, "response.service_tier", "service_tier")
+	for _, value := range values {
+		if value.Type != gjson.String {
+			continue
+		}
+		if tier := strings.TrimSpace(value.String()); tier != "" {
+			return tier
+		}
+	}
+	return ""
+}
+
+func observeRelayTurnResponseServiceTier(turn *relayTurnTiming, tier string) {
+	if turn == nil {
+		return
+	}
+	if tier = strings.TrimSpace(tier); tier != "" {
+		turn.terminalResponseServiceTier = tier
+	}
 }
 
 func observeRelayTurnResponseModel(turn *relayTurnTiming, model string, terminal bool) {
@@ -1017,21 +1065,93 @@ func openAIWSRelayActiveTurn(state *relayState) *relayTurnTiming {
 }
 
 func openAIWSRelayActiveTurnID(state *relayState) string {
-	turn := openAIWSRelayActiveTurn(state)
-	if turn == nil {
-		return ""
-	}
-	if id := strings.TrimSpace(turn.responseID); id != "" {
-		return id
-	}
 	if state == nil {
 		return ""
 	}
-	return strings.TrimSpace(state.lastResponseID)
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	if state.activeTurn == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(state.activeTurn.responseID); id != "" {
+		return id
+	}
+	return ""
 }
 
-func finalizePendingBareError(_ *relayState, _ time.Time) observedUpstreamEvent {
-	return observedUpstreamEvent{}
+func shouldFinalizePendingBareError(state *relayState, payload []byte, eventType string) bool {
+	if state == nil || state.pendingBareError == nil {
+		return false
+	}
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" || eventType == "error" || eventType == "response.failed" {
+		return false
+	}
+	if isTerminalEvent(eventType) || eventType == "response.created" {
+		return true
+	}
+	responseID := strings.TrimSpace(gjson.GetBytes(payload, "response.id").String())
+	if responseID == "" || state.pendingBareError.responseID == "" {
+		return false
+	}
+	return responseID != state.pendingBareError.responseID
+}
+
+func finalizePendingBareError(state *relayState, now time.Time) observedUpstreamEvent {
+	if state == nil || state.pendingBareError == nil {
+		return observedUpstreamEvent{}
+	}
+	observed := *state.pendingBareError
+	state.pendingBareError = nil
+	observed.terminal = true
+	if observed.responseID != "" {
+		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, observed.responseID); ok {
+			observed.responseModel = relayTurnResponseModel(&turnTiming)
+			observed.responseConflict = turnTiming.responseModelConflict
+			observed.responseServiceTier = turnTiming.terminalResponseServiceTier
+			observed.startedAt = turnTiming.startAt
+			observed.duration = now.Sub(turnTiming.startAt)
+			if observed.duration < 0 {
+				observed.duration = 0
+			}
+			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
+			observed.imageFirstOutput = openAIWSRelayCloneIntPtr(turnTiming.imageFirstOutputMs)
+			observed.imageCount = turnTiming.imageTracker.Count()
+			observed.turnSequence = turnTiming.sequence
+			observed.requestModel = turnTiming.requestModel
+			state.lastResponseModel = observed.responseModel
+			state.responseConflict = observed.responseConflict
+			state.lastResponseServiceTier = observed.responseServiceTier
+		}
+	} else {
+		state.turnMu.Lock()
+		var turnTiming *relayTurnTiming
+		if state.activeTurn != nil {
+			turnTiming = state.activeTurn
+		} else if len(state.pendingTurns) > 0 {
+			turnTiming = state.pendingTurns[0]
+			state.pendingTurns[0] = nil
+			state.pendingTurns = state.pendingTurns[1:]
+		}
+		state.activeTurn = nil
+		state.turnMu.Unlock()
+		if turnTiming != nil {
+			observed.startedAt = turnTiming.startAt
+			observed.duration = now.Sub(turnTiming.startAt)
+			if observed.duration < 0 {
+				observed.duration = 0
+			}
+			observed.firstToken = openAIWSRelayCloneIntPtr(turnTiming.firstTokenMs)
+			observed.imageFirstOutput = openAIWSRelayCloneIntPtr(turnTiming.imageFirstOutputMs)
+			observed.imageCount = turnTiming.imageTracker.Count()
+			observed.turnSequence = turnTiming.sequence
+			observed.requestModel = turnTiming.requestModel
+			observed.responseModel = relayTurnResponseModel(turnTiming)
+			observed.responseConflict = turnTiming.responseModelConflict
+			observed.responseServiceTier = turnTiming.terminalResponseServiceTier
+		}
+	}
+	return observed
 }
 
 func openAIWSRelayDiscardPendingTurn(state *relayState, sequence uint64) {
@@ -1194,6 +1314,7 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	result.RequestModel = state.currentRequestModel()
 	result.ResponseModel = state.lastResponseModel
 	result.ResponseModelConflict = state.responseConflict
+	result.ResponseServiceTier = state.lastResponseServiceTier
 	result.Usage = state.usage
 	result.RequestID = state.lastResponseID
 	result.TerminalEventType = state.terminalEventType
