@@ -387,7 +387,7 @@
         </div>
 
         <div class="flex justify-end">
-          <button type="button" class="btn btn-primary" :disabled="saving" @click="saveRules">
+          <button type="button" class="btn btn-primary" :disabled="saving || !settingsLoaded" @click="saveRules">
             {{ saving ? t('admin.operations.saving') : t('admin.operations.save') }}
           </button>
         </div>
@@ -1079,6 +1079,10 @@ function normalizeRewardAmount(value: number, fallback: number): number {
 }
 
 async function saveRules() {
+  if (!settingsLoaded.value) {
+    appStore.showError(t('admin.operations.loadFailed'))
+    return
+  }
   if (Math.abs(rewardProbabilityTotal.value - 100) >= 0.000001) {
     appStore.showError(`${t('admin.operations.probabilityTotal')}: ${rewardProbabilityTotal.value.toFixed(4)}%`)
     return

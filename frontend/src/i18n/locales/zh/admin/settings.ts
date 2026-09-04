@@ -1238,6 +1238,7 @@ export default {
       smtpConnectionSuccess: 'SMTP 连接成功',
       testEmailSent: '测试邮件发送成功',
       failedToLoad: '加载设置失败',
+      invalidResponse: '设置响应格式异常，为避免覆盖已有配置，当前已禁止保存，请刷新后重试。',
       failedToSave: '保存设置失败',
       failedToTestSmtp: 'SMTP 连接测试失败',
       failedToSendTestEmail: '发送测试邮件失败'

@@ -10,6 +10,28 @@
 
       <!-- Settings Form -->
       <form v-else @submit.prevent="saveSettings" class="space-y-6" novalidate>
+        <div
+          v-if="loadFailed"
+          class="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 sm:flex-row sm:items-center sm:justify-between"
+          role="alert"
+        >
+          <span>
+            {{
+              settingsResponseInvalid
+                ? t("admin.settings.invalidResponse")
+                : t("admin.settings.failedToLoad")
+            }}
+          </span>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm shrink-0"
+            @click="loadSettings"
+          >
+            <Icon name="refresh" size="xs" />
+            {{ t("common.refresh") }}
+          </button>
+        </div>
+
         <!-- Tab Navigation -->
         <div class="settings-tabs-shell">
           <nav
@@ -8389,7 +8411,7 @@
             :providers="providers"
             :loading="providersLoading"
             :can-create="hasAnyPaymentTypeEnabled"
-            :enabled-payment-types="form.payment_enabled_types"
+            :enabled-payment-types="enabledPaymentTypes"
             :all-payment-types="allPaymentTypes"
             :redirect-label="t('admin.settings.payment.easypayRedirect')"
             @refresh="loadProviders"
@@ -9312,6 +9334,7 @@ import {
   deriveWeChatConnectStoredMode,
   normalizeDefaultSubscriptionSettings,
   resolveWeChatConnectModeCapabilities,
+  InvalidSystemSettingsResponseError,
 } from "@/api/admin/settings";
 import type {
   AuthSourceDefaultsState,
@@ -9477,6 +9500,7 @@ const { copyToClipboard } = useClipboard();
 
 const loading = ref(true);
 const loadFailed = ref(false);
+const settingsResponseInvalid = ref(false);
 const saving = ref(false);
 const testingSmtp = ref(false);
 const sendingTestEmail = ref(false);
@@ -10614,18 +10638,28 @@ const form = reactive<SettingsForm>({
 
 const webConsoleEndpointOptions = computed(() => {
   const options: Array<{ value: string; label: string }> = [];
-  const add = (label: string, endpoint: string) => {
+  const add = (label: unknown, endpoint: unknown) => {
+    if (typeof endpoint !== "string") return;
     const value = endpoint.trim();
     if (!value || options.some((item) => item.value === value)) return;
-    options.push({ value, label: `${label} - ${value}` });
+    const displayLabel =
+      typeof label === "string" && label.trim() ? label : value;
+    options.push({ value, label: `${displayLabel} - ${value}` });
   };
 
   add(t("admin.settings.features.webConsole.primaryEndpoint"), form.api_base_url);
-  for (const endpoint of form.custom_endpoints) {
+  const customEndpoints = Array.isArray(form.custom_endpoints)
+    ? form.custom_endpoints
+    : [];
+  for (const endpoint of customEndpoints) {
+    if (!endpoint || typeof endpoint !== "object") continue;
     add(endpoint.name || endpoint.endpoint, endpoint.endpoint);
   }
 
-  const selected = form.web_console_default_endpoint.trim();
+  const selected =
+    typeof form.web_console_default_endpoint === "string"
+      ? form.web_console_default_endpoint.trim()
+      : "";
   if (selected && !options.some((item) => item.value === selected)) {
     options.unshift({
       value: selected,
@@ -11665,6 +11699,7 @@ const codexSyncedVersionLabel = computed(() => {
 async function loadSettings() {
   loading.value = true;
   loadFailed.value = false;
+  settingsResponseInvalid.value = false;
   try {
     const settings = await adminAPI.settings.getSettings();
     settings.payment_load_balance_strategy =
@@ -11830,8 +11865,12 @@ async function loadSettings() {
     await Promise.all([loadWebSearchConfig(), loadNotificationConfig()]);
   } catch (error: unknown) {
     loadFailed.value = true;
+    settingsResponseInvalid.value =
+      error instanceof InvalidSystemSettingsResponseError;
     appStore.showError(
-      extractApiErrorMessage(error, t("admin.settings.failedToLoad")),
+      settingsResponseInvalid.value
+        ? t("admin.settings.invalidResponse")
+        : extractApiErrorMessage(error, t("admin.settings.failedToLoad")),
     );
   } finally {
     loading.value = false;
@@ -12021,6 +12060,14 @@ function findDuplicateDefaultSubscription(
 }
 
 async function saveSettings() {
+  if (loadFailed.value) {
+    appStore.showError(
+      settingsResponseInvalid.value
+        ? t("admin.settings.invalidResponse")
+        : t("admin.settings.failedToLoad"),
+    );
+    return;
+  }
   saving.value = true;
   try {
     form.clarity_project_id = form.clarity_project_id.trim();
@@ -12433,7 +12480,7 @@ async function saveSettings() {
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
       payment_recharge_gift_enabled: form.payment_recharge_gift_enabled,
       payment_recharge_gift_tiers: normalizedRechargeGiftTiers,
-      payment_enabled_types: form.payment_enabled_types,
+      payment_enabled_types: enabledPaymentTypes.value,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
       payment_product_name_suffix: form.payment_product_name_suffix,
@@ -12659,6 +12706,12 @@ async function saveSettings() {
       (error as { reason?: string })?.reason === "STEP_UP_ENABLE_REQUIRES_TOTP"
     ) {
       appStore.showError(t("admin.settings.security.stepUpEnableRequiresTotp"));
+      return;
+    }
+    if (error instanceof InvalidSystemSettingsResponseError) {
+      loadFailed.value = true;
+      settingsResponseInvalid.value = true;
+      appStore.showError(t("admin.settings.invalidResponse"));
       return;
     }
     appStore.showError(
@@ -13243,23 +13296,32 @@ const allPaymentTypes = computed(() => [
   { value: "airwallex", label: t("payment.methods.airwallex") },
 ]);
 
+const enabledPaymentTypes = computed<string[]>(() =>
+  Array.isArray(form.payment_enabled_types)
+    ? form.payment_enabled_types.filter(
+        (type): type is string => typeof type === "string",
+      )
+    : [],
+);
+
 function isPaymentTypeEnabled(type: string): boolean {
-  return form.payment_enabled_types.includes(type);
+  return enabledPaymentTypes.value.includes(type);
 }
 
 const hasAnyPaymentTypeEnabled = computed(
-  () => form.payment_enabled_types.length > 0,
+  () => enabledPaymentTypes.value.length > 0,
 );
 
 async function togglePaymentType(type: string) {
-  if (form.payment_enabled_types.includes(type)) {
+  const currentPaymentTypes = enabledPaymentTypes.value;
+  if (currentPaymentTypes.includes(type)) {
     // Disable all provider instances matching this type
     if (!(await disableProvidersByType(type))) return;
-    form.payment_enabled_types = form.payment_enabled_types.filter(
+    form.payment_enabled_types = currentPaymentTypes.filter(
       (t) => t !== type,
     );
   } else {
-    form.payment_enabled_types = [...form.payment_enabled_types, type];
+    form.payment_enabled_types = [...currentPaymentTypes, type];
   }
 }
 
@@ -13326,8 +13388,9 @@ const providerKeyOptions = computed(() => [
 ]);
 
 const enabledProviderKeyOptions = computed(() => {
-  const enabled = form.payment_enabled_types;
-  return providerKeyOptions.value.filter((opt) => enabled.includes(opt.value));
+  return providerKeyOptions.value.filter((opt) =>
+    enabledPaymentTypes.value.includes(opt.value),
+  );
 });
 
 const loadBalanceOptions = computed(() => [

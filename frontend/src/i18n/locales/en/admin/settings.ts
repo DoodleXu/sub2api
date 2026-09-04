@@ -1244,6 +1244,7 @@ export default {
       smtpConnectionSuccess: 'SMTP connection successful',
       testEmailSent: 'Test email sent successfully',
       failedToLoad: 'Failed to load settings',
+      invalidResponse: 'The settings response is malformed. Saving is disabled to protect the existing configuration. Reload and try again.',
       failedToSave: 'Failed to save settings',
       failedToTestSmtp: 'SMTP connection test failed',
       failedToSendTestEmail: 'Failed to send test email'

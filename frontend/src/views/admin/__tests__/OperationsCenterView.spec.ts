@@ -294,6 +294,20 @@ describe('OperationsCenterView', () => {
     )
   })
 
+  it('keeps rule saving disabled when settings fail to load', async () => {
+    getSettings.mockRejectedValueOnce(new Error('malformed settings response'))
+    const wrapper = mountView()
+
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.operations.rules')?.trigger('click')
+    await flushPromises()
+
+    const saveButton = wrapper.findAll('button').find((button) => button.text() === 'admin.operations.save')
+    expect(saveButton?.attributes('disabled')).toBeDefined()
+    await saveButton?.trigger('click')
+    expect(updateDailyCheckinSettings).not.toHaveBeenCalled()
+  })
+
   it('ignores stale overview responses after a rapid range change', async () => {
     const wrapper = mountView()
     await flushPromises()

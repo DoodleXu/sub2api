@@ -14,6 +14,11 @@ import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { applyRouteSEO, resolveRouteSEO } from './title'
 import { subscribeToAuthSessionEvents } from '@/utils/authSessionEvents'
+import RouteLoadErrorView from '@/views/RouteLoadErrorView.vue'
+import {
+  CHUNK_RELOAD_ATTEMPT_KEY,
+  resolveChunkLoadRecoveryAction
+} from './chunkLoadRecovery'
 
 /**
  * Route definitions with lazy loading
@@ -795,6 +800,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
 
+  // ==================== Route Load Recovery ====================
+  {
+    path: '/route-load-error',
+    name: 'RouteLoadError',
+    component: RouteLoadErrorView,
+    meta: {
+      requiresAuth: false,
+      title: 'Page Load Error'
+    }
+  },
+
   // ==================== 404 Not Found ====================
   {
     path: '/:pathMatch(.*)*',
@@ -831,7 +847,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/email-unsubscribe', '/payment/result', '/payment/airwallex', '/legal', '/unsupported']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/email-unsubscribe', '/payment/result', '/payment/airwallex', '/legal', '/unsupported', '/route-load-error']
 const BACKEND_MODE_CALLBACK_PATHS = [
   '/auth/callback',
   '/auth/linuxdo/callback',
@@ -1145,30 +1161,25 @@ router.afterEach((to) => {
  * Navigation guard: Error handling
  * Handles dynamic import failures caused by deployment updates
  */
-router.onError((error) => {
+router.onError((error, to) => {
   console.error('Router error:', error)
 
-  // Check if this is a dynamic import failure (chunk loading error)
-  const isChunkLoadError =
-    error.message?.includes('Failed to fetch dynamically imported module') ||
-    error.message?.includes('Loading chunk') ||
-    error.message?.includes('Loading CSS chunk') ||
-    error.name === 'ChunkLoadError'
-
-  if (isChunkLoadError) {
-    // Avoid infinite reload loop by checking sessionStorage
-    const reloadKey = 'chunk_reload_attempted'
-    const lastReload = sessionStorage.getItem(reloadKey)
-    const now = Date.now()
-
-    // Allow reload if never attempted or more than 10 seconds ago
-    if (!lastReload || now - parseInt(lastReload) > 10000) {
-      sessionStorage.setItem(reloadKey, now.toString())
-      console.warn('Chunk load error detected, reloading page to fetch latest version...')
-      window.location.reload()
-    } else {
-      console.error('Chunk load error persists after reload. Please clear browser cache.')
-    }
+  const now = Date.now()
+  const action = resolveChunkLoadRecoveryAction(
+    error,
+    sessionStorage.getItem(CHUNK_RELOAD_ATTEMPT_KEY),
+    now
+  )
+  if (action === 'reload') {
+    sessionStorage.setItem(CHUNK_RELOAD_ATTEMPT_KEY, now.toString())
+    console.warn('Chunk load error detected, reloading page to fetch latest version...')
+    window.location.reload()
+  } else if (action === 'fallback') {
+    console.error('Chunk load error persists after reload. Showing recovery page.')
+    void router.replace({
+      name: 'RouteLoadError',
+      query: { from: to.fullPath }
+    })
   }
 })
 

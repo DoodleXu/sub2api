@@ -770,6 +770,242 @@ export interface SystemSettings {
   allow_user_view_error_requests: boolean;
 }
 
+const SYSTEM_SETTINGS_STRING_ARRAY_KEYS = [
+  "registration_email_suffix_whitelist",
+  "passkey_rp_origins",
+  "forwarded_client_ip_headers",
+  "payment_enabled_types",
+] as const satisfies readonly (keyof SystemSettings)[];
+
+const SYSTEM_SETTINGS_NUMBER_ARRAY_KEYS = [
+  "table_page_size_options",
+] as const satisfies readonly (keyof SystemSettings)[];
+
+const SYSTEM_SETTINGS_RECORD_ARRAY_KEYS = [
+  "login_agreement_documents",
+  "default_subscriptions",
+  "auth_source_default_email_subscriptions",
+  "auth_source_default_linuxdo_subscriptions",
+  "auth_source_default_oidc_subscriptions",
+  "auth_source_default_wechat_subscriptions",
+  "auth_source_default_dingtalk_subscriptions",
+  "auth_source_default_github_subscriptions",
+  "auth_source_default_google_subscriptions",
+  "custom_menu_items",
+  "account_quota_notify_emails",
+  "payment_recharge_gift_tiers",
+  "daily_checkin_reward_tiers",
+  "daily_checkin_streak_multipliers",
+] as const satisfies readonly (keyof SystemSettings)[];
+
+type SystemSettingsArrayKey =
+  | (typeof SYSTEM_SETTINGS_STRING_ARRAY_KEYS)[number]
+  | (typeof SYSTEM_SETTINGS_NUMBER_ARRAY_KEYS)[number]
+  | (typeof SYSTEM_SETTINGS_RECORD_ARRAY_KEYS)[number]
+  | "custom_endpoints";
+type SystemSettingsResponseField = keyof SystemSettings;
+
+export class InvalidSystemSettingsResponseError extends TypeError {
+  readonly field: SystemSettingsResponseField;
+
+  constructor(field: SystemSettingsResponseField) {
+    super(`Invalid system settings response field: ${field}`);
+    this.name = "InvalidSystemSettingsResponseError";
+    this.field = field;
+  }
+}
+
+function isSettingsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+// These fields are part of every backend response and span the major settings
+// sections. Validating them prevents an empty/partial object from being
+// mistaken for a successful response and subsequently saved as defaults.
+const SYSTEM_SETTINGS_REQUIRED_FIELD_SCHEMAS = [
+  ["registration_enabled", isBoolean],
+  ["email_verify_enabled", isBoolean],
+  ["frontend_url", isString],
+  ["default_balance", isFiniteNumber],
+  ["default_concurrency", isFiniteNumber],
+  ["site_name", isString],
+  ["api_base_url", isString],
+  ["table_default_page_size", isFiniteNumber],
+  ["backend_mode_enabled", isBoolean],
+  ["smtp_host", isString],
+  ["payment_enabled", isBoolean],
+  ["payment_min_amount", isFiniteNumber],
+  ["channel_monitor_enabled", isBoolean],
+  ["available_channels_enabled", isBoolean],
+  ["web_console_enabled", isBoolean],
+] as const satisfies readonly (
+  readonly [SystemSettingsResponseField, (value: unknown) => boolean]
+)[];
+
+function normalizeArrayItems<T>(
+  value: unknown,
+  predicate: (item: unknown) => boolean,
+  field: SystemSettingsResponseField,
+): T[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(predicate)) {
+    throw new InvalidSystemSettingsResponseError(field);
+  }
+  return value.slice() as T[];
+}
+
+function hasStringFields(
+  value: unknown,
+  fields: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    isSettingsRecord(value) &&
+    fields.every((field) => typeof value[field] === "string")
+  );
+}
+
+function hasFiniteNumberFields(
+  value: unknown,
+  fields: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    isSettingsRecord(value) &&
+    fields.every(
+      (field) =>
+        typeof value[field] === "number" && Number.isFinite(value[field]),
+    )
+  );
+}
+
+function isDefaultSubscriptionSetting(
+  value: unknown,
+): value is DefaultSubscriptionSetting {
+  return hasFiniteNumberFields(value, ["group_id", "validity_days"]);
+}
+
+function isLoginAgreementDocument(
+  value: unknown,
+): value is LoginAgreementDocument {
+  return hasStringFields(value, ["id", "title", "content_md"]);
+}
+
+function isCustomMenuItem(value: unknown): value is CustomMenuItem {
+  return (
+    hasStringFields(value, ["id", "label", "icon_svg", "url", "visibility"]) &&
+    (value.visibility === "user" || value.visibility === "admin") &&
+    typeof value.sort_order === "number" &&
+    Number.isFinite(value.sort_order) &&
+    (value.page_slug === undefined || typeof value.page_slug === "string")
+  );
+}
+
+function isNotifyEmailEntry(value: unknown): value is NotifyEmailEntry {
+  return (
+    hasStringFields(value, ["email"]) &&
+    typeof value.disabled === "boolean" &&
+    typeof value.verified === "boolean"
+  );
+}
+
+function isDailyCheckinRewardTier(
+  value: unknown,
+): value is DailyCheckinRewardTier {
+  return hasFiniteNumberFields(value, [
+    "min_usd",
+    "max_usd",
+    "probability_percent",
+  ]);
+}
+
+function isDailyCheckinStreakMultiplier(
+  value: unknown,
+): value is DailyCheckinStreakMultiplier {
+  return hasFiniteNumberFields(value, ["days", "multiplier"]);
+}
+
+const SYSTEM_SETTINGS_RECORD_ARRAY_SCHEMAS = [
+  ["login_agreement_documents", isLoginAgreementDocument],
+  ["default_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_email_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_linuxdo_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_oidc_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_wechat_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_dingtalk_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_github_subscriptions", isDefaultSubscriptionSetting],
+  ["auth_source_default_google_subscriptions", isDefaultSubscriptionSetting],
+  ["custom_menu_items", isCustomMenuItem],
+  ["account_quota_notify_emails", isNotifyEmailEntry],
+  ["payment_recharge_gift_tiers", (value: unknown) =>
+    hasFiniteNumberFields(value, ["threshold", "percent"])],
+  ["daily_checkin_reward_tiers", isDailyCheckinRewardTier],
+  ["daily_checkin_streak_multipliers", isDailyCheckinStreakMultiplier],
+] as const satisfies readonly (
+  readonly [SystemSettingsArrayKey, (item: unknown) => boolean]
+)[];
+
+function isCustomEndpoint(value: unknown): value is CustomEndpoint {
+  return hasStringFields(value, ["name", "endpoint", "description"]);
+}
+
+export function normalizeCustomEndpoints(value: unknown): CustomEndpoint[] {
+  return normalizeArrayItems<CustomEndpoint>(
+    value,
+    isCustomEndpoint,
+    "custom_endpoints",
+  );
+}
+
+/** Normalize array-backed settings before they reach the admin form. */
+export function normalizeSystemSettingsResponse(value: unknown): SystemSettings {
+  if (!isSettingsRecord(value)) {
+    throw new TypeError("Invalid system settings response");
+  }
+
+  const normalized: Record<string, unknown> = { ...value };
+
+  for (const key of SYSTEM_SETTINGS_STRING_ARRAY_KEYS) {
+    normalized[key] = normalizeArrayItems(
+      normalized[key],
+      (item): item is string => typeof item === "string",
+      key,
+    );
+  }
+  for (const key of SYSTEM_SETTINGS_NUMBER_ARRAY_KEYS) {
+    normalized[key] = normalizeArrayItems(
+      normalized[key],
+      (item): item is number =>
+        typeof item === "number" && Number.isFinite(item),
+      key,
+    );
+  }
+  for (const [key, predicate] of SYSTEM_SETTINGS_RECORD_ARRAY_SCHEMAS) {
+    normalized[key] = normalizeArrayItems(normalized[key], predicate, key);
+  }
+  normalized.custom_endpoints = normalizeCustomEndpoints(
+    normalized.custom_endpoints,
+  );
+
+  for (const [field, predicate] of SYSTEM_SETTINGS_REQUIRED_FIELD_SCHEMAS) {
+    if (!predicate(normalized[field])) {
+      throw new InvalidSystemSettingsResponseError(field);
+    }
+  }
+
+  return normalized as unknown as SystemSettings;
+}
+
 export interface DailyCheckinRewardTier {
   min_usd: number;
   max_usd: number;
@@ -1116,8 +1352,8 @@ export interface UpdateSettingsRequest {
  * @returns System settings
  */
 export async function getSettings(): Promise<SystemSettings> {
-  const { data } = await apiClient.get<SystemSettings>("/admin/settings");
-  return data;
+  const { data } = await apiClient.get<unknown>("/admin/settings");
+  return normalizeSystemSettingsResponse(data);
 }
 
 /**
@@ -1128,11 +1364,11 @@ export async function getSettings(): Promise<SystemSettings> {
 export async function updateSettings(
   settings: UpdateSettingsRequest,
 ): Promise<SystemSettings> {
-  const { data } = await apiClient.put<SystemSettings>(
+  const { data } = await apiClient.put<unknown>(
     "/admin/settings",
     settings,
   );
-  return data;
+  return normalizeSystemSettingsResponse(data);
 }
 
 export interface DailyCheckinAdminStats {

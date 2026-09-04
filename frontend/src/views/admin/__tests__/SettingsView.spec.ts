@@ -6,6 +6,7 @@ import enCommon from "@/i18n/locales/en/common";
 import enSettings from "@/i18n/locales/en/admin/settings";
 import zhCommon from "@/i18n/locales/zh/common";
 import zhSettings from "@/i18n/locales/zh/admin/settings";
+import { InvalidSystemSettingsResponseError } from "@/api/admin/settings";
 import SettingsView from "../SettingsView.vue";
 
 const {
@@ -806,6 +807,26 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it("keeps rendering but blocks saves when the settings response is malformed", async () => {
+    getSettings.mockRejectedValueOnce(
+      new InvalidSystemSettingsResponseError("payment_enabled_types"),
+    );
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.find("form").exists()).toBe(true);
+    expect(wrapper.text()).toContain("admin.settings.tabs.features");
+    expect(showError).toHaveBeenCalledWith("admin.settings.invalidResponse");
+
+    const saveButton = wrapper.find<HTMLButtonElement>('button[type="submit"]');
+    expect(saveButton.element.disabled).toBe(true);
+    await wrapper.find("form").trigger("submit");
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    wrapper.unmount();
   });
 
   it("loads, validates, and saves the controlled Clarity fields", async () => {
