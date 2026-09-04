@@ -236,7 +236,6 @@ func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(
 }
 
 func TestForwardAsChatCompletions_APIKeyAutoDerivesStableIsolatedPromptCacheKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	response := func() *http.Response {
 		return &http.Response{
@@ -283,7 +282,6 @@ func TestForwardAsChatCompletions_APIKeyAutoDerivesStableIsolatedPromptCacheKey(
 }
 
 func TestForwardAsChatCompletions_ResponsesShapeDoesNotAutoDerivePromptCacheKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	response := func() *http.Response {
 		return &http.Response{

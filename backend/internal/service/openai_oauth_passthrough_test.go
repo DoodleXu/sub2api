@@ -470,7 +470,6 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyNormali
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_GroupForceOpenAIFastInjectsMissingTier(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
@@ -967,7 +966,6 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 }
 
 func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIFastInjectsMissingTier(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
@@ -1001,7 +999,6 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIFastInjectsMissingTier
 }
 
 func TestOpenAIGatewayService_OAuthLegacy_GroupForceStillHonorsGlobalFilter(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))

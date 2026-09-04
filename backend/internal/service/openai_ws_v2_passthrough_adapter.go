@@ -1322,6 +1322,16 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
 				turnNo := int(completedTurns.Add(1))
 				turnMeta, hasTurnMeta := usageMeta.takeTurn(turn.TurnSequence)
+				if !hasTurnMeta {
+					// A rejected turn may be discarded by the relay before its
+					// terminal error is observed, so the upstream terminal can
+					// occasionally arrive with a sequence that has no matching
+					// client metadata. Preserve the latest accepted turn metadata
+					// for billing rather than dropping image fields.
+					if latest, ok := usageMeta.latestTurn(); ok {
+						turnMeta, hasTurnMeta = latest, true
+					}
+				}
 				turnRequestModel := turn.RequestModel
 				if hasTurnMeta && turnMeta.requestModel != "" {
 					turnRequestModel = turnMeta.requestModel
@@ -1379,7 +1389,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnResult.Usage.CacheReadInputTokens,
 				)
 				if hooks != nil && hooks.AfterTurn != nil {
-					hooks.AfterTurn(turnNo, turnResult, nil)
+					var turnErr error
+					switch turn.TerminalEventType {
+					case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+						turnErr = fmt.Errorf("upstream websocket turn ended with %s", turn.TerminalEventType)
+					}
+					hooks.AfterTurn(turnNo, turnResult, turnErr)
 				}
 			},
 			BeforeClientWrite: func(msgType coderws.MessageType, payload []byte) {

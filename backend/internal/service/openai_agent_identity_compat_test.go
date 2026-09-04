@@ -838,7 +838,6 @@ func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
 }
 
 func TestOpenAIAgentIdentityChatRecoveryKeepsAutoDerivedSessionIsolationStable(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
 		ID: 52, Name: "agent-identity", Platform: PlatformOpenAI, Type: AccountTypeOAuth,

@@ -3623,8 +3623,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && !compatMessagesBridge && !nativeDeepSeekResponses {
-		markPatchSet("instructions", "")
+	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeDeepSeekResponses {
+		markPatchSet("instructions", defaultCodexSynthInstructions(reqModel))
 	}
 
 	billingModel := account.GetMappedModel(reqModel)
@@ -3860,6 +3860,23 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
+	if requestView.ServiceTier == "" && openAIGroupForcesFast(ctx, account) {
+		action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, OpenAIFastTierPriority)
+		switch action {
+		case BetaPolicyActionBlock:
+			msg := errMsg
+			if msg == "" {
+				msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", OpenAIFastTierPriority, upstreamModel)
+			}
+			blocked := &OpenAIFastBlockedError{Message: msg}
+			writeOpenAIFastPolicyBlockedResponse(c, blocked)
+			return nil, blocked
+		case BetaPolicyActionFilter:
+			// Global filter takes precedence over the group force setting.
+		default:
+			markPatchSet("service_tier", OpenAIFastTierPriority)
+		}
+	}
 	if rawTier := requestView.ServiceTier; rawTier != "" {
 		if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
 			action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
@@ -9740,13 +9757,6 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	if !gjson.ValidBytes(frame) {
 		return frame, nil, nil
 	}
-	if openAIGroupForcesFast(ctx, account) {
-		updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
-		if err != nil {
-			return frame, nil, fmt.Errorf("force group service_tier priority in ws frame: %w", err)
-		}
-		frame = updated
-	}
 	frameType := strings.TrimSpace(gjson.GetBytes(frame, "type").String())
 	// Strict match: only response.create is policy-checked. Empty / other
 	// types pass through untouched so we never accidentally strip fields
@@ -9756,6 +9766,13 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	// upstream reject it rather than guessing at our layer.
 	if frameType != "response.create" {
 		return frame, nil, nil
+	}
+	if openAIGroupForcesFast(ctx, account) {
+		updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
+		if err != nil {
+			return frame, nil, fmt.Errorf("force group service_tier priority in ws frame: %w", err)
+		}
+		frame = updated
 	}
 	rawTier := gjson.GetBytes(frame, "service_tier").String()
 	if rawTier == "" {
