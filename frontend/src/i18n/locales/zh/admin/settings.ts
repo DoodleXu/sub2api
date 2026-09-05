@@ -703,7 +703,7 @@ export default {
         balanceRechargeMultiplier: '余额充值倍率',
         balanceRechargeMultiplierHint: '用户每支付 1 CNY 可获得多少 USD 余额',
         rechargeGift: '充值满赠',
-        rechargeGiftHint: 'JSON 档位，例如 [{"threshold":30,"percent":2}]，按最高满足门槛的比例赠送',
+        rechargeGiftHint: 'JSON 档位，例如 threshold=30、percent=2 的数组，按最高满足门槛的比例赠送',
         balanceRechargePreview: '预览：1 CNY = {usd} USD',
         subscriptionUsdToCnyRate: '订阅 CNY 换算汇率',
         subscriptionUsdToCnyRateHint:

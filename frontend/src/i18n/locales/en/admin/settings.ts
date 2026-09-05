@@ -708,7 +708,7 @@ export default {
         balanceRechargeMultiplier: 'Balance Recharge Multiplier',
         balanceRechargeMultiplierHint: 'How many USD balance the user receives for each 1 CNY paid',
         rechargeGift: 'Recharge Gift',
-        rechargeGiftHint: 'JSON tiers, e.g. [{"threshold":30,"percent":2}], using the highest matching threshold',
+        rechargeGiftHint: 'JSON tiers, for example an array with threshold=30 and percent=2, using the highest matching threshold',
         balanceRechargePreview: 'Preview: 1 CNY = {usd} USD',
         subscriptionUsdToCnyRate: 'Subscription USD to CNY Rate',
         subscriptionUsdToCnyRateHint:
