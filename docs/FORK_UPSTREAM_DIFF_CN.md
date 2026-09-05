@@ -39,7 +39,8 @@
 - 恢复国产配额探测器的 singleflight 共享抓取与成功/失败缓存 TTL；SMTP `use_tls` 支持省略与显式 `false` 的三态语义，并对测试邮件站点名做 HTML 转义；UpdateGroup 对 nil 字段执行真正的部分更新，保留 fork 组策略。
 - 用量日志领域模型、SQL 查询/插入/批量写入、统计过滤、DTO 和夹具统一为 63 参数契约，贯通 `requested_reasoning_effort` 与 `native_compaction_v2`，历史 NULL/旧记录保持可读；未执行生产迁移。
 - UsageProgressBar 恢复 75/90 阈值、fixed/auto 标签布局契约；保留签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全及 OpenAI 调度/计费等 fork 定制能力。
-- 审核修复管理端充值满赠配置：非法 JSON 不再静默清空已有档位，保存时明确阻止并提示；补充满赠计算单元测试，保持按最高匹配档位计算并四舍五入到分。
+- 审核修复管理端充值满赠配置：非法档位数据不再静默清空已有档位，保存时明确阻止并提示；补充满赠计算单元测试，保持按满足条件的最高赠送比例计算并四舍五入到分。
+- 管理端充值满赠配置改为独立一行的可视化档位编辑器，支持按充值门槛填写赠送比例、动态添加/删除档位，保存仍使用 `payment_recharge_gift_tiers` 数组契约。
 - 修正用量日志与用户分组迁移的重复 `231_` 前缀风险：保留原始迁移文件名不变（迁移表按完整文件名记录），同时收紧 OpenAI WebSocket HTTP bridge 辅助函数的类型化参数契约。
 - 修复 WebSocket `cyber_policy` 误触发账号健康副作用：公共副作用入口统一跳过请求级策略拒绝，错误解析器同时支持顶层 `error` 与 `response.error`；补充 `response.failed`、`error` 和账号副作用回归测试。
 - 验证结果：后端 `go test -tags=unit ./... -count=1`、`go vet -tags=unit ./...`、`make test-integration` 全部通过；前端 lint、typecheck、Vitest（272 个文件/1974 项）和 build 全部通过。`golangci-lint` 当前环境未安装，浏览器视觉验收未执行；未执行生产迁移、部署、push、tag 或 release。

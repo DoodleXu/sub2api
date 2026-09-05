@@ -829,6 +829,67 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("renders recharge gifts as editable tiers and saves the array contract", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_gift_enabled: true,
+      payment_recharge_gift_tiers: [
+        { threshold: 30, percent: 2 },
+        { threshold: 500, percent: 12 },
+      ],
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    const giftConfig = wrapper.get('[data-testid="recharge-gift-config"]');
+    expect(giftConfig.find("textarea").exists()).toBe(false);
+    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(2);
+
+    await giftConfig.get('[data-testid="recharge-gift-add-tier"]').trigger("click");
+    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(3);
+    await giftConfig.get('[data-testid="recharge-gift-tier-2"] button').trigger("click");
+    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(2);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_recharge_gift_enabled: true,
+        payment_recharge_gift_tiers: [
+          { threshold: 30, percent: 2 },
+          { threshold: 500, percent: 12 },
+        ],
+      }),
+    );
+    wrapper.unmount();
+  });
+
+  it("blocks saving recharge gifts with invalid tier values", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_gift_enabled: true,
+      payment_recharge_gift_tiers: [{ threshold: 30, percent: 2 }],
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+
+    await wrapper.get('[data-testid="recharge-gift-tier-0"] input').setValue("0");
+    showError.mockClear();
+    updateSettings.mockClear();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(showError).toHaveBeenCalledWith(
+      "充值满赠档位必须填写有效的充值金额和赠送比例。",
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("loads, validates, and saves the controlled Clarity fields", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
