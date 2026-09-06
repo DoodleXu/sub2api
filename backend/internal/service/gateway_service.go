@@ -3206,6 +3206,14 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 	return allowed
 }
 
+// ReleaseAccountSession immediately releases a registered session slot.
+func (s *GatewayService) ReleaseAccountSession(ctx context.Context, account *Account, sessionID string) {
+	if s == nil || account == nil || sessionID == "" || s.sessionLimitCache == nil || !account.IsAnthropicOAuthOrSetupToken() {
+		return
+	}
+	_ = s.sessionLimitCache.UnregisterSession(ctx, account.ID, sessionID)
+}
+
 func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID int64) (*Account, error) {
 	var (
 		account *Account

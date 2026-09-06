@@ -1567,6 +1567,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			ctx,
 			c,
 			account,
+			nil,
+			"",
 			deadline.startedAt,
 			deadline.requestModel,
 			deadline.reasoningEffort,
