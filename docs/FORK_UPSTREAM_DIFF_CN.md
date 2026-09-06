@@ -2,7 +2,13 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-04
+最后更新：2026-09-06
+
+## 2026-09-06 合并上游 v0.2.1
+
+- 合入上游 `v0.2.1`（`578785ee7fb35030b094b69624efe25670a36f5f`）的 GPT-6 Astra 能力同步、Codex ultrafast、Claude CLI 版本配置、上游请求标识、定价热加载、OpenCode 会话转发、图片 URL 回填及支付对账等更新。
+- 冲突按 fork 聚合模块方案处理：保留 `backend/cmd/server/VERSION` 的 fork 版本、用量/网关聚合文件、Responses Lite、生图与 WebSocket 计费、签到、运营中心、人民币成本、账号归档、Web 创作台和生图管理；上游重新拆分且 fork 已删除的文件继续删除。
+- 合并前 `git merge-tree --write-tree` 识别内容及 modify/delete 冲突，已按确认方案解决；未执行生产迁移、部署或远程推送。
 
 ## 2026-09-04 系统设置白屏恢复
 

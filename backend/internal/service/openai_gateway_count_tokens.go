@@ -80,7 +80,7 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	}
 
 	proxyURL := ""
-	if account.Proxy != nil {
+	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
@@ -336,7 +336,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	redactSensitiveBody := identityMetadata.redactor
 
 	proxyURL := ""
-	if account.Proxy != nil {
+	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	agentIdentity := identityMetadata.isAgentIdentity
