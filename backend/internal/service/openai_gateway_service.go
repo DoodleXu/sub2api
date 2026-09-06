@@ -4413,7 +4413,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageCount := 0
 		var imageOutputSizes []string
 		if reqStream {
-			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, nil, "", startTime, originalModel, upstreamModel, reasoningEffortValue)
+			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, "", startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if err != nil {
 				if signal, ok := asOpenAICompactFallbackSignal(err); ok {
 					if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(c, account, originalModel, body, http.StatusBadRequest, signal.message, signal.payload, compactFallbackRetried); retry {
