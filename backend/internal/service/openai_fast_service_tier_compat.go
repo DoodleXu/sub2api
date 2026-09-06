@@ -10,7 +10,7 @@ import (
 type ErrInvalidOpenAIServiceTier struct{ Value string }
 
 func (e *ErrInvalidOpenAIServiceTier) Error() string {
-	return fmt.Sprintf("invalid service_tier %q; allowed values include fast, priority, flex, auto, default, scale", e.Value)
+	return fmt.Sprintf("invalid service_tier %q; allowed values include fast, priority, flex, auto, default, scale, ultrafast", e.Value)
 }
 
 func ValidateOpenAIServiceTierField(body []byte) (string, error) {
@@ -27,7 +27,7 @@ func ValidateOpenAIServiceTierField(body []byte) (string, error) {
 		return "priority", nil
 	}
 	switch value {
-	case "priority", "flex", "auto", "default", "scale":
+	case "priority", "flex", "auto", "default", "scale", "ultrafast":
 		return value, nil
 	default:
 		if len(value) > 64 {
