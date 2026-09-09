@@ -413,6 +413,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if err != nil {
 			return nil, err
 		}
+		if c != nil {
+			if state := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader)); state != "" {
+				upstreamReq.Header.Set(openAIWSTurnStateHeader, state)
+			}
+		}
 		identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))
 		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
 			upstreamReq.Header.Set(responsesLiteHeader, "true")
