@@ -1272,6 +1272,9 @@ func parseUsageAndAccumulate(
 	}
 	usageResult := gjson.GetBytes(message, "response.usage")
 	if !usageResult.Exists() {
+		usageResult = gjson.GetBytes(message, "usage")
+	}
+	if !usageResult.Exists() {
 		return Usage{}
 	}
 	usageRaw := strings.TrimSpace(usageResult.Raw)
@@ -1424,7 +1427,7 @@ func isDisconnectError(err error) bool {
 
 func isTerminalEvent(eventType string) bool {
 	switch eventType {
-	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	case "response.completed", "response.done", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
 		return false
