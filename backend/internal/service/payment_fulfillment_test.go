@@ -27,6 +27,41 @@ type paymentFulfillmentTestProvider struct {
 	supportedTypes []payment.PaymentType
 }
 
+type paymentFulfillmentRedeemCacheStub struct{ count, getCalls, incrementCalls, acquireCalls, releaseCalls int }
+type paymentFulfillmentRedeemRepo struct {
+	paymentOrderLifecycleRedeemRepo
+	createCalls int
+}
+
+func (r *paymentFulfillmentRedeemRepo) Create(_ context.Context, code *RedeemCode) error {
+	r.createCalls++
+	if r.codesByCode == nil {
+		r.codesByCode = map[string]*RedeemCode{}
+	}
+	cloned := *code
+	cloned.ID = int64(100 + r.createCalls)
+	code.ID = cloned.ID
+	r.codesByCode[cloned.Code] = &cloned
+	return nil
+}
+func (c *paymentFulfillmentRedeemCacheStub) GetRedeemAttemptCount(context.Context, int64) (int, error) {
+	c.getCalls++
+	return c.count, nil
+}
+func (c *paymentFulfillmentRedeemCacheStub) IncrementRedeemAttemptCount(context.Context, int64) error {
+	c.incrementCalls++
+	c.count++
+	return nil
+}
+func (c *paymentFulfillmentRedeemCacheStub) AcquireRedeemLock(context.Context, string, time.Duration) (bool, error) {
+	c.acquireCalls++
+	return true, nil
+}
+func (c *paymentFulfillmentRedeemCacheStub) ReleaseRedeemLock(context.Context, string) error {
+	c.releaseCalls++
+	return nil
+}
+
 type paymentFulfillmentTransactionalSubRepo struct {
 	userSubRepoNoop
 
@@ -344,13 +379,15 @@ func ensurePaymentAuditOrderActionUniqueIndex(t *testing.T, ctx context.Context,
 
 func TestResolveRedeemAction_CodeNotFound(t *testing.T) {
 	t.Parallel()
-	action := resolveRedeemAction(nil, nil)
+	action, err := resolveRedeemAction(nil, nil)
+	require.NoError(t, err)
 	assert.Equal(t, redeemActionCreate, action, "nil code with nil error should create")
 }
 
 func TestResolveRedeemAction_LookupError(t *testing.T) {
 	t.Parallel()
-	action := resolveRedeemAction(nil, errors.New("db connection lost"))
+	action, err := resolveRedeemAction(nil, errors.New("db connection lost"))
+	require.Error(t, err)
 	assert.Equal(t, redeemActionCreate, action, "lookup error should fall back to create")
 }
 
@@ -359,7 +396,8 @@ func TestResolveRedeemAction_LookupErrorWithNonNilCode(t *testing.T) {
 	// Edge case: both code and error are non-nil (shouldn't happen in practice,
 	// but the function should still treat error as authoritative)
 	code := &RedeemCode{Status: StatusUnused}
-	action := resolveRedeemAction(code, errors.New("partial error"))
+	action, err := resolveRedeemAction(code, errors.New("partial error"))
+	require.Error(t, err)
 	assert.Equal(t, redeemActionCreate, action, "non-nil error should always result in create regardless of code")
 }
 
@@ -371,7 +409,8 @@ func TestResolveRedeemAction_CodeExistsAndUsed(t *testing.T) {
 		Type:   RedeemTypeBalance,
 		Value:  10.0,
 	}
-	action := resolveRedeemAction(code, nil)
+	action, err := resolveRedeemAction(code, nil)
+	require.NoError(t, err)
 	assert.Equal(t, redeemActionSkipCompleted, action, "used code should skip to completed")
 }
 
@@ -383,7 +422,8 @@ func TestResolveRedeemAction_CodeExistsAndUnused(t *testing.T) {
 		Type:   RedeemTypeBalance,
 		Value:  25.0,
 	}
-	action := resolveRedeemAction(code, nil)
+	action, err := resolveRedeemAction(code, nil)
+	require.NoError(t, err)
 	assert.Equal(t, redeemActionRedeem, action, "unused code should skip creation and proceed to redeem")
 }
 
@@ -395,7 +435,8 @@ func TestResolveRedeemAction_CodeExistsWithExpiredStatus(t *testing.T) {
 		Code:   "expired-code",
 		Status: StatusExpired,
 	}
-	action := resolveRedeemAction(code, nil)
+	action, err := resolveRedeemAction(code, nil)
+	require.NoError(t, err)
 	assert.Equal(t, redeemActionRedeem, action, "expired-status code is not IsUsed(), should redeem")
 }
 
@@ -453,7 +494,7 @@ func TestResolveRedeemAction_Table(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := resolveRedeemAction(tt.code, tt.err)
+			got, _ := resolveRedeemAction(tt.code, tt.err)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -484,11 +525,15 @@ func TestResolveRedeemAction_IsUsedCanUseConsistency(t *testing.T) {
 	// Verify our decision function is consistent with the domain model methods
 	assert.True(t, usedCode.IsUsed())
 	assert.False(t, usedCode.CanUse())
-	assert.Equal(t, redeemActionSkipCompleted, resolveRedeemAction(usedCode, nil))
+	got, err := resolveRedeemAction(usedCode, nil)
+	require.NoError(t, err)
+	assert.Equal(t, redeemActionSkipCompleted, got)
 
 	assert.False(t, unusedCode.IsUsed())
 	assert.True(t, unusedCode.CanUse())
-	assert.Equal(t, redeemActionRedeem, resolveRedeemAction(unusedCode, nil))
+	got, err = resolveRedeemAction(unusedCode, nil)
+	require.NoError(t, err)
+	assert.Equal(t, redeemActionRedeem, got)
 }
 
 func TestExpectedNotificationProviderKeyPrefersOrderInstanceProvider(t *testing.T) {

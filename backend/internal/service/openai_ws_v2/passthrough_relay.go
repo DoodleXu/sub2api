@@ -562,6 +562,7 @@ func runUpstreamToClient(
 	exitCh chan<- relayExitSignal,
 ) {
 	wroteDownstream := false
+	connectionWroteDownstream := false
 	for {
 		msgType, payload, err := upstreamConn.ReadFrame(ctx)
 		if err != nil {
@@ -586,7 +587,7 @@ func runUpstreamToClient(
 				stage:           "read_upstream",
 				err:             err,
 				graceful:        graceful,
-				wroteDownstream: wroteDownstream,
+				wroteDownstream: connectionWroteDownstream,
 			}
 			return
 		}
@@ -605,7 +606,7 @@ func runUpstreamToClient(
 				exitCh <- relayExitSignal{
 					stage:           "upstream_message",
 					err:             transformErr,
-					wroteDownstream: wroteDownstream,
+					wroteDownstream: connectionWroteDownstream,
 				}
 				return
 			}
@@ -663,7 +664,7 @@ func runUpstreamToClient(
 				WroteDownstream: wroteDownstream,
 				Error:           err.Error(),
 			})
-			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: wroteDownstream}
+			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: connectionWroteDownstream}
 			return
 		}
 		if afterClientWrite != nil {
@@ -673,6 +674,7 @@ func runUpstreamToClient(
 		// 回调；否则回调阻塞会让客户端在上游已完成时仍读超时。
 		emitTurnComplete(onTurnComplete, state, observedEvent)
 		wroteDownstream = true
+		connectionWroteDownstream = true
 		if afterWriteClient != nil {
 			afterWriteClient()
 		}
@@ -680,6 +682,9 @@ func runUpstreamToClient(
 			forwardedFrames.Add(1)
 		}
 		markActivity()
+		if observedEvent.terminal {
+			wroteDownstream = false
+		}
 	}
 }
 
@@ -1071,6 +1076,9 @@ func openAIWSRelayActiveTurnID(state *relayState) string {
 	state.turnMu.Lock()
 	defer state.turnMu.Unlock()
 	if state.activeTurn == nil {
+		if len(state.pendingTurns) > 0 {
+			return "pending"
+		}
 		return ""
 	}
 	if id := strings.TrimSpace(state.activeTurn.responseID); id != "" {
