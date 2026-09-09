@@ -461,6 +461,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 
 		respBody := redactSensitiveBody(rawRespBody)
+		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if upstreamMsg == "" {
 			upstreamMsg = http.StatusText(resp.StatusCode)
@@ -693,6 +694,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				errMessage = "upstream error event"
 			}
 			statusCode := openAIStreamFailureStatus(upstreamMessage, errMessage)
+			markStatus := statusCode
+			if hit, _, _ := detectOpenAICyberPolicy(upstreamMessage); hit {
+				markStatus = http.StatusOK
+			}
+			markOpenAICyberPolicyEvent(c, upstreamMessage, markStatus, &usage)
 			shouldFailover := openAIStreamFailedEventShouldFailover(upstreamMessage, errMessage)
 			if eventType == "error" {
 				errCodeRaw, errTypeRaw, _ := parseOpenAIWSErrorEventFields(upstreamMessage)

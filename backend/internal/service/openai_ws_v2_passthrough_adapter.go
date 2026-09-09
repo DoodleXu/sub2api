@@ -1448,6 +1448,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return payload, nil
 				}
 				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				markOpenAICyberPolicyEvent(c, payload, http.StatusOK, nil)
 				if isOpenAIErrorBearingEventType(eventType) {
 					payload = redactSensitiveBody(payload)
 				}

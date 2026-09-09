@@ -704,8 +704,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				bridgeAccountFailoverInputExists = true
 			}
 			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
+				wasEmpty := turnState == ""
 				turnState = bridgeTurnState
-				if stateStore != nil && sessionHash != "" {
+				if stateStore != nil && sessionHash != "" && wasEmpty {
 					stateStore.BindSessionTurnState(groupID, sessionHash, bridgeTurnState, s.openAIWSSessionStickyTTL())
 				}
 			}
@@ -907,8 +908,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
+			wasEmpty := turnState == ""
 			turnState = handshakeTurnState
-			if stateStore != nil && sessionHash != "" {
+			if stateStore != nil && sessionHash != "" && wasEmpty {
 				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
 			}
 			updatedHeaders := cloneHeader(baseAcquireReq.Headers)
