@@ -30,7 +30,11 @@ func clampOllamaCloudUpstreamMaxTokens(account *Account, body []byte) []byte {
 	if account == nil || len(body) == 0 {
 		return body
 	}
-	if !isOllamaCloudBaseURL(account.GetOpenAIBaseURL()) {
+	baseURL := account.GetOpenAIBaseURL()
+	if baseURL == "" {
+		baseURL = account.GetBaseURL()
+	}
+	if !isOllamaCloudBaseURL(baseURL) {
 		return body
 	}
 	if !isDeepSeekModel(gjson.GetBytes(body, "model").String()) && !isOllamaCloudRawChatCompletionsAccount(account) {
