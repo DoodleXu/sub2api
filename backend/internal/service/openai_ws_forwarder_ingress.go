@@ -534,6 +534,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
 		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
+		if c != nil && sessionHash != "" {
+			c.Set(openAIWSIngressSessionHashContextKey, sessionHash)
+		}
 		if turnState == "" && stateStore != nil && sessionHash != "" {
 			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 				turnState = savedTurnState
@@ -738,6 +741,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
 			if parseErr != nil {
 				return parseErr
+			}
+			refreshIngressRouteState(nextPayload)
+			if invalid := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalid) > 0 {
+				stripped, _ := s.stripSessionInvalidEncryptedContentLogged(nextPayload.payloadRaw, invalid, "ingress_ws_invalid_encrypted_lineage_strip", account.ID, turn+1)
+				if !bytes.Equal(stripped, nextPayload.payloadRaw) {
+					nextPayload, parseErr = parseClientPayload(turn+1, stripped)
+					if parseErr != nil {
+						return parseErr
+					}
+				}
 			}
 			currentBridgePayload = nextPayload
 		}
@@ -1008,6 +1021,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			if strings.EqualFold(gjson.GetBytes(upstreamMessage, "error.code").String(), openAIWSFallbackReasonInvalidEncryptedContent) || strings.EqualFold(gjson.GetBytes(upstreamMessage, "response.error.code").String(), openAIWSFallbackReasonInvalidEncryptedContent) {
+				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, upstreamMessage, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn)
+			}
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 			if isOpenAIErrorBearingEventType(eventType) {
 				upstreamMessage = redactSensitiveBody(upstreamMessage)
@@ -1851,6 +1867,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
 		if parseErr != nil {
 			return parseErr
+		}
+		refreshIngressRouteState(nextPayload)
+		if invalid := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalid) > 0 {
+			stripped, _ := s.stripSessionInvalidEncryptedContentLogged(nextPayload.payloadRaw, invalid, "ingress_ws_invalid_encrypted_lineage_strip", account.ID, turn+1)
+			if !bytes.Equal(stripped, nextPayload.payloadRaw) {
+				nextPayload, parseErr = parseClientPayload(turn+1, stripped)
+				if parseErr != nil {
+					return parseErr
+				}
+			}
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
 		if nextPayload.promptCacheKey != "" {

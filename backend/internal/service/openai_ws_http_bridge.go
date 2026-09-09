@@ -638,6 +638,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			upstreamMessage = normalized
 		}
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+		if strings.EqualFold(gjson.GetBytes(upstreamMessage, "error.code").String(), openAIWSFallbackReasonInvalidEncryptedContent) || strings.EqualFold(gjson.GetBytes(upstreamMessage, "response.error.code").String(), openAIWSFallbackReasonInvalidEncryptedContent) {
+			s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, upstreamMessage, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn)
+		}
 		responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
 		if isOpenAIErrorBearingEventType(eventType) {
 			upstreamMessage = redactSensitiveBody(upstreamMessage)
