@@ -57,6 +57,9 @@ func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {
 	if account.IsOpenAIOAuthLike() {
 		return true
 	}
+	if account.IsOpenAIPassthroughEnabled() {
+		return true
+	}
 	if !account.IsOpenAIApiKey() {
 		return false
 	}
