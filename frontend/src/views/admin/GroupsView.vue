@@ -5439,7 +5439,7 @@ const loadModelsListCandidates = async (
   const loadingRef = mode === "create" ? createModelsListLoading : editModelsListLoading;
   loadingRef.value = true;
   try {
-    const models = await adminAPI.groups.getModelsListCandidates(groupID, platform);
+    const models = await adminAPI.groups.getModelAllowlistCandidates(groupID, platform);
     if (!modelsListCandidatesTracker.isCurrent(requestID, request)) {
       return;
     }
@@ -6130,7 +6130,7 @@ const handleCreateGroup = async () => {
       model_routing: convertRoutingRulesToApiFormat(
         createModelRoutingRules.value,
       ),
-      models_list_config: buildModelsListConfig(createModelsListState),
+      model_allowlist: buildModelsListConfig(createModelsListState),
       // 创建时固定账号 manifest 固定发送关闭状态（后端创建路径禁止开启）
       codex_models_manifest_config: createCodexManifestDefaults(),
       supported_model_scopes: normalizeSupportedModelScopesForPlatform(
@@ -6316,7 +6316,7 @@ const handleEdit = async (group: AdminGroup) => {
     group.reasoning_effort_mappings,
     group.platform,
   );
-  resetModelsListState(editModelsListState, group.models_list_config);
+  resetModelsListState(editModelsListState, group.model_allowlist);
   // 固定账号 manifest 配置：回显配置并异步解析已存账号名称（失败显示 #<id>）
   const savedCodexManifestConfig =
     group.codex_models_manifest_config ?? createCodexManifestDefaults();
@@ -6458,7 +6458,7 @@ const handleUpdateGroup = async () => {
       model_routing: convertRoutingRulesToApiFormat(
         editModelRoutingRules.value,
       ),
-      models_list_config: buildModelsListConfig(editModelsListState),
+      model_allowlist: buildModelsListConfig(editModelsListState),
       // 非 openai 平台提交关闭状态，与后端归一化一致
       codex_models_manifest_config:
         editForm.platform === "openai"
@@ -6943,7 +6943,7 @@ watch(
     }
     resetDisabledBatchImagePricing(editForm);
     if (editingGroup.value) {
-      resetModelsListState(editModelsListState, editForm.platform === editingGroup.value.platform ? editingGroup.value.models_list_config : undefined);
+      resetModelsListState(editModelsListState, editForm.platform === editingGroup.value.platform ? editingGroup.value.model_allowlist : undefined);
       loadModelsListCandidates("edit", editingGroup.value.id, newVal);
     }
   },

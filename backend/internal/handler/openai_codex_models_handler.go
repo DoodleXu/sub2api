@@ -120,7 +120,13 @@ func (h *OpenAIGatewayHandler) TryCodexModels(c *gin.Context) bool {
 	}
 }
 
-func writeCodexModelsManifestResponse(c *gin.Context, manifest *service.CodexModelsManifest) {
+func writeCodexModelsManifestResponse(c *gin.Context, value any) {
+	var manifest *service.OpenAIModelsResponse
+	if m, ok := value.(*service.OpenAIModelsResponse); ok {
+		manifest = m
+	} else if m, ok := value.(*service.CodexModelsManifest); ok {
+		manifest = &service.OpenAIModelsResponse{Body: m.Body, ETag: m.ETag, NotModified: m.NotModified}
+	}
 	if manifest == nil {
 		return
 	}

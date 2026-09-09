@@ -471,6 +471,12 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 	if choiceType == "" {
 		return false
 	}
+	if choiceType == "allowed_tools" {
+		// This is a selection policy, not a declared tool type. Preserve it for
+		// upstream validation (including references to input.additional_tools);
+		// falling back to auto would silently discard the caller's restriction.
+		return false
+	}
 	modified := false
 	if choiceType == "function" {
 		name := strings.TrimSpace(firstNonEmptyString(choiceMap["name"]))
@@ -1712,8 +1718,7 @@ func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
 // 仅供显式需要合成 base instructions 的兼容路径/测试使用；Codex OAuth
 // /responses 主路径在 instructions 为空时只补空字符串，避免覆盖客户端工具环境提示。
 //
-// 按 model 选择真实 Codex CLI 的 base instructions（codex 系→GPT-5-Codex，
-// gpt-5.2→GPT-5.2，gpt-5.1/gpt-5→GPT-5.1），使合成请求在提示词层面贴近真实 Codex 行为；
+// 按 model 选择真实 Codex CLI 的 base instructions，使合成请求在提示词层面贴近真实 Codex 行为；
 // 若内嵌 prompt 意外为空，回退到最小占位符以保证字段非空。
 func defaultCodexSynthInstructions(model string) string {
 	if instructions := strings.TrimSpace(openai.CodexBaseInstructionsForModel(model)); instructions != "" {

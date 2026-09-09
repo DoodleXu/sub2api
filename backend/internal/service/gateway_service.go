@@ -6382,7 +6382,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 
 	if getHeaderRaw(req.Header, "content-type") == "" {
 		setHeaderRaw(req.Header, "content-type", "application/json")
@@ -7417,7 +7417,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
 	} else {
-		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
 	// 白名单透传 headers
@@ -10332,7 +10332,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost,
+			cost.TotalCost, pricingAt,
 		)
 	}
 
@@ -11242,7 +11242,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
 	req.Header.Del("cookie")
-	setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+	setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -11343,7 +11343,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
 	} else {
-		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
 	// 白名单透传 headers（恢复真实 wire casing）
@@ -11619,6 +11619,10 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		models = append(models, model)
 	}
 	sort.Strings(models)
+
+	if platform == PlatformOpenAI {
+		models = supplementUnmappedOpenAIModels(accounts, models)
+	}
 
 	if s.modelsListCache != nil {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)

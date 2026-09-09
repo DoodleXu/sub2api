@@ -19,6 +19,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -61,6 +62,7 @@ type AdminService interface {
 	GetAllGroupsIncludingInactive(ctx context.Context) ([]Group, error)
 	GetGroup(ctx context.Context, id int64) (*Group, error)
 	GetGroupModelsListCandidates(ctx context.Context, id int64, platform string) ([]string, error)
+	ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error
 	CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error)
 	// DuplicateGroup creates an inactive independent copy of a group's configuration
 	// and account bindings while preserving each binding's priority.
@@ -294,7 +296,7 @@ type CreateGroupInput struct {
 	RequireOAuthOnly            bool
 	RequirePrivacySet           bool
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
-	ModelsListConfig            GroupModelsListConfig
+	ModelAllowlist              GroupModelAllowlist
 	// CodexModelsManifestConfig 固定账号 manifest 配置；创建路径禁止开启，仅编辑可配置。
 	CodexModelsManifestConfig GroupCodexModelsManifestConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
@@ -375,7 +377,7 @@ type UpdateGroupInput struct {
 	RequireOAuthOnly            *bool
 	RequirePrivacySet           *bool
 	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
-	ModelsListConfig            *GroupModelsListConfig
+	ModelAllowlist              *GroupModelAllowlist
 	// CodexModelsManifestConfig nil 表示不修改；非 openai 平台会被归一化为关闭。
 	CodexModelsManifestConfig *GroupCodexModelsManifestConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
@@ -687,6 +689,10 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 
 // adminServiceImpl implements AdminService
 type adminServiceImpl struct {
+	cfg                  *config.Config
+	emptyGroupDeleteRepo interface {
+		DeleteIfEmpty(context.Context, int64) error
+	}
 	userRepo                UserRepository
 	groupRepo               GroupRepository
 	groupDuplicateRepo      GroupDuplicateRepository
@@ -713,6 +719,22 @@ type adminServiceImpl struct {
 	compositeResolver       *CompositeRouteResolver
 	dashboardCostRefresh    DashboardCostSnapshotRefresher
 	channelCacheInvalidator ChannelCacheInvalidator
+}
+
+func (s *adminServiceImpl) DeleteGroupIfEmpty(ctx context.Context, id int64) error {
+	if s.emptyGroupDeleteRepo == nil {
+		return errors.New("guarded group deletion is unavailable")
+	}
+	return s.emptyGroupDeleteRepo.DeleteIfEmpty(ctx, id)
+}
+
+func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error {
+	for _, id := range groupIDs {
+		if _, err := s.groupRepo.GetByID(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ChannelCacheInvalidator invalidates channel-derived pricing and model caches.
@@ -2418,6 +2440,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		}
 	}
 
+	modelAllowlist, err := normalizeGroupModelAllowlist(input.ModelAllowlist)
+	if err != nil {
+		return nil, err
+	}
 	group := &Group{
 		Name:                            input.Name,
 		Description:                     input.Description,
@@ -2462,7 +2488,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		RequirePrivacySet:               input.RequirePrivacySet,
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
-		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
+		ModelAllowlist:                  modelAllowlist,
 		RPMLimit:                        input.RPMLimit,
 		MaxReasoningEffort:              maxReasoningEffort,
 		MaxReasoningEffortOverLimit:     maxReasoningEffortOverLimit,
@@ -2827,8 +2853,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.MessagesDispatchModelConfig != nil {
 		group.MessagesDispatchModelConfig = normalizeOpenAIMessagesDispatchModelConfig(*input.MessagesDispatchModelConfig)
 	}
-	if input.ModelsListConfig != nil {
-		group.ModelsListConfig = normalizeGroupModelsListConfig(*input.ModelsListConfig)
+	if input.ModelAllowlist != nil {
+		normalized, err := normalizeGroupModelAllowlist(*input.ModelAllowlist)
+		if err != nil {
+			return nil, err
+		}
+		group.ModelAllowlist = normalized
 	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit

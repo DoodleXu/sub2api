@@ -493,7 +493,7 @@ type OpenAIGatewayService struct {
 	openaiWSRetryMetrics                openAIWSRetryMetrics
 	responseHeaderFilter                *responseheaders.CompiledHeaderFilter
 	codexSnapshotThrottle               *accountWriteThrottle
-	codexModelsManifestCache            codexModelsManifestCache
+	openAIModelsCache                   openAIModelsCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
@@ -3267,7 +3267,19 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 	}
 }
 
-func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(args ...interface{}) bool {
+	var statusCode int
+	var upstreamMsg string
+	var upstreamBody []byte
+	if len(args) == 4 {
+		statusCode, _ = args[1].(int)
+		upstreamMsg, _ = args[2].(string)
+		upstreamBody, _ = args[3].([]byte)
+	} else if len(args) == 3 {
+		statusCode, _ = args[0].(int)
+		upstreamMsg, _ = args[1].(string)
+		upstreamBody, _ = args[2].([]byte)
+	}
 	if hit, _, _ := detectOpenAICyberPolicy(upstreamBody); hit {
 		return false
 	}
@@ -8337,7 +8349,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if apiKey.GroupID != nil {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
-			tokens, cost.TotalCost,
+			tokens, cost.TotalCost, pricingAt,
 		)
 	}
 
