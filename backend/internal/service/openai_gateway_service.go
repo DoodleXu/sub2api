@@ -10129,7 +10129,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
 	if strings.EqualFold(strings.TrimSpace(raw), "max") {
 		normalizedModel := strings.ToLower(strings.TrimSpace(model))
-		if isOpenAIGPT56Model(model) || strings.Contains(normalizedModel, "deepseek") || strings.Contains(normalizedModel, "kimi") || strings.Contains(normalizedModel, "glm") {
+		if isOpenAIGPT56Model(model) || isOpenAIGPT6AstraModel(model) || strings.Contains(normalizedModel, "astra") || strings.Contains(normalizedModel, "deepseek") || strings.Contains(normalizedModel, "kimi") || strings.Contains(normalizedModel, "glm") {
 			return "max"
 		}
 	}
