@@ -7,7 +7,15 @@ import (
 )
 
 func modelRoutingAppliesToPlatform(target, group string) bool {
-	return target == "" || group == "" || target == group
+	target = strings.TrimSpace(target)
+	group = strings.TrimSpace(group)
+	if target != PlatformOpenAI && target != PlatformAnthropic {
+		return false
+	}
+	if group == PlatformComposite {
+		return true
+	}
+	return group == target
 }
 
 func isOpenAICompatibleModelNotFound400(body []byte) bool {
