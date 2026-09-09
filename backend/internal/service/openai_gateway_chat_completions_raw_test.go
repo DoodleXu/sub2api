@@ -723,7 +723,6 @@ func TestForwardAsRawChatCompletions_TruncatedStreamAfterOutputFailsRequest(t *t
 
 // 截断 failover 事件必须带上本次传输真实使用的托管代理快照。
 func TestForwardAsRawChatCompletions_TruncationFailoverAttributesManagedProxy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()

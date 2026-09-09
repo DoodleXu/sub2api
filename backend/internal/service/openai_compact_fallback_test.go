@@ -245,7 +245,6 @@ func requireCompactEventsAttributedTo(t *testing.T, events []*OpsUpstreamErrorEv
 // as its own attempt (it previously vanished on `continue`), carrying the
 // managed proxy the transport actually used.
 func TestOpenAIGatewayForwardNonStreamCompactRetryRecordsAttemptWithManagedProxy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"compact-test","input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses")
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
@@ -291,7 +290,6 @@ func TestOpenAIGatewayForwardNonStreamCompactRetryRecordsAttemptWithManagedProxy
 // Streaming compact fallback whose second attempt fails with a failover-class
 // error: both the retry event and the failover event must carry the proxy.
 func TestOpenAIGatewayForwardCompactFailoverEventCarriesManagedProxy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-5.5","stream":true,"instructions":"compact-test","input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

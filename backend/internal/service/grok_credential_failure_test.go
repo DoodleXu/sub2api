@@ -294,7 +294,6 @@ func TestGetRequestCredentialMapsPermanentGrokOAuthFailureAndRedactsSecrets(t *t
 }
 
 func TestNewGrokCredentialFailoverDoesNotAttributeInferenceProxy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	proxyID := int64(43)
 	account := &Account{
 		ID:       701,

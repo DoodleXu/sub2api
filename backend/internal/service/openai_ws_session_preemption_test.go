@@ -223,7 +223,6 @@ func TestOpenAIWSSessionPreemptRemoteClaimAndStaleReleaseAreAtomic(t *testing.T)
 }
 
 func TestOpenAIWSHTTPBridgeSessionPreemptionEligibility(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	tests := []struct {
 		name          string
 		routerEnabled bool

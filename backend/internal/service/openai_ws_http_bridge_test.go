@@ -978,7 +978,6 @@ func TestProxyOpenAIWSHTTPBridgeTurnBareErrorUsesAuthoritativeFailed(t *testing.
 }
 
 func TestProxyOpenAIWSHTTPBridgeTurnMarksCyberPolicyForFailureShapes(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name       string
