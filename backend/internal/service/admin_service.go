@@ -691,7 +691,7 @@ var ErrRPMStatusUnavailable = infraerrors.New(http.StatusNotImplemented, "RPM_ST
 type adminServiceImpl struct {
 	cfg                  *config.Config
 	emptyGroupDeleteRepo interface {
-		DeleteIfEmpty(context.Context, int64) error
+		DeleteCascadeIfEmpty(context.Context, int64) ([]int64, error)
 	}
 	userRepo                UserRepository
 	groupRepo               GroupRepository
@@ -725,7 +725,8 @@ func (s *adminServiceImpl) DeleteGroupIfEmpty(ctx context.Context, id int64) err
 	if s.emptyGroupDeleteRepo == nil {
 		return errors.New("guarded group deletion is unavailable")
 	}
-	return s.emptyGroupDeleteRepo.DeleteIfEmpty(ctx, id)
+	_, err := s.emptyGroupDeleteRepo.DeleteCascadeIfEmpty(ctx, id)
+	return err
 }
 
 func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, groupIDs []int64) error {
