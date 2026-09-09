@@ -3638,12 +3638,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("image generation disabled for group")
 	}
 
-	instructions := gjson.GetBytes(body, "instructions")
-	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeDeepSeekResponses {
-		markPatchSet("instructions", defaultCodexSynthInstructions(reqModel))
-	}
-
 	billingModel := account.GetMappedModel(reqModel)
 	if billingModel != reqModel {
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", reqModel, billingModel, account.Name, isCodexCLI)
@@ -3662,6 +3656,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markPatchSet("model", compactMappedModel)
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Compact model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", billingModel, compactMappedModel, account.Name, isCodexCLI)
 		}
+	}
+	instructions := gjson.GetBytes(body, "instructions")
+	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
+	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeDeepSeekResponses {
+		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}
 	if !compactMapped {
 		modelForNormalize := reqModel
