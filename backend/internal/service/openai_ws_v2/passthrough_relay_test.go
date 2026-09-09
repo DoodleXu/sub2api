@@ -986,12 +986,12 @@ func TestRelay_BeforeWriteClientTracksDownstreamPerTurn(t *testing.T) {
 			clientConn,
 			upstreamConn,
 			[]byte(`{"type":"response.create","model":"gpt-5.3-codex","input":[]}`),
-			RelayOptions{BeforeWriteClient: func(_ coderws.MessageType, payload []byte, wroteDownstream bool) error {
+			RelayOptions{BeforeWriteClient: func(_ coderws.MessageType, payload []byte, wroteDownstream bool) ([]byte, error) {
 				wroteStates <- wroteDownstream
 				if strings.Contains(string(payload), `"type":"error"`) {
-					return stopErr
+					return payload, stopErr
 				}
-				return nil
+				return payload, nil
 			}},
 		)
 		done <- relayExit
