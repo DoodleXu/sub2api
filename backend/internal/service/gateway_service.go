@@ -3220,7 +3220,7 @@ func (s *GatewayService) checkAndRegisterSession(ctx context.Context, account *A
 
 // ReleaseAccountSession immediately releases a registered session slot.
 func (s *GatewayService) ReleaseAccountSession(ctx context.Context, account *Account, sessionID string) {
-	if s == nil || account == nil || sessionID == "" || s.sessionLimitCache == nil || !account.IsAnthropicOAuthOrSetupToken() {
+	if s == nil || account == nil || sessionID == "" || s.sessionLimitCache == nil || !account.IsAnthropicOAuthOrSetupToken() || account.GetMaxSessions() <= 0 {
 		return
 	}
 	_ = s.sessionLimitCache.UnregisterSession(ctx, account.ID, sessionID)
