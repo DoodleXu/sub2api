@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -161,7 +162,14 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	// Ollama Cloud DeepSeek 出站 max_tokens clamp：判定与 nativeAnthropicTargetURL
 	// 的 base 取值同源（GetAnthropicProtocolBaseURL，adaptive 时是 Anthropic 协议
 	// 地址而非 CC/Responses 地址），详见 helper 注释。
-	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetAnthropicProtocolBaseURL(), body)
+	baseURL := account.GetAnthropicProtocolBaseURL()
+	if baseURL == "" {
+		baseURL = targetURL
+		if parsed, parseErr := url.Parse(targetURL); parseErr == nil {
+			baseURL = parsed.Scheme + "://" + parsed.Host
+		}
+	}
+	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, baseURL, body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
