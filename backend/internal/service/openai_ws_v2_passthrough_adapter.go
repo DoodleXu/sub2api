@@ -669,7 +669,7 @@ func (c *openAIWSPassthroughFirstOutputFrameConn) notifyDeadlineChanged() {
 func openAIWSPassthroughStartsSemanticOutput(payload []byte) bool {
 	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 	switch eventType {
-	case "error", "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	case "error", "response.completed", "response.done", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	case "", "response.created", "response.in_progress", "response.output_item.added", "response.output_item.done":
 		return false
@@ -681,7 +681,7 @@ func openAIWSPassthroughStartsSemanticOutput(payload []byte) bool {
 
 func openAIWSPassthroughIsTerminalOutput(payload []byte) bool {
 	switch strings.TrimSpace(gjson.GetBytes(payload, "type").String()) {
-	case "error", "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	case "error", "response.completed", "response.done", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
 		return false
@@ -1394,7 +1394,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "upstream cyber policy", UpstreamStatus: http.StatusOK, UpstreamInTok: turnResult.Usage.InputTokens, UpstreamOutTok: turnResult.Usage.OutputTokens})
 					}
 					switch turn.TerminalEventType {
-					case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+					case "error", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":
 						turnErr = fmt.Errorf("upstream websocket turn ended with %s", turn.TerminalEventType)
 					}
 					hooks.AfterTurn(turnNo, turnResult, turnErr)
@@ -1424,7 +1424,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 					markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
-					if eventType == "error" || eventType == "response.failed" {
+					if eventType == "error" || eventType == "response.failed" || eventType == "response.fail" {
 						code, errType, _ := parseOpenAIWSErrorEventFields(payload)
 						if !strings.EqualFold(strings.TrimSpace(code), "cyber_policy") {
 							status := int(gjson.GetBytes(payload, "error.status_code").Int())
