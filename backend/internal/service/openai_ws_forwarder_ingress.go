@@ -1150,6 +1150,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				imageFirstOutputMs = &ms
 			}
 
+			if eventType == "error" || eventType == "response.failed" {
+				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+			}
 			if eventType == "response.failed" {
 				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{

@@ -1433,6 +1433,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
+				var failover *UpstreamFailoverError
+				if errors.As(exit.Err, &failover) && failover != nil {
+					markOpenAICyberPolicyEvent(c, failover.ResponseBody, http.StatusOK, nil)
+				}
 				if context.Cause(ctx) != nil {
 					return
 				}
