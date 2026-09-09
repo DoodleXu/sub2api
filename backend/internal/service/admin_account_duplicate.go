@@ -203,6 +203,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if !canDuplicateAccountType(source.Type) {
 		return nil, infraerrors.BadRequest("ACCOUNT_DUPLICATE_CREDENTIAL_TYPE_UNSUPPORTED", "accounts with rotating or unsupported credential types cannot be duplicated")
 	}
+	if err := s.ValidateAccountGroupBindings(ctx, source.GroupIDs); err != nil {
+		return nil, err
+	}
 	credentials, err := cloneAccountJSONMap(source.Credentials)
 	if err != nil {
 		return nil, fmt.Errorf("clone account credentials: %w", err)

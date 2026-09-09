@@ -8,7 +8,9 @@
 
 - 合入上游 release `v0.2.3`（`8fa67d477d6651a744754392a8982ea589c26ae6`），保留 fork 定制能力。
 - 分组模型列表迁移为上游 `ModelAllowlist` 能力，认证与统计定价调用显式传递能力参数。
-- Wire 已重新生成；后端 `go build ./...`、前端 `vue-tsc --noEmit` 通过。未执行生产迁移、部署或远程推送。
+- 分组创建/更新已接入 Codex 模型清单能力模块：创建路径拒绝直接启用，更新路径按平台归一化并校验活动 OpenAI 账号归属；业务服务只依赖该能力的规范化/校验接口。
+- Wire 已重新生成；后端 `go build ./...`、前端 `vue-tsc --noEmit` 和前端构建通过；Codex 清单、简单模式、Grok 媒体资格、账号复制与 WebSocket relay 定向测试通过。
+- `internal/service` 全量套件仍有跨模块既有/环境耦合失败（Astra/OpenAI 请求清洗、WebSocket、图片回填、Gin 全局状态、支付夹具等），未发现与本次 Codex 清单迁移直接相关的失败；未执行生产迁移、部署或远程推送。
 
 ## 2026-09-06 合并上游 v0.2.1
 
@@ -77,10 +79,10 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `2fb64657c` | 合并 v0.2.0 前的 fork 基线；版本源保持 `0.1.268` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.0` -> `aa236488351eb71e120fc2b6fb32e36b0374c918` | 已合入 2026-09-02 发布的官方 release |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.0` -> `aa236488351eb71e120fc2b6fb32e36b0374c918` | 当前同步目标 |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次处理 17 个冲突路径，其中 11 个内容冲突、6 个 modify/delete 冲突；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 fork 聚合文件结构、`linux/amd64 + GHCR` 发布约束、签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| Fork 同步前 HEAD | `81cfdfb48` | 合并 v0.2.3 前的 fork 基线；版本源保持 fork 版本 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.3` -> `8fa67d477d6651a744754392a8982ea589c26ae6` | 已合入 2026-09-08 发布的官方 release |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.3` -> `8fa67d477d6651a744754392a8982ea589c26ae6` | 当前同步目标 |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
 

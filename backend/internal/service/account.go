@@ -1890,7 +1890,7 @@ func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
 		return false, "billing_free_tier"
 	}
 	if !grokBillingHasAuthoritativeQuota(billing) {
-		return false, "billing_inconclusive"
+		return true, "billing_inconclusive"
 	}
 	return true, "eligible"
 }

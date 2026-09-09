@@ -587,7 +587,7 @@ func runUpstreamToClient(
 				stage:           "read_upstream",
 				err:             err,
 				graceful:        graceful,
-				wroteDownstream: connectionWroteDownstream,
+				wroteDownstream: wroteDownstream,
 			}
 			return
 		}
@@ -622,6 +622,12 @@ func runUpstreamToClient(
 			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
+			// 若供应商以 binary 承载 JSON 终态，只消费 turn 状态，避免将
+			// usage/response 元数据耦合到 binary 编解码路径。
+			binaryEventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			if isTerminalEvent(binaryEventType) {
+				openAIWSRelayCompleteUnobservedTurn(state, strings.TrimSpace(gjson.GetBytes(payload, "response.id").String()))
+			}
 		}
 		if observedEvent.abortedSequence > 0 && onResponseCreateAborted != nil {
 			onResponseCreateAborted(observedEvent.abortedSequence)
@@ -642,7 +648,7 @@ func runUpstreamToClient(
 				exitCh <- relayExitSignal{
 					stage:           "drain_terminal",
 					graceful:        true,
-					wroteDownstream: wroteDownstream,
+					wroteDownstream: connectionWroteDownstream,
 				}
 				return
 			}
@@ -800,7 +806,9 @@ func observeUpstreamMessage(
 		turnTiming = openAIWSRelayGetOrInitTurnTiming(state, responseID, now)
 	}
 	if turnTiming == nil {
-		turnTiming = openAIWSRelayActiveTurn(state)
+		if eventType != "error" {
+			turnTiming = openAIWSRelayActivatePendingTurn(state)
+		}
 	}
 	observeRelayTurnResponseModel(turnTiming, firstRelayResponseModel(message), isTerminalEvent(eventType))
 	if state.imageTracker.Observe(message) && state.imageFirstOutputMs == nil {
@@ -848,7 +856,9 @@ func observeUpstreamMessage(
 		if eventType == "error" {
 			state.terminalEventType = eventType
 			if observed.responseID == "" {
-				observed.responseID = openAIWSRelayActiveTurnID(state)
+				if activeID := openAIWSRelayActiveTurnID(state); activeID != "" && activeID != "pending" {
+					observed.responseID = activeID
+				}
 			}
 			pending := observed
 			state.pendingBareError = &pending
@@ -1084,7 +1094,48 @@ func openAIWSRelayActiveTurnID(state *relayState) string {
 	if id := strings.TrimSpace(state.activeTurn.responseID); id != "" {
 		return id
 	}
-	return ""
+	return "pending"
+}
+
+func openAIWSRelayActivatePendingTurn(state *relayState) *relayTurnTiming {
+	if state == nil {
+		return nil
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	if state.activeTurn != nil || len(state.pendingTurns) == 0 {
+		return state.activeTurn
+	}
+	timing := state.pendingTurns[0]
+	state.pendingTurns[0] = nil
+	state.pendingTurns = state.pendingTurns[1:]
+	state.activeTurn = timing
+	return timing
+}
+
+func openAIWSRelayCompleteUnobservedTurn(state *relayState, responseID string) {
+	if state == nil {
+		return
+	}
+	state.turnMu.Lock()
+	defer state.turnMu.Unlock()
+	if responseID != "" {
+		if timing, ok := state.turnTimingByID[responseID]; ok && timing != nil {
+			delete(state.turnTimingByID, responseID)
+			if state.activeTurn == timing {
+				state.activeTurn = nil
+			}
+			return
+		}
+	}
+	if state.activeTurn != nil {
+		state.activeTurn = nil
+		return
+	}
+	if len(state.pendingTurns) > 0 {
+		state.pendingTurns[0] = nil
+		state.pendingTurns = state.pendingTurns[1:]
+	}
 }
 
 func shouldFinalizePendingBareError(state *relayState, payload []byte, eventType string) bool {

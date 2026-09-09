@@ -29,7 +29,12 @@ func ValidateSimpleModeGroupOperation(cfg *config.Config, operation AdminGroupOp
 }
 
 func (s *adminServiceImpl) ValidateSimpleModeGroupOperation(operation AdminGroupOperation) error {
-	// Fork's aggregate admin service has no direct config dependency. Simple
-	// mode handlers perform the mode gate at their boundary.
+	return ValidateSimpleModeGroupOperation(s.cfg, operation)
+}
+
+func (s *adminServiceImpl) validateSimpleModeGroupAccess(group *Group) error {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !IsGroupBindableInSimpleMode(group) {
+		return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups are not supported in simple mode")
+	}
 	return nil
 }
