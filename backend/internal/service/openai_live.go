@@ -258,7 +258,14 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	return nil, ErrLiveUnavailable
 }
 
-func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(err error) bool {
+func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(args ...interface{}) bool {
+	var err error
+	if len(args) == 1 {
+		err, _ = args[0].(error)
+	}
+	if len(args) >= 2 {
+		err, _ = args[len(args)-1].(error)
+	}
 	var upstreamErr *UpstreamFailoverError
 	if !errors.As(err, &upstreamErr) {
 		// 凭证读取和网络传输错误都可能只影响当前账号或代理。
