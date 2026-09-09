@@ -1390,6 +1390,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				)
 				if hooks != nil && hooks.AfterTurn != nil {
 					var turnErr error
+					if turn.TerminalEventType == "error" || turn.TerminalEventType == "response.failed" || turn.TerminalEventType == "response.fail" {
+						MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "upstream cyber policy", UpstreamStatus: http.StatusOK, UpstreamInTok: turnResult.Usage.InputTokens, UpstreamOutTok: turnResult.Usage.OutputTokens})
+					}
 					switch turn.TerminalEventType {
 					case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 						turnErr = fmt.Errorf("upstream websocket turn ended with %s", turn.TerminalEventType)
@@ -1407,10 +1410,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 					usage := OpenAIUsage{}
 					parseOpenAIWSResponseUsageFromCompletedEvent(payload, &usage)
-					if usage.InputTokens == 0 { usage.InputTokens = int(gjson.GetBytes(payload, "usage.input_tokens").Int()) }
-					if usage.OutputTokens == 0 { usage.OutputTokens = int(gjson.GetBytes(payload, "usage.output_tokens").Int()) }
-					if usage.InputTokens == 0 { usage.InputTokens = int(gjson.GetBytes(payload, "response.usage.input_tokens").Int()) }
-					if usage.OutputTokens == 0 { usage.OutputTokens = int(gjson.GetBytes(payload, "response.usage.output_tokens").Int()) }
+					if usage.InputTokens == 0 {
+						usage.InputTokens = int(gjson.GetBytes(payload, "usage.input_tokens").Int())
+					}
+					if usage.OutputTokens == 0 {
+						usage.OutputTokens = int(gjson.GetBytes(payload, "usage.output_tokens").Int())
+					}
+					if usage.InputTokens == 0 {
+						usage.InputTokens = int(gjson.GetBytes(payload, "response.usage.input_tokens").Int())
+					}
+					if usage.OutputTokens == 0 {
+						usage.OutputTokens = int(gjson.GetBytes(payload, "response.usage.output_tokens").Int())
+					}
 					markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
 					if eventType == "error" || eventType == "response.failed" {
