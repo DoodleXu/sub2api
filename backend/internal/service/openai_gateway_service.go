@@ -3268,10 +3268,12 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(args ...interface{}) bool {
+	var account *Account
 	var statusCode int
 	var upstreamMsg string
 	var upstreamBody []byte
 	if len(args) == 4 {
+		account, _ = args[0].(*Account)
 		statusCode, _ = args[1].(int)
 		upstreamMsg, _ = args[2].(string)
 		upstreamBody, _ = args[3].([]byte)
@@ -3290,6 +3292,10 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(args ...inte
 		return true
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
+	if s != nil && s.accountRepo != nil && account != nil && account.IsOpenAICompatible() && statusCode == http.StatusBadRequest &&
+		isOpenAICompatibleModelNotFound400(upstreamBody) {
 		return true
 	}
 	if s.shouldFailoverUpstreamError(statusCode) {
