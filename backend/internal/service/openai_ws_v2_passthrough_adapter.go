@@ -1565,6 +1565,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return nil
 	}
 	relayErr := relayExit.Err
+	var relayFailover *UpstreamFailoverError
+	if errors.As(relayErr, &relayFailover) && relayFailover != nil {
+		markOpenAICyberPolicyEvent(c, relayFailover.ResponseBody, http.StatusOK, nil)
+	}
 	var firstOutputTimeoutErr *openAIWSPassthroughFirstOutputTimeoutError
 	if errors.As(relayErr, &firstOutputTimeoutErr) {
 		deadline := firstOutputTimeoutErr.deadline
