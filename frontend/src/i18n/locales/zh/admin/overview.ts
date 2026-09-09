@@ -434,6 +434,7 @@ export default {
 
     // Users Management
     users: {
+      passwordCopied: '密码已复制',
       title: '用户管理',
       description: '管理用户账户和权限',
       createUser: '创建用户',
@@ -862,6 +863,7 @@ export default {
         reasoningEffortModelPlaceholder: '留空则全部 / gpt / gpt-5.4',
         reasoningEffortFrom: '请求值',
         reasoningEffortTo: '转发值',
+        reasoningEffortToDeny: '拒绝',
         reasoningEffortFromPlaceholder: '请选择 A',
         reasoningEffortToPlaceholder: '请选择 B',
         fromRequired: '请选择请求值 A',
@@ -1066,6 +1068,9 @@ export default {
         marginRangeError: '最低毛利率应在 0 到 99.99 之间',
         bufferRangeError: '安全缓冲应在 0 到 99.99 之间',
         sumTooHigh: '最低毛利率与安全缓冲之和必须小于 100%，否则将排除全部账号'
+      },
+      modelAllowlist: {
+        title: '模型白名单', hint: '启用后仅允许白名单模型', loading: '正在加载候选模型...', empty: '暂无候选模型，请添加自定义条目', selectedSummary: '已选 {selected} / {total}', selectAll: '全选', invertSelection: '反选', wildcardTag: '通配符', customPlaceholder: '自定义条目，例如 claude-* 或 gpt-5.5-codex', addCustom: '添加', emptySelectionError: '启用白名单后至少选择或添加一个模型', errors: { empty: '请输入模型条目', invalidWildcard: '通配符只能位于条目末尾', duplicate: '该条目已存在' }
       },
       modelsList: {
         title: '自定义 {endpoint} 模型列表',

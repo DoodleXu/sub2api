@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      addCostCny: 'Add CNY cost', addCostCnyHint: 'Record account cost in CNY', archiveAccount: 'Archive account', archiveConfirm: 'Archive this account?', archiveFailed: 'Archive failed', archiveSuccess: 'Account archived',
+      autoResetCredit: { title: 'Auto reset credit', hint: 'Configure automatic credit reset', threshold5h: '5-hour threshold', threshold7d: '7-day threshold', thresholdHint: 'Threshold percentage', thresholdInvalid: 'Invalid threshold' },
+      costStatsPendingHint: 'Cost statistics are pending', failedToResetQuota: 'Failed to reset quota',
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
       createAccount: 'Create Account',

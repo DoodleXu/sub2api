@@ -1,5 +1,8 @@
 export default {
     accounts: {
+      addCostCny: '添加人民币成本', addCostCnyHint: '记录账号人民币成本', archiveAccount: '归档账号', archiveConfirm: '确认归档此账号？', archiveFailed: '归档失败', archiveSuccess: '账号已归档',
+      autoResetCredit: { title: '自动重置额度', hint: '配置自动重置额度', threshold5h: '5 小时阈值', threshold7d: '7 天阈值', thresholdHint: '阈值百分比', thresholdInvalid: '阈值无效' },
+      costStatsPendingHint: '成本统计处理中', failedToResetQuota: '重置额度失败',
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
       createAccount: '添加账号',

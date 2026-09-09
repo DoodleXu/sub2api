@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import en from '../locales/en'
-import zh from '../locales/zh'
+import legacyEn from '../locales/en'
+import modularEn from '../locales/en/index'
+import legacyZh from '../locales/zh'
+import modularZh from '../locales/zh/index'
+import { mergeLocaleMessages } from '../index'
+
+const en = mergeLocaleMessages(legacyEn, modularEn)
+const zh = mergeLocaleMessages(legacyZh, modularZh)
 
 type LocaleValue = Record<string, unknown>
 
