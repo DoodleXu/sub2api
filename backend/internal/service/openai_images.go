@@ -871,6 +871,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		if err != nil {
 			return nil, err
 		}
+		responseBody = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, responseBody)
+		c.Data(resp.StatusCode, "application/json", responseBody)
 		usage = nonStreamUsage
 		var imageFirstOutputMs *int
 		if nonStreamCount > 0 {
@@ -1049,14 +1051,6 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(resp *http
 		return OpenAIUsage{}, 0, nil, nil, err
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	contentType := "application/json"
-	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
-		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
-			contentType = upstreamType
-		}
-	}
-	c.Data(resp.StatusCode, contentType, body)
-
 	usage, _ := extractOpenAIUsageFromJSONBytes(body)
 	return usage, extractOpenAIImageCountFromJSONBytes(body), collectOpenAIResponseImageOutputSizesFromJSONBytes(body), body, nil
 }
