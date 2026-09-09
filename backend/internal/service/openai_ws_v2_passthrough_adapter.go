@@ -1595,6 +1595,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			activeTurnTimeoutErr,
 		)
 	}
+	var laterFailoverErr *UpstreamFailoverError
+	if turnCount > 0 && relayExit.WroteDownstream && errors.As(relayErr, &laterFailoverErr) {
+		relayErr = NewOpenAIWSClientCloseError(coderws.StatusGoingAway, "upstream turn failed; please reconnect", relayErr)
+	}
 	safeRelayErr := redactOpenAIWSPassthroughRelayError(redactSensitiveBody, relayErr)
 	logOpenAIWSV2Passthrough(
 		"relay_failed account_id=%d stage=%s wrote_downstream=%v err=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",
@@ -1609,7 +1613,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnCount,
 	)
 
-	relayErr = safeRelayErr
 	if relayExit.Stage == "idle_timeout" {
 		relayErr = NewOpenAIWSClientCloseError(
 			coderws.StatusPolicyViolation,
