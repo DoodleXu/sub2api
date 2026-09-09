@@ -214,7 +214,7 @@ func payloadAsJSONBytes(payload map[string]any) []byte {
 
 func isOpenAIWSTerminalEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+	case "response.completed", "response.done", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
 	default:
 		return false
@@ -227,7 +227,7 @@ func normalizeOpenAIWSTerminalEvent(eventType string) string {
 		return "response.completed"
 	case "response.done":
 		return "response.done"
-	case "response.failed":
+	case "response.failed", "response.fail":
 		return "response.failed"
 	case "response.incomplete":
 		return "response.incomplete"
