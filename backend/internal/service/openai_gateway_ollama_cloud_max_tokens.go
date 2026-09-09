@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
@@ -71,6 +72,22 @@ func ollamaCloudResponsesMaxOutputTokensClamp(account *Account, upstreamModel st
 		return 0, false
 	}
 	return cap, true
+}
+
+// clampOllamaCloudResponsesMaxOutputTokens applies the Responses-specific
+// provider capability to a request body. It is intentionally independent from
+// client type so Codex and non-Codex callers share the same upstream contract.
+func clampOllamaCloudResponsesMaxOutputTokens(account *Account, body []byte) []byte {
+	upstreamModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	cap, ok := ollamaCloudResponsesMaxOutputTokensClamp(account, upstreamModel, body)
+	if !ok {
+		return body
+	}
+	updated, err := sjson.SetBytes(body, "max_output_tokens", cap)
+	if err != nil {
+		return body
+	}
+	return updated
 }
 
 // ollamaCloudMaxTokensCap 返回账号配置的 max_tokens 上限。账号为 nil 或 extra 中
