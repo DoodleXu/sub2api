@@ -416,6 +416,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if c != nil {
 			if state := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader)); state != "" {
 				upstreamReq.Header.Set(openAIWSTurnStateHeader, state)
+			} else if state := strings.TrimSpace(c.GetString("openai_ws_ingress_turn_state")); state != "" {
+				upstreamReq.Header.Set(openAIWSTurnStateHeader, state)
 			}
 		}
 		identityMetadata.bindAuthorization(upstreamReq.Header.Get("Authorization"))

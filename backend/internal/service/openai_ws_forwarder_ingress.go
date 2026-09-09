@@ -542,6 +542,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				turnState = savedTurnState
 				if c != nil && c.Request != nil {
 					c.Request.Header.Set(openAIWSTurnStateHeader, turnState)
+					c.Set("openai_ws_ingress_turn_state", turnState)
 				}
 			}
 		}
