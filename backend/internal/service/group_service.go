@@ -38,6 +38,13 @@ type GroupRepository interface {
 	UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
 }
 
+// BindableGroupListRepository provides the filtered view allowed for account
+// bindings in simple mode. Keeping it separate avoids forcing every group
+// consumer to depend on simple-mode query semantics.
+type BindableGroupListRepository interface {
+	ListBindableWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]Group, *pagination.PaginationResult, error)
+}
+
 type GroupDuplicateRepository interface {
 	// FindByDuplicateOperationID performs the read-only recovery lookup used
 	// after an ambiguous idempotency-store failure.

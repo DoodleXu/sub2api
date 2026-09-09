@@ -2051,9 +2051,7 @@ func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, p
 	var result *pagination.PaginationResult
 	var err error
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		repo, ok := s.groupRepo.(interface {
-			ListBindableWithFilters(context.Context, pagination.PaginationParams, string, string, string, *bool) ([]Group, *pagination.PaginationResult, error)
-		})
+		repo, ok := s.groupRepo.(BindableGroupListRepository)
 		if !ok {
 			return nil, 0, errors.New("group repository does not support simple-mode filtering")
 		}
