@@ -1710,7 +1710,7 @@ func openAICompactSupportTier(account *Account) int {
 
 func NormalizeOpenAICompatiblePlatform(platform string) string {
 	switch platform {
-	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		return platform
 	default:
 		return PlatformOpenAI

@@ -421,6 +421,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
@@ -1390,6 +1391,7 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorDefaultIntervalSeconds *int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorMode                   *string `json:"channel_monitor_mode"`
 	ChannelMonitorHideThroughput         *bool   `json:"channel_monitor_hide_throughput"`
+	ChannelMonitorHideUserRanking        *bool   `json:"channel_monitor_hide_user_ranking"`
 	ChannelMonitorShowQuota              *bool   `json:"channel_monitor_show_quota"`
 
 	// Grok model mapping policy
@@ -2981,6 +2983,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ChannelMonitorHideThroughput
 		}(),
+		ChannelMonitorHideUserRanking: func() bool {
+			if req.ChannelMonitorHideUserRanking != nil {
+				return *req.ChannelMonitorHideUserRanking
+			}
+			return previousSettings.ChannelMonitorHideUserRanking
+		}(),
 		ChannelMonitorShowQuota: func() bool {
 			if req.ChannelMonitorShowQuota != nil {
 				return *req.ChannelMonitorShowQuota
@@ -3563,6 +3571,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorMode:                   updatedSettings.ChannelMonitorMode,
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
+		ChannelMonitorHideUserRanking:        updatedSettings.ChannelMonitorHideUserRanking,
 		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
 		GrokDefaultTextModel:                 updatedSettings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled:       updatedSettings.GrokCrossClientModelMapEnabled,
@@ -4213,6 +4222,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.ChannelMonitorHideThroughput != after.ChannelMonitorHideThroughput {
 		changed = append(changed, "channel_monitor_hide_throughput")
+	}
+	if before.ChannelMonitorHideUserRanking != after.ChannelMonitorHideUserRanking {
+		changed = append(changed, "channel_monitor_hide_user_ranking")
 	}
 	if before.GrokDefaultTextModel != after.GrokDefaultTextModel {
 		changed = append(changed, "grok_default_text_model")

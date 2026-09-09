@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -50,9 +51,17 @@ const (
 	openAIImageMaxUploadBytes              = 80 << 20                         // aggregate multipart image bytes
 	openAIImageMaxDimension                = 16384
 	openAIImageMaxPixels                   = int64(100_000_000)
-	openAIImagesResponsesMainModel         = "gpt-5.4-mini"
+	openAIImagesResponsesMainModel         = "gpt-5.6-luna"
 	openAIImagesVerbatimPromptInstructions = "When invoking the image_generation tool, use the user's image prompt verbatim. Do not rewrite, expand, summarize, embellish, translate, normalize punctuation, or add or remove visual details or constraints. Preserve the original language, wording, capitalization, quotes, and punctuation exactly."
 )
+
+// The Responses driver is independent from the image_generation tool model.
+func openAIImagesResponsesMainModelValue() string {
+	if model := strings.TrimSpace(os.Getenv("SUB2API_IMAGES_MAIN_MODEL")); model != "" {
+		return model
+	}
+	return openAIImagesResponsesMainModel
+}
 
 type OpenAIImagesCapability string
 

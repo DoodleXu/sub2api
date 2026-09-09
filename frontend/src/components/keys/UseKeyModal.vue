@@ -425,6 +425,8 @@ const platformDescription = computed(() => {
         return t('keys.useKeyModal.grok.codexDescription')
       }
       return t('keys.useKeyModal.grok.description')
+    case 'minimax':
+      return t('keys.useKeyModal.minimax.description')
     default:
       return t('keys.useKeyModal.description')
   }
@@ -462,6 +464,8 @@ const platformNote = computed(() => {
         return t('keys.useKeyModal.grok.noteWindows')
       }
       return t('keys.useKeyModal.grok.note')
+    case 'minimax':
+      return t('keys.useKeyModal.note')
     default:
       return t('keys.useKeyModal.note')
   }
@@ -550,6 +554,10 @@ const currentFiles = computed((): FileConfig[] => {
         return generateGrokCodexFiles(apiBase, apiKey)
       }
       return generateGrokFiles(apiBase, apiKey)
+    case 'deepseek':
+    case 'minimax':
+    case 'composite':
+      return generateAnthropicFiles(baseRoot, apiKey)
     default:
       return generateAnthropicFiles(baseUrl, apiKey)
   }

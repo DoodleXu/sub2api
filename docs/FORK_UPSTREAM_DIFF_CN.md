@@ -2,7 +2,15 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-09
+最后更新：2026-09-10
+
+## 2026-09-10 合并上游 v0.2.4
+
+- 合入上游 release `v0.2.4`（`5de5e2bed035d43591a2e10e51f420ef6a84eb98`），同步 MiniMax 一等平台、OpenAI Image 2.5、HTTP/2 PING 保活、Grok 媒体生成资格、渠道监控用户排行隐藏、周成本展示、代理部分更新与日期校验等能力。
+- 合并前预检识别 27 个冲突路径（16 个内容冲突、11 个 modify/delete 冲突）；继续采用“移植行为、不恢复上游拆分文件”的聚合模块策略，将设置、代理、网关模型、图片和 WebSocket 增量迁入 fork 实际模块。
+- 保留 fork `backend/cmd/server/VERSION=0.2.8`、非 OpenAI 组不下发远程 Codex manifest、Grok 客户端工具缓存显式 opt-in、Agent Identity 脱敏、Responses Lite、生图/WS 逐轮计费、人民币成本、账号归档、签到、运营中心、Web 创作台和生图管理；Apple Container 文件继续保持删除，部署维持 Linux/Docker/GHCR 约束。
+- 分组模型列表统一调用 service 层 `GroupModelAllowlist.FilterForListing`，避免 Handler 重复实现白名单业务逻辑；通配条目按候选来源展开，Antigravity 原生模型列表同步受白名单约束。
+- 验证结果：后端 `go build ./...`、v0.2.4 相关 handler/service 定向测试通过；前端 `vue-tsc --noEmit`、定向 Vitest 和生产构建通过。后端全量 unit 及前端全量 Vitest 仍有合并前基线可复现的 Codex manifest、WebSocket、账号/分组界面和 i18n 测试缺口，本次未扩大失败集合；未执行生产迁移、部署、远程推送、tag 或 release。
 
 ## 2026-09-09 合并上游 v0.2.3
 
@@ -79,9 +87,9 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `81cfdfb48` | 合并 v0.2.3 前的 fork 基线；版本源保持 fork 版本 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.3` -> `8fa67d477d6651a744754392a8982ea589c26ae6` | 已合入 2026-09-08 发布的官方 release |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.3` -> `8fa67d477d6651a744754392a8982ea589c26ae6` | 当前同步目标 |
+| Fork 同步前 HEAD | `659851406` | 合并 v0.2.4 前的 fork 基线；版本源保持 fork 版本 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.4` -> `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | 已合入 2026-09-09 发布的官方 release |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.4` -> `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | 当前同步目标 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
