@@ -1405,6 +1405,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && writeErr == nil {
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+					markOpenAICyberPolicyEvent(c, payload, http.StatusOK, nil)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
 					if eventType == "error" || eventType == "response.failed" {
 						code, errType, _ := parseOpenAIWSErrorEventFields(payload)
