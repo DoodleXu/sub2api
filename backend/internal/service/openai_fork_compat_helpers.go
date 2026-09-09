@@ -196,6 +196,13 @@ func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
+	// GPT-6 Astra 官方 Responses contract preserves reasoning.mode and does
+	// not infer effort from mode=pro. Keep this capability decision in the
+	// shared normalizer so native, passthrough, and WebSocket paths agree.
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if isOpenAIGPT6AstraModel(model) {
+		return body, false, nil
+	}
 	mode := gjson.GetBytes(body, "reasoning.mode")
 	if !mode.Exists() || mode.Type != gjson.String {
 		return body, false, nil
