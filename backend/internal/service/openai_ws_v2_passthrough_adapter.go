@@ -1405,7 +1405,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && writeErr == nil {
 					eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
-					markOpenAICyberPolicyEvent(c, payload, http.StatusOK, nil)
+					usage := OpenAIUsage{}
+					parseOpenAIWSResponseUsageFromCompletedEvent(payload, &usage)
+					if usage.InputTokens == 0 { usage.InputTokens = int(gjson.GetBytes(payload, "usage.input_tokens").Int()) }
+					if usage.OutputTokens == 0 { usage.OutputTokens = int(gjson.GetBytes(payload, "usage.output_tokens").Int()) }
+					if usage.InputTokens == 0 { usage.InputTokens = int(gjson.GetBytes(payload, "response.usage.input_tokens").Int()) }
+					if usage.OutputTokens == 0 { usage.OutputTokens = int(gjson.GetBytes(payload, "response.usage.output_tokens").Int()) }
+					markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
 					markOpenAIWSClientVisibleFailure(c, eventType, payload)
 					if eventType == "error" || eventType == "response.failed" {
 						code, errType, _ := parseOpenAIWSErrorEventFields(payload)
