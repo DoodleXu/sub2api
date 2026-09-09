@@ -1597,7 +1597,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	var laterFailoverErr *UpstreamFailoverError
 	if turnCount > 0 && relayExit.WroteDownstream && errors.As(relayErr, &laterFailoverErr) {
-		relayErr = NewOpenAIWSClientCloseError(coderws.StatusGoingAway, "upstream turn failed; please reconnect", relayErr)
+		relayErr = NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "upstream rate limit exceeded; please reconnect", relayErr)
 	}
 	safeRelayErr := redactOpenAIWSPassthroughRelayError(redactSensitiveBody, relayErr)
 	logOpenAIWSV2Passthrough(
@@ -1635,6 +1635,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 }
 
 func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTurns int) (coderws.StatusCode, string, bool) {
+	var failoverErr *UpstreamFailoverError
+	if errors.As(exit.Err, &failoverErr) && completedTurns > 0 {
+		return coderws.StatusTryAgainLater, "upstream rate limit exceeded; please reconnect", true
+	}
 	var closeErr *OpenAIWSClientCloseError
 	if errors.As(exit.Err, &closeErr) {
 		return closeErr.StatusCode(), closeErr.Reason(), true
