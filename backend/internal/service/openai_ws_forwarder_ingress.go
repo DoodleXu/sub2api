@@ -537,6 +537,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if turnState == "" && stateStore != nil && sessionHash != "" {
 			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 				turnState = savedTurnState
+				if c != nil && c.Request != nil {
+					c.Request.Header.Set(openAIWSTurnStateHeader, turnState)
+				}
 			}
 		}
 
