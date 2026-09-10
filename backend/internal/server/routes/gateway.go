@@ -55,12 +55,6 @@ func RegisterGatewayRoutes(
 			return false
 		}
 	}
-	codexModelsHandler := func(c *gin.Context) {
-		if h.OpenAIGateway.TryCodexModels(c) {
-			return
-		}
-		h.Gateway.CodexModels(c)
-	}
 	countTokensHandler := func(c *gin.Context) {
 		switch getGroupPlatform(c) {
 		case service.PlatformOpenAI, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax:
@@ -71,16 +65,13 @@ func RegisterGatewayRoutes(
 			h.Gateway.CountTokens(c)
 		}
 	}
+	codexModelsHandler := func(c *gin.Context) {
+		dispatchCodexModelsGateway(c, h.OpenAIGateway.CodexModels, h.Gateway.CodexModels)
+	}
 	modelsHandler := func(c *gin.Context) {
 		if c.Query("client_version") != "" {
-			switch getGroupPlatform(c) {
-			case service.PlatformOpenAI:
-				codexModelsHandler(c)
-				return
-			case service.PlatformComposite:
-				h.OpenAIGateway.CodexModels(c)
-				return
-			}
+			codexModelsHandler(c)
+			return
 		}
 		h.Gateway.Models(c)
 	}
@@ -522,9 +513,6 @@ func RegisterGatewayRoutes(
 
 }
 
-// dispatchCodexModelsGateway keeps the live Codex manifest endpoint limited to
-// OpenAI groups; other platforms use the generated compatibility manifest.
-// Keeping this decision in one helper avoids route aliases drifting apart.
 func dispatchCodexModelsGateway(c *gin.Context, openAIHandler, generatedHandler gin.HandlerFunc) {
 	if getGroupPlatform(c) == service.PlatformOpenAI {
 		openAIHandler(c)
