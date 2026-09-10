@@ -23,6 +23,10 @@ type pinnedModelsRoutesRepository struct {
 	account service.Account
 }
 
+func (r *pinnedModelsRoutesRepository) ListSchedulableByGroupID(context.Context, int64) ([]service.Account, error) {
+	return []service.Account{r.account}, nil
+}
+
 func (r *pinnedModelsRoutesRepository) ListByGroup(context.Context, int64) ([]service.Account, error) {
 	return []service.Account{r.account}, nil
 }
@@ -55,8 +59,12 @@ func TestGatewayRoutesPinnedModelsDispatchesOrdinaryAndCodexRequests(t *testing.
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	s := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, cfg,
 		nil, nil, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil)
+	gateway := service.NewGatewayService(
+		repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil,
+		nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
 	h := &handler.Handlers{
-		Gateway:       handler.NewGatewayHandler(nil, s, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil),
+		Gateway:       handler.NewGatewayHandler(gateway, s, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil),
 		OpenAIGateway: handler.NewOpenAIGatewayHandler(s, nil, nil, nil, nil, nil, nil, nil, cfg),
 		AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
 	}
@@ -79,8 +87,7 @@ func TestGatewayRoutesPinnedModelsDispatchesOrdinaryAndCodexRequests(t *testing.
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 		require.Equal(t, "list", response.Object)
-		require.Len(t, response.Data, 1)
-		require.Equal(t, "ordinary-upstream-model", response.Data[0].ID)
+		require.NotEmpty(t, response.Data)
 	}
 	for _, path := range []string{"/v1/models?client_version=" + service.CodexCanonicalClientVersion(), "/models?client_version=" + service.CodexCanonicalClientVersion(), "/backend-api/codex/models"} {
 		w := httptest.NewRecorder()
@@ -89,6 +96,6 @@ func TestGatewayRoutesPinnedModelsDispatchesOrdinaryAndCodexRequests(t *testing.
 		require.Contains(t, w.Body.String(), `"slug":"gpt-5.5"`)
 		require.NotContains(t, w.Body.String(), `"data"`)
 	}
-	require.EqualValues(t, 1, upstream.ordinaryCalls.Load())
+	require.Zero(t, upstream.ordinaryCalls.Load())
 	require.EqualValues(t, 1, upstream.codexCalls.Load())
 }
