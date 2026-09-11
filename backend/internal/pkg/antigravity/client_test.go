@@ -1300,8 +1300,8 @@ func TestClient_LoadCodeAssist_Success_RealCall(t *testing.T) {
 		if reqBody.Metadata.IDEType != "ANTIGRAVITY" {
 			t.Errorf("IDEType 不匹配: got %s, want ANTIGRAVITY", reqBody.Metadata.IDEType)
 		}
-		if reqBody.Metadata.IDEVersion != GetIDEVersion() {
-			t.Errorf("IDEVersion 不匹配: got %s, want %s", reqBody.Metadata.IDEVersion, GetIDEVersion())
+		if reqBody.Metadata.IDEVersion != GetUserAgentVersionForContext(r.Context()) {
+			t.Errorf("IDEVersion 不匹配: got %s, want %s", reqBody.Metadata.IDEVersion, GetUserAgentVersionForContext(r.Context()))
 		}
 		if reqBody.Metadata.IDEName != "antigravity" {
 			t.Errorf("IDEName 不匹配: got %s, want antigravity", reqBody.Metadata.IDEName)
