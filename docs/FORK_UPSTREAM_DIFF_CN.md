@@ -2,7 +2,17 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-10
+最后更新：2026-09-11
+
+## 2026-09-11 v0.2.4 合并后全面修复
+
+- 恢复官方 simple mode 分组管理契约：Handler 仅负责模式门禁、请求清洗和 DTO 映射，删除动作通过 `AdminService.DeleteGroupIfEmpty` 能力执行；高级调度、倍率、订阅和模型清单配置在简单模式下继续 fail closed。
+- 补齐 Codex 模型清单多账号 failover 与普通 `/models` pinned manifest 路由：清单错误按账号调度策略继续切换，普通和 Codex 模型端点统一遵守 OpenAI 分组 pinned models 行为。
+- 收紧 OpenAI WebSocket 模型校验：首帧、`session.update` 与后续 `response.create` 均执行分组白名单校验，保留大小写变体/重复 `model` 键并拒绝冲突值，阻断通过 session model 轮换绕过白名单。
+- 修复 OpenAI compact/failover 与流处理观测：compact fallback 的 retry、HTTP error、failover 事件统一携带实际代理快照；已产生语义输出后收到 `response.failed` 会记录 `stream_failed`，且账号健康副作用保持幂等；确定性 `model_not_found` 在账号耗尽后保留脱敏后的结构化 400。
+- 修复 WS cyber 与会话隔离：终态 usage 可补全先写入的 cyber 标记，普通错误不再误标 cyber；rate-limit 早退前完成 cyber/usage 解析；HTTP bridge 优先使用首帧 `prompt_cache_key` 建立连接内隔离哈希，避免相同 header session 的并发连接串用 turn state。
+- Claude OAuth 请求中的 billing `cc_version` 与实际 User-Agent 版本保持一致；Antigravity LoadCodeAssist 请求测试按上下文实际 IDE 版本断言。Redis session 与外部服务降级相关 unit 包已纳入本轮验证；当前环境没有 Antigravity/Google 实际凭据，因此未执行真实 Google 上游调用。
+- 本轮基于已合入的 `refs/tags/upstream/v0.2.4` 本地基线修复；未新增上游合并，未执行生产迁移、部署、远程推送、tag 或 release。
 
 ## 2026-09-10 合并上游 v0.2.4
 
