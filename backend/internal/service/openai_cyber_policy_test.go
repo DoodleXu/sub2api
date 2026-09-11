@@ -31,8 +31,11 @@ func TestMarkOpsCyberPolicyFirstWins(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "first"})
-	MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "second"})
-	require.Equal(t, "first", GetOpsCyberPolicy(c).Message, "first mark wins, later marks ignored")
+	MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "second", UpstreamInTok: 11, UpstreamOutTok: 3})
+	got := GetOpsCyberPolicy(c)
+	require.Equal(t, "first", got.Message, "first evidence wins")
+	require.Equal(t, 11, got.UpstreamInTok, "terminal usage enriches an earlier WS mark")
+	require.Equal(t, 3, got.UpstreamOutTok, "terminal usage enriches an earlier WS mark")
 }
 
 func TestMarkOpsCyberPolicyNilContext(t *testing.T) {

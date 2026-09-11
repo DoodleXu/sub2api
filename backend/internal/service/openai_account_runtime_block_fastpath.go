@@ -569,6 +569,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Acc
 	if s == nil {
 		return false
 	}
+	if account != nil && s.isOpenAIAccountRuntimeHardBlocked(account.ID) {
+		return true
+	}
 	snapshot := s.peekOpenAIAccountRuntimeBlock(account)
 	if snapshot.blocked {
 		if accountPersistedSchedulingCooldownActive(account) {

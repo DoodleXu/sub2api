@@ -536,16 +536,20 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 			}
 			if eventType == "response.failed" {
+				outputAlreadyStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				bareErrorJustResolved = bareErrorPending
 				bareErrorPending = false
 				failedMessage = extractOpenAISSEErrorMessage(dataBytes)
 				// Paired failures can arrive after visible output, so account
 				// health side effects must run even when failover is suppressed.
-				s.handleOpenAIStreamTerminalAccountSideEffects(c, account, dataBytes, failedMessage, resp.Header)
+				statusCode, _ := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, dataBytes, failedMessage, resp.Header)
 				// response.failed 自带上游已消耗的 usage（input token 通常已扣）；必须先解析
 				// 再打 cyber 标记，否则 mark 记到的是解析前的 0，导致流式 cyber 按 0 token 计费
 				// 而漏记真实用量。对齐 WS V2 / Chat 流式路径（均先解析 usage 再 Mark）。
 				s.parseSSEUsageBytes(dataBytes, usage)
+				if outputAlreadyStarted {
+					s.recordOpenAIStreamUpstreamErrorWithStatus(c, account, false, upstreamRequestID, "stream_failed", dataBytes, failedMessage, statusCode)
+				}
 				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,

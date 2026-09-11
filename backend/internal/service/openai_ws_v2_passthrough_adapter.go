@@ -1091,6 +1091,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
+			if eventType == "session.update" {
+				topModels, sessionModels, modelErr := OpenAIWSModelFields(payload)
+				if modelErr != nil || OpenAIWSModelValuesConflict(topModels) || OpenAIWSModelValuesConflict(sessionModels) {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model is not available for this group", modelErr)
+				}
+			}
 			responseCreateAt := time.Time{}
 			acceptedTurn := false
 			if isResponseCreate {
@@ -1159,6 +1165,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				usageMeta.sessionRequestModel = requestModelForThisFrame
 				if hooks != nil {
+					if hooks.ValidateModel != nil {
+						topModels, _, modelErr := OpenAIWSModelFields(payload)
+						if modelErr != nil || OpenAIWSModelValuesConflict(topModels) {
+							return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model is not available for this group", modelErr)
+						}
+						if requestModelForThisFrame != "" {
+							if err := hooks.ValidateModel(payload, requestModelForThisFrame); err != nil {
+								return payload, nil, err
+							}
+						}
+					}
+					if hooks.ValidateModel != nil && capturedSessionModel != "" {
+						if err := hooks.ValidateModel(payload, capturedSessionModel); err != nil {
+							return payload, nil, err
+						}
+					}
 					if hooks.BeforeTurn != nil {
 						if err := hooks.BeforeTurn(turnNo); err != nil {
 							return payload, nil, err
@@ -1390,8 +1412,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				)
 				if hooks != nil && hooks.AfterTurn != nil {
 					var turnErr error
-					if turn.TerminalEventType == "error" || turn.TerminalEventType == "response.failed" || turn.TerminalEventType == "response.fail" {
-						MarkOpsCyberPolicy(c, CyberPolicyMark{Code: "cyber_policy", Message: "upstream cyber policy", UpstreamStatus: http.StatusOK, UpstreamInTok: turnResult.Usage.InputTokens, UpstreamOutTok: turnResult.Usage.OutputTokens})
+					if GetOpsCyberPolicy(c) != nil {
+						MarkOpsCyberPolicy(c, CyberPolicyMark{UpstreamInTok: turnResult.Usage.InputTokens, UpstreamOutTok: turnResult.Usage.OutputTokens})
 					}
 					switch turn.TerminalEventType {
 					case "error", "response.failed", "response.fail", "response.incomplete", "response.cancelled", "response.canceled":

@@ -769,7 +769,7 @@ func TestOpenAIRuntimeBlock_ClearAccountSchedulingBlock(t *testing.T) {
 func TestRuntimeBlockHonorsClearedPersistedCooldown(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 92, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
-	svc.BlockAccountScheduling(account, time.Now().Add(30*time.Minute), "grok payment required")
+	svc.BlockAccountScheduling(account, time.Now().Add(30*time.Minute), "429")
 	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "grok-3"))
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
@@ -778,11 +778,11 @@ func TestRuntimeBlockConditionalClearSkipsNewerGeneration(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 94, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
 	firstUntil := time.Now().Add(10 * time.Minute)
-	svc.BlockAccountScheduling(account, firstUntil, "stale")
+	svc.BlockAccountScheduling(account, firstUntil, "429")
 	snapshot := svc.peekOpenAIAccountRuntimeBlock(account)
 	require.True(t, snapshot.blocked)
 	newerUntil := time.Now().Add(30 * time.Minute)
-	svc.BlockAccountScheduling(account, newerUntil, "fresh")
+	svc.BlockAccountScheduling(account, newerUntil, "429_fallback")
 	svc.clearOpenAIAccountRuntimeBlockIfUnchanged(account.ID, snapshot)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 	require.False(t, svc.isOpenAIAccountRequestRuntimeBlocked(account, "grok-3"))

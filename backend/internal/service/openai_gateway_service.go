@@ -4442,7 +4442,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 						reqBody = nil
 						continue
 					}
-					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: http.StatusBadRequest, Kind: "http_error", Message: signal.message})
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account), UpstreamStatusCode: http.StatusBadRequest, Kind: "http_error", Message: signal.message})
 					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": signal.message}})
 					return nil, fmt.Errorf("non-streaming openai protocol error: %s", signal.message)
 				}
@@ -4467,7 +4467,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 						reqBody = nil
 						continue
 					}
-					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: http.StatusBadRequest, Kind: "http_error", Message: signal.message})
+					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account), UpstreamStatusCode: http.StatusBadRequest, Kind: "http_error", Message: signal.message})
 					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "message": signal.message}})
 					return nil, fmt.Errorf("non-streaming openai protocol error: %s", signal.message)
 				}
@@ -5616,6 +5616,8 @@ func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamErrorWithStatus(
 		setOpsUpstreamError(c, statusCode, message, detail)
 		event := OpsUpstreamErrorEvent{
 			Platform:           PlatformOpenAI,
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			UpstreamStatusCode: statusCode,
 			UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
 			Passthrough:        passthrough,
@@ -8885,7 +8887,7 @@ func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, 
 	}
 	gid := apiKey.Group.ID
 	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid, Group: apiKey.Group})
-	if resolved.Source == PricingSourceChannel {
+	if resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel {
 		return resolved
 	}
 	return nil

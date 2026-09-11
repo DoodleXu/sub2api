@@ -96,6 +96,6 @@ func TestGatewayRoutesPinnedModelsDispatchesOrdinaryAndCodexRequests(t *testing.
 		require.Contains(t, w.Body.String(), `"slug":"gpt-5.5"`)
 		require.NotContains(t, w.Body.String(), `"data"`)
 	}
-	require.Zero(t, upstream.ordinaryCalls.Load())
+	require.EqualValues(t, 1, upstream.ordinaryCalls.Load())
 	require.EqualValues(t, 1, upstream.codexCalls.Load())
 }

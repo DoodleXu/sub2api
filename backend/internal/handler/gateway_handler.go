@@ -1122,6 +1122,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	if apiKey != nil && apiKey.Group != nil {
 		groupID = &apiKey.Group.ID
 		platform = apiKey.Group.Platform
+		if platform == service.PlatformOpenAI && apiKey.Group.CodexModelsManifestConfig.Enabled && h.openAIGatewayService != nil {
+			h.pinnedOpenAIModels(c, apiKey.Group)
+			return
+		}
 	}
 	if forcedPlatform, ok := middleware2.GetForcePlatformFromContext(c); ok && strings.TrimSpace(forcedPlatform) != "" {
 		platform = forcedPlatform
@@ -1199,6 +1203,14 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 // here would instead replace bundled metadata (including model instructions)
 // with incomplete gateway metadata.
 func (h *GatewayHandler) CodexModels(c *gin.Context) {
+	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
+	if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformOpenAI && h.openAIGatewayService != nil {
+		if apiKey.Group.CodexModelsManifestConfig.Enabled {
+			pinned := &OpenAIGatewayHandler{gatewayService: h.openAIGatewayService, maxAccountSwitches: h.maxAccountSwitches}
+			pinned.CodexModels(c)
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"models": []any{}})
 }
 

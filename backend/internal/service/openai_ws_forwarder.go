@@ -264,6 +264,9 @@ type OpenAIWSIngressHooks struct {
 	BeforeTurn              func(turn int) error
 	// BeforeRequest receives the final payload for every turn, including turn 1.
 	BeforeRequest func(turn int, payload []byte, originalModel string) error
+	// ValidateModel enforces the caller's model policy on every client frame.
+	// It is invoked before model mapping so policy always sees the client value.
+	ValidateModel func(payload []byte, model string) error
 	// MapRequestModel resolves the current turn's client model to the model
 	// that must be written into the upstream response.create frame.
 	MapRequestModel func(turn int, originalModel string) (string, error)

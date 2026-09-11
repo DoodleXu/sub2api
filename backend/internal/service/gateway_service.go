@@ -4781,14 +4781,15 @@ func expandClaudeOAuthSystemPromptTextTemplate(body []byte, text string, expansi
 		return "", nil
 	}
 	expansionPrompt = defaultClaudeOAuthExpansionPrompt(expansionPrompt)
-	billingText, err := buildBillingAttributionText(body, claude.CLICurrentVersion)
+	cliVersion := claude.CLIVersion()
+	billingText, err := buildBillingAttributionText(body, cliVersion)
 	if err != nil {
 		return "", err
 	}
-	fp := computeClaudeCodeFingerprint(body, claude.CLICurrentVersion)
+	fp := computeClaudeCodeFingerprint(body, cliVersion)
 	replacer := strings.NewReplacer(
 		"{billing_header}", billingText,
-		"{cc_version}", claude.CLICurrentVersion,
+		"{cc_version}", cliVersion,
 		"{fp}", fp,
 		"{claude_code_system_prompt}", claudeCodeSystemPrompt,
 		"{claude_code_expansion_prompt}", expansionPrompt,
@@ -7377,8 +7378,12 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if fingerprint != nil {
-		body = syncBillingHeaderVersion(body, fingerprint.UserAgent)
+	if fingerprint != nil || (tokenType == "oauth" && mimicClaudeCode) {
+		billingUA := claude.DefaultHeaders["User-Agent"]
+		if fingerprint != nil && !(tokenType == "oauth" && mimicClaudeCode) {
+			billingUA = fingerprint.UserAgent
+		}
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
@@ -10482,7 +10487,7 @@ func (s *GatewayService) resolveChannelPricing(ctx context.Context, billingModel
 	}
 	gid := apiKey.Group.ID
 	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: &gid, Group: apiKey.Group})
-	if resolved.Source == PricingSourceChannel {
+	if resolved.Source == PricingSourceGroup || resolved.Source == PricingSourceChannel {
 		return resolved
 	}
 	return nil
@@ -11313,8 +11318,12 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	}
 
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if ctFingerprint != nil && ctEnableFP {
-		body = syncBillingHeaderVersion(body, ctFingerprint.UserAgent)
+	if (ctFingerprint != nil && ctEnableFP) || (tokenType == "oauth" && mimicClaudeCode) {
+		billingUA := claude.DefaultHeaders["User-Agent"]
+		if ctFingerprint != nil && !(tokenType == "oauth" && mimicClaudeCode) {
+			billingUA = ctFingerprint.UserAgent
+		}
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===

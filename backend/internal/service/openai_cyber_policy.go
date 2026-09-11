@@ -35,7 +35,23 @@ func MarkOpsCyberPolicy(c *gin.Context, mark CyberPolicyMark) {
 	if c == nil {
 		return
 	}
-	if GetOpsCyberPolicy(c) != nil {
+	if existing := GetOpsCyberPolicy(c); existing != nil {
+		// The WS relay can recognize cyber_policy before its turn collector has
+		// assembled terminal usage. Preserve the first evidence, but enrich the
+		// immutable context snapshot once the terminal callback supplies tokens.
+		next := *existing
+		changed := false
+		if next.UpstreamInTok == 0 && mark.UpstreamInTok > 0 {
+			next.UpstreamInTok = mark.UpstreamInTok
+			changed = true
+		}
+		if next.UpstreamOutTok == 0 && mark.UpstreamOutTok > 0 {
+			next.UpstreamOutTok = mark.UpstreamOutTok
+			changed = true
+		}
+		if changed {
+			c.Set(opsCyberPolicyKey, &next)
+		}
 		return
 	}
 	mark.Code = "cyber_policy"

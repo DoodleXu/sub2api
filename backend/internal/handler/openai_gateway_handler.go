@@ -2375,6 +2375,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
 		return
 	}
+	if apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+		topModels, sessionModels, modelErr := service.OpenAIWSModelFields(firstMessage)
+		if modelErr != nil || service.OpenAIWSModelValuesConflict(topModels) || service.OpenAIWSModelValuesConflict(sessionModels) || !apiKey.Group.ModelAllowlist.Allows(reqModel) {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is not available for this group")
+			return
+		}
+	}
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	ctx = c.Request.Context()
 	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
@@ -2765,7 +2772,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			MaxReasoningEffort:          maxReasoningEffort,
 			MaxReasoningEffortOverLimit: maxReasoningEffortOverLimit,
 			ReasoningEffortMappings:     reasoningEffortMappings,
-			TurnStarted:                 recordTurnStart,
+			ValidateModel: func(payload []byte, model string) error {
+				group := apiKey.Group
+				if group == nil || !group.ModelAllowlistEnabled() || strings.TrimSpace(model) == "" || group.ModelAllowlist.Allows(model) {
+					return nil
+				}
+				return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model is not available for this group", nil)
+			},
+			TurnStarted: recordTurnStart,
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
@@ -3355,8 +3369,12 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 
 	// 记录原始上游状态码，以便 ops 错误日志捕获真实的上游错误
-	upstreamMsg := service.ExtractUpstreamErrorMessage(responseBody)
+	upstreamMsg := service.SanitizeUpstreamErrorMessage(service.ExtractUpstreamErrorMessage(responseBody))
 	service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+	if statusCode == http.StatusBadRequest && len(responseBody) > 0 && !streamStarted {
+		service.WriteOpenAIUpstreamClientError(c, statusCode, responseBody, upstreamMsg)
+		return
+	}
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)

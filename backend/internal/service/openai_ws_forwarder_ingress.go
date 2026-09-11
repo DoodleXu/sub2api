@@ -285,6 +285,22 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 
 		originalModel := strings.TrimSpace(values[1].String())
+		if hooks != nil && hooks.ValidateModel != nil {
+			topModels, sessionModels, modelErr := OpenAIWSModelFields(trimmed)
+			if modelErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", modelErr)
+			}
+			if OpenAIWSModelValuesConflict(topModels) || OpenAIWSModelValuesConflict(sessionModels) {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model is not available for this group", nil)
+			}
+			candidate := originalModel
+			if candidate == "" && len(sessionModels) > 0 {
+				candidate = sessionModels[len(sessionModels)-1]
+			}
+			if err := hooks.ValidateModel(trimmed, candidate); err != nil {
+				return openAIWSClientPayload{}, err
+			}
+		}
 		modelMissing := originalModel == ""
 		if originalModel == "" {
 			// 入站 WS 长会话里，部分客户端只在第一轮 response.create 上声明
@@ -533,7 +549,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	preferredConnID := ""
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
-		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
+		if sessionHash == "" {
+			if payload.promptCacheKey != "" {
+				var legacySessionHash string
+				sessionHash, legacySessionHash = openAIWSSessionHashesFromID(payload.promptCacheKey)
+				attachOpenAILegacySessionHashToGin(c, legacySessionHash)
+			} else {
+				sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
+			}
+		}
 		if c != nil && sessionHash != "" {
 			c.Set(openAIWSIngressSessionHashContextKey, sessionHash)
 		}
@@ -1039,6 +1063,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				lastEventType = eventType
 			}
+			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
+				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+			}
+			if eventType == "error" || eventType == "response.failed" {
+				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+			}
 			if eventType == "error" || eventType == "response.failed" {
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
@@ -1141,30 +1171,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				ms := int(time.Since(turnStart).Milliseconds())
 				firstTokenMs = &ms
 			}
-			if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
-				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
-			}
 			imageCounter.AddSSEData(upstreamMessage)
 			if imageFirstOutputMs == nil && openAISSEDataContainsImageOutput(upstreamMessage) {
 				ms := int(time.Since(turnStart).Milliseconds())
 				imageFirstOutputMs = &ms
 			}
 
-			if eventType == "error" || eventType == "response.failed" {
-				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
-			}
-			if eventType == "response.failed" {
-				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
-					MarkOpsCyberPolicy(c, CyberPolicyMark{
-						Code:           code,
-						Message:        msg,
-						Body:           truncateString(string(upstreamMessage), 4096),
-						UpstreamStatus: http.StatusOK,
-						UpstreamInTok:  usage.InputTokens,
-						UpstreamOutTok: usage.OutputTokens,
-					})
-				}
-			}
 			if !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)

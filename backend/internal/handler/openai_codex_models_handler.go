@@ -122,10 +122,20 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			if c.Request.Context().Err() != nil {
 				return
 			}
-			if service.IsRetryableCodexModelsManifestError(err) && switchCount < maxAccountSwitches {
+			// Keep manifest discovery consistent with normal OpenAI forwarding:
+			// an account opted into limit-continuation must not make an upstream
+			// discovery error terminal while another account may serve the client.
+			continueScheduling := account.IsOpenAIContinueSchedulingAfterLimitEnabled()
+			if (service.IsRetryableCodexModelsManifestError(err) || continueScheduling) && switchCount < maxAccountSwitches {
 				failedAccountIDs[account.ID] = struct{}{}
 				switchCount++
-				lastUpstreamErr = err
+				if !continueScheduling {
+					lastUpstreamErr = err
+				} else if lastUpstreamErr == nil {
+					// Preserve a gateway-shaped terminal response without exposing
+					// the opted-in account's exhausted upstream payload.
+					lastUpstreamErr = infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "Codex models manifest upstream request failed")
+				}
 				continue
 			}
 			h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
