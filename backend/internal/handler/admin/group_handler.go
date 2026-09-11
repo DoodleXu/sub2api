@@ -25,10 +25,14 @@ type GroupHandler struct {
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
+	cfg                  *config.Config
 }
 
 // GetLiveCapability 返回当前服务端是否具备生成 Live attestation 的运行环境。
 func (h *GroupHandler) GetLiveCapability(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	err := liveattestation.NewProvider().Check(c.Request.Context())
 	result := gin.H{"supported": err == nil}
 	if err != nil {
@@ -95,8 +99,61 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 	}
 }
 
-func NewGroupHandlerWithConfig(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService, _ *config.Config) *GroupHandler {
-	return NewGroupHandler(adminService, dashboardService, groupCapacityService)
+func NewGroupHandlerWithConfig(adminService service.AdminService, dashboardService *service.DashboardService, groupCapacityService *service.GroupCapacityService, cfg *config.Config) *GroupHandler {
+	return &GroupHandler{adminService: adminService, dashboardService: dashboardService, groupCapacityService: groupCapacityService, cfg: cfg}
+}
+
+func (h *GroupHandler) isSimpleMode() bool {
+	return h != nil && h.cfg != nil && h.cfg.RunMode == config.RunModeSimple
+}
+
+type simpleModeGroupOperation string
+
+var simpleModeGroupOperations = map[simpleModeGroupOperation]struct{}{
+	"list": {}, "get_all": {}, "get": {}, "create": {}, "update": {}, "delete": {},
+}
+
+func (h *GroupHandler) rejectUnsupportedSimpleModeOperation(c *gin.Context, operation simpleModeGroupOperation) bool {
+	if !h.isSimpleMode() {
+		return false
+	}
+	if _, allowed := simpleModeGroupOperations[operation]; allowed {
+		return false
+	}
+	response.ErrorFrom(c, service.ValidateSimpleModeGroupOperation(h.cfg, service.AdminGroupOperation(operation)))
+	return true
+}
+
+type simpleModeGroupResponse struct {
+	ID                      int64     `json:"id"`
+	Name                    string    `json:"name"`
+	Description             string    `json:"description"`
+	Platform                string    `json:"platform"`
+	Status                  string    `json:"status"`
+	AccountCount            int64     `json:"account_count,omitempty"`
+	ActiveAccountCount      int64     `json:"active_account_count,omitempty"`
+	RateLimitedAccountCount int64     `json:"rate_limited_account_count,omitempty"`
+	SortOrder               int       `json:"sort_order"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
+func groupForSimpleMode(g *service.Group) *simpleModeGroupResponse {
+	if g == nil {
+		return nil
+	}
+	return &simpleModeGroupResponse{ID: g.ID, Name: g.Name, Description: g.Description, Platform: g.Platform, Status: g.Status, AccountCount: g.AccountCount, ActiveAccountCount: g.ActiveAccountCount, RateLimitedAccountCount: g.RateLimitedAccountCount, SortOrder: g.SortOrder, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt}
+}
+
+func sanitizeCreateGroupRequestForSimpleMode(r *CreateGroupRequest) {
+	if r != nil {
+		*r = CreateGroupRequest{Name: r.Name, Description: r.Description, Platform: r.Platform, RateMultiplier: 1, SubscriptionType: service.SubscriptionTypeStandard}
+	}
+}
+func sanitizeUpdateGroupRequestForSimpleMode(r *UpdateGroupRequest) {
+	if r != nil {
+		*r = UpdateGroupRequest{Name: r.Name, Description: r.Description}
+	}
 }
 
 // CreateGroupRequest represents create group request
@@ -267,6 +324,9 @@ type CompositeRoutePreviewRequest struct {
 // List handles listing all groups with pagination
 // GET /api/v1/admin/groups
 func (h *GroupHandler) List(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "list") {
+		return
+	}
 	page, pageSize := response.ParsePagination(c)
 	platform := c.Query("platform")
 	status := c.Query("status")
@@ -281,7 +341,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 	sortOrder := c.DefaultQuery("sort_order", "asc")
 
 	var isExclusive *bool
-	if isExclusiveStr != "" {
+	if isExclusiveStr != "" && !h.isSimpleMode() {
 		val := isExclusiveStr == "true"
 		isExclusive = &val
 	}
@@ -293,6 +353,16 @@ func (h *GroupHandler) List(c *gin.Context) {
 	}
 
 	outGroups := make([]dto.AdminGroup, 0, len(groups))
+	if h.isSimpleMode() {
+		items := make([]simpleModeGroupResponse, 0, len(groups))
+		for i := range groups {
+			if service.IsGroupBindableInSimpleMode(&groups[i]) {
+				items = append(items, *groupForSimpleMode(&groups[i]))
+			}
+		}
+		response.Paginated(c, items, int64(len(items)), page, pageSize)
+		return
+	}
 	for i := range groups {
 		outGroups = append(outGroups, *dto.GroupFromServiceAdmin(&groups[i]))
 	}
@@ -302,6 +372,9 @@ func (h *GroupHandler) List(c *gin.Context) {
 // ListCompositeRoutes handles listing composite model routes for one group.
 // GET /api/v1/admin/groups/:id/composite-routes
 func (h *GroupHandler) ListCompositeRoutes(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, ok := parsePositiveIDParam(c, "id")
 	if !ok {
 		return
@@ -317,6 +390,9 @@ func (h *GroupHandler) ListCompositeRoutes(c *gin.Context) {
 // CreateCompositeRoute handles creating one composite model route.
 // POST /api/v1/admin/groups/:id/composite-routes
 func (h *GroupHandler) CreateCompositeRoute(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, ok := parsePositiveIDParam(c, "id")
 	if !ok {
 		return
@@ -337,6 +413,9 @@ func (h *GroupHandler) CreateCompositeRoute(c *gin.Context) {
 // UpdateCompositeRoute handles replacing one composite model route.
 // PUT /api/v1/admin/groups/:id/composite-routes/:route_id
 func (h *GroupHandler) UpdateCompositeRoute(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, ok := parsePositiveIDParam(c, "id")
 	if !ok {
 		return
@@ -361,6 +440,9 @@ func (h *GroupHandler) UpdateCompositeRoute(c *gin.Context) {
 // DeleteCompositeRoute handles deleting one composite model route.
 // DELETE /api/v1/admin/groups/:id/composite-routes/:route_id
 func (h *GroupHandler) DeleteCompositeRoute(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, ok := parsePositiveIDParam(c, "id")
 	if !ok {
 		return
@@ -379,6 +461,9 @@ func (h *GroupHandler) DeleteCompositeRoute(c *gin.Context) {
 // PreviewCompositeRoute resolves a model without mutating routes.
 // POST /api/v1/admin/groups/:id/composite-routes/preview
 func (h *GroupHandler) PreviewCompositeRoute(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, ok := parsePositiveIDParam(c, "id")
 	if !ok {
 		return
@@ -432,6 +517,9 @@ func parsePositiveIDParam(c *gin.Context, name string) (int64, bool) {
 // bound to them even after the group is disabled).
 // GET /api/v1/admin/groups/all
 func (h *GroupHandler) GetAll(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "get_all") {
+		return
+	}
 	platform := c.Query("platform")
 	includeInactive := c.Query("include_inactive") == "true"
 
@@ -451,6 +539,16 @@ func (h *GroupHandler) GetAll(c *gin.Context) {
 		return
 	}
 
+	if h.isSimpleMode() {
+		items := make([]simpleModeGroupResponse, 0, len(groups))
+		for i := range groups {
+			if service.IsGroupBindableInSimpleMode(&groups[i]) {
+				items = append(items, *groupForSimpleMode(&groups[i]))
+			}
+		}
+		response.Success(c, items)
+		return
+	}
 	outGroups := make([]dto.AdminGroup, 0, len(groups))
 	for i := range groups {
 		outGroups = append(outGroups, *dto.GroupFromServiceAdmin(&groups[i]))
@@ -461,6 +559,9 @@ func (h *GroupHandler) GetAll(c *gin.Context) {
 // GetByID handles getting a group by ID
 // GET /api/v1/admin/groups/:id
 func (h *GroupHandler) GetByID(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "get") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -473,12 +574,19 @@ func (h *GroupHandler) GetByID(c *gin.Context) {
 		return
 	}
 
+	if h.isSimpleMode() {
+		response.Success(c, groupForSimpleMode(group))
+		return
+	}
 	response.Success(c, dto.GroupFromServiceAdmin(group))
 }
 
 // GetModelsListCandidates handles getting candidate model IDs for custom /v1/models list.
 // GET /api/v1/admin/groups/:id/models-list-candidates
 func (h *GroupHandler) GetModelsListCandidates(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || groupID < 0 {
 		response.BadRequest(c, "Invalid group ID")
@@ -507,10 +615,20 @@ func (h *GroupHandler) GetGroupModelAllowlistCandidates(c *gin.Context) {
 // Create handles creating a new group
 // POST /api/v1/admin/groups
 func (h *GroupHandler) Create(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "create") {
+		return
+	}
 	var req CreateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
+	}
+	if h.isSimpleMode() {
+		if req.Platform == service.PlatformComposite {
+			response.BadRequest(c, "Platform is not supported in simple mode")
+			return
+		}
+		sanitizeCreateGroupRequestForSimpleMode(&req)
 	}
 
 	if err := service.ValidatePeakRateConfig(req.SubscriptionType, req.PeakRateEnabled, req.PeakStart, req.PeakEnd, float64ValueOrDefault(req.PeakRateMultiplier, 1.0)); err != nil {
@@ -592,12 +710,19 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if h.isSimpleMode() {
+		response.Success(c, groupForSimpleMode(group))
+		return
+	}
 	response.Success(c, dto.GroupFromServiceAdmin(group))
 }
 
 // Duplicate handles creating an inactive group copy with the source account bindings.
 // POST /api/v1/admin/groups/:id/duplicate
 func (h *GroupHandler) Duplicate(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || groupID <= 0 {
 		response.BadRequest(c, "Invalid group ID")
@@ -645,6 +770,9 @@ func (h *GroupHandler) Duplicate(c *gin.Context) {
 // Update handles updating a group
 // PUT /api/v1/admin/groups/:id
 func (h *GroupHandler) Update(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "update") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -655,6 +783,9 @@ func (h *GroupHandler) Update(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
+	}
+	if h.isSimpleMode() {
+		sanitizeUpdateGroupRequestForSimpleMode(&req)
 	}
 
 	group, err := h.adminService.UpdateGroup(c.Request.Context(), groupID, &service.UpdateGroupInput{
@@ -725,19 +856,30 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if h.isSimpleMode() {
+		response.Success(c, groupForSimpleMode(group))
+		return
+	}
 	response.Success(c, dto.GroupFromServiceAdmin(group))
 }
 
 // Delete handles deleting a group
 // DELETE /api/v1/admin/groups/:id
 func (h *GroupHandler) Delete(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "delete") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
 		return
 	}
 
-	err = h.adminService.DeleteGroup(c.Request.Context(), groupID)
+	if h.isSimpleMode() {
+		err = h.adminService.DeleteGroupIfEmpty(c.Request.Context(), groupID)
+	} else {
+		err = h.adminService.DeleteGroup(c.Request.Context(), groupID)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -749,6 +891,9 @@ func (h *GroupHandler) Delete(c *gin.Context) {
 // GetStats handles getting group statistics
 // GET /api/v1/admin/groups/:id/stats
 func (h *GroupHandler) GetStats(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	if _, err := strconv.ParseInt(c.Param("id"), 10, 64); err != nil {
 		response.BadRequest(c, "Invalid group ID")
 		return
@@ -759,6 +904,9 @@ func (h *GroupHandler) GetStats(c *gin.Context) {
 // GetUsageSummary returns today's, yesterday's, and cumulative cost for all groups.
 // GET /api/v1/admin/groups/usage-summary
 func (h *GroupHandler) GetUsageSummary(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	todayStart := service.GroupUsageTodayStart(time.Now())
 
 	results, err := h.dashboardService.GetGroupUsageSummary(c.Request.Context(), todayStart)
@@ -773,6 +921,9 @@ func (h *GroupHandler) GetUsageSummary(c *gin.Context) {
 // GetCapacitySummary returns aggregated capacity (concurrency/sessions/RPM) for all active groups.
 // GET /api/v1/admin/groups/capacity-summary
 func (h *GroupHandler) GetCapacitySummary(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	results, err := h.groupCapacityService.GetAllGroupCapacity(c.Request.Context())
 	if err != nil {
 		response.Error(c, 500, "Failed to get group capacity summary")
@@ -784,6 +935,9 @@ func (h *GroupHandler) GetCapacitySummary(c *gin.Context) {
 // GetGroupAPIKeys handles getting API keys in a group
 // GET /api/v1/admin/groups/:id/api-keys
 func (h *GroupHandler) GetGroupAPIKeys(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -808,6 +962,9 @@ func (h *GroupHandler) GetGroupAPIKeys(c *gin.Context) {
 // GetGroupRateMultipliers handles getting rate multipliers for users in a group
 // GET /api/v1/admin/groups/:id/rate-multipliers
 func (h *GroupHandler) GetGroupRateMultipliers(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -829,6 +986,9 @@ func (h *GroupHandler) GetGroupRateMultipliers(c *gin.Context) {
 // ClearGroupRateMultipliers handles clearing all rate multipliers for a group
 // DELETE /api/v1/admin/groups/:id/rate-multipliers
 func (h *GroupHandler) ClearGroupRateMultipliers(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -851,6 +1011,9 @@ type BatchSetGroupRateMultipliersRequest struct {
 // BatchSetGroupRateMultipliers handles batch setting rate multipliers for a group
 // PUT /api/v1/admin/groups/:id/rate-multipliers
 func (h *GroupHandler) BatchSetGroupRateMultipliers(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -879,6 +1042,9 @@ type BatchSetGroupRPMOverridesRequest struct {
 // BatchSetGroupRPMOverrides handles batch setting rpm_override for users in a group
 // PUT /api/v1/admin/groups/:id/rpm-overrides
 func (h *GroupHandler) BatchSetGroupRPMOverrides(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -902,6 +1068,9 @@ func (h *GroupHandler) BatchSetGroupRPMOverrides(c *gin.Context) {
 // ClearGroupRPMOverrides handles clearing all rpm_override for a group
 // DELETE /api/v1/admin/groups/:id/rpm-overrides
 func (h *GroupHandler) ClearGroupRPMOverrides(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid group ID")
@@ -927,6 +1096,9 @@ type UpdateSortOrderRequest struct {
 // UpdateSortOrder handles updating group sort orders
 // PUT /api/v1/admin/groups/sort-order
 func (h *GroupHandler) UpdateSortOrder(c *gin.Context) {
+	if h.rejectUnsupportedSimpleModeOperation(c, "advanced") {
+		return
+	}
 	var req UpdateSortOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
