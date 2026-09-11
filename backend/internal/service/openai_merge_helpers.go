@@ -20,7 +20,7 @@ func (s *OpenAIGatewayService) validateOutboundURL(raw string) (string, error) {
 	if err != nil || u.Host == "" {
 		return "", http.ErrUseLastResponse
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && s != nil && s.cfg != nil && s.cfg.Security.URLAllowlist.AllowInsecureHTTP) {
+	if u.Scheme != "https" && (u.Scheme != "http" || s == nil || s.cfg == nil || !s.cfg.Security.URLAllowlist.AllowInsecureHTTP) {
 		return "", http.ErrUseLastResponse
 	}
 	return u.String(), nil

@@ -3267,7 +3267,7 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 	}
 }
 
-func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(args ...interface{}) bool {
+func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(args ...any) bool {
 	var account *Account
 	var statusCode int
 	var upstreamMsg string

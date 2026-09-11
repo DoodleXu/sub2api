@@ -258,7 +258,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	return nil, ErrLiveUnavailable
 }
 
-func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(args ...interface{}) bool {
+func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(args ...any) bool {
 	var err error
 	if len(args) == 1 {
 		err, _ = args[0].(error)

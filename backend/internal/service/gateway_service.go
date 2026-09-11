@@ -7380,7 +7380,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
 	if fingerprint != nil || (tokenType == "oauth" && mimicClaudeCode) {
 		billingUA := claude.DefaultHeaders["User-Agent"]
-		if fingerprint != nil && !(tokenType == "oauth" && mimicClaudeCode) {
+		if fingerprint != nil && (tokenType != "oauth" || !mimicClaudeCode) {
 			billingUA = fingerprint.UserAgent
 		}
 		body = syncBillingHeaderVersion(body, billingUA)
@@ -11320,7 +11320,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
 	if (ctFingerprint != nil && ctEnableFP) || (tokenType == "oauth" && mimicClaudeCode) {
 		billingUA := claude.DefaultHeaders["User-Agent"]
-		if ctFingerprint != nil && !(tokenType == "oauth" && mimicClaudeCode) {
+		if ctFingerprint != nil && (tokenType != "oauth" || !mimicClaudeCode) {
 			billingUA = ctFingerprint.UserAgent
 		}
 		body = syncBillingHeaderVersion(body, billingUA)
