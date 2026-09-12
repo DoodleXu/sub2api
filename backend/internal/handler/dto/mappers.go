@@ -468,6 +468,7 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 		OllamaCloudUsage: a.OllamaCloudUsage,
 		ProxyID:          a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency: a.Concurrency, LoadFactor: a.LoadFactor, Priority: a.Priority, RateMultiplier: a.RateMultiplier,
+		TotalCostCNY: a.TotalCostCNY, TotalAccountCost: a.TotalAccountCost, CostCNYPerUSD: a.CostCNYPerUSD, CostStatsPending: a.CostStatsPending,
 		Status: a.Status, ErrorMessage: a.ErrorMessage, LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
 		AutoPauseOnExpired: a.AutoPauseOnExpired, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
 		Schedulable: a.Schedulable, RateLimitedAt: a.RateLimitedAt, RateLimitResetAt: a.RateLimitResetAt,

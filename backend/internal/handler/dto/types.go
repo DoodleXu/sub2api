@@ -359,6 +359,10 @@ type AccountListItem struct {
 	LoadFactor              *int       `json:"load_factor,omitempty"`
 	Priority                int        `json:"priority"`
 	RateMultiplier          float64    `json:"rate_multiplier"`
+	TotalCostCNY            float64    `json:"total_cost_cny"`
+	TotalAccountCost        float64    `json:"total_account_cost"`
+	CostCNYPerUSD           float64    `json:"cost_cny_per_usd"`
+	CostStatsPending        bool       `json:"cost_stats_pending"`
 	Status                  string     `json:"status"`
 	ErrorMessage            string     `json:"error_message"`
 	LastUsedAt              *time.Time `json:"last_used_at"`

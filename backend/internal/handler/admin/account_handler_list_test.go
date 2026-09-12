@@ -25,6 +25,7 @@ func TestAccountHandlerListLiteUsesCompactDTOAndETag(t *testing.T) {
 		Credentials: map[string]any{"email": "compact@example.com", "access_token": strings.Repeat("x", 4096)},
 		Extra:       map[string]any{"privacy_mode": "training_off"}, Status: service.StatusActive,
 		Schedulable: true, Concurrency: 4, GroupIDs: []int64{groupID},
+		TotalCostCNY: 12, TotalAccountCost: 3, CostCNYPerUSD: 4,
 		Groups:        []*service.Group{{ID: groupID, Name: "codex", Platform: service.PlatformOpenAI}},
 		AccountGroups: []service.AccountGroup{{AccountID: 501, GroupID: groupID, Priority: 2, Group: &service.Group{ID: groupID, Name: "codex", Platform: service.PlatformOpenAI}}},
 		CreatedAt:     now, UpdatedAt: now,
@@ -47,6 +48,9 @@ func TestAccountHandlerListLiteUsesCompactDTOAndETag(t *testing.T) {
 	require.Equal(t, float64(501), liteItem["id"])
 	require.Equal(t, []any{float64(groupID)}, liteItem["group_ids"])
 	require.Equal(t, true, liteItem["schedulable"])
+	require.Equal(t, float64(12), liteItem["total_cost_cny"])
+	require.Equal(t, float64(3), liteItem["total_account_cost"])
+	require.Equal(t, float64(4), liteItem["cost_cny_per_usd"])
 	require.NotContains(t, liteItem, "groups")
 	require.NotContains(t, liteItem, "account_groups")
 	credentials, ok := liteItem["credentials"].(map[string]any)

@@ -2,7 +2,11 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-11
+最后更新：2026-09-12
+
+## 2026-09-12 v0.2.9 账号成本展示修复
+
+- 修复管理端账号列表强制使用 `lite=1` 后紧凑 DTO 漏传 `total_cost_cny`、`total_account_cost`、`cost_cny_per_usd` 和 `cost_stats_pending`，导致所有账号“每刀成本”显示为 `-`；成本账本与计算口径保持不变。新增 handler 回归断言覆盖紧凑列表字段。
 
 ## 2026-09-11 v0.2.4 合并后全面修复
 
