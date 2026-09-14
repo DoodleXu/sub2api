@@ -755,6 +755,7 @@ export default {
         providerWxpay: '微信官方',
         providerStripe: 'Stripe',
         providerAirwallex: 'Airwallex',
+        providerHashPay: 'HashPay',
         typeDisabled: '类型已禁用',
         enableTypesFirst: '请先在上方启用至少一种服务商',
         easypayRedirect: '跳转',

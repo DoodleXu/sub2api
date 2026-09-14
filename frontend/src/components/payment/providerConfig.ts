@@ -42,6 +42,7 @@ export const PROVIDER_SUPPORTED_TYPES: Record<string, string[]> = {
   wxpay: ['wxpay'],
   stripe: ['card', 'alipay', 'wxpay', 'link'],
   airwallex: ['airwallex'],
+  hashpay: ['hashpay'],
 }
 
 /** Available payment modes for EasyPay providers. */
@@ -107,6 +108,7 @@ export const WEBHOOK_PATHS: Record<string, string> = {
   wxpay: '/api/v1/payment/webhook/wxpay',
   stripe: '/api/v1/payment/webhook/stripe',
   airwallex: '/api/v1/payment/webhook/airwallex',
+  hashpay: '/api/v1/payment/webhook/hashpay',
 }
 
 export const RETURN_PATH = '/payment/result'
@@ -118,6 +120,7 @@ export const PROVIDER_CALLBACK_PATHS: Record<string, CallbackPaths> = {
   wxpay: { notifyUrl: WEBHOOK_PATHS.wxpay },
   // stripe: 不需要回调 URL 配置，Webhook 单独配置。
   // airwallex: 不需要回调 URL 配置，Webhook 在空中云汇后台配置。
+  hashpay: { notifyUrl: WEBHOOK_PATHS.hashpay, returnUrl: RETURN_PATH },
 }
 
 /** Per-provider config fields (excludes notifyUrl/returnUrl which are handled separately). */
@@ -163,6 +166,12 @@ export const PROVIDER_CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { key: 'currency', label: '', sensitive: false, defaultValue: 'CNY', hintKey: 'admin.settings.payment.field_paymentCurrencyHint', options: PAYMENT_CURRENCY_OPTIONS },
     { key: 'accountId', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_accountIdHint' },
     { key: 'feeRate', label: '', sensitive: false, optional: true, clearable: true, hintKey: 'admin.settings.payment.field_providerFeeRateHint' },
+  ],
+  hashpay: [
+    { key: 'merchantId', label: 'Merchant ID', sensitive: false },
+    { key: 'privateKey', label: 'RSA Private Key', sensitive: true },
+    { key: 'apiBase', label: 'API Base URL', sensitive: false },
+    { key: 'currency', label: 'Currency', sensitive: false, defaultValue: 'USD', options: PAYMENT_CURRENCY_OPTIONS },
   ],
 }
 

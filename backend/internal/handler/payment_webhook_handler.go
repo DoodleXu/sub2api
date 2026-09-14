@@ -67,6 +67,11 @@ func (h *PaymentWebhookHandler) AirwallexWebhook(c *gin.Context) {
 	h.handleNotify(c, payment.TypeAirwallex)
 }
 
+// HashPayWebhook handles encrypted HashPay callbacks.
+func (h *PaymentWebhookHandler) HashPayWebhook(c *gin.Context) {
+	h.handleNotify(c, payment.TypeHashPay)
+}
+
 // handleNotify is the shared logic for all provider webhook handlers.
 func (h *PaymentWebhookHandler) handleNotify(c *gin.Context, providerKey string) {
 	var rawBody string

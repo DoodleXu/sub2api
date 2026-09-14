@@ -25,6 +25,9 @@ Sub2API has a built-in payment system that enables user self-service top-up with
 | **Alipay (Direct)** | Desktop QR code, mobile Alipay redirect | Direct integration with Alipay Open Platform, returning desktop QR codes and mobile WAP/app launch links |
 | **WeChat Pay (Direct)** | Native QR, H5, MP/JSAPI Pay | Direct integration with WeChat Pay APIv3 with environment-aware routing |
 | **Stripe** | Card, Alipay, WeChat Pay, Link, etc. | International payments, multi-currency support |
+| **HashPay** | Cryptocurrency checkout | RSA-signed orders and encrypted callbacks |
+
+HashPay provider instances require `merchantId`, an RSA PKCS#1/PKCS#8 `privateKey`, an HTTPS `apiBase`, and optional `currency` (defaults to `USD`). Configure HashPay to deliver encrypted callbacks to `/api/v1/payment/webhook/hashpay`; the callback uses RSA-OAEP-256 plus AES-256-GCM and is accepted only when both callback timestamps match and fall within five minutes. HashPay refunds are unsupported.
 
 > Alipay/WeChat Pay direct and EasyPay can both exist as backend provider instances, but the frontend always exposes only two visible buttons: `Alipay` and `WeChat Pay`. Admins choose exactly one source for each visible method: direct or EasyPay. Direct channels connect to payment APIs directly with lower fees; EasyPay aggregates through third-party platforms with easier setup.
 

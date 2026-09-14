@@ -113,6 +113,7 @@ var pendingOrderStatuses = []string{
 // stripe publishableKey) are returned in plaintext by the admin GET API.
 var providerSensitiveConfigFields = map[string]map[string]struct{}{
 	payment.TypeEasyPay:   {"pkey": {}},
+	payment.TypeHashPay:   {"privatekey": {}},
 	payment.TypeAlipay:    {"privatekey": {}, "publickey": {}, "alipaypublickey": {}},
 	payment.TypeWxpay:     {"privatekey": {}, "apiv3key": {}, "publickey": {}},
 	payment.TypeStripe:    {"secretkey": {}, "webhooksecret": {}},
@@ -129,6 +130,7 @@ var providerPendingOrderProtectedConfigFields = map[string]map[string]struct{}{
 	payment.TypeWxpay:     {"privatekey": {}, "apiv3key": {}, "publickey": {}, "appid": {}, "mpappid": {}, "mchid": {}, "publickeyid": {}, "certserial": {}},
 	payment.TypeStripe:    {"secretkey": {}, "webhooksecret": {}, "currency": {}},
 	payment.TypeAirwallex: {"clientid": {}, "apikey": {}, "webhooksecret": {}, "apibase": {}, "accountid": {}, "currency": {}},
+	payment.TypeHashPay:   {"merchantid": {}, "privatekey": {}, "apibase": {}, "currency": {}},
 }
 
 func isSensitiveProviderConfigField(providerKey, fieldName string) bool {
@@ -179,10 +181,13 @@ func (s *PaymentConfigService) countPendingOrdersByPlan(ctx context.Context, pla
 }
 
 var validProviderKeys = map[string]bool{
-	payment.TypeEasyPay: true, payment.TypeAlipay: true, payment.TypeWxpay: true, payment.TypeStripe: true, payment.TypeAirwallex: true,
+	payment.TypeEasyPay: true, payment.TypeAlipay: true, payment.TypeWxpay: true, payment.TypeStripe: true, payment.TypeAirwallex: true, payment.TypeHashPay: true,
 }
 
 func (s *PaymentConfigService) CreateProviderInstance(ctx context.Context, req CreateProviderInstanceRequest) (*dbent.PaymentProviderInstance, error) {
+	if req.ProviderKey == payment.TypeHashPay && req.RefundEnabled {
+		return nil, infraerrors.BadRequest("REFUND_UNSUPPORTED", "HashPay does not support refunds")
+	}
 	typesStr := joinTypes(req.SupportedTypes)
 	if err := validateProviderRequest(req.ProviderKey, req.Name, typesStr); err != nil {
 		return nil, err
@@ -295,6 +300,9 @@ func (s *PaymentConfigService) UpdateProviderInstance(ctx context.Context, id in
 	current, err := s.entClient.PaymentProviderInstance.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("load provider instance: %w", err)
+	}
+	if current.ProviderKey == payment.TypeHashPay && req.RefundEnabled != nil && *req.RefundEnabled {
+		return nil, infraerrors.BadRequest("REFUND_UNSUPPORTED", "HashPay does not support refunds")
 	}
 	var pendingOrderCount *int
 	getPendingOrderCount := func() (int, error) {

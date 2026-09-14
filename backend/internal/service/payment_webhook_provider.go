@@ -66,7 +66,7 @@ func (s *PaymentService) GetWebhookProviders(ctx context.Context, providerKey, o
 		}
 	}
 
-	if strings.TrimSpace(providerKey) == payment.TypeWxpay {
+	if strings.TrimSpace(providerKey) == payment.TypeWxpay || strings.TrimSpace(providerKey) == payment.TypeHashPay {
 		return s.getEnabledWebhookProvidersByKey(ctx, providerKey)
 	}
 

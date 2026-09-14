@@ -2,7 +2,12 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-12
+最后更新：2026-09-14
+
+## 2026-09-14 HashPay 加密货币支付网关
+
+- 内置支付 provider 新增 HashPay：按 `METHOD + path + timestamp + body` 规范使用商户 RSA 私钥签名创建/查询订单，并通过 RSA-OAEP-256 与 AES-256-GCM 解密支付成功回调。
+- HashPay 商户 ID、私钥、API 地址和结算币种复用支付服务商实例配置；私钥按敏感字段处理，待支付订单存在时禁止修改商户身份和密钥。新增 `/api/v1/payment/webhook/hashpay` 回调入口。
 
 ## 2026-09-12 v0.2.9 账号成本展示修复
 
