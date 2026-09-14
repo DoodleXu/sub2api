@@ -83,7 +83,7 @@ func (h *HashPay) request(ctx context.Context, method, path string, body []byte)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	out, err := io.ReadAll(io.LimitReader(resp.Body, hashPayMaxBody))
 	if err != nil {
 		return nil, err
