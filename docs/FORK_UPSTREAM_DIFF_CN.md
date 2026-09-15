@@ -2,7 +2,14 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-14
+最后更新：2026-09-15
+
+## 2026-09-15 合并上游 v0.2.5
+
+- 合入官方 release `v0.2.5`（`86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea`）；合并前按 `git merge-tree --write-tree` 预检识别 75 个冲突路径（54 个内容冲突、21 个 modify/delete 冲突）。
+- 内容冲突继续采用 fork 聚合模块策略，以 fork 现有实现承载签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全和 OpenAI 调度/计费等定制行为；上游重新拆分且 fork 已删除的 handler/service/deploy 文件保持删除。
+- 同步上游订阅批量操作、OpenCode Go 平台、站点订阅开关、Grok 媒体账号选择、渠道监控日期聚合和相关前后端测试；重新生成 Wire，并保持 `backend/cmd/server/VERSION` 的 fork 版本。
+- 验证结果：后端 `go build ./...` 通过；前端 `pnpm run build`（含 i18n 检查、`vue-tsc -b` 和 Vite 构建）通过。定向后端 unit 套件可编译运行，但仍有依赖 Redis/外部状态及 fork 与上游既有语义差异的失败，详见本次同步记录；未执行生产迁移、部署、远程推送、tag 或 release。
 
 ## 2026-09-14 HashPay 加密货币支付网关
 
@@ -106,9 +113,9 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `659851406` | 合并 v0.2.4 前的 fork 基线；版本源保持 fork 版本 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.4` -> `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | 已合入 2026-09-09 发布的官方 release |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.4` -> `5de5e2bed035d43591a2e10e51f420ef6a84eb98` | 当前同步目标 |
+| Fork 同步前 HEAD | `e2d5e2972` | 合并 v0.2.5 前的 fork 基线；版本源保持 fork 版本 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.5` -> `86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea` | 已合入 2026-09-15 发布的官方 release |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.5` -> `86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea` | 当前同步目标 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录

@@ -94,6 +94,7 @@ function defineFlag<K extends keyof PublicSettings>(
  * public-settings-driven switch; see the "Adding a new flag" checklist above.
  */
 export const FeatureFlags = {
+  subscription: defineFlag({ key: 'subscription_enabled', mode: 'opt-out', label: 'Subscription' }),
   channelMonitor: defineFlag({
     key: 'channel_monitor_enabled',
     mode: 'opt-out',
@@ -135,6 +136,21 @@ export const FeatureFlags = {
     label: 'Affiliate',
   }),
 } as const
+
+export function resolveFeatureFlag(flag: FeatureFlagDefinition): boolean
+export function resolveFeatureFlag(settings: Partial<PublicSettings> | null | undefined, flag: FeatureFlagDefinition): boolean
+export function resolveFeatureFlag(
+  settingsOrFlag: Partial<PublicSettings> | FeatureFlagDefinition | null | undefined,
+  maybeFlag?: FeatureFlagDefinition,
+): boolean {
+  if (maybeFlag) {
+    const raw = settingsOrFlag && 'key' in settingsOrFlag
+      ? undefined
+      : (settingsOrFlag as Partial<PublicSettings> | null | undefined)?.[maybeFlag.key]
+    return typeof raw === 'boolean' ? raw : maybeFlag.mode === 'opt-out'
+  }
+  return isFeatureFlagEnabled(settingsOrFlag as FeatureFlagDefinition)
+}
 
 export type RegisteredFeatureFlag = keyof typeof FeatureFlags
 

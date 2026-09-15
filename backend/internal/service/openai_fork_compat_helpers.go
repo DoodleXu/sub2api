@@ -138,6 +138,10 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse
 	return next, true, nil
 }
 
+func normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
+	return normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body, knownStoreFalse)
+}
+
 const openAIHTTPResponseOwnerContextKeyCompat = "openai_http_response_owner"
 
 func SetOpenAIHTTPResponseOwner(c *gin.Context, userID, apiKeyID int64) {

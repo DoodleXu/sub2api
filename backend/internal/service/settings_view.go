@@ -12,6 +12,8 @@ func firstNonEmpty(values ...string) string {
 }
 
 type SystemSettings struct {
+	SubscriptionEnabled                 bool `json:"subscription_enabled"`
+	PaymentBalanceDisabled              bool `json:"payment_balance_disabled"`
 	RegistrationEnabled                 bool
 	EmailVerifyEnabled                  bool
 	RegistrationEmailSuffixWhitelist    []string
@@ -345,6 +347,8 @@ type DefaultSubscriptionSetting struct {
 }
 
 type PublicSettings struct {
+	SubscriptionEnabled                 bool `json:"subscription_enabled"`
+	PaymentBalanceDisabled              bool `json:"payment_balance_disabled"`
 	RegistrationEnabled                 bool
 	EmailVerifyEnabled                  bool
 	ForceEmailOnThirdPartySignup        bool
@@ -713,7 +717,8 @@ func DefaultBetaPolicySettings() *BetaPolicySettings {
 // 本策略复用 BetaPolicyAction*/BetaPolicyScope* 常量语义，只是匹配键从
 // anthropic-beta header 换成 body 的 service_tier 字段。
 const (
-	OpenAIFastTierAny       = "all"       // 匹配任意已识别的 service_tier
+	OpenAIFastTierAny       = "all" // 匹配任意已识别的 service_tier
+	OpenAIFastTierMissing   = "missing"
 	OpenAIFastTierPriority  = "priority"  // 仅匹配 fast（priority）
 	OpenAIFastTierUltrafast = "ultrafast" // 仅匹配 ultrafast
 	OpenAIFastTierFlex      = "flex"      // 仅匹配 flex

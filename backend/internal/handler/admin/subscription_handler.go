@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,29 @@ func toResponsePagination(p *pagination.PaginationResult) *response.PaginationRe
 // SubscriptionHandler handles admin subscription management
 type SubscriptionHandler struct {
 	subscriptionService *service.SubscriptionService
+}
+
+type BulkActionSubscriptionRequest struct {
+	SubscriptionIDs []int64 `json:"subscription_ids"`
+	Action          string  `json:"action"`
+	Days            int     `json:"days"`
+	Daily           bool    `json:"daily"`
+	Weekly          bool    `json:"weekly"`
+	Monthly         bool    `json:"monthly"`
+}
+
+func (h *SubscriptionHandler) BulkAction(c *gin.Context) {
+	var req BulkActionSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	result, err := h.subscriptionService.BulkSubscriptionAction(c.Request.Context(), &service.BulkSubscriptionActionInput{SubscriptionIDs: req.SubscriptionIDs, Action: req.Action, Days: req.Days, Daily: req.Daily, Weekly: req.Weekly, Monthly: req.Monthly})
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.Success(c, result)
 }
 
 // NewSubscriptionHandler creates a new admin subscription handler

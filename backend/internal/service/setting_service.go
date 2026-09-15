@@ -539,6 +539,11 @@ type DefaultPlatformQuotaSetting struct {
 	MonthlyLimitUSD *float64 `json:"monthly"`
 }
 
+// HasAnyLimit 报告是否至少配置了一档限额（0 也算配置）。nil receiver 视为未配置。
+func (q *DefaultPlatformQuotaSetting) HasAnyLimit() bool {
+	return q != nil && (q.DailyLimitUSD != nil || q.WeeklyLimitUSD != nil || q.MonthlyLimitUSD != nil)
+}
+
 type ProviderDefaultGrantSettings struct {
 	Balance          float64
 	Concurrency      int
@@ -1321,6 +1326,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SiteLaunchAt:                        strings.TrimSpace(settings[SettingKeySiteLaunchAt]),
 		HideCcsImportButton:                 settings[SettingKeyHideCcsImportButton] == "true",
 		PurchaseSubscriptionEnabled:         settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
+		SubscriptionEnabled:                 !isFalseSettingValue(settings[SettingKeySubscriptionEnabled]),
+		PaymentBalanceDisabled:              settings[SettingBalancePayDisabled] == "true",
 		PurchaseSubscriptionURL:             strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		TableDefaultPageSize:                tableDefaultPageSize,
 		TablePageSizeOptions:                tablePageSizeOptions,
@@ -2261,6 +2268,8 @@ func (s *SettingService) SetVersion(version string) {
 // A unit test diffs this struct's JSON keys against dto.PublicSettings to catch
 // drift automatically (see setting_service_injection_test.go).
 type PublicSettingsInjectionPayload struct {
+	SubscriptionEnabled                 bool                     `json:"subscription_enabled"`
+	PaymentBalanceDisabled              bool                     `json:"payment_balance_disabled"`
 	RegistrationEnabled                 bool                     `json:"registration_enabled"`
 	EmailVerifyEnabled                  bool                     `json:"email_verify_enabled"`
 	RegistrationEmailSuffixWhitelist    []string                 `json:"registration_email_suffix_whitelist"`
@@ -2386,6 +2395,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		SiteLaunchAt:                        settings.SiteLaunchAt,
 		HideCcsImportButton:                 settings.HideCcsImportButton,
 		PurchaseSubscriptionEnabled:         settings.PurchaseSubscriptionEnabled,
+		SubscriptionEnabled:                 settings.SubscriptionEnabled,
+		PaymentBalanceDisabled:              settings.PaymentBalanceDisabled,
 		PurchaseSubscriptionURL:             settings.PurchaseSubscriptionURL,
 		TableDefaultPageSize:                settings.TableDefaultPageSize,
 		TablePageSizeOptions:                settings.TablePageSizeOptions,
@@ -4688,6 +4699,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		SiteLaunchAt:                           strings.TrimSpace(settings[SettingKeySiteLaunchAt]),
 		HideCcsImportButton:                    settings[SettingKeyHideCcsImportButton] == "true",
 		PurchaseSubscriptionEnabled:            settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
+		SubscriptionEnabled:                    !isFalseSettingValue(settings[SettingKeySubscriptionEnabled]),
+		PaymentBalanceDisabled:                 settings[SettingBalancePayDisabled] == "true",
 		PurchaseSubscriptionURL:                strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                        settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                        settings[SettingKeyCustomEndpoints],

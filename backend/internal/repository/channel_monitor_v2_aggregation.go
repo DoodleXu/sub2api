@@ -398,6 +398,12 @@ func sameFixedRollupBucket(start, end time.Time, seconds int) bool {
 	return start.Truncate(interval).Equal(end.Add(-time.Nanosecond).Truncate(interval))
 }
 
+const channelMonitorV2DateBinOrigin = "TIMESTAMPTZ '1970-01-01 00:00:00+00'"
+
+func channelMonitorV2DateBinExpr(column string) string {
+	return "date_bin($1::interval," + column + "," + channelMonitorV2DateBinOrigin + ")"
+}
+
 const channelMonitorV2FixedRollupBoundsSQL = `
 WITH bounds AS (
   SELECT

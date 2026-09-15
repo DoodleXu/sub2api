@@ -2392,7 +2392,7 @@ const handleDuplicateAccount = async (a: Account) => {
 const handleRefresh = async (a: Account) => {
   try {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
-    patchAccountInList(updated)
+    patchAccountInList('account' in updated ? updated.account : updated)
     markLocalAccountMutation()
     appStore.showSuccess(t('common.success'))
   } catch (error) {
