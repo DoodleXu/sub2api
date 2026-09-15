@@ -2,9 +2,9 @@ package admin
 
 import (
 	"context"
-	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -43,17 +43,18 @@ type BulkActionSubscriptionRequest struct {
 }
 
 func (h *SubscriptionHandler) BulkAction(c *gin.Context) {
-	var req BulkActionSubscriptionRequest
+	var req service.BulkSubscriptionActionInput
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	result, err := h.subscriptionService.BulkSubscriptionAction(c.Request.Context(), &service.BulkSubscriptionActionInput{SubscriptionIDs: req.SubscriptionIDs, Action: req.Action, Days: req.Days, Daily: req.Daily, Weekly: req.Weekly, Monthly: req.Monthly})
-	if err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
+	if err := req.Validate(); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, result)
+	executeAdminIdempotentJSONWithTimeout(c, "admin.subscriptions.bulk-action", req, service.DefaultWriteIdempotencyTTL(), 2*time.Minute, func(ctx context.Context) (any, error) {
+		return h.subscriptionService.BulkSubscriptionAction(ctx, &req)
+	})
 }
 
 // NewSubscriptionHandler creates a new admin subscription handler

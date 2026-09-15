@@ -28,7 +28,7 @@ export interface BillingModeSettings {
 }
 
 export function resolveSiteBillingMode(settings: BillingModeSettings | null | undefined): SiteBillingMode {
-  const subscriptionEnabled = resolveFeatureFlag(FeatureFlags.subscription)
+  const subscriptionEnabled = resolveFeatureFlag(settings, FeatureFlags.subscription)
   if (!subscriptionEnabled) return 'recharge_only'
   if (settings?.payment_balance_disabled === true) return 'subscription_only'
   return 'recharge_and_subscription'

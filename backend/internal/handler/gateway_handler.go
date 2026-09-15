@@ -1172,6 +1172,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Fallback to default models
 	if platform == service.PlatformOpenAI {
+		if c.Param("model") != "" {
+			writeOpenAIModelsList(c, defaultModelIDsForPlatform(platform))
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
 			"data":   openai.DefaultModels,
@@ -1180,6 +1184,11 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if platform == service.PlatformGemini {
+		if c.Param("model") != "" {
+			body, _ := json.Marshal(gin.H{"object": "list", "data": geminicli.DefaultModels})
+			writeRetrievedModel(c, body)
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
 			"data":   geminicli.DefaultModels,
@@ -1187,10 +1196,19 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 	if platform == service.PlatformGrok {
+		if c.Param("model") != "" {
+			writeGrokModelsList(c, xai.DefaultModelIDs())
+			return
+		}
 		writeGrokModelsList(c, xai.DefaultModelIDs())
 		return
 	}
 
+	if c.Param("model") != "" {
+		body, _ := json.Marshal(gin.H{"object": "list", "data": claude.DefaultModels})
+		writeRetrievedModel(c, body)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   claude.DefaultModels,
@@ -1259,6 +1277,11 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
 	}
+	if c.Param("model") != "" {
+		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
+		writeRetrievedModel(c, body)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   models,
@@ -1316,6 +1339,11 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 		models = append(models, item)
 	}
 
+	if c.Param("model") != "" {
+		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
+		writeRetrievedModel(c, body)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
 }
 
@@ -1348,6 +1376,11 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 			Type:        "model",
 			DisplayName: modelID,
 		})
+	}
+	if c.Param("model") != "" {
+		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
+		writeRetrievedModel(c, body)
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",

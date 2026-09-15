@@ -10,6 +10,7 @@
 - 内容冲突继续采用 fork 聚合模块策略，以 fork 现有实现承载签到、运营中心、人民币成本、账号归档、Web 创作台、生图管理、Responses Lite、支付安全和 OpenAI 调度/计费等定制行为；上游重新拆分且 fork 已删除的 handler/service/deploy 文件保持删除。
 - 同步上游订阅批量操作、OpenCode Go 平台、站点订阅开关、Grok 媒体账号选择、渠道监控日期聚合和相关前后端测试；重新生成 Wire，并保持 `backend/cmd/server/VERSION` 的 fork 版本。
 - 验证结果：后端 `go build ./...` 通过；前端 `pnpm run build`（含 i18n 检查、`vue-tsc -b` 和 Vite 构建）通过。定向后端 unit 套件可编译运行，但仍有依赖 Redis/外部状态及 fork 与上游既有语义差异的失败，详见本次同步记录；未执行生产迁移、部署、远程推送、tag 或 release。
+- 合并后审核修复：恢复 OpenAI WS 转发参数契约，补回订阅批量操作的参数校验与幂等重放，计费模式解析改为使用调用方设置，并让普通平台的 `/models/:model` 保留列表元数据后返回单模型对象。后端相关定向测试和前端站点计费模式测试通过。
 
 ## 2026-09-14 HashPay 加密货币支付网关
 
