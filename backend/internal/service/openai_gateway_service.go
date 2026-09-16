@@ -8749,7 +8749,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 // falling back to unrelated Claude catalog pricing unless the operator has
 // explicitly configured group or channel pricing for that model name.
 func (s *OpenAIGatewayService) filterCNProviderBillingModelCandidates(ctx context.Context, account *Account, apiKey *APIKey, candidates []string) []string {
-	if account == nil || !account.IsCNProvider() {
+	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGo()) {
 		return candidates
 	}
 	out := make([]string, 0, len(candidates))
