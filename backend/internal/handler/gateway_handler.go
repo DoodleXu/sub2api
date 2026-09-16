@@ -1172,47 +1172,20 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	// Fallback to default models
 	if platform == service.PlatformOpenAI {
-		if c.Param("model") != "" {
-			writeOpenAIModelsList(c, defaultModelIDsForPlatform(platform))
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   openai.DefaultModels,
-		})
+		writeModelsListResponse(c, openai.DefaultModels)
 		return
 	}
 
 	if platform == service.PlatformGemini {
-		if c.Param("model") != "" {
-			body, _ := json.Marshal(gin.H{"object": "list", "data": geminicli.DefaultModels})
-			writeRetrievedModel(c, body)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   geminicli.DefaultModels,
-		})
+		writeModelsListResponse(c, geminicli.DefaultModels)
 		return
 	}
 	if platform == service.PlatformGrok {
-		if c.Param("model") != "" {
-			writeGrokModelsList(c, xai.DefaultModelIDs())
-			return
-		}
 		writeGrokModelsList(c, xai.DefaultModelIDs())
 		return
 	}
 
-	if c.Param("model") != "" {
-		body, _ := json.Marshal(gin.H{"object": "list", "data": claude.DefaultModels})
-		writeRetrievedModel(c, body)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   claude.DefaultModels,
-	})
+	writeModelsListResponse(c, claude.DefaultModels)
 }
 
 // CodexModels writes an empty, valid Codex manifest for groups without a
@@ -1277,15 +1250,7 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
 	}
-	if c.Param("model") != "" {
-		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
-		writeRetrievedModel(c, body)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeModelsListResponse(c, models)
 }
 
 func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
@@ -1339,12 +1304,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 		models = append(models, item)
 	}
 
-	if c.Param("model") != "" {
-		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
-		writeRetrievedModel(c, body)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
+	writeModelsListResponse(c, models)
 }
 
 func grokModelSupportsConfigurableReasoning(modelID string) bool {
@@ -1377,15 +1337,7 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 			DisplayName: modelID,
 		})
 	}
-	if c.Param("model") != "" {
-		body, _ := json.Marshal(gin.H{"object": "list", "data": models})
-		writeRetrievedModel(c, body)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
+	writeModelsListResponse(c, models)
 }
 
 func customModelsListSource(platform string, availableModels, fallbackModels []string) []string {

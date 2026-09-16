@@ -428,6 +428,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled:        settings.AvailableChannelsEnabled,
+		SubscriptionEnabled:             settings.SubscriptionEnabled,
 		WebConsoleEnabled:               settings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint:       settings.WebConsoleDefaultEndpoint,
 		DailyCheckinEnabled:             settings.DailyCheckinEnabled,
@@ -1401,6 +1402,9 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
+	SubscriptionEnabled *bool `json:"subscription_enabled"`
 
 	// Web Console feature switch (browser-side)
 	WebConsoleEnabled         *bool   `json:"web_console_enabled"`
@@ -3013,6 +3017,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		SubscriptionEnabled: func() bool {
+			if req.SubscriptionEnabled != nil {
+				return *req.SubscriptionEnabled
+			}
+			return previousSettings.SubscriptionEnabled
+		}(),
 		WebConsoleEnabled: func() bool {
 			if req.WebConsoleEnabled != nil {
 				return *req.WebConsoleEnabled
@@ -3578,6 +3588,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:               updatedSettings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled:        updatedSettings.AvailableChannelsEnabled,
+		SubscriptionEnabled:             updatedSettings.SubscriptionEnabled,
 		WebConsoleEnabled:               updatedSettings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint:       updatedSettings.WebConsoleDefaultEndpoint,
 		ModelPlazaEnabled:               updatedSettings.ModelPlazaEnabled,
@@ -4237,6 +4248,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.SubscriptionEnabled != after.SubscriptionEnabled {
+		changed = append(changed, "subscription_enabled")
 	}
 	if before.WebConsoleEnabled != after.WebConsoleEnabled {
 		changed = append(changed, "web_console_enabled")
