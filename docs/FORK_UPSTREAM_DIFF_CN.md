@@ -22,6 +22,8 @@
 - 同步上游订阅批量操作、OpenCode Go 平台、站点订阅开关、Grok 媒体账号选择、渠道监控日期聚合和相关前后端测试；重新生成 Wire，并保持 `backend/cmd/server/VERSION` 的 fork 版本。
 - 验证结果：后端 `go build ./...` 通过；前端 `pnpm run build`（含 i18n 检查、`vue-tsc -b` 和 Vite 构建）通过。定向后端 unit 套件可编译运行，但仍有依赖 Redis/外部状态及 fork 与上游既有语义差异的失败，详见本次同步记录；未执行生产迁移、部署、远程推送、tag 或 release。
 - 合并后审核修复：恢复 OpenAI WS 转发参数契约，补回订阅批量操作的参数校验与幂等重放，计费模式解析改为使用调用方设置，并让普通平台的 `/models/:model` 保留列表元数据后返回单模型对象。后端相关定向测试和前端站点计费模式测试通过。
+- 二次审核修复：恢复合并时被 fork 侧实现覆盖的 OpenAI WS 执行作用域与会话隔离语义——HTTP 转发的执行作用域改回从改写前的原始请求计算并传入 WSv2 转发；WS 接入的会话级状态键、会话抢占与 `store=false` 连接绑定统一改用执行作用域键（线程标识优先，其次显式 session，无声明身份时沿用 fork 的会话哈希/首帧 `prompt_cache_key`）；被抢占连接先发关闭帧再取消；轮次重试强制新建上游连接，并把轮次预检 ping 放宽到探活超时。fork 的 WS 路由状态缓存、Agent Identity 脱敏、HTTP bridge 与逐轮计费行为保持不变。
+- 二次审核修复：移植上游 Fast 策略的 `missing` tier 匹配，仅显式 `missing` 规则把省略 `service_tier` 的请求强制为 `priority`；legacy `all`/空 tier 规则仍只作用于显式选择的档位。
 
 ## 2026-09-14 HashPay 加密货币支付网关
 

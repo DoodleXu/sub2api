@@ -3383,6 +3383,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
 	apiKeyID := getAPIKeyIDFromContext(c)
+	// 执行作用域必须取自客户端原始身份：后面的账号 namespace 改写与指纹收敛会改掉
+	// 请求体里的 client_metadata / prompt_cache_key，用改写后的值取键会让不同会话
+	// 落到同一个键，也会与 WS 接入路径按原始报文算出的键对不上。
+	wsExecutionScope, _ := resolveOpenAIWSExecutionScope(c, body, apiKeyID)
 	logCodexCLIOnlyDetection(ctx, c, account, apiKeyID, restrictionResult, body)
 	if restrictionResult.Enabled && !restrictionResult.Matched {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
@@ -4126,7 +4130,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				account,
 				wsReqBody,
 				promptCacheKey,
-				"",
+				wsExecutionScope,
 				token,
 				wsDecision,
 				isCodexCLI,
@@ -9555,7 +9559,7 @@ func (e *OpenAIFastBlockedError) Error() string { return e.Message }
 //
 // Matching rules:
 //   - Scope filters by account type (all / oauth / apikey / bedrock)
-//   - ServiceTier must be empty (= any), "all", or equal the normalized tier
+//   - ServiceTier must be empty (= any), "all", "missing", or equal the normalized tier
 //   - ModelWhitelist narrows the rule to specific models; FallbackAction
 //     handles the non-matching case (default: pass)
 //
@@ -9586,6 +9590,18 @@ func (s *OpenAIGatewayService) evaluateOpenAIFastPolicy(ctx context.Context, acc
 	return evaluateOpenAIFastPolicyWithSettings(settings, openAIFastPolicyUserID(ctx), account, model, tier)
 }
 
+// shouldForceOpenAIFastPriorityForMissingTier reports whether a request that
+// omitted service_tier should be upgraded to priority. This is opt-in through
+// the dedicated "missing" tier matcher; legacy "all" rules continue to apply
+// only to requests that explicitly selected a recognized tier.
+func (s *OpenAIGatewayService) shouldForceOpenAIFastPriorityForMissingTier(ctx context.Context, account *Account, model string) bool {
+	if account == nil || account.Platform != PlatformOpenAI {
+		return false
+	}
+	action, _ := s.evaluateOpenAIFastPolicy(ctx, account, model, OpenAIFastTierMissing)
+	return action == OpenAIFastPolicyActionForcePriority
+}
+
 // evaluateOpenAIFastPolicyWithSettings is the pure-function core extracted so
 // long-lived sessions (e.g. WS) can prefetch settings once and avoid hitting
 // the settingService on every frame. See WSSession entry and
@@ -9606,7 +9622,11 @@ func evaluateOpenAIFastPolicyWithSettings(settings *OpenAIFastPolicySettings, us
 				continue
 			}
 			ruleTier := strings.ToLower(strings.TrimSpace(rule.ServiceTier))
-			if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != tier {
+			if tier == OpenAIFastTierMissing {
+				if ruleTier != OpenAIFastTierMissing {
+					continue
+				}
+			} else if ruleTier != "" && ruleTier != OpenAIFastTierAny && ruleTier != tier {
 				continue
 			}
 			eff := BetaPolicyRule{
@@ -9707,6 +9727,13 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 	}
 	rawTier := gjson.GetBytes(body, "service_tier").String()
 	if rawTier == "" {
+		if s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, model) {
+			updated, err := sjson.SetBytes(body, "service_tier", OpenAIFastTierPriority)
+			if err != nil {
+				return body, fmt.Errorf("force missing service_tier priority on body: %w", err)
+			}
+			return updated, nil
+		}
 		return body, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
@@ -9821,6 +9848,13 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	}
 	rawTier := gjson.GetBytes(frame, "service_tier").String()
 	if rawTier == "" {
+		if s.shouldForceOpenAIFastPriorityForMissingTier(ctx, account, model) {
+			updated, err := sjson.SetBytes(frame, "service_tier", OpenAIFastTierPriority)
+			if err != nil {
+				return frame, nil, fmt.Errorf("force missing service_tier priority in ws frame: %w", err)
+			}
+			return updated, nil, nil
+		}
 		return frame, nil, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
