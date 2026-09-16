@@ -3350,16 +3350,25 @@ func openAISchedulingResetWindowEnd(account *Account, now time.Time) (time.Time,
 	return time.Time{}, false
 }
 
+// 绝对时间优先；相对倒计时必须锚定快照采样时间，不能随每次评分向后滑动。
 func openAICodexWindowResetAt(extra map[string]any, window string) (time.Time, bool) {
 	if len(extra) == 0 {
 		return time.Time{}, false
 	}
-	if raw, ok := extra["codex_"+window+"_reset_at"]; ok {
-		if t, err := parseTime(fmt.Sprint(raw)); err == nil {
-			return t, true
+	if resetAtRaw, ok := extra["codex_"+window+"_reset_at"]; ok {
+		if resetAt, err := parseTime(fmt.Sprint(resetAtRaw)); err == nil {
+			return resetAt, true
 		}
 	}
-	return time.Time{}, false
+	resetAfter := parseExtraInt(extra["codex_"+window+"_reset_after_seconds"])
+	if resetAfter <= 0 {
+		return time.Time{}, false
+	}
+	updatedAt, err := parseTime(fmt.Sprint(extra["codex_usage_updated_at"]))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return updatedAt.Add(time.Duration(resetAfter) * time.Second), true
 }
 
 func openAIQuotaHeadroomSnapshotStale(extra map[string]any, now time.Time) bool {

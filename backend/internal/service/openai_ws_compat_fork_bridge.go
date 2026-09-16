@@ -119,11 +119,35 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 		delete(req, "commands")
 		changed = true
 	}
-	if !changed {
-		return body, false, nil
+
+	normalized := body
+	if changed {
+		next, err := marshalOpenAIUpstreamJSON(req)
+		if err != nil {
+			return body, false, err
+		}
+		normalized = next
 	}
-	next, err := marshalOpenAIUpstreamJSON(req)
-	return next, true, err
+
+	// Codex can attach internal message metadata when a custom provider is named
+	// OpenAI. ChatGPT rejects this field on input items (#7066). Only remove the
+	// input-item field, never same-named user content.
+	input := gjson.GetBytes(normalized, "input")
+	if !input.IsArray() {
+		return normalized, changed, nil
+	}
+	for i, item := range input.Array() {
+		if !item.IsObject() || !item.Get("internal_chat_message_metadata_passthrough").Exists() {
+			continue
+		}
+		next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.internal_chat_message_metadata_passthrough", i))
+		if err != nil {
+			return body, false, fmt.Errorf("normalize oauth input metadata: %w", err)
+		}
+		normalized = next
+		changed = true
+	}
+	return normalized, changed, nil
 }
 
 func normalizeOpenAIParallelToolCallsWithoutTools(body []byte, legacyLite ...bool) ([]byte, bool, error) {

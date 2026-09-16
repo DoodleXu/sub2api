@@ -183,6 +183,21 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 		delete(reqBody, "commands")
 		changed = true
 	}
+	// Codex can attach internal message metadata when a custom provider is named
+	// OpenAI. ChatGPT rejects this field on input items (#7066). Only the input
+	// items are touched; same-named user content stays intact.
+	if input, ok := reqBody["input"].([]any); ok {
+		for _, value := range input {
+			item, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, exists := item["internal_chat_message_metadata_passthrough"]; exists {
+				delete(item, "internal_chat_message_metadata_passthrough")
+				changed = true
+			}
+		}
+	}
 	return changed
 }
 
