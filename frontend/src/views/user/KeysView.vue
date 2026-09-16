@@ -28,6 +28,22 @@
             :api-base-url="publicSettings?.api_base_url || ''"
             :custom-endpoints="publicSettings?.custom_endpoints || []"
           />
+          <div v-if="selectedIds.length" class="flex flex-wrap items-center gap-3 text-sm">
+            <span class="text-gray-600 dark:text-gray-300">
+              {{ t('keys.bulkEdit.selectedCount', { count: selectedIds.length }) }}
+            </span>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="loading"
+              data-test="bulk-edit-keys"
+              @click="showBulkEditModal = true"
+            >
+              {{ t('keys.bulkEdit.title') }}
+            </button>
+            <button class="btn btn-secondary btn-sm" @click="selectedIds = []">
+              {{ t('keys.bulkEdit.clearSelection') }}
+            </button>
+          </div>
         </div>
       </template>
 
@@ -85,6 +101,11 @@
           :columns="columns"
           :data="apiKeys"
           :loading="loading"
+          selectable
+          row-key="id"
+          :selected-keys="selectedIds"
+          :selection-label="(key: ApiKey) => t('keys.bulkEdit.selectKey', { name: key.name })"
+          @update:selected-keys="handleSelectionChange"
           :server-side-sort="true"
           default-sort-key="created_at"
           default-sort-order="desc"
@@ -464,12 +485,64 @@
           />
         </div>
 
+        <fieldset v-if="!showEditModal" data-tour="key-form-provider">
+          <legend class="input-label">{{ t('keys.providerLabel') }}</legend>
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <label
+              v-for="provider in createProviderOptions"
+              :key="provider.value"
+              class="relative min-w-0"
+              :class="provider.count === 0 ? 'cursor-not-allowed' : 'cursor-pointer'"
+            >
+              <input
+                type="radio"
+                name="key-provider"
+                :value="provider.value"
+                :checked="createProvider === provider.value"
+                :disabled="provider.count === 0"
+                class="peer sr-only"
+                @change="selectCreateProvider(provider.value)"
+              />
+              <span
+                class="flex h-full flex-col items-center gap-2 rounded-xl border border-gray-200 bg-white px-2 py-3 text-center transition-colors peer-checked:border-primary-500 peer-checked:bg-primary-50/60 peer-checked:ring-1 peer-checked:ring-primary-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary-500 peer-disabled:opacity-40 dark:border-dark-600 dark:bg-dark-800 dark:peer-checked:border-primary-500 dark:peer-checked:bg-primary-500/10"
+                :class="provider.count > 0 && 'hover:border-primary-300 dark:hover:border-primary-700'"
+              >
+                <span class="flex h-8 items-center justify-center gap-1.5" aria-hidden="true">
+                  <span
+                    v-for="platform in KEY_GROUP_PROVIDER_ICONS[provider.value]"
+                    :key="platform"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg"
+                    :class="platformBadgeLightClass(platform)"
+                  >
+                    <PlatformIcon :platform="platform" size="lg" />
+                  </span>
+                </span>
+                <span class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ provider.label }}</span>
+              </span>
+              <span
+                v-if="createProvider === provider.value"
+                class="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary-500 text-white"
+                aria-hidden="true"
+              >
+                <Icon name="check" size="xs" :stroke-width="3" />
+              </span>
+            </label>
+          </div>
+          <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400" aria-live="polite">
+            {{ createBindingOptions.length === 0 ? t('common.noGroupsAvailable') : t(`keys.providerHints.${createProvider}`) }}
+          </p>
+        </fieldset>
+
         <div>
-          <label class="input-label">{{ t('keys.bindingLabel') }}</label>
+          <label class="input-label" for="key-form-group">{{ showEditModal ? t('keys.bindingLabel') : t('keys.groupLabel') }}</label>
           <Select
+            :key="showEditModal ? 'edit' : createProvider"
+            id="key-form-group"
+            :aria-label="showEditModal ? t('keys.bindingLabel') : t('keys.groupLabel')"
             :model-value="formData.binding_value"
-            :options="keyBindingOptions"
-            :placeholder="t('keys.selectBinding')"
+            :options="formGroupOptions"
+            :placeholder="showEditModal ? t('keys.selectBinding') : t('keys.selectGroup')"
+            :empty-text="t('common.noGroupsAvailable')"
             :searchable="true"
             :search-placeholder="t('keys.searchGroup')"
             data-tour="key-form-group"
@@ -488,7 +561,7 @@
                 :peak-end="(option as unknown as KeyBindingOption).peakEnd"
                 :peak-rate-multiplier="(option as unknown as KeyBindingOption).peakRateMultiplier"
               />
-              <span v-else class="text-gray-400">{{ t('keys.selectBinding') }}</span>
+              <span v-else class="text-gray-400">{{ showEditModal ? t('keys.selectBinding') : t('keys.selectGroup') }}</span>
             </template>
             <template #option="{ option, selected }">
               <GroupOptionItem
@@ -953,6 +1026,14 @@
       </template>
     </BaseDialog>
 
+    <BulkEditKeysModal
+      :show="showBulkEditModal"
+      :selected-keys="selectedApiKeys"
+      :groups="groups"
+      @close="showBulkEditModal = false"
+      @updated="handleBulkUpdated"
+    />
+
     <!-- Delete Confirmation Dialog -->
     <ConfirmDialog
       :show="showDeleteDialog"
@@ -1115,7 +1196,7 @@
 </template>
 
 <script setup lang="ts">
-	import { ref, reactive, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+	import { ref, reactive, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 	import { useI18n } from 'vue-i18n'
 	import { useAppStore } from '@/stores/app'
 	import { useOnboardingStore } from '@/stores/onboarding'
@@ -1136,16 +1217,20 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import SearchInput from '@/components/common/SearchInput.vue'
 	import Icon from '@/components/icons/Icon.vue'
 	import UseKeyModal from '@/components/keys/UseKeyModal.vue'
+	import BulkEditKeysModal from '@/components/keys/BulkEditKeysModal.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
-	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest } from '@/types'
+	import PlatformIcon from '@/components/common/PlatformIcon.vue'
+	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest, UserSubscription } from '@/types'
 import userChannelsAPI, { type UserAvailableChannel, type UserSupportedModel } from '@/api/channels'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import { isSubscriptionType } from '@/utils/subscriptionType'
+import { platformBadgeLightClass } from '@/utils/platformColors'
+import { KEY_GROUP_PROVIDERS, KEY_GROUP_PROVIDER_ICONS, getKeyGroupProvider, type KeyGroupProvider } from '@/utils/keyGroupProviders'
 import {
   buildCcSwitchImportDeeplink,
   type CcSwitchClientType
@@ -1160,7 +1245,7 @@ const formatDateTimeLocal = (isoDate: string): string => {
 
 interface KeyBindingOption {
   [key: string]: unknown
-  value: string
+  value: string | number
   label: string
   description: string | null
   rate: number
@@ -1275,6 +1360,22 @@ const columns = computed<Column[]>(() =>
 )
 
 const apiKeys = ref<ApiKey[]>([])
+const selectedIds = ref<number[]>([])
+const showBulkEditModal = ref(false)
+const selectedApiKeys = computed(() => apiKeys.value.filter((key) => selectedIds.value.includes(key.id)))
+
+// Only visible keys stay selected: table filters and refreshes shrink the selection.
+const handleSelectionChange = (ids: Array<string | number>) => {
+  const visibleIds = new Set(apiKeys.value.map((key) => key.id))
+  selectedIds.value = [...new Set(ids.map(Number))].filter((id) => visibleIds.has(id))
+}
+
+const handleBulkUpdated = (succeededIds: number[]) => {
+  const succeeded = new Set(succeededIds)
+  selectedIds.value = selectedIds.value.filter((id) => !succeeded.has(id))
+  loadApiKeys()
+}
+
 const groups = ref<Group[]>([])
 const loading = ref(false)
 const submitting = ref(false)
@@ -1336,7 +1437,7 @@ const setGroupButtonRef = (keyId: number, el: Element | ComponentPublicInstance 
 
 const formData = ref({
   name: '',
-  binding_value: '',
+  binding_value: '' as string | number | null,
   group_id: null as number | null,
   subscription_id: null as number | null,
   status: 'active' as 'active' | 'inactive',
@@ -1402,6 +1503,7 @@ const statusFilterOptions = computed(() => [
 ])
 
 const onFilterChange = () => {
+  selectedIds.value = []
   pagination.value.page = 1
   loadApiKeys()
 }
@@ -1447,54 +1549,115 @@ const legacySubscriptionBindingOption = computed<KeyBindingOption | null>(() => 
   }
 })
 
-const keyBindingOptions = computed<KeyBindingOption[]>(() => {
-  const standardGroups: KeyBindingOption[] = groups.value
-    .filter((group) => !isSubscriptionType(group.subscription_type))
-    .map((group): KeyBindingOption => ({
-      value: groupBindingValue(group.id),
-      label: group.name,
-      description: group.description,
-      rate: group.rate_multiplier,
-      userRate: userGroupRates.value[group.id] ?? null,
-      peakRateEnabled: group.peak_rate_enabled,
-      peakStart: group.peak_start,
-      peakEnd: group.peak_end,
-      peakRateMultiplier: group.peak_rate_multiplier,
-      subscriptionType: group.subscription_type,
-      platform: group.platform,
-      groupId: group.id,
-      subscriptionId: null
-    }))
+const toGroupBindingOption = (group: Group, value: string | number): KeyBindingOption => ({
+  value,
+  label: group.name,
+  description: group.description,
+  rate: group.rate_multiplier,
+  userRate: userGroupRates.value[group.id] ?? null,
+  peakRateEnabled: group.peak_rate_enabled,
+  peakStart: group.peak_start,
+  peakEnd: group.peak_end,
+  peakRateMultiplier: group.peak_rate_multiplier,
+  subscriptionType: group.subscription_type,
+  platform: group.platform,
+  groupId: group.id,
+  subscriptionId: null
+})
 
-  const subscriptionBindings: KeyBindingOption[] = []
-  for (const sub of activeSubscriptions.value) {
-    if (sub.status !== 'active') continue
-    const group = sub.group || groupById.value.get(sub.group_id)
-    if (!group) continue
-    const expiresAt = sub.expires_at ? formatDateTime(sub.expires_at) : ''
-    subscriptionBindings.push({
-      value: subscriptionBindingValue(sub.id),
-      label: `${group.name} #${sub.id}`,
-      description: expiresAt ? `${t('keys.subscriptionExpiresAt')} ${expiresAt}` : group.description,
-      rate: group.rate_multiplier,
-      userRate: userGroupRates.value[group.id] ?? null,
-      peakRateEnabled: group.peak_rate_enabled,
-      peakStart: group.peak_start,
-      peakEnd: group.peak_end,
-      peakRateMultiplier: group.peak_rate_multiplier,
-      subscriptionType: group.subscription_type,
-      platform: group.platform,
-      groupId: group.id,
-      subscriptionId: sub.id
-    })
+const toSubscriptionBindingOption = (subscription: UserSubscription, group: Group): KeyBindingOption => {
+  const expiresAt = subscription.expires_at ? formatDateTime(subscription.expires_at) : ''
+  return {
+    value: subscriptionBindingValue(subscription.id),
+    label: `${group.name} #${subscription.id}`,
+    description: expiresAt ? `${t('keys.subscriptionExpiresAt')} ${expiresAt}` : group.description,
+    rate: group.rate_multiplier,
+    userRate: userGroupRates.value[group.id] ?? null,
+    peakRateEnabled: group.peak_rate_enabled,
+    peakStart: group.peak_start,
+    peakEnd: group.peak_end,
+    peakRateMultiplier: group.peak_rate_multiplier,
+    subscriptionType: group.subscription_type,
+    platform: group.platform,
+    groupId: group.id,
+    subscriptionId: subscription.id
   }
+}
 
-  const options = [...standardGroups, ...subscriptionBindings]
+// 普通分组可以直接绑定；订阅分组只在存在有效订阅时按订阅下标提供
+const standardGroupOptions = computed(() =>
+  groups.value.filter((group) => !isSubscriptionType(group.subscription_type))
+)
+
+const activeSubscriptionGroups = computed(() => {
+  const bindings: Array<{ subscription: UserSubscription; group: Group }> = []
+  for (const subscription of activeSubscriptions.value) {
+    if (subscription.status !== 'active') continue
+    const group = subscription.group || groupById.value.get(subscription.group_id)
+    if (group) bindings.push({ subscription, group })
+  }
+  return bindings
+})
+
+const buildBindingOptions = (groupValue: (group: Group) => string | number): KeyBindingOption[] => [
+  ...standardGroupOptions.value.map((group) => toGroupBindingOption(group, groupValue(group))),
+  ...activeSubscriptionGroups.value.map(({ subscription, group }) =>
+    toSubscriptionBindingOption(subscription, group)
+  )
+]
+
+// 编辑态与表格内换组使用稳定的字符串绑定值，避免分组 ID 与订阅 ID 混淆
+const keyBindingOptions = computed<KeyBindingOption[]>(() => {
+  const options = buildBindingOptions((group) => groupBindingValue(group.id))
   const legacyOption = legacySubscriptionBindingOption.value
   if (legacyOption && !options.some((option) => option.value === legacyOption.value)) {
     return [legacyOption, ...options]
   }
   return options
+})
+
+// 创建态沿用上游的数字分组 ID 契约，订阅绑定继续以字符串下标提供
+const createBindingOptions = computed<KeyBindingOption[]>(() =>
+  buildBindingOptions((group) => group.id)
+)
+
+const createProvider = ref<KeyGroupProvider>('anthropic')
+
+const createProviderOptions = computed(() =>
+  KEY_GROUP_PROVIDERS.map((value) => ({
+    value,
+    label: t(`keys.providers.${value}`),
+    count: createBindingOptions.value.filter((option) => getKeyGroupProvider(option.platform) === value).length
+  }))
+)
+
+const formGroupOptions = computed<KeyBindingOption[]>(() =>
+  showEditModal.value
+    ? keyBindingOptions.value
+    : createBindingOptions.value.filter((option) => getKeyGroupProvider(option.platform) === createProvider.value)
+)
+
+const clearFormBinding = () => {
+  formData.value.binding_value = null
+  formData.value.group_id = null
+  formData.value.subscription_id = null
+}
+
+const selectCreateProvider = (provider: KeyGroupProvider) => {
+  if (createProvider.value === provider) return
+  createProvider.value = provider
+  clearFormBinding()
+}
+
+// 分组晚于创建弹窗到达时也要选中可用厂商，并清理已失效的分组选择
+watch([showCreateModal, createProviderOptions], ([isOpen, providers], [wasOpen]) => {
+  if (!isOpen) return
+  if (!wasOpen || !providers.some((provider) => provider.value === createProvider.value && provider.count > 0)) {
+    selectCreateProvider(providers.find((provider) => provider.count > 0)?.value ?? 'anthropic')
+  }
+  if (!formGroupOptions.value.some((option) => option.value === formData.value.binding_value)) {
+    clearFormBinding()
+  }
 })
 
 const apiKeyBindingValue = (key: Pick<ApiKey, 'group_id' | 'subscription_id'> | null) => {
@@ -1504,13 +1667,15 @@ const apiKeyBindingValue = (key: Pick<ApiKey, 'group_id' | 'subscription_id'> | 
   return ''
 }
 
-const resolveBindingOption = (value: string) =>
-  keyBindingOptions.value.find((option) => option.value === value) || null
+const resolveBindingOption = (value: string | number | boolean | null) => {
+  if (typeof value !== 'string' && typeof value !== 'number') return null
+  const options = showEditModal.value ? keyBindingOptions.value : createBindingOptions.value
+  return options.find((option) => option.value === value) || null
+}
 
 const onFormBindingChange = (value: string | number | boolean | null) => {
-  const bindingValue = typeof value === 'string' ? value : ''
-  const option = resolveBindingOption(bindingValue)
-  formData.value.binding_value = bindingValue
+  const option = resolveBindingOption(value)
+  formData.value.binding_value = option ? (value as string | number) : null
   formData.value.group_id = option?.groupId ?? null
   formData.value.subscription_id = option?.subscriptionId ?? null
 }
@@ -1568,6 +1733,7 @@ const loadApiKeys = async () => {
     })
     if (signal.aborted) return
     apiKeys.value = response.items
+    handleSelectionChange(selectedIds.value)
     pagination.value.total = response.total
     pagination.value.pages = response.pages
 
@@ -1672,17 +1838,20 @@ const closeUseKeyModal = () => {
 }
 
 const handlePageChange = (page: number) => {
+  selectedIds.value = []
   pagination.value.page = page
   loadApiKeys()
 }
 
 const handlePageSizeChange = (pageSize: number) => {
+  selectedIds.value = []
   pagination.value.page_size = pageSize
   pagination.value.page = 1
   loadApiKeys()
 }
 
 const handleSort = (key: string, order: 'asc' | 'desc') => {
+  selectedIds.value = []
   sortState.value.sort_by = key
   sortState.value.sort_order = order
   pagination.value.page = 1
@@ -1974,14 +2143,20 @@ const setExpirationDays = (days: number) => {
 
 // Reset quota used for an API key
 const resetQuotaUsed = async () => {
-  if (!selectedKey.value) return
+  const key = selectedKey.value
+  if (!key) return
   showResetQuotaDialog.value = false
   try {
-    await keysAPI.update(selectedKey.value.id, { reset_quota: true })
+    const updatedKey = await keysAPI.update(key.id, { reset_quota: true })
     appStore.showSuccess(t('keys.quotaResetSuccess'))
     // Update local state
-    if (selectedKey.value) {
-      selectedKey.value.quota_used = 0
+    key.quota_used = updatedKey.quota_used
+    // 额度重置可能同时把 quota_exhausted 恢复为 active，需同步表单状态
+    if (key.status !== updatedKey.status) {
+      key.status = updatedKey.status
+      if (selectedKey.value?.id === key.id) {
+        formData.value.status = updatedKey.status === 'active' ? 'active' : 'inactive'
+      }
     }
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || t('keys.failedToResetQuota')
