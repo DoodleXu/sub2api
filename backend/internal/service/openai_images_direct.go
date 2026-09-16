@@ -204,17 +204,19 @@ func codexDirectImagesUsage(body []byte) (OpenAIUsage, bool) {
 	return usage, true
 }
 
-func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp *http.Response, c *gin.Context, parsed *OpenAIImagesRequest) (OpenAIUsage, int, []string, error) {
+// fork 扩展：在返回上游用量之外，额外回传写出的 JSON 正文，供 fork 的同步图片
+// 归档（生图管理）复用；上游版本只返回用量与尺寸。
+func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp *http.Response, c *gin.Context, parsed *OpenAIImagesRequest) (OpenAIUsage, int, []string, []byte, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if shouldClassifyOpenAIUpstreamStreamReadError(err) {
 			err = newOpenAIUpstreamStreamReadError(err)
 		}
-		return OpenAIUsage{}, 0, nil, err
+		return OpenAIUsage{}, 0, nil, nil, err
 	}
 	results, err := parseCodexDirectImagesResponse(body)
 	if err != nil {
-		return OpenAIUsage{}, 0, nil, err
+		return OpenAIUsage{}, 0, nil, nil, err
 	}
 	usage, _ := codexDirectImagesUsage(body)
 	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
@@ -257,5 +259,5 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp 
 		}
 	}
 	c.Data(resp.StatusCode, contentType, body)
-	return usage, len(results), openAIResponsesImageResultSizes(results), nil
+	return usage, len(results), openAIResponsesImageResultSizes(results), body, nil
 }

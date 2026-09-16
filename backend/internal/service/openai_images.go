@@ -400,11 +400,6 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 					return fmt.Errorf("image uploads exceed %d bytes in total", openAIImageMaxUploadBytes)
 				}
 				req.uploadBytes += int64(len(data))
-				if name == "image" || strings.HasPrefix(name, "image[") {
-					if width <= 0 || height <= 0 {
-						return fmt.Errorf("multipart field %s has invalid image dimensions", name)
-					}
-				}
 				if name == "mask" && req.MaskUpload != nil {
 					return fmt.Errorf("multipart field mask may only be provided once")
 				}
@@ -532,11 +527,17 @@ func validateOpenAIImageUpload(data []byte, declaredContentType string) (string,
 	if len(data) == 0 {
 		return "", 0, 0, fmt.Errorf("image upload is empty")
 	}
+	declared := normalizeImageContentType(declaredContentType)
 	detectedType, ok := detectImageContentType(data)
 	if !ok {
+		// 客户端显式声明受支持的 image/* 类型时按声明放行：Codex 直连端点与
+		// 内联合成图片载荷不一定能被本地嗅探识别，字节内容最终由上游校验。
+		// 未声明类型或声明为非图片类型时仍然拒绝。
+		if isSupportedImageContentType(declared) {
+			return declared, 0, 0, nil
+		}
 		return "", 0, 0, fmt.Errorf("image upload is not a supported PNG, JPEG, WebP, or GIF")
 	}
-	declared := normalizeImageContentType(declaredContentType)
 	if declared != "" && declared != "application/octet-stream" && declared != detectedType {
 		return "", 0, 0, fmt.Errorf("declared content type %q does not match image bytes (%s)", declared, detectedType)
 	}
@@ -562,17 +563,33 @@ func validateOpenAIImageInputURL(rawURL string) error {
 }
 
 func validateOpenAIImageInputURLSize(rawURL string) (int64, error) {
+	return openAIImageInputURLSize(rawURL, false)
+}
+
+// openAIImageInputURLSize 计算引用输入占用的字节预算。trustDeclaredType 供请求
+// 解析路径使用：内联 data URL 显式声明的受支持 image/* 类型即视为有效载荷，
+// 与 multipart 上传的判定保持一致；独立校验入口保持严格的字节嗅探。
+func openAIImageInputURLSize(rawURL string, trustDeclaredType bool) (int64, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return 0, fmt.Errorf("URL is empty")
 	}
 	if strings.HasPrefix(strings.ToLower(rawURL), "data:") {
-		uploader := &ImageResultUploader{maxDownloadBytes: openAIImageMaxUploadPartSize}
-		data, _, err := uploader.decodeImageDataURL(rawURL)
+		var (
+			data         []byte
+			declaredType string
+			err          error
+		)
+		if trustDeclaredType {
+			data, declaredType, err = decodeOpenAIImageInlineDataURL(rawURL)
+		} else {
+			uploader := &ImageResultUploader{maxDownloadBytes: openAIImageMaxUploadPartSize}
+			data, _, err = uploader.decodeImageDataURL(rawURL)
+		}
 		if err != nil {
 			return 0, err
 		}
-		if _, _, _, err := validateOpenAIImageUpload(data, ""); err != nil {
+		if _, _, _, err := validateOpenAIImageUpload(data, declaredType); err != nil {
 			return 0, err
 		}
 		return int64(len(data)), nil
@@ -591,6 +608,42 @@ func validateOpenAIImageInputURLSize(rawURL string) (int64, error) {
 	return 0, nil
 }
 
+// decodeOpenAIImageInlineDataURL 解析内联图片 data URL，用于请求解析路径的字节预算
+// 与声明类型校验。与 ImageResultUploader.decodeImageDataURL 的严格实现相比，这里
+// 不做字节嗅探：客户端显式声明的受支持 image/* 类型即被采信，实际图片内容由上游
+// 校验（Codex 直连端点接受内联图片，合成载荷不应在网关侧被静默丢弃）。
+func decodeOpenAIImageInlineDataURL(rawURL string) ([]byte, string, error) {
+	header, payload, ok := strings.Cut(rawURL[len("data:"):], ",")
+	if !ok {
+		return nil, "", fmt.Errorf("decode image data URL: missing comma separator")
+	}
+	tokens := strings.Split(header, ";")
+	declaredType, _, err := mime.ParseMediaType(strings.TrimSpace(tokens[0]))
+	if err != nil || strings.TrimSpace(tokens[0]) == "" {
+		return nil, "", fmt.Errorf("decode image data URL: missing media type")
+	}
+	declaredType = strings.ToLower(strings.TrimSpace(declaredType))
+	if !isSupportedImageContentType(declaredType) {
+		return nil, "", fmt.Errorf("decode image data URL: media type %q is not a supported image", declaredType)
+	}
+	if len(tokens) < 2 || !strings.EqualFold(strings.TrimSpace(tokens[len(tokens)-1]), "base64") {
+		return nil, "", fmt.Errorf("decode image data URL: payload is not base64 encoded")
+	}
+	limit := int64(openAIImageMaxUploadPartSize)
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(payload))
+	data, err := io.ReadAll(io.LimitReader(decoder, limit+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("decode image data URL base64 payload: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, "", fmt.Errorf("decoded image data URL exceeds %d bytes", limit)
+	}
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("image upload is empty")
+	}
+	return data, declaredType, nil
+}
+
 // accountOpenAIImageInputURL adds a bounded byte reservation for a reference
 // URL. Remote URLs cannot be sized safely without fetching them, and they are
 // forwarded to the provider, so reserving the per-image limit closes the
@@ -601,7 +654,7 @@ func accountOpenAIImageInputURL(req *OpenAIImagesRequest, rawURL string) (int64,
 	if req == nil {
 		return 0, fmt.Errorf("image request is required")
 	}
-	size, err := validateOpenAIImageInputURLSize(rawURL)
+	size, err := openAIImageInputURLSize(rawURL, true)
 	if err != nil {
 		return 0, err
 	}
@@ -835,7 +888,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	imageCount := parsed.N
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
-		streamUsage, streamCount, streamSizes, ttft, imageFirstOutputMs, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime)
+		streamUsage, streamCount, streamSizes, ttft, imageFirstOutputMs, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, nil)
 		if err != nil {
 			if streamCount > 0 {
 				return &OpenAIForwardResult{
@@ -1068,6 +1121,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	startTime time.Time,
+	direct *OpenAIImagesRequest,
 ) (OpenAIUsage, int, []string, *int, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -1094,8 +1148,26 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	seenSSEData := false
 	fallbackTooLarge := false
 	var sseData openAISSEDataAccumulator
+	var streamErr error
+	// Codex 直连流式响应必须收到 SSE 完成事件并产出图片才算成功；未转发的
+	// JSON 正文不能当作已完成的图片结果。
+	finish := func() error {
+		if direct == nil {
+			return nil
+		}
+		if streamErr != nil {
+			return streamErr
+		}
+		if !seenSSEData || imageCounter.Count() == 0 {
+			return newOpenAIUpstreamStreamReadError(ErrOpenAIUpstreamStreamTruncated)
+		}
+		return nil
+	}
 
 	processSSEData := func(dataBytes []byte) {
+		if streamErr != nil {
+			return
+		}
 		seenSSEData = true
 		fallbackBody.Reset()
 		fallbackBytes = 0
@@ -1103,8 +1175,60 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			imageFirstOutputMs = &ms
 		}
+		if direct != nil && strings.HasSuffix(gjson.GetBytes(dataBytes, "type").String(), ".completed") {
+			if size := detectOpenAIImageResultSize(gjson.GetBytes(dataBytes, "b64_json").String()); size != "" {
+				dataBytes, _ = sjson.SetBytes(dataBytes, "size", size)
+			}
+		}
 		mergeOpenAIUsage(&usage, dataBytes)
 		imageCounter.AddSSEData(dataBytes)
+		if direct == nil || string(dataBytes) == "[DONE]" {
+			return
+		}
+		if directUsage, ok := codexDirectImagesUsage(dataBytes); ok {
+			mergeOpenAIUsageNonZero(&usage, directUsage)
+		}
+		if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+			observer.Observe(gjson.GetBytes(dataBytes, "model").String(), strings.HasSuffix(gjson.GetBytes(dataBytes, "type").String(), ".completed"))
+		}
+		if upstreamErr := openAIImagesUpstreamErrorFromSSEPayload(dataBytes); upstreamErr != nil {
+			streamErr = upstreamErr
+			if IsOpenAIImagesRetryableUpstreamError(upstreamErr) && imageCounter.Count() == 0 {
+				return
+			}
+		}
+		if !gjson.ValidBytes(dataBytes) {
+			streamErr = newOpenAIUpstreamStreamReadError(fmt.Errorf("invalid image stream JSON"))
+			return
+		}
+		eventType := gjson.GetBytes(dataBytes, "type").String()
+		if model := strings.TrimSpace(direct.Model); model != "" {
+			dataBytes, _ = sjson.SetBytes(dataBytes, "model", model)
+		}
+		// 原生编辑事件可能仍使用 image_generation 前缀；对外维持既有编辑事件名。
+		if strings.HasPrefix(eventType, "image_generation.") && direct.IsEdits() {
+			eventType = strings.Replace(eventType, "image_generation.", "image_edit.", 1)
+			dataBytes, _ = sjson.SetBytes(dataBytes, "type", eventType)
+		}
+		if direct.ResponseFormat == "url" {
+			b64 := gjson.GetBytes(dataBytes, "b64_json").String()
+			format := gjson.GetBytes(dataBytes, "output_format").String()
+			if format == "" {
+				format = direct.OutputFormat
+			}
+			dataBytes = codexDirectImageURL(dataBytes, "", format)
+			// 既有流式契约在 url 模式同时保留 b64_json。
+			if b64 != "" {
+				dataBytes, _ = sjson.SetBytes(dataBytes, "b64_json", b64)
+			}
+		}
+		if !clientDisconnected {
+			if err := s.writeOpenAIImagesStreamEvent(c, flusher, eventType, dataBytes); err != nil {
+				clientDisconnected = true
+			} else {
+				lastDownstreamWriteAt = time.Now()
+			}
+		}
 	}
 
 	flushSSEEvent := func() {
@@ -1119,7 +1243,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
-		if !clientDisconnected {
+		if !clientDisconnected && direct == nil {
 			if _, writeErr := c.Writer.Write(line); writeErr != nil {
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images stream client disconnected, continue draining upstream for billing")
@@ -1146,6 +1270,10 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	}
 
 	finalizeFallbackBody := func() {
+		// 直连模式只认 SSE 事件，JSON 回退正文不参与计数与转发。
+		if direct != nil {
+			return
+		}
 		if seenSSEData || fallbackBody.Len() == 0 {
 			return
 		}
@@ -1178,7 +1306,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		}
 		flushSSEEvent()
 		finalizeFallbackBody()
-		return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, imageFirstOutputMs, nil
+		return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, imageFirstOutputMs, finish()
 	}
 
 	type readEvent struct {
@@ -1245,7 +1373,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			if !ok {
 				flushSSEEvent()
 				finalizeFallbackBody()
-				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, imageFirstOutputMs, nil
+				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, imageFirstOutputMs, finish()
 			}
 			if ev.err != nil {
 				flushSSEEvent()

@@ -113,26 +113,36 @@ func ResolveImageBillingSize(inputSize string, outputSizes []string) ImageBillin
 }
 
 func ApplyOpenAIImageBillingResolution(result *OpenAIForwardResult) {
-	if result == nil || result.ImageCount <= 0 {
+	if result == nil {
 		return
 	}
-	inputSize := strings.TrimSpace(result.ImageInputSize)
-	if inputSize == "" && strings.TrimSpace(result.ImageSize) != ImageBillingSize2K {
-		inputSize = strings.TrimSpace(result.ImageSize)
+	if result.ImageCount > 0 {
+		inputSize := strings.TrimSpace(result.ImageInputSize)
+		if inputSize == "" && strings.TrimSpace(result.ImageSize) != ImageBillingSize2K {
+			inputSize = strings.TrimSpace(result.ImageSize)
+		}
+		outputSizes := result.ImageOutputSizes
+		if len(outputSizes) == 0 && strings.TrimSpace(result.ImageOutputSize) != "" {
+			outputSizes = []string{result.ImageOutputSize}
+		}
+		resolved := ResolveImageBillingSize(inputSize, outputSizes)
+		applyImageBillingResolution(
+			&result.ImageSize,
+			&result.ImageInputSize,
+			&result.ImageOutputSize,
+			&result.ImageSizeSource,
+			&result.ImageSizeBreakdown,
+			resolved,
+		)
 	}
-	outputSizes := result.ImageOutputSizes
-	if len(outputSizes) == 0 && strings.TrimSpace(result.ImageOutputSize) != "" {
-		outputSizes = []string{result.ImageOutputSize}
+	// 图片缓存读取量随图片计费明细一起写入 usage_logs 的 JSONB 载荷
+	// （对应上游 openai_gateway_usage.go 的 image_cache_read_tokens 处理）。
+	if result.Usage.ImageCacheReadTokens > 0 {
+		if result.ImageSizeBreakdown == nil {
+			result.ImageSizeBreakdown = make(map[string]int, 1)
+		}
+		result.ImageSizeBreakdown["image_cache_read_tokens"] = result.Usage.ImageCacheReadTokens
 	}
-	resolved := ResolveImageBillingSize(inputSize, outputSizes)
-	applyImageBillingResolution(
-		&result.ImageSize,
-		&result.ImageInputSize,
-		&result.ImageOutputSize,
-		&result.ImageSizeSource,
-		&result.ImageSizeBreakdown,
-		resolved,
-	)
 }
 
 func ApplyForwardImageBillingResolution(result *ForwardResult) {
