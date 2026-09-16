@@ -2,7 +2,15 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-15
+最后更新：2026-09-16
+
+## 2026-09-16 合并后审查修复
+
+- 补齐 Ops 带内错误语义：非流式响应按 `stream=false` 记录，请求级错误按逻辑状态码落库，不继承先前尝试的上游错误和 `skip_monitoring`；此前已恢复的上游错误仍单独保留遥测，沿用 fork 的 WS 逐轮快照处理。
+- OpenAI 账号测试模型选择器恢复“上游显示名、本地目录显示名、原始模型 ID”的回退顺序，复用现有名称解析能力，不改写共享发现缓存；本地补充的图片模型使用相同命名规则。
+- 更正 Antigravity 审查结论：当前混合工具过滤与上游 `v0.2.5` 一致，保留客户端函数、移除混用的内置搜索/执行工具；修正兼容与原生 Gemini 转发测试的旧预期，同时验证仅内置工具场景仍保留搜索。没有重新启用 `includeServerSideToolInvocations`。
+- 同步 OpenAI Fast/Flex 策略新增的“省略 tier”文案与说明到运行时中英文语言资源，避免模块化资源已更新但页面仍缺少翻译。
+- 验证：上述定向回归、`go build ./...` 和 `git diff --check` 通过。`TZ=UTC go test -tags=unit ./internal/handler ./internal/service ./internal/pkg/antigravity -count=1` 中 Antigravity 包通过，handler/service 仍有 43 个顶层用例失败（Grok 媒体、OpenCode Go、WS、设置与订阅等）。以 Go overlay 恢复修改前 `HEAD=cd87b1434` 的两个生产文件后，逐项重跑这 43 个用例，失败集合完全一致；未宣称全量通过。未进行真实上游凭据验收、提交、推送或部署。
 
 ## 2026-09-15 合并上游 v0.2.5
 

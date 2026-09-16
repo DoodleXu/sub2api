@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // antigravityFailingWriter 模拟客户端断开连接的 gin.ResponseWriter
@@ -397,7 +398,7 @@ func TestAntigravityGatewayService_ForwardGemini_ImageUsesDefaultMappingAndOAuth
 	require.Equal(t, []any{"TEXT", "IMAGE"}, generationConfig["responseModalities"])
 }
 
-func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocationConfig(t *testing.T) {
+func TestAntigravityGatewayService_ForwardGemini_ReconcilesMixedTools(t *testing.T) {
 	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","parameters":{"type":"object","additionalProperties":false}}]},{"googleSearch":{}}],"toolConfig":{"includeServerSideToolInvocations":true}}`)
 	writer := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(writer)
@@ -428,10 +429,11 @@ func TestAntigravityGatewayService_ForwardGemini_PreservesServerSideToolInvocati
 	require.NoError(t, json.Unmarshal(upstream.requestBodies[0], &wrapped))
 	request, ok := wrapped["request"].(map[string]any)
 	require.True(t, ok)
-	toolConfig, ok := request["toolConfig"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, true, toolConfig["includeServerSideToolInvocations"])
-	require.NotContains(t, toolConfig, "include_server_side_tool_invocations")
+	require.NotContains(t, request, "toolConfig")
+	tools := gjson.GetBytes(upstream.requestBodies[0], "request.tools").Array()
+	require.Len(t, tools, 1)
+	require.Equal(t, "get_weather", tools[0].Get("functionDeclarations.0.name").String())
+	require.False(t, tools[0].Get("googleSearch").Exists())
 }
 
 func TestAntigravityGatewayService_ForwardGemini_MissingProjectReturnsLocalError(t *testing.T) {
