@@ -258,7 +258,6 @@ func TestOpenCodeSessionForwardedByResponsesBuildersAfterAccountOverride(t *test
 }
 
 func TestOpenCodeSessionForwardedFromPromptCacheKeyWithoutCallerHeader(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	svc := openCodeSessionTestService()
 	account := &Account{
 		ID:       1,
