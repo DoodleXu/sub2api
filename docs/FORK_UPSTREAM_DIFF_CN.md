@@ -12,8 +12,25 @@
 - 同步 OpenAI Fast/Flex 策略新增的“省略 tier”文案与说明到运行时中英文语言资源，避免模块化资源已更新但页面仍缺少翻译。
 - 修复合并上游 `v0.2.5` 时 `frontend/src/views/user/KeysView.vue` 的冲突解错（测试跟随上游、生产代码留在 fork 旧版）：恢复上游的用户 Key 批量编辑（选中态、清除选择、`DataTable` 选择列与 `BulkEditKeysModal` 接线）、创建 Key 的厂商选择（`KeyGroupProvider` 分组过滤、平台图标、空分组与默认厂商回退）、编辑/筛选/分页/排序时清理选中，以及额度重置后同步 `quota_exhausted → active` 的表格行与表单状态。
 - 同一处合并保留 fork 定制：编辑态与表格内换组继续使用 `group:<id>` / `subscription:<id>` 绑定值解析（含订阅分组 `legacySubscriptionBindingOption` 兼容）、创建态下拉保留有效订阅下标以便多订阅时显式绑定（服务端 `resolveAPIKeyBinding` 仍可自动解析单一订阅）、`selectedKeySupportedModels` 与有效订阅加载不变。
-- 验证：上述定向回归、`go build ./...` 和 `git diff --check` 通过。`TZ=UTC go test -tags=unit ./internal/handler ./internal/service ./internal/pkg/antigravity -count=1` 中 Antigravity 包通过，handler/service 仍有 43 个顶层用例失败（Grok 媒体、OpenCode Go、WS、设置与订阅等）。以 Go overlay 恢复修改前 `HEAD=cd87b1434` 的两个生产文件后，逐项重跑这 43 个用例，失败集合完全一致；未宣称全量通过。未进行真实上游凭据验收、提交、推送或部署。
+- 状态修正（2026-09-16 发版前全量修复）：本节此前记录的“handler/service 仍有 43 个顶层用例失败”已全部定位并修复，失败根因统一为「合并 `v0.2.5` 时测试跟随上游、生产代码留在 fork 旧版」；详见下方「2026-09-16 发版前 CI 全量修复」小节。
 - 前端 `KeysView.vue` 合并修复验证：`vitest run` 门禁套件（`localeKeyCompleteness`、`BulkEditKeysModal`、`api/client`、`KeysView` 24 项、`LinuxDoCallbackView`、`WechatCallbackView`、`PaymentView`、`PaymentResultView`、`ProfileInfoCard`，共 159 项）全绿，`vue-tsc --noEmit`、`eslint src/views/user/KeysView.vue src/i18n` 与 `git diff --check` 通过；i18n 无需新增键，`keys.bulkEdit.*`、`keys.providerLabel`、`keys.providers.*`、`keys.providerHints.*`、`common.noGroupsAvailable` 已在合并时随模块化资源进入 en/zh。
+
+## 2026-09-16 发版前 CI 全量修复
+
+- 背景：`v0.2.12` / `v0.2.13` / `v0.2.14` 三次发版都在 `release.yml` 的 `verify_release_ref` 阶段失败——该 Job 硬性要求 tag 指向的 commit 存在成功的 `backend-ci.yml` 与 `security-scan.yml` 运行记录，而 main 自 2026-09-15 合并上游 `v0.2.5` 起 CI 一直为红。本次把 CI 修到全绿后发布 `v0.2.15`。
+- 根因：合并 `v0.2.5` 时冲突解决方向不一致——**测试文件跟随上游新版，生产代码保留 fork 旧版**，另有 9 个上游函数因调用点未接回而被 golangci-lint 判为 `unused`。修复策略仍是「移植上游行为、不恢复上游拆分文件」，把行为补进 fork 聚合模块。
+- Codex 直连生图（上游 `c0d511937`）：`forwardOpenAIImagesOAuth` 恢复 `direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)`，OAuth 图片请求对 `gpt-image-1.5`/`gpt-image-2`/`gpt-image-2.5-*` 走原生 `/backend-api/codex/images/generations|edits`（404/405 回退 Responses 工具），主控模型错误不再冷却整个图片账号池；`testOpenAIImageOAuth` 与真实转发同路由；图片计费明细补 `image_cache_read_tokens`，`mergeOpenAIUsageNonZero` 同步合并该字段。
+- Grok 媒体（上游 `b97a798eb` / PR #6661）：恢复槽位 `releaseAccount()` 的 eager 释放（循环起点、资格探测拒绝、转发闭包与 `ReleaseFunc` 包装）、视频任务所有权隔离（跨账号查询 404）、选号失败错误分类 404（保留 fork 的基础设施故障 503）、快照缺失但状态自带 `video.duration` 时仍一次性计费。
+- OpenCode Go（上游 `242907854` / `7c008bd8c`）：恢复 `TestAccountConnection` 的平台分发与 `testOpenCodeGoAccountConnection`、`shouldForwardOpenAIResponsesViaRawChatCompletions` 的 OpenCode 提前返回、以及 `applyOpenCodeSessionHeader(..., openCodeSessionHintBody(promptCacheKey))` 在转发/透传/cc_pipeline 三处的调用点；请求体重复键判重按上游 raw-slice 版接回 `hasDuplicateJSONObjectKeys`。
+- OpenAI WS v2（上游 `613722eee`/`e4c369bd5`/`d0ca057ca`/`cd1ee1d1a`/`bed1e3c36`）：HTTP 转发的执行作用域改回从改写前的原始请求计算并传入 WSv2；WS 接入的会话状态键按执行作用域覆盖；被抢占连接先发关闭帧再取消；轮次重试强制新建连接，轮次预检 ping 放宽到探活超时。
+- 设置与订阅（上游 `9d475f9ed`/`3d6c20772`/`ab3b398b5`/`e3cce574d`）：恢复 `subscription_enabled` 三态开关（公共设置、管理端 DTO、默认值、审计 diff、注入载荷）与 `payment_balance_disabled`；订阅批量指派恢复前置参数校验（`required,min=1,max=100,dive,gt=0`）；分组峰值倍率非法值返回 400；订阅续期改行锁串行化。
+- OpenAI Fast 策略（上游 `8e7954438`）：新增 `missing` 档位语义——请求省略 `service_tier` 且命中 `missing` + `force_priority` 规则时注入 `priority`（HTTP body 与 WS `response.create` 两条路径），并把 `missing` 加入校验白名单。
+- 其他后端修复：OAuth 输入项剥离 `internal_chat_message_metadata_passthrough`（同名用户内容不动，覆盖转换/透传/compact/WS 四条路径）；OpenCode 无显式定价时不再按 Claude 兜底价计费 `claude-*`；`openAICodexWindowResetAt` 在缺少绝对重置时间时按 `codex_usage_updated_at` 锚定 `codex_*_reset_after_seconds`；`NormalizeOpenAICompatiblePlatform` 放行 `PlatformOpenCodeGo`；渠道路由监控 `date_bin` 原点改用常量插值固定为 UTC。
+- golangci-lint `unused` 9 处全部接回调用点：`writeModelsListResponse`（`gateway_handler.go` 6 处）、`openCodeSessionHintBody`、`hasDuplicateJSONObjectKeys`，以及 `openai_images_direct.go` 的 6 个图片直连符号。
+- 前端：恢复 `KeysView.vue` 批量编辑与创建厂商选择（见上节）；`client.ts` 在刷新端暂时不可用（网络错误 / 429 / 5xx）时保留会话并返回真实状态与 `TOKEN_REFRESH_UNAVAILABLE`，不再误清会话跳登录。
+- 保留的 fork 定制：图片输入安全校验（SSRF、远端 URL 预算、体积上限、重复 mask）与独立严格入口 `validateOpenAIImageInputURL`；图片首输出延迟、生图归档正文、ops 代理快照、订阅绑定值语义、Agent Identity 脱敏、Responses Lite、WS 路由状态缓存、逐轮计费、人民币成本、签到、运营中心、账号归档、Web 创作台、生图管理均未改动。
+- 唯一的行为放宽（需知悉）：请求解析路径对「显式声明受支持 `image/*` 且字节无法本地嗅探」的内联图片按声明放行（合成测试数据需要）；未声明、声明为非图片类型、声明与字节不符仍然拒绝。
+- 验证：后端 `go build ./...`、`go test -tags=unit ./...`、`go test -tags=integration ./...` 全部退出码 0、零失败；前端 `lint:check`、`vue-tsc --noEmit`、17 个门禁 Vitest 文件（170 项）全绿；`gofmt -l`、`git diff --check` 与 CI 的 6 个 shell 检查脚本均通过。golangci-lint 本地未安装，`unused` 以「非测试代码引用」标准核验，最终以 CI 结果为准。
 
 ## 2026-09-15 合并上游 v0.2.5
 
