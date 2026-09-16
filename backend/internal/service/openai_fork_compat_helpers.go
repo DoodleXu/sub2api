@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -80,31 +82,112 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse
 	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
 		return body, false, nil
 	}
+	root := parseRawJSONView(body)
+	input := root.Get("input")
+	if !input.IsArray() {
+		return body, false, nil
+	}
+	if !root.IsObject() || !gjson.ValidBytes(body) || !utf8.Valid(body) || hasDuplicateJSONObjectKeys(root) {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
+
+	// Only reasoning metadata needs decoding. Keep large image/tool results as
+	// slices of the original JSON and copy them once into the final request.
+	items := make([]string, 0)
+	changed := false
+	fallback := false
+	var itemErr error
+	input.ForEach(func(_, item gjson.Result) bool {
+		if !item.IsObject() {
+			items = append(items, item.Raw)
+			return true
+		}
+		if hasDuplicateJSONObjectKeys(item) {
+			fallback = true
+			return false
+		}
+		typ := strings.TrimSpace(item.Get("type").String())
+		id := strings.TrimSpace(item.Get("id").String())
+		encrypted := item.Get("encrypted_content")
+		if (typ == "reasoning" && (encrypted.Type != gjson.String || strings.TrimSpace(encrypted.Str) == "")) ||
+			(typ == "item_reference" && strings.HasPrefix(id, "rs_")) {
+			changed = true
+			return true
+		}
+		stripID := typ == "reasoning" && strings.HasPrefix(id, "rs_")
+		addSummary := typ == "reasoning" && item.Get("summary").Type == gjson.Null
+		stripCallID := shouldStripOpenAIResponsesNonPairCallID(typ) && item.Get("call_id").Exists()
+		if !stripID && !addSummary && !stripCallID {
+			items = append(items, item.Raw)
+			return true
+		}
+		var decoded map[string]any
+		if err := decodeOpenAIJSONUseNumber([]byte(item.Raw), &decoded); err != nil {
+			itemErr = err
+			return false
+		}
+		if stripID {
+			delete(decoded, "id")
+		}
+		if addSummary {
+			decoded["summary"] = []any{}
+		}
+		if stripCallID {
+			delete(decoded, "call_id")
+		}
+		encoded, err := marshalOpenAIUpstreamJSON(decoded)
+		if err != nil {
+			itemErr = err
+			return false
+		}
+		items = append(items, string(encoded))
+		changed = true
+		return true
+	})
+	if fallback {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
+	if itemErr != nil {
+		return body, false, fmt.Errorf("normalize API-key store=false reasoning replay: %w", itemErr)
+	}
+	if !changed {
+		return body, false, nil
+	}
+	return replaceOpenAIRawInput(body, input, items), true, nil
+}
+
+// Preserve the decoder's handling of unusual or duplicate-key input objects.
+func normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
+	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
+		return body, false, nil
+	}
 	input := gjson.GetBytes(body, "input")
 	if !input.IsArray() {
 		return body, false, nil
 	}
-	var req map[string]any
-	if err := decodeOpenAIJSONUseNumber(body, &req); err != nil {
-		return body, false, err
+
+	var reqBody map[string]any
+	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
+		return body, false, fmt.Errorf("normalize API-key store=false reasoning replay: %w", err)
 	}
-	items, ok := req["input"].([]any)
+	items, ok := reqBody["input"].([]any)
 	if !ok {
 		return body, false, nil
 	}
 	filtered := make([]any, 0, len(items))
 	changed := false
-	for _, raw := range items {
-		item, ok := raw.(map[string]any)
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
 		if !ok {
-			filtered = append(filtered, raw)
+			filtered = append(filtered, rawItem)
 			continue
 		}
 		typ := strings.TrimSpace(firstNonEmptyString(item["type"]))
 		id := strings.TrimSpace(firstNonEmptyString(item["id"]))
-		if typ == "reasoning" {
-			enc, has := item["encrypted_content"].(string)
-			if !has || strings.TrimSpace(enc) == "" {
+		switch typ {
+		case "reasoning":
+			encryptedContent, hasEncryptedContent := item["encrypted_content"].(string)
+			if !hasEncryptedContent || strings.TrimSpace(encryptedContent) == "" {
 				changed = true
 				continue
 			}
@@ -112,34 +195,33 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse
 				delete(item, "id")
 				changed = true
 			}
-			if _, has := item["call_id"]; has {
-				delete(item, "call_id")
-				changed = true
-			}
-			if summary, has := item["summary"]; !has || summary == nil {
+			if summary, ok := item["summary"]; !ok || summary == nil {
 				item["summary"] = []any{}
 				changed = true
 			}
+		case "item_reference":
+			if strings.HasPrefix(id, "rs_") {
+				changed = true
+				continue
+			}
 		}
-		if typ == "item_reference" && strings.HasPrefix(id, "rs_") {
-			changed = true
-			continue
+		if shouldStripOpenAIResponsesNonPairCallID(typ) {
+			if _, hasCallID := item["call_id"]; hasCallID {
+				delete(item, "call_id")
+				changed = true
+			}
 		}
 		filtered = append(filtered, item)
 	}
 	if !changed {
 		return body, false, nil
 	}
-	req["input"] = filtered
-	next, err := marshalOpenAIUpstreamJSON(req)
+	reqBody["input"] = filtered
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
 	if err != nil {
-		return body, false, err
+		return body, false, fmt.Errorf("serialize API-key store=false reasoning replay: %w", err)
 	}
-	return next, true, nil
-}
-
-func normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
-	return normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body, knownStoreFalse)
+	return normalized, true, nil
 }
 
 const openAIHTTPResponseOwnerContextKeyCompat = "openai_http_response_owner"

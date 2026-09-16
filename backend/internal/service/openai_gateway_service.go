@@ -2173,6 +2173,11 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
+	if account.IsOpenCodeGo() {
+		// Model protocol_rules are the authority. Probe Extra must not collapse
+		// Grok/GPT/Muse into Chat Completions.
+		return false
+	}
 	if IsCNProvider(account.Platform) {
 		switch account.GetAPIProtocol() {
 		case APIProtocolChatCompletions:
@@ -5135,7 +5140,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, req.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
@@ -6186,7 +6191,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, req.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
