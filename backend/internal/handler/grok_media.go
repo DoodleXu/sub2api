@@ -172,7 +172,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
 		)
 		if err != nil || boundLookupAccountID <= 0 {
-			if err != nil && !errors.Is(err, service.ErrGrokVideoTaskNotFound) {
+			// 归属绑定缺失（任务不存在、调用方不匹配，或 Redis 绑定已过期/丢失）
+			// 对调用方一律是 404：xAI 视频任务 ID 是账号维度的，绝不能退化成
+			// 503 让客户端把「不属于我的任务」当成暂时故障无限重试。
+			// 只有真正的 durable 存储/基础设施错误才降级为 503。
+			if err != nil && !grokVideoLookupOwnershipMissing(err) {
 				reqLog.Warn("grok_media.video_lookup_owner_binding_unavailable", zap.Error(err))
 				h.errorResponse(c, http.StatusServiceUnavailable, "service_unavailable", "Video task is temporarily unavailable")
 				return
@@ -204,8 +208,19 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 	routingStart := time.Now()
 	requiredCapability := grokMediaRequiredCapability(endpoint)
+	// 选号可能已经急切抢到账号槽位；在任何拒绝、探测或换号之前必须先接管它的
+	// 释放权，否则重选/早退都会泄漏槽位（上游 b97a798eb 的释放语义）。
+	var accountReleaseFunc func()
+	releaseAccount := func() {
+		if accountReleaseFunc != nil {
+			accountReleaseFunc()
+			accountReleaseFunc = nil
+		}
+	}
+	defer releaseAccount()
 
 	for {
+		releaseAccount()
 		if failoverClientGone(c) {
 			return
 		}
@@ -234,12 +249,25 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				service.PlatformGrok,
 			)
 		}
+		// 选号若已急切抢到槽位则立刻接管释放权：后续任何资格探测失败、归属校验
+		// 拒绝或客户端断连都必须释放；转发阶段复用同一次释放（上游 b97a798eb）。
+		if selection != nil && selection.Acquired {
+			selection.ReleaseFunc = wrapReleaseOnDone(requestCtx, selection.ReleaseFunc)
+			accountReleaseFunc = selection.ReleaseFunc
+		}
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("grok_media.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
 			if endpoint.IsVideoLookupRequest() {
+				if grokVideoLookupOwnershipMissing(err) ||
+					errors.Is(err, service.ErrGrokVideoTaskAccountUnavailable) ||
+					errors.Is(err, service.ErrNoAvailableAccounts) {
+					reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
+					h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+					return
+				}
 				reqLog.Warn("grok_media.video_lookup_bound_account_unavailable",
 					zap.Int64("bound_account_id", boundLookupAccountID),
 					zap.Error(err),
@@ -285,6 +313,19 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 			return
 		}
+		if failoverClientGone(c) {
+			return
+		}
+		// 视频查询只承认解析出来的任务归属账号：选号结果与归属不一致时立即 404，
+		// 既不能换号，也不能把任务的粘性 TTL 改写（上游 b97a798eb 的所有权隔离）。
+		if boundLookupAccountID > 0 && selection.Account.ID != boundLookupAccountID {
+			reqLog.Warn("grok_media.video_lookup_bound_account_unavailable",
+				zap.Int64("bound_account_id", boundLookupAccountID),
+				zap.Int64("selected_account_id", selection.Account.ID),
+			)
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+			return
+		}
 		reqLog.Debug("grok_media.account_schedule_decision",
 			zap.String("layer", scheduleDecision.Layer),
 			zap.Bool("sticky_session_hit", scheduleDecision.StickySessionHit),
@@ -298,6 +339,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		if endpoint.IsGenerationRequest() {
 			eligible, eligibilityReason, eligibilityErr := h.ensureGrokMediaAccountEligibility(requestCtx, account)
 			if !eligible {
+				// 资格探测在选号抢槽之后执行：拒绝该账号前必须立刻归还槽位，
+				// 否则下一次选号会叠加占用（上游 b97a798eb 的提前释放语义）。
+				releaseAccount()
 				mediaEligibilityRejected = true
 				failedAccountIDs[account.ID] = struct{}{}
 				reqLog.Warn("grok_media.account_eligibility_rejected",
@@ -314,10 +358,19 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				continue
 			}
 		}
+		if failoverClientGone(c) {
+			return
+		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
+		admissionSessionHash := sessionHash
+		if boundLookupAccountID > 0 {
+			// 视频查询的排队等待不得把任务归属 TTL 改写成文本粘性 TTL。
+			admissionSessionHash = ""
+		}
+		var slotResult openAISlotAcquireResult
+		accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, apiKey.GroupID, admissionSessionHash, selection, false, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 媒体路径已显式豁免利润门（suppress 标记），此分支仅防御性兜底，
 			// 同样受否决上限约束。
@@ -335,11 +388,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		forwardStart := time.Now()
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
-			defer func() {
-				if accountReleaseFunc != nil {
-					accountReleaseFunc()
-				}
-			}()
+			defer releaseAccount()
 			return h.gatewayService.ForwardGrokMedia(requestCtx, c, account, endpoint, requestID, body, contentType)
 		}()
 
@@ -483,6 +532,18 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 }
 
+// grokVideoLookupOwnershipMissing 判断视频任务归属解析错误是否等价于
+// 「任务不存在 / 不属于该调用方」。上游对任意绑定缺失都返回 404；fork 额外
+// 区分 durable 存储故障（503），因此这里把任务缺失与 Redis 绑定丢失都归为 404，
+// 避免把不存在的任务暴露成可重试的 503。
+func grokVideoLookupOwnershipMissing(err error) bool {
+	if err == nil {
+		return true
+	}
+	return errors.Is(err, service.ErrGrokVideoTaskNotFound) ||
+		errors.Is(err, service.ErrStickySessionNotFound)
+}
+
 func (h *OpenAIGatewayHandler) ensureGrokMediaAccountEligibility(ctx context.Context, account *service.Account) (bool, string, error) {
 	if account == nil {
 		return false, "missing_account", errors.New("grok media account is required")
@@ -573,12 +634,21 @@ func prepareGrokVideoCompletionBilling(
 		reqLog.Warn("grok_media.video_pending_billing_load_failed", zap.String("request_id", taskRequestID), zap.Error(loadErr))
 	}
 	if pending == nil {
-		// xAI status does not reliably include the requested resolution. Charging
-		// without the create-time snapshot would silently fall back to 480p.
-		reqLog.Error("grok_media.video_billing_skipped_missing_task_snapshot",
+		// 状态接口不返回 resolution：没有创建期快照时按 480p 兜底会少计费。
+		// 仅当官方状态自带 video.duration（可定价时长）时才继续计费；否则
+		// 返回 nil 且不消耗一次性 claim，等下一次轮询或补齐快照后再计费。
+		if statusResult.VideoDurationSeconds <= 0 {
+			reqLog.Error("grok_media.video_billing_skipped_missing_pending",
+				zap.String("request_id", taskRequestID),
+				zap.String("reason", "no create-time snapshot and status has no video.duration"),
+			)
+			return nil
+		}
+		reqLog.Error("grok_media.video_billing_without_pending",
 			zap.String("request_id", taskRequestID),
+			zap.Int("status_duration_seconds", statusResult.VideoDurationSeconds),
+			zap.String("note", "resolution falls back to default 480p; investigate pending store failures"),
 		)
-		return nil
 	}
 	claimed, err := h.gatewayService.ClaimGrokVideoBilling(ctx, taskRequestID, subject.UserID, apiKey.ID)
 	if err != nil {
