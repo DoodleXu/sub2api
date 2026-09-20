@@ -83,11 +83,11 @@ type GrokVideoTask struct {
 }
 
 func (e GrokMediaEndpoint) RequiresRequestBody() bool {
-	return !e.IsVideoLookupRequest()
+	return !e.IsVideoLookupRequest() && e != SeedanceEndpointStatus && e != SeedanceEndpointDelete
 }
 
 func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
-	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent
+	return e == GrokMediaEndpointVideoStatus || e == GrokMediaEndpointVideoContent || e == SeedanceEndpointStatus || e == SeedanceEndpointDelete
 }
 
 func (e GrokMediaEndpoint) IsVideoCreateRequest() bool {

@@ -260,7 +260,7 @@ const suggestedSubscriptionRefundAmount = computed(() => {
 
 const balanceInsufficient = computed(() => {
   if (props.userBalance == null || !props.order) return false
-  return props.userBalance < props.order.amount
+  return props.userBalance < form.amount
 })
 
 const calculatedSubscriptionRefundDays = computed(() => {

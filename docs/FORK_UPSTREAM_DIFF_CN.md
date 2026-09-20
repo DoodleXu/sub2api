@@ -2,7 +2,14 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-16
+最后更新：2026-09-20
+
+## 2026-09-20 合并上游 v0.2.7
+
+- 合入官方 release `v0.2.7`（`aea725f2ea644d5592d0bbb1d63b607efa7e200a`，发布于 2026-09-19）；合并前 `git merge-tree --write-tree` 预检识别 11 个冲突路径。
+- 冲突继续采用“移植行为、不恢复上游拆分文件”的聚合模块策略：保留 fork 的 Grok 媒体账号归属、归档/调度和计费 claim，保留账号仓储归档/影子账号/成本语义，保留 OpenAI 网关 Responses Lite、错误脱敏、逐轮计费、failover 与平台兼容行为；上游修改的 `openai_gateway_request_body.go` 继续保持删除，避免拆分文件与 fork 聚合实现重复。
+- 版本源 `backend/cmd/server/VERSION` 保持 fork 的 `0.2.15`，未跟随上游版本回退；新增 Seedance 原生 API、插件 host services/status bridge、Gemini/Anthropic 兼容、兑换记录分页、支付与前端交互修复随上游进入主线。
+- 冲突解决后无未合并索引，`git diff --check` 通过；后端 `go build ./...`、前端 `pnpm exec vue-tsc --noEmit`、`pnpm run build` 通过。后端 `TZ=UTC go test -tags=unit -count=1 ./...` 目前唯一失败为新接入的 `TestSeedanceHandlerLifecycleAndOwnership`：创建请求已转发，但状态轮询在测试夹具中返回 404，需后续补齐 Seedance 专用任务绑定迁移；其余包通过。未执行生产迁移、部署、远程推送或重新发布。
 
 ## 2026-09-16 合并后审查修复
 
@@ -145,8 +152,8 @@
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
 | Fork 同步前 HEAD | `e2d5e2972` | 合并 v0.2.5 前的 fork 基线；版本源保持 fork 版本 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.5` -> `86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea` | 已合入 2026-09-15 发布的官方 release |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.5` -> `86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea` | 当前同步目标 |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.7` -> `aea725f2ea644d5592d0bbb1d63b607efa7e200a` | 已合入 2026-09-19 发布的官方 release |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.7` -> `aea725f2ea644d5592d0bbb1d63b607efa7e200a` | 当前同步目标 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
