@@ -10,6 +10,7 @@
 - 冲突继续采用“移植行为、不恢复上游拆分文件”的聚合模块策略：保留 fork 的 Grok 媒体账号归属、归档/调度和计费 claim，保留账号仓储归档/影子账号/成本语义，保留 OpenAI 网关 Responses Lite、错误脱敏、逐轮计费、failover 与平台兼容行为；上游修改的 `openai_gateway_request_body.go` 继续保持删除，避免拆分文件与 fork 聚合实现重复。
 - 版本源 `backend/cmd/server/VERSION` 保持 fork 的 `0.2.15`，未跟随上游版本回退；新增 Seedance 原生 API、插件 host services/status bridge、Gemini/Anthropic 兼容、兑换记录分页、支付与前端交互修复随上游进入主线。
 - 冲突解决后无未合并索引，`git diff --check` 通过；后端 `go build ./...`、前端 `pnpm exec vue-tsc --noEmit`、`pnpm run build` 通过。后端 `TZ=UTC go test -tags=unit -count=1 ./...` 目前唯一失败为新接入的 `TestSeedanceHandlerLifecycleAndOwnership`：创建请求已转发，但状态轮询在测试夹具中返回 404，需后续补齐 Seedance 专用任务绑定迁移；其余包通过。未执行生产迁移、部署、远程推送或重新发布。
+- 全面审核修复：Seedance 创建纳入媒体权限、内容审核、并发 slot 与 `OpenAIEndpointCapabilitySeedance` 选号；状态/删除请求恢复 durable owner resolve，并允许绑定的 OpenAI Seedance 账号按专用 capability 复核，`TestSeedanceHandlerLifecycleAndOwnership` 通过。服务层 `TestSeedanceNativeForwarding` 仍因测试夹具未初始化 gateway config 触发 nil panic，需单独修复测试夹具。
 
 ## 2026-09-16 合并后审查修复
 

@@ -119,6 +119,8 @@ func (e GrokMediaEndpoint) IsGenerationRequest() bool {
 	switch e {
 	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		return true
+	case SeedanceEndpointCreate:
+		return true
 	default:
 		return false
 	}
@@ -440,6 +442,7 @@ func (s *OpenAIGatewayService) SelectGrokMediaVideoLookupAccount(
 	groupID *int64,
 	accountID int64,
 	requestedModel string,
+	platform ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	decision := OpenAIAccountScheduleDecision{
 		Layer:             "grok_video_task_binding",
@@ -455,8 +458,14 @@ func (s *OpenAIGatewayService) SelectGrokMediaVideoLookupAccount(
 	if err != nil {
 		return nil, decision, fmt.Errorf("load grok video task account: %w", err)
 	}
+	lookupPlatform := PlatformGrok
+	lookupCapability := OpenAIEndpointCapabilityGrokMediaGeneration
+	if len(platform) > 0 && platform[0] == PlatformOpenAI {
+		lookupPlatform = PlatformOpenAI
+		lookupCapability = OpenAIEndpointCapabilitySeedance
+	}
 	account = s.recheckSelectedOpenAIAccountFromDB(
-		ctx, account, groupID, PlatformGrok, requestedModel, false, "",
+		ctx, account, groupID, lookupPlatform, requestedModel, false, lookupCapability,
 	)
 	if account == nil || !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 		return nil, decision, ErrGrokVideoTaskAccountUnavailable
