@@ -15,6 +15,22 @@ type settingPublicRepoStub struct {
 	err    error
 }
 
+func TestSettingService_GetPublicSettings_PluginManagement(t *testing.T) {
+	for _, value := range []string{"", "false", "true"} {
+		svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{
+			SettingKeyPluginManagementEnabled: value,
+		}}, &config.Config{})
+		settings, err := svc.GetPublicSettings(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, value == "true", settings.PluginManagementEnabled)
+		raw, err := svc.GetPublicSettingsForInjection(context.Background())
+		require.NoError(t, err)
+		payload, ok := raw.(*PublicSettingsInjectionPayload)
+		require.True(t, ok)
+		require.Equal(t, value == "true", payload.PluginManagementEnabled)
+	}
+}
+
 func (s *settingPublicRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
 	panic("unexpected Get call")
 }

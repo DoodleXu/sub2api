@@ -1402,6 +1402,7 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+	PluginManagementEnabled  *bool `json:"plugin_management_enabled"`
 
 	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
 	SubscriptionEnabled *bool `json:"subscription_enabled"`
@@ -3035,6 +3036,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.WebConsoleDefaultEndpoint
 		}(),
+		PluginManagementEnabled: func() bool {
+			if req.PluginManagementEnabled != nil {
+				return *req.PluginManagementEnabled
+			}
+			return previousSettings.PluginManagementEnabled
+		}(),
 		ModelPlazaEnabled: func() bool {
 			if req.ModelPlazaEnabled != nil {
 				return *req.ModelPlazaEnabled
@@ -3588,6 +3595,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:               updatedSettings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled:        updatedSettings.AvailableChannelsEnabled,
+		PluginManagementEnabled:         updatedSettings.PluginManagementEnabled,
 		SubscriptionEnabled:             updatedSettings.SubscriptionEnabled,
 		WebConsoleEnabled:               updatedSettings.WebConsoleEnabled,
 		WebConsoleDefaultEndpoint:       updatedSettings.WebConsoleDefaultEndpoint,
@@ -4260,6 +4268,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.ModelPlazaEnabled != after.ModelPlazaEnabled {
 		changed = append(changed, "model_plaza_enabled")
+	}
+	if before.PluginManagementEnabled != after.PluginManagementEnabled {
+		changed = append(changed, "plugin_management_enabled")
 	}
 	if before.ModelPlazaRequireAuth != after.ModelPlazaRequireAuth {
 		changed = append(changed, "model_plaza_require_auth")

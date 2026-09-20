@@ -3,6 +3,8 @@
 package admin
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -10,6 +12,27 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestUpdateSettingsPluginManagementRoundTrip(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	for _, enabled := range []bool{true, false} {
+		rec := doUpdateSettings(t, h, map[string]any{"plugin_management_enabled": enabled}, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var response struct {
+			Data struct {
+				Enabled bool `json:"plugin_management_enabled"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+		require.Equal(t, enabled, response.Data.Enabled)
+		stored, err := h.settingService.GetAllSettings(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, enabled, stored.PluginManagementEnabled)
+		rec = doUpdateSettings(t, h, map[string]any{"site_name": "Example Gateway"}, nil)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, enabled, repo.values[service.SettingKeyPluginManagementEnabled] == "true")
+	}
+}
 
 // Saving settings is a whole-document PUT. A client that sends only the field it
 // cares about must not reset everything else: a payload as small as
