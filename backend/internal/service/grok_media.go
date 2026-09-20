@@ -92,7 +92,7 @@ func (e GrokMediaEndpoint) IsVideoLookupRequest() bool {
 
 func (e GrokMediaEndpoint) IsVideoCreateRequest() bool {
 	switch e {
-	case GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
+	case SeedanceEndpointCreate, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		return true
 	default:
 		return false
@@ -414,6 +414,9 @@ func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(
 	if s.grokVideoTaskRepo != nil {
 		task, err := s.grokVideoTaskRepo.GetByOwner(ctx, requestID, userID, apiKeyID)
 		if err == nil {
+			if derefGroupID(task.GroupID) != derefGroupID(groupID) {
+				return 0, ErrGrokVideoTaskNotFound
+			}
 			if task.AccountID <= 0 {
 				return 0, fmt.Errorf("grok video task account is invalid")
 			}

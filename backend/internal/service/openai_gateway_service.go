@@ -6923,12 +6923,20 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	if store == nil {
 		return
 	}
+	bindBaseCtx := context.Background()
+	if ctx != nil {
+		bindBaseCtx = context.WithoutCancel(ctx)
+	}
+	bindCtx, cancel := context.WithTimeout(bindBaseCtx, openAIWSStateStoreRedisTimeout)
+	defer cancel()
 	groupID := getOpenAIGroupIDFromContext(c)
 	ttl := s.openAIWSResponseStickyTTL()
-	logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, store.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
+	logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, store.BindResponseAccount(bindCtx, groupID, responseID, account.ID, ttl))
 	if owner, ok := c.Get(openAIHTTPResponseOwnerContextKeyCompat); ok {
 		if binding, ok := owner.(struct{ userID, apiKeyID int64 }); ok {
-			_ = store.BindHTTPResponseOwner(ctx, groupID, responseID, binding.userID, binding.apiKeyID, ttl)
+			if err := store.BindHTTPResponseOwner(bindCtx, groupID, responseID, binding.userID, binding.apiKeyID, ttl); err != nil {
+				logger.L().Warn("openai.http_bind_response_owner_failed", zap.Int64("group_id", groupID), zap.String("response_id", responseID), zap.Error(err))
+			}
 		}
 	}
 }
@@ -7450,7 +7458,20 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
 		normalized = stripped
 	}
-	return normalized
+	var requestBody map[string]any
+	if err := decodeOpenAIJSONUseNumber(normalized, &requestBody); err != nil {
+		return normalized
+	}
+	liftedInput, changed := apicompat.LiftResponsesToolOutputMedia(requestBody["input"])
+	if !changed {
+		return normalized
+	}
+	requestBody["input"] = liftedInput
+	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
+	if err != nil {
+		return normalized
+	}
+	return rebuilt
 }
 
 func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {

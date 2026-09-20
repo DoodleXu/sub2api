@@ -4,11 +4,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -16,8 +18,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type seedanceTaskRepository struct {
+	grokVideoTaskHandlerRepo
+	upsertError error
+}
+
+func (r *seedanceTaskRepository) Upsert(ctx context.Context, task *service.GrokVideoTask) error {
+	if r.upsertError != nil {
+		return r.upsertError
+	}
+	return r.grokVideoTaskHandlerRepo.Upsert(ctx, task)
+}
+
 func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 	h, slots, bindings, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI)
+	tasks := &seedanceTaskRepository{}
+	h.gatewayService.SetGrokVideoTaskRepository(tasks)
 	var owner int64
 	upstream.call = func(req *http.Request, id int64) (*http.Response, error) {
 		body := `{"id":"task-ark","status":"queued"}`
@@ -45,6 +61,14 @@ func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 	require.Equal(t, 200, w.Code, w.Body.String())
 	require.Positive(t, owner)
 	require.Len(t, bindings.pending, 1)
+	task, err := tasks.GetByOwner(context.Background(), "seedance:task-ark", 10, 20)
+	require.NoError(t, err)
+	require.Equal(t, "seedance:task-ark", task.RequestID)
+	require.Equal(t, owner, task.AccountID)
+	_, err = time.Parse(time.RFC3339Nano, task.Pending.CreatedAt)
+	require.NoError(t, err)
+	bindings.pending = nil
+	bindings.key, bindings.owner = "", 0
 	slots.assertReleased(t)
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		c, w = newContext(method)
@@ -93,5 +117,23 @@ func TestSeedanceHandlerLifecycleAndOwnership(t *testing.T) {
 			require.Nil(t, billed)
 		}
 	}
-	require.Len(t, bindings.billed, 1)
+	require.Len(t, tasks.claimed, 1)
+	require.Empty(t, bindings.billed)
+}
+
+func TestSeedanceRegistrationFailureDoesNotReturnSuccessfulCreate(t *testing.T) {
+	h, slots, _, upstream := newGrokMediaSlotHandler(t, false, false, service.PlatformOpenAI)
+	h.gatewayService.SetGrokVideoTaskRepository(&seedanceTaskRepository{upsertError: errors.New("database unavailable")})
+	upstream.call = func(_ *http.Request, _ int64) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"task-ark"}`))}, nil
+	}
+	c, w := grokMediaSlotContext(context.Background(), true)
+	key, _ := middleware.GetAPIKeyFromContext(c)
+	key.Group.Platform = service.PlatformOpenAI
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(`{"model":"doubao-seedance","content":[{"type":"text","text":"waves"}]}`))
+	h.SeedanceTasks(c)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), `"id":"task-ark"`)
+	require.Equal(t, 1, upstream.calls)
+	slots.assertReleased(t)
 }
