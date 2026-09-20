@@ -14,6 +14,15 @@ import type {
 } from '@/types'
 
 export type SubscriptionBulkAction = 'extend' | 'reset_quota' | 'revoke' | 'restore'
+export interface BulkAssignSubscriptionResult {
+  success_count: number
+  created_count: number
+  reused_count: number
+  failed_count: number
+  subscriptions: UserSubscription[]
+  errors: string[]
+  statuses?: Record<string, 'created' | 'reused' | 'failed'>
+}
 export interface SubscriptionBulkActionRequest {
   subscription_ids: number[]
   action: SubscriptionBulkAction
@@ -121,8 +130,8 @@ export async function assign(request: AssignSubscriptionRequest): Promise<UserSu
  */
 export async function bulkAssign(
   request: BulkAssignSubscriptionRequest
-): Promise<UserSubscription[]> {
-  const { data } = await apiClient.post<UserSubscription[]>(
+): Promise<BulkAssignSubscriptionResult> {
+  const { data } = await apiClient.post<BulkAssignSubscriptionResult>(
     '/admin/subscriptions/bulk-assign',
     request
   )

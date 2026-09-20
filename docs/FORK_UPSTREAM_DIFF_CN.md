@@ -12,6 +12,14 @@
 - 冲突解决后无未合并索引，`git diff --check` 通过；后端 `go build ./...`、前端 `pnpm exec vue-tsc --noEmit`、`pnpm run build` 通过。后端 `TZ=UTC go test -tags=unit -count=1 ./...` 目前唯一失败为新接入的 `TestSeedanceHandlerLifecycleAndOwnership`：创建请求已转发，但状态轮询在测试夹具中返回 404，需后续补齐 Seedance 专用任务绑定迁移；其余包通过。未执行生产迁移、部署、远程推送或重新发布。
 - 全面审核修复：Seedance 创建纳入媒体权限、内容审核、并发 slot 与 `OpenAIEndpointCapabilitySeedance` 选号；状态/删除请求恢复 durable owner resolve，并允许绑定的 OpenAI Seedance 账号按专用 capability 复核，`TestSeedanceHandlerLifecycleAndOwnership` 通过。服务层 `TestSeedanceNativeForwarding` 仍因测试夹具未初始化 gateway config 触发 nil panic，需单独修复测试夹具。
 
+## 2026-09-20 审核后修复
+
+- Seedance 创建复用持久化视频任务登记，登记成功后才返回上游任务 ID；Redis 绑定和快照丢失后仍可解析归属与领取计费 claim。任务查询同时校验创建分组；Seedance token 计费接回用量持久化、失败释放 claim 和成功完成标记，仍不使用 Grok 按秒计价。
+- 将上游响应归属写入的取消隔离和 DeepSeek Responses 图片工具输出转换接入 fork 聚合实现；保持状态字段清理、工具调用参数字符串和 fork 网关结构。
+- 修正 Seedance 测试配置，补持久化任务、Redis 丢失、登记失败及归属隔离回归；移除新增 service 测试中的 Gin 全局模式修改，沿用 TestMain 的统一配置。
+- 修复前端订阅开关的路由/菜单接线和购买入口文案、账号部分刷新警告，以及订阅批量操作/批量指派、当前用户搜索、输入变化即时清除指派目标。批量指派 DTO 对齐后端逐用户结果，保留 fork 的全量周额度重置和扩展订阅类型筛选。
+- 前端此前 13 个失败在合并前 `0a9c6a323` 同样复现，本次一并修复；前端全量 Vitest 322 个文件、2399 项通过。后端 `TZ=UTC go test -tags=unit -count=1 ./...`、`go vet -tags=unit ./...`、`go build ./...`，前端生产构建（含 vue-tsc 和 i18n 检查）、全量 lint 及 `git diff --check` 均通过。持久化路径使用仓储替身验证，未执行真实数据库集成测试、浏览器验收或真实 Ark 调用。未执行提交、推送、生产迁移、部署或发布。
+
 ## 2026-09-16 合并后审查修复
 
 - 补齐 Ops 带内错误语义：非流式响应按 `stream=false` 记录，请求级错误按逻辑状态码落库，不继承先前尝试的上游错误和 `skip_monitoring`；此前已恢复的上游错误仍单独保留遥测，沿用 fork 的 WS 逐轮快照处理。

@@ -2394,7 +2394,11 @@ const handleRefresh = async (a: Account) => {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList('account' in updated ? updated.account : updated)
     markLocalAccountMutation()
-    appStore.showSuccess(t('common.success'))
+    if ('warning' in updated && updated.warning) {
+      appStore.showWarning(updated.message)
+    } else {
+      appStore.showSuccess(t('common.success'))
+    }
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
     appStore.showError(extractApiErrorMessage(error, t('admin.accounts.failedToRefresh')))

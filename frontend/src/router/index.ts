@@ -322,6 +322,7 @@ const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       requiresAdmin: false,
       title: 'My Subscriptions',
+      requiresSubscription: true,
       titleKey: 'userSubscriptions.title',
       descriptionKey: 'userSubscriptions.description'
     }
@@ -547,6 +548,7 @@ const routes: RouteRecordRaw[] = [
       requiresAdmin: true,
       title: 'Subscription Management',
       titleKey: 'admin.subscriptions.title',
+      requiresSubscription: true,
       descriptionKey: 'admin.subscriptions.description'
     }
   },
@@ -899,6 +901,7 @@ export async function ensurePublicSettingsForRoute(
 ): Promise<void> {
   const needsPublicSettings =
     meta.requiresPayment ||
+    meta.requiresSubscription ||
     meta.requiresRiskControl ||
     meta.requiresWebConsole
 
@@ -1086,6 +1089,15 @@ router.beforeEach(async (to, _from, next) => {
     to.meta.requiresPayment &&
     appStore.publicSettingsLoaded &&
     appStore.cachedPublicSettings?.payment_enabled === false
+  ) {
+    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+    return
+  }
+
+  if (
+    to.meta.requiresSubscription &&
+    appStore.publicSettingsLoaded &&
+    appStore.cachedPublicSettings?.subscription_enabled === false
   ) {
     next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     return
