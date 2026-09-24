@@ -283,9 +283,14 @@ func (s *BackupService) recoverStaleRecords() {
 		}
 		if records[i].RestoreStatus == "running" {
 			if records[i].RestoreStartedAt == "" {
-				// Older records did not persist a separate restore start time.
-				// Preserve their protection and start a fresh recovery window.
-				records[i].RestoreStartedAt = now.Format(time.RFC3339)
+				// Older archive records did not persist a separate restore start time.
+				// Ordinary backup restores can use their backup age; archive restores
+				// must retain protection because their restore may predate migration.
+				if records[i].MonthlyArchive != nil {
+					records[i].RestoreStartedAt = now.Format(time.RFC3339)
+				} else {
+					records[i].RestoreStartedAt = records[i].StartedAt
+				}
 				changed = true
 			}
 			if backupOperationExpired(records[i].RestoreStartedAt, now) {
