@@ -5075,7 +5075,6 @@
                     data-testid="openai-scheduling-usd-to-cny-rate"
                     min="0.01"
                     max="100"
-                    required
                     step="0.01"
                     type="number"
                   />
@@ -5107,7 +5106,6 @@
                     class="input pr-8"
                     data-testid="openai-oauth-scheduling-rate-multiplier"
                     min="0"
-                    required
                     step="0.01"
                     type="number"
                   />
@@ -5196,7 +5194,6 @@
                     class="input pr-8"
                     data-testid="openai-oauth-scheduling-rate-multiplier"
                     min="0"
-                    required
                     step="0.01"
                     type="number"
                   />
@@ -10378,7 +10375,7 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_low_upstream_rate_priority_enabled: boolean;
-  openai_oauth_scheduling_rate_multiplier: number;
+  openai_oauth_scheduling_rate_multiplier: number | string | null;
   openai_scheduling_usd_to_cny_rate: number;
   openai_advanced_scheduler_enabled: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
@@ -10632,7 +10629,7 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_low_upstream_rate_priority_enabled: false,
-  openai_oauth_scheduling_rate_multiplier: 1,
+  openai_oauth_scheduling_rate_multiplier: null,
   openai_scheduling_usd_to_cny_rate: 7.2,
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
@@ -11815,6 +11812,10 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
+    if (Object.prototype.hasOwnProperty.call(settings, "openai_oauth_scheduling_rate_multiplier")) {
+      form.openai_oauth_scheduling_rate_multiplier =
+        settings.openai_oauth_scheduling_rate_multiplier ?? null;
+    }
     form.payment_recharge_gift_tiers = (settings.payment_recharge_gift_tiers || []).map(
       (tier) => ({ threshold: Number(tier.threshold), percent: Number(tier.percent) }),
     )
@@ -12221,6 +12222,18 @@ async function saveSettings() {
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
 
+    const oauthRate = form.openai_oauth_scheduling_rate_multiplier;
+    if (oauthRate !== null && oauthRate !== "") {
+      const normalizedOauthRate = Number(oauthRate);
+      if (!Number.isFinite(normalizedOauthRate) || normalizedOauthRate < 0) {
+        appStore.showError("OAuth 调度参考倍率必须是非负数字，或留空以使用账号倍率。");
+        return;
+      }
+      form.openai_oauth_scheduling_rate_multiplier = normalizedOauthRate;
+    } else {
+      form.openai_oauth_scheduling_rate_multiplier = null;
+    }
+
     const normalizedRechargeGiftTiers = normalizeRechargeGiftTiers(
       form.payment_recharge_gift_tiers,
     );
@@ -12610,7 +12623,9 @@ async function saveSettings() {
       openai_low_upstream_rate_priority_enabled:
         form.openai_low_upstream_rate_priority_enabled,
       openai_oauth_scheduling_rate_multiplier:
-        form.openai_oauth_scheduling_rate_multiplier,
+        form.openai_oauth_scheduling_rate_multiplier === ""
+          ? null
+          : form.openai_oauth_scheduling_rate_multiplier,
       openai_scheduling_usd_to_cny_rate:
         form.openai_scheduling_usd_to_cny_rate,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
@@ -12723,6 +12738,10 @@ async function saveSettings() {
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(updated, "openai_oauth_scheduling_rate_multiplier")) {
+      form.openai_oauth_scheduling_rate_multiplier =
+        updated.openai_oauth_scheduling_rate_multiplier ?? null;
     }
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);

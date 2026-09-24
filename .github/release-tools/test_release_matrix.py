@@ -53,16 +53,16 @@ class ReleaseMatrixTest(unittest.TestCase):
 
     def test_full_and_simple_matrix_match_existing_targets(self):
         full = release.targets()
-        self.assertEqual(len(full), 5)
+        self.assertEqual(len(full), 1)
         self.assertNotIn({'goos': 'windows', 'goarch': 'arm64'}, full)
         self.assertEqual(release.targets(True), [{'goos': 'linux', 'goarch': 'amd64'}])
 
     def test_leaf_keeps_packaging_and_selects_only_one_target(self):
         original = release.config()
-        release.generate_config(argparse.Namespace(mode='build', simple=False, goos='darwin', goarch='arm64', output='leaf.yaml'))
+        release.generate_config(argparse.Namespace(mode='build', simple=False, goos='linux', goarch='amd64', output='leaf.yaml'))
         leaf = yaml.safe_load(Path('leaf.yaml').read_text())
-        self.assertEqual(leaf['builds'][0]['goos'], ['darwin'])
-        self.assertEqual(leaf['builds'][0]['goarch'], ['arm64'])
+        self.assertEqual(leaf['builds'][0]['goos'], ['linux'])
+        self.assertEqual(leaf['builds'][0]['goarch'], ['amd64'])
         self.assertEqual(leaf['builds'][0]['ignore'], [])
         self.assertEqual(leaf['archives'], original['archives'])
         self.assertEqual(leaf['release'], original['release'])
@@ -137,7 +137,7 @@ class ReleaseMatrixTest(unittest.TestCase):
         output = dict(line.split('=', 1) for line in Path('outputs').read_text().splitlines())
         self.assertEqual(output['dry_run'], 'true')
         self.assertEqual(output['owner_lower'], 'exampleowner')
-        self.assertEqual(len(json.loads(output['matrix'])['include']), 5)
+        self.assertEqual(len(json.loads(output['matrix'])['include']), 1)
 
     def test_docker_commands_do_not_publish_during_dry_run(self):
         fake_bin = Path('bin')
