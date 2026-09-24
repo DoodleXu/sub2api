@@ -2,7 +2,15 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-20
+最后更新：2026-09-24
+
+## 2026-09-24 合并上游 v0.2.8
+
+- 合入官方 release `v0.2.8`（`d7a82d78ca51d42be41cb4daa3510ea401defe9f`）；本次冲突部分按上游实现恢复，未保留会改变上游契约的 fork 分支行为。
+- 仪表盘聚合与请求日志保留清理采用上游的首次聚合窗口、保留天数读取、分区删除、批次事务和 rollup 失效策略；保留 fork 的账号成本字段、设置仓储注入和现有聚合模块边界。
+- 设置与 Claude Code 版本同步接入 fork 的系统设置模型、缓存失效和运行时依赖注入；OpenAI OAuth 调度倍率继续使用 fork 既有 `float64` 设置契约。`backend/cmd/server/VERSION` 保持 fork 的 `0.2.16`。
+- 保留 fork 的签到、运营中心、成本核算、账号归档、Web 创作台、生图管理、Responses Lite、WS/网关兼容、人民币成本和支付安全等定制能力；未执行生产迁移、部署、远程推送、tag 或 release。
+- 验证：`gofmt`、`git diff --check`、后端 `TZ=UTC go test -tags=unit -run '^$' ./...` 和请求日志保留、Claude 设置、仪表盘聚合定向测试通过。后端全量 unit 行为测试尚未作为本次合并的绿色门禁，既有 fork 与外部状态依赖失败需单独处理。
 
 ## 2026-09-20 合并上游 v0.2.7
 

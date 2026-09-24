@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -278,7 +279,7 @@ func resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel string) strin
 	return strings.TrimSpace(billingModel)
 }
 
-func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
+func normalizeOpenAIResponsesReasoningMode(body []byte, modelHint ...string) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
@@ -286,8 +287,14 @@ func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
 	// not infer effort from mode=pro. Keep this capability decision in the
 	// shared normalizer so native, passthrough, and WebSocket paths agree.
 	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if len(modelHint) > 0 && strings.TrimSpace(modelHint[0]) != "" {
+		model = strings.TrimSpace(modelHint[0])
+	}
 	if isOpenAIGPT6AstraModel(model) {
 		return body, false, nil
+	}
+	if isOpenAIGPT6Model(model) {
+		return normalizeGPT6ResponsesSampling(body, model)
 	}
 	mode := gjson.GetBytes(body, "reasoning.mode")
 	if !mode.Exists() || mode.Type != gjson.String {
@@ -313,4 +320,47 @@ func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
 		}
 	}
 	return updated, true, nil
+}
+
+func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, error) {
+	if !openai.IsGPT6SolOrLunaModelSpelling(model) || gjson.GetBytes(body, "reasoning.effort").String() == "none" {
+		return body, false, nil
+	}
+	out, changed := body, false
+	for _, key := range []string{"temperature", "top_p", "top_logprobs", "logprobs"} {
+		if !gjson.GetBytes(out, key).Exists() {
+			continue
+		}
+		var err error
+		out, err = sjson.DeleteBytes(out, key)
+		if err != nil {
+			return body, false, fmt.Errorf("remove GPT-6 sampling parameter %s: %w", key, err)
+		}
+		changed = true
+	}
+	if include := gjson.GetBytes(out, "include"); include.IsArray() {
+		for i := len(include.Array()) - 1; i >= 0; i-- {
+			if include.Array()[i].String() == "message.output_text.logprobs" {
+				var err error
+				out, err = sjson.DeleteBytes(out, fmt.Sprintf("include.%d", i))
+				if err != nil {
+					return body, false, err
+				}
+				changed = true
+			}
+		}
+	}
+	return out, changed, nil
+}
+
+func isOpenAICompatibleModelNotFoundBody(body []byte) bool {
+	code := strings.TrimSpace(extractUpstreamErrorCode(body))
+	if code != "" {
+		return strings.EqualFold(code, "model_not_found")
+	}
+	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+	if message == "" && !gjson.ValidBytes(body) {
+		message = strings.ToLower(strings.TrimSpace(string(body)))
+	}
+	return strings.Contains(message, "unknown provider for model") || strings.Contains(message, "unknown model") || strings.Contains(message, "model not found") || strings.Contains(message, "model is not supported")
 }

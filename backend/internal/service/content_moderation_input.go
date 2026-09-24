@@ -14,6 +14,37 @@ func ExtractContentModerationText(protocol string, body []byte) string {
 	return ExtractContentModerationInput(protocol, body).Text
 }
 
+func extractContentModerationKeywordText(protocol string, body []byte) string {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return ""
+	}
+	var collector contentModerationInputCollector
+	switch protocol {
+	case ContentModerationProtocolAnthropicMessages:
+		collectLatestAnthropicUserMessage(gjson.GetBytes(body, "messages"), &collector)
+	case ContentModerationProtocolOpenAIChat:
+		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
+	case ContentModerationProtocolOpenAIResponses, ContentModerationProtocolOpenAIAlphaSearch:
+		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
+	case ContentModerationProtocolGemini:
+		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
+	case ContentModerationProtocolOpenAIImages:
+		addKeywordModerationText(&collector.parts, gjson.GetBytes(body, "prompt").String())
+	default:
+		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
+		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
+		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
+	}
+	return normalizeContentModerationText(strings.Join(collector.parts, "\n"))
+}
+
+func addKeywordModerationText(parts *[]string, text string) {
+	text = strings.TrimSpace(text)
+	if text != "" {
+		*parts = append(*parts, text)
+	}
+}
+
 func ExtractContentModerationInput(protocol string, body []byte) ContentModerationInput {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return ContentModerationInput{}

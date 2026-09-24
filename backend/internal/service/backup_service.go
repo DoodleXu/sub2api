@@ -50,12 +50,13 @@ const (
 )
 
 var (
-	ErrBackupS3NotConfigured = infraerrors.BadRequest("BACKUP_S3_NOT_CONFIGURED", "backup S3 storage is not configured")
-	ErrBackupNotFound        = infraerrors.NotFound("BACKUP_NOT_FOUND", "backup record not found")
-	ErrBackupInProgress      = infraerrors.Conflict("BACKUP_IN_PROGRESS", "a backup is already in progress")
-	ErrRestoreInProgress     = infraerrors.Conflict("RESTORE_IN_PROGRESS", "a restore is already in progress")
-	ErrBackupRecordsCorrupt  = infraerrors.InternalServer("BACKUP_RECORDS_CORRUPT", "backup records data is corrupted")
-	ErrBackupS3ConfigCorrupt = infraerrors.InternalServer("BACKUP_S3_CONFIG_CORRUPT", "backup S3 config data is corrupted")
+	ErrBackupS3NotConfigured  = infraerrors.BadRequest("BACKUP_S3_NOT_CONFIGURED", "backup S3 storage is not configured")
+	ErrBackupNotFound         = infraerrors.NotFound("BACKUP_NOT_FOUND", "backup record not found")
+	ErrBackupInProgress       = infraerrors.Conflict("BACKUP_IN_PROGRESS", "a backup is already in progress")
+	ErrRestoreInProgress      = infraerrors.Conflict("RESTORE_IN_PROGRESS", "a restore is already in progress")
+	ErrBackupRecordsCorrupt   = infraerrors.InternalServer("BACKUP_RECORDS_CORRUPT", "backup records data is corrupted")
+	ErrBackupS3ConfigCorrupt  = infraerrors.InternalServer("BACKUP_S3_CONFIG_CORRUPT", "backup S3 config data is corrupted")
+	ErrBackupArchiveProtected = infraerrors.Conflict("BACKUP_ARCHIVE_PROTECTED", "explicit confirmation is required to delete an archived backup")
 
 	// ErrSecretEncryptionKeyNotConfigured is returned when an S3 SecretAccessKey
 	// would be encrypted with an auto-generated (ephemeral) key. That key is
@@ -111,30 +112,33 @@ func (c *BackupS3Config) IsConfigured() bool {
 
 // BackupScheduleConfig 定时备份配置
 type BackupScheduleConfig struct {
-	Enabled     bool   `json:"enabled"`
-	CronExpr    string `json:"cron_expr"`    // cron 表达式，如 "0 2 * * *" 每天凌晨2点
-	RetainDays  int    `json:"retain_days"`  // 备份文件过期天数，默认14，0=不自动清理
-	RetainCount int    `json:"retain_count"` // 最多保留份数，0=不限制
+	Enabled        bool                        `json:"enabled"`
+	CronExpr       string                      `json:"cron_expr"`    // cron 表达式，如 "0 2 * * *" 每天凌晨2点
+	RetainDays     int                         `json:"retain_days"`  // 备份文件过期天数，默认14，0=不自动清理
+	RetainCount    int                         `json:"retain_count"` // 最多保留份数，0=不限制
+	MonthlyArchive *BackupMonthlyArchiveConfig `json:"monthly_archive,omitempty"`
 }
 
 // BackupRecord 备份记录
 type BackupRecord struct {
-	ID            string       `json:"id"`
-	Status        string       `json:"status"`      // pending, running, completed, failed
-	BackupType    string       `json:"backup_type"` // postgres
-	FileName      string       `json:"file_name"`
-	S3Key         string       `json:"s3_key"`
-	Parts         []BackupPart `json:"parts,omitempty"`
-	SizeBytes     int64        `json:"size_bytes"`
-	TriggeredBy   string       `json:"triggered_by"` // manual, scheduled
-	ErrorMsg      string       `json:"error_message,omitempty"`
-	StartedAt     string       `json:"started_at"`
-	FinishedAt    string       `json:"finished_at,omitempty"`
-	ExpiresAt     string       `json:"expires_at,omitempty"`     // 过期时间
-	Progress      string       `json:"progress,omitempty"`       // "dumping", "uploading", ""
-	RestoreStatus string       `json:"restore_status,omitempty"` // "", "running", "completed", "failed"
-	RestoreError  string       `json:"restore_error,omitempty"`
-	RestoredAt    string       `json:"restored_at,omitempty"`
+	ID               string                `json:"id"`
+	Status           string                `json:"status"`      // pending, running, completed, failed
+	BackupType       string                `json:"backup_type"` // postgres
+	FileName         string                `json:"file_name"`
+	S3Key            string                `json:"s3_key"`
+	Parts            []BackupPart          `json:"parts,omitempty"`
+	SizeBytes        int64                 `json:"size_bytes"`
+	TriggeredBy      string                `json:"triggered_by"` // manual, scheduled
+	ErrorMsg         string                `json:"error_message,omitempty"`
+	StartedAt        string                `json:"started_at"`
+	FinishedAt       string                `json:"finished_at,omitempty"`
+	ExpiresAt        string                `json:"expires_at,omitempty"`     // 过期时间
+	Progress         string                `json:"progress,omitempty"`       // "dumping", "uploading", ""
+	RestoreStatus    string                `json:"restore_status,omitempty"` // "", "running", "completed", "failed"
+	RestoreStartedAt string                `json:"restore_started_at,omitempty"`
+	RestoreError     string                `json:"restore_error,omitempty"`
+	RestoredAt       string                `json:"restored_at,omitempty"`
+	MonthlyArchive   *BackupMonthlyArchive `json:"monthly_archive,omitempty"`
 }
 
 // BackupDownloadPart 描述一个可下载的备份分卷。
@@ -1192,6 +1196,14 @@ func (s *BackupService) GetBackupRecord(ctx context.Context, backupID string) (*
 }
 
 func (s *BackupService) DeleteBackup(ctx context.Context, backupID string) error {
+	return s.deleteBackup(ctx, backupID, false)
+}
+
+func (s *BackupService) DeleteArchivedBackup(ctx context.Context, backupID string) error {
+	return s.deleteBackup(ctx, backupID, true)
+}
+
+func (s *BackupService) deleteBackup(ctx context.Context, backupID string, deleteArchived bool) error {
 	s.recordsMu.Lock()
 	defer s.recordsMu.Unlock()
 
@@ -1215,6 +1227,12 @@ func (s *BackupService) DeleteBackup(ctx context.Context, backupID string) error
 	if found.Status == "running" {
 		// 后台上传仍可能依赖 Parts 计划；删除对象会让随后完成的记录引用失效卷。
 		return ErrBackupInProgress
+	}
+	if found.MonthlyArchive != nil && !deleteArchived {
+		return ErrBackupArchiveProtected
+	}
+	if found.RestoreStatus == "running" {
+		return ErrRestoreInProgress
 	}
 
 	// 从对象存储删除所有单文件或分卷对象。删除不完整时保留记录，便于重试。
@@ -1371,6 +1389,10 @@ func (s *BackupService) saveRecordsLocked(ctx context.Context, records []BackupR
 
 // saveRecord 保存单条记录（带互斥锁保护）
 func (s *BackupService) saveRecord(ctx context.Context, record *BackupRecord) error {
+	return s.saveRecordWithArchive(ctx, record, nil)
+}
+
+func (s *BackupService) saveRecordWithArchive(ctx context.Context, record *BackupRecord, schedule *BackupScheduleConfig) error {
 	s.recordsMu.Lock()
 	defer s.recordsMu.Unlock()
 
@@ -1379,17 +1401,29 @@ func (s *BackupService) saveRecord(ctx context.Context, record *BackupRecord) er
 		return err
 	}
 
+	snapshot := *record
+	for _, existing := range records {
+		if existing.ID == record.ID && existing.MonthlyArchive != nil {
+			snapshot.MonthlyArchive = existing.MonthlyArchive
+			snapshot.ExpiresAt = ""
+			break
+		}
+	}
+	checkpoint, err := s.assignMonthlyArchive(ctx, &snapshot, schedule)
+	if err != nil {
+		return err
+	}
 	// 更新已有记录或追加
 	found := false
 	for i := range records {
 		if records[i].ID == record.ID {
-			records[i] = *record
+			records[i] = snapshot
 			found = true
 			break
 		}
 	}
 	if !found {
-		records = append(records, *record)
+		records = append(records, snapshot)
 	}
 
 	// 限制记录数量
@@ -1397,6 +1431,13 @@ func (s *BackupService) saveRecord(ctx context.Context, record *BackupRecord) er
 		records = records[len(records)-maxBackupRecords:]
 	}
 
+	if checkpoint != "" {
+		data, err := json.Marshal(records)
+		if err != nil {
+			return err
+		}
+		return s.settingRepo.SetMultiple(ctx, map[string]string{settingKeyBackupRecords: string(data), settingKeyBackupArchiveCheckpoint: checkpoint})
+	}
 	return s.saveRecordsLocked(ctx, records)
 }
 

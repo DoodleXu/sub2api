@@ -2930,15 +2930,24 @@ func buildOpenAIAccountSchedulerScoreSnapshot(
 	loadMap map[int64]*AccountLoadInfo,
 	weights GatewayOpenAIWSSchedulerScoreWeightsView,
 	stickyWeightedEnabled bool,
-	rateArgs ...float64,
+	rateArgs ...any,
 ) map[int64]OpenAIAccountSchedulerScoreSnapshot {
 	oauthSchedulingRateMultiplier := defaultOpenAIOAuthSchedulingRateMultiplier
 	schedulingUSDToCNYRate := defaultOpenAISchedulingUSDToCNYRate
 	if len(rateArgs) > 0 {
-		oauthSchedulingRateMultiplier = rateArgs[0]
+		switch v := rateArgs[0].(type) {
+		case float64:
+			oauthSchedulingRateMultiplier = v
+		case *float64:
+			if v != nil {
+				oauthSchedulingRateMultiplier = *v
+			}
+		}
 	}
 	if len(rateArgs) > 1 {
-		schedulingUSDToCNYRate = rateArgs[1]
+		if v, ok := rateArgs[1].(float64); ok {
+			schedulingUSDToCNYRate = v
+		}
 	}
 	if len(accounts) == 0 {
 		return nil
@@ -3061,7 +3070,24 @@ func buildOpenAIAccountSchedulerScoreSnapshot(
 	return result
 }
 
-func openAIUpstreamCostFactors(accounts []*Account, now time.Time, oauthSchedulingRateMultiplier, schedulingUSDToCNYRate float64) map[int64]float64 {
+func openAIUpstreamCostFactors(accounts []*Account, now time.Time, args ...any) map[int64]float64 {
+	oauthSchedulingRateMultiplier := defaultOpenAIOAuthSchedulingRateMultiplier
+	schedulingUSDToCNYRate := defaultOpenAISchedulingUSDToCNYRate
+	if len(args) > 0 {
+		switch v := args[0].(type) {
+		case *float64:
+			if v != nil {
+				oauthSchedulingRateMultiplier = *v
+			}
+		case float64:
+			oauthSchedulingRateMultiplier = v
+		}
+	}
+	if len(args) > 1 {
+		if v, ok := args[1].(float64); ok {
+			schedulingUSDToCNYRate = v
+		}
+	}
 	type rateSample struct {
 		accountID int64
 		rate      float64
@@ -3128,7 +3154,24 @@ type openAILegacyUpstreamRateOrder struct {
 	rates   map[int64]float64
 }
 
-func newOpenAILegacyUpstreamRateOrder(accounts []*Account, now time.Time, oauthSchedulingRateMultiplier, schedulingUSDToCNYRate float64) openAILegacyUpstreamRateOrder {
+func newOpenAILegacyUpstreamRateOrder(accounts []*Account, now time.Time, args ...any) openAILegacyUpstreamRateOrder {
+	oauthSchedulingRateMultiplier := defaultOpenAIOAuthSchedulingRateMultiplier
+	schedulingUSDToCNYRate := defaultOpenAISchedulingUSDToCNYRate
+	if len(args) > 0 {
+		switch v := args[0].(type) {
+		case *float64:
+			if v != nil {
+				oauthSchedulingRateMultiplier = *v
+			}
+		case float64:
+			oauthSchedulingRateMultiplier = v
+		}
+	}
+	if len(args) > 1 {
+		if v, ok := args[1].(float64); ok {
+			schedulingUSDToCNYRate = v
+		}
+	}
 	rates := make(map[int64]float64, len(accounts))
 	var first float64
 	distinct := false
@@ -3156,7 +3199,24 @@ func newOpenAILegacyUpstreamRateOrder(accounts []*Account, now time.Time, oauthS
 	return openAILegacyUpstreamRateOrder{enabled: len(rates) >= 2 && distinct, rates: rates}
 }
 
-func openAISchedulingRate(account *Account, now time.Time, oauthSchedulingRateMultiplier, schedulingUSDToCNYRate float64) (float64, bool) {
+func openAISchedulingRate(account *Account, now time.Time, args ...any) (float64, bool) {
+	oauthSchedulingRateMultiplier := defaultOpenAIOAuthSchedulingRateMultiplier
+	schedulingUSDToCNYRate := defaultOpenAISchedulingUSDToCNYRate
+	if len(args) > 0 {
+		switch v := args[0].(type) {
+		case *float64:
+			if v != nil {
+				oauthSchedulingRateMultiplier = *v
+			}
+		case float64:
+			oauthSchedulingRateMultiplier = v
+		}
+	}
+	if len(args) > 1 {
+		if v, ok := args[1].(float64); ok {
+			schedulingUSDToCNYRate = v
+		}
+	}
 	if account != nil && account.IsOpenAIOAuth() {
 		return oauthSchedulingRateMultiplier, true
 	}

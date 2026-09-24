@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,43 +11,44 @@ import (
 )
 
 type dashboardAggregationRepoTestStub struct {
-	aggregateCalls         int
-	recomputeCalls         int
-	cleanupUsageCalls      int
-	cleanupDedupCalls      int
-	ensurePartitionCalls   int
-	lastStart              time.Time
-	lastEnd                time.Time
-	watermark              time.Time
-	aggregateErr           error
-	cleanupAggregatesErr   error
-	cleanupUsageErr        error
-	cleanupDedupErr        error
-	ensurePartitionErr     error
-	accountCostRanges      [][2]time.Time
-	accountCoverageStart   time.Time
-	accountCoverageEnd     time.Time
-	refreshSnapshotCalls   int
-	refreshSnapshotStart   time.Time
-	refreshSnapshotEnd     time.Time
-	processTotalsCalls     int
-	processTotalsResult    int64
-	markSnapshotStaleCalls int32
-	recomputeDoneCalls     int32
-	refreshDoneCalls       int32
-	aggregateCtx           context.Context
-	events                 *[]string
+	aggregateCalls        int
+	recomputeCalls        int
+	cleanupUsageCalls     int
+	cleanupUsageCutoff    time.Time
+	cleanupDedupCutoff    time.Time
+	cleanupAggregateCalls int
+	cleanupDedupCalls     int
+	ensurePartitionCalls  int
+	lastStart             time.Time
+	lastEnd               time.Time
+	watermark             time.Time
+	aggregateErr          error
+	cleanupAggregatesErr  error
+	cleanupUsageErr       error
+	cleanupDedupErr       error
+	ensurePartitionErr    error
+	aggregateCtx          context.Context
+	events                *[]string
 }
 
-func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, start, end time.Time) error {
-	s.aggregateCalls++
-	s.lastStart = start
-	s.lastEnd = end
-	s.aggregateCtx = ctx
-	if s.events != nil {
-		*s.events = append(*s.events, "dashboard_aggregation")
-	}
-	return s.aggregateErr
+func (s *dashboardAggregationRepoTestStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
+	return nil
+}
+
+func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error) {
+	return time.Time{}, time.Time{}, nil
+}
+
+func (s *dashboardAggregationRepoTestStub) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
+	return 0, nil
+}
+
+func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationState(ctx context.Context) (AccountCostAggregationState, error) {
+	return AccountCostAggregationState{BackfillComplete: true}, nil
+}
+
+func (s *dashboardAggregationRepoTestStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
+	return true, nil
 }
 
 type dashboardAggregationRollupRepoTestStub struct {
@@ -69,38 +69,19 @@ func (s *dashboardAggregationRollupRepoTestStub) SyncGroupUsageRollups(ctx conte
 	return s.groupRollupErr
 }
 
-func (s *dashboardAggregationRepoTestStub) AggregateAccountCostRange(ctx context.Context, start, end time.Time) error {
-	s.accountCostRanges = append(s.accountCostRanges, [2]time.Time{start, end})
-	return nil
-}
-
-func (s *dashboardAggregationRepoTestStub) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
-	s.processTotalsCalls++
-	result := s.processTotalsResult
-	s.processTotalsResult = 0
-	return result, nil
-}
-
-func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationState(ctx context.Context) (AccountCostAggregationState, error) {
-	return AccountCostAggregationState{BackfillComplete: true}, nil
-}
-
-func (s *dashboardAggregationRepoTestStub) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
-	s.refreshSnapshotCalls++
-	s.refreshSnapshotStart = targetStart
-	s.refreshSnapshotEnd = targetEnd
-	atomic.AddInt32(&s.refreshDoneCalls, 1)
-	return true, nil
-}
-
-func (s *dashboardAggregationRepoTestStub) MarkDashboardCostSnapshotStale(ctx context.Context) error {
-	atomic.AddInt32(&s.markSnapshotStaleCalls, 1)
-	return nil
+func (s *dashboardAggregationRepoTestStub) AggregateRange(ctx context.Context, start, end time.Time) error {
+	s.aggregateCalls++
+	s.aggregateCtx = ctx
+	s.lastStart = start
+	s.lastEnd = end
+	if s.events != nil {
+		*s.events = append(*s.events, "dashboard_aggregation")
+	}
+	return s.aggregateErr
 }
 
 func (s *dashboardAggregationRepoTestStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
 	s.recomputeCalls++
-	atomic.AddInt32(&s.recomputeDoneCalls, 1)
 	return s.AggregateRange(ctx, start, end)
 }
 
@@ -108,29 +89,24 @@ func (s *dashboardAggregationRepoTestStub) GetAggregationWatermark(ctx context.C
 	return s.watermark, nil
 }
 
-func (s *dashboardAggregationRepoTestStub) GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error) {
-	if !s.accountCoverageStart.IsZero() || !s.accountCoverageEnd.IsZero() {
-		return s.accountCoverageStart, s.accountCoverageEnd, nil
-	}
-	epoch := time.Unix(0, 0).UTC()
-	return epoch, epoch, nil
-}
-
 func (s *dashboardAggregationRepoTestStub) UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error {
 	return nil
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error {
+	s.cleanupAggregateCalls++
 	return s.cleanupAggregatesErr
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupUsageLogs(ctx context.Context, cutoff time.Time) error {
 	s.cleanupUsageCalls++
+	s.cleanupUsageCutoff = cutoff
 	return s.cleanupUsageErr
 }
 
 func (s *dashboardAggregationRepoTestStub) CleanupUsageBillingDedup(ctx context.Context, cutoff time.Time) error {
 	s.cleanupDedupCalls++
+	s.cleanupDedupCutoff = cutoff
 	return s.cleanupDedupErr
 }
 
@@ -139,7 +115,7 @@ func (s *dashboardAggregationRepoTestStub) EnsureUsageLogsPartitions(ctx context
 	return s.ensurePartitionErr
 }
 
-func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesBoundedRealtimeStart(t *testing.T) {
+func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesRetentionStart(t *testing.T) {
 	repo := &dashboardAggregationRepoTestStub{watermark: time.Unix(0, 0).UTC()}
 	svc := &DashboardAggregationService{
 		repo: repo,
@@ -157,9 +133,9 @@ func TestDashboardAggregationService_RunScheduledAggregation_EpochUsesBoundedRea
 
 	svc.runScheduledAggregation()
 
-	require.Equal(t, 24, repo.aggregateCalls)
+	require.Equal(t, 1, repo.aggregateCalls)
 	require.False(t, repo.lastEnd.IsZero())
-	require.True(t, repo.lastEnd.Sub(repo.lastStart) <= time.Hour)
+	require.Equal(t, truncateToDayUTC(repo.lastEnd.AddDate(0, 0, -1)), repo.lastStart)
 }
 
 func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupUsageRollups(t *testing.T) {
@@ -169,9 +145,13 @@ func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupUsageRollu
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
 			Enabled:         true,
+			IntervalSeconds: 60,
 			LookbackSeconds: 120,
 			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 1,
+				UsageLogsDays:         1,
+				UsageBillingDedupDays: 2,
+				HourlyDays:            1,
+				DailyDays:             1,
 			},
 		},
 	}
@@ -184,19 +164,24 @@ func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupUsageRollu
 	require.Contains(t, []time.Time{before, after}, repo.groupRollupAt)
 }
 
-func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupAfterDashboardFailure(t *testing.T) {
+func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupAfterDashboardEarlyReturn(t *testing.T) {
 	events := make([]string, 0, 2)
 	baseRepo := &dashboardAggregationRepoTestStub{
 		watermark:    time.Now().UTC(),
 		aggregateErr: errors.New("dashboard aggregation failed"),
 		events:       &events,
 	}
-	repo := &dashboardAggregationRollupRepoTestStub{dashboardAggregationRepoTestStub: baseRepo}
+	repo := &dashboardAggregationRollupRepoTestStub{
+		dashboardAggregationRepoTestStub: baseRepo,
+		groupRollupErr:                   errors.New("group rollup failed"),
+	}
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
 			LookbackSeconds: 120,
-			Retention:       config.DashboardAggregationRetentionConfig{UsageLogsDays: 1},
+			Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 1,
+			},
 		},
 	}
 
@@ -205,195 +190,49 @@ func TestDashboardAggregationService_RunScheduledAggregationSyncsGroupAfterDashb
 	require.Equal(t, []string{"dashboard_aggregation", "group_rollup"}, events)
 	require.NotNil(t, repo.aggregateCtx)
 	require.NotNil(t, repo.groupRollupCtx)
-	require.NotEqual(t, repo.aggregateCtx, repo.groupRollupCtx)
+	if repo.aggregateCtx == repo.groupRollupCtx {
+		t.Fatal("分组日汇总必须使用独立于 dashboard 聚合的 context")
+	}
+	groupDeadline, ok := repo.groupRollupCtx.Deadline()
+	require.True(t, ok, "group rollup context must be bounded")
+	require.LessOrEqual(t, time.Until(groupDeadline), defaultDashboardAggregationTimeout)
 }
 
-func TestDashboardAggregationService_RunScheduledAggregationProcessesAccountCostTotals(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{
-		watermark:           time.Now().UTC().Add(-time.Minute),
-		processTotalsResult: 7,
-	}
-	svc := &DashboardAggregationService{
-		repo: repo,
-		cfg: config.DashboardAggregationConfig{
-			Enabled:         true,
-			LookbackSeconds: 120,
-			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 1,
-				HourlyDays:    1,
-				DailyDays:     1,
-			},
-		},
-	}
-
-	svc.runScheduledAggregation()
-
-	require.Zero(t, repo.processTotalsCalls, "scheduled aggregation should not eagerly consume account cost ledger batches")
-	require.Zero(t, repo.refreshSnapshotCalls, "scheduled aggregation should leave cost snapshot refresh to the 10-minute maintenance task")
+type dashboardAggregationLeaderLockRecordingCache struct {
+	delegate    *fakeLeaderLockCache
+	acquireKeys []string
+	acquireTTLs []time.Duration
 }
 
-func TestDashboardAggregationService_BackfillsAccountCostInDailyChunksWithoutGlobalReaggregation(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{}
-	svc := &DashboardAggregationService{
-		repo:                       repo,
-		accountCostBackfillYieldFn: func(context.Context) bool { return true },
-		cfg: config.DashboardAggregationConfig{
-			Enabled: true,
-			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 2,
-			},
-		},
-	}
-
-	svc.backfillAccountCostAggregates()
-
-	require.NotEmpty(t, repo.accountCostRanges)
-	require.Equal(t, 0, repo.aggregateCalls)
-	require.Equal(t, time.Now().UTC().Truncate(time.Hour), repo.accountCostRanges[0][1])
-	for _, window := range repo.accountCostRanges {
-		require.True(t, window[1].After(window[0]))
-		require.LessOrEqual(t, window[1].Sub(window[0]), 24*time.Hour)
-	}
+func (c *dashboardAggregationLeaderLockRecordingCache) TryAcquireLeaderLock(ctx context.Context, key, owner string, ttl time.Duration) (bool, error) {
+	c.acquireKeys = append(c.acquireKeys, key)
+	c.acquireTTLs = append(c.acquireTTLs, ttl)
+	return c.delegate.TryAcquireLeaderLock(ctx, key, owner, ttl)
 }
 
-func TestDashboardAggregationService_ResumesPartialAccountCostBackfillForward(t *testing.T) {
-	now := time.Now().UTC()
-	coverageStart := truncateToDayUTC(now.AddDate(0, 0, -2))
-	coverageEnd := coverageStart.Add(24 * time.Hour)
-	repo := &dashboardAggregationRepoTestStub{
-		accountCoverageStart: coverageStart,
-		accountCoverageEnd:   coverageEnd,
-	}
-	svc := &DashboardAggregationService{
-		repo:                       repo,
-		accountCostBackfillYieldFn: func(context.Context) bool { return true },
-		cfg: config.DashboardAggregationConfig{
-			Enabled: true,
-			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 2,
-			},
-		},
-	}
-
-	svc.backfillAccountCostAggregates()
-
-	require.NotEmpty(t, repo.accountCostRanges)
-	require.True(t, repo.accountCostRanges[0][0].Equal(coverageEnd))
-	require.Equal(t, 0, repo.aggregateCalls)
+func (c *dashboardAggregationLeaderLockRecordingCache) ReleaseLeaderLock(ctx context.Context, key, owner string) error {
+	return c.delegate.ReleaseLeaderLock(ctx, key, owner)
 }
 
-func TestDashboardAggregationService_BackfillsRetentionWindowWithinSafetyCap(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{}
-	svc := &DashboardAggregationService{
-		repo:                       repo,
-		accountCostBackfillYieldFn: func(context.Context) bool { return true },
-		cfg: config.DashboardAggregationConfig{
-			Enabled: true,
-			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 30,
-			},
-		},
-	}
-
-	svc.backfillAccountCostAggregates()
-
-	require.NotEmpty(t, repo.accountCostRanges)
-	require.LessOrEqual(t, len(repo.accountCostRanges), accountCostAggregateMaxChunks)
-	require.Greater(t, len(repo.accountCostRanges), 7, "fast backfill should not be artificially limited to seven days")
-	require.Zero(t, atomic.LoadInt32(&svc.running))
-	require.Zero(t, atomic.LoadInt32(&svc.accountCostBackfillRunning))
-}
-
-func TestDashboardAggregationService_AccountCostLedgerCadenceAndBudgets(t *testing.T) {
-	require.Equal(t, 10*time.Minute, accountCostMaintenanceInterval)
-	require.Equal(t, 2*time.Minute, accountCostLedgerRunBudget)
-	require.Equal(t, 2*time.Minute, accountCostAggregateRunBudget)
-	require.Equal(t, 128, accountCostLedgerMaxBatches)
-	require.Equal(t, 128, accountCostAggregateMaxChunks)
-}
-
-func TestDashboardAggregationService_ProcessAccountCostTotalsUsesDedicatedRunner(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
-	svc := &DashboardAggregationService{
-		repo: repo,
-		cfg:  config.DashboardAggregationConfig{Enabled: true},
-	}
-
-	svc.processAccountCostTotals()
-
-	require.Equal(t, 2, repo.processTotalsCalls, "runner should continue until the ledger reports no pending account")
-	require.Zero(t, atomic.LoadInt32(&svc.accountCostLedgerRunning))
-}
-
-func TestDashboardAggregationService_AccountCostMaintenanceSkipsOnPeerLeader(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
-	lockCache := &fakeLeaderLockCache{}
-	held, err := lockCache.TryAcquireLeaderLock(
-		context.Background(),
-		accountCostMaintenanceLeaderLockKey,
-		"peer",
-		accountCostMaintenanceLeaderLockTTL,
-	)
+func TestDashboardAggregationService_StartupGroupSyncUsesIndependentLongLivedLeaderLock(t *testing.T) {
+	delegate := &fakeLeaderLockCache{}
+	_, err := delegate.TryAcquireLeaderLock(context.Background(), dashboardAggregationLeaderLockKey, "periodic-peer", time.Hour)
 	require.NoError(t, err)
-	require.True(t, held)
+	cache := &dashboardAggregationLeaderLockRecordingCache{delegate: delegate}
+	repo := &dashboardAggregationRollupRepoTestStub{dashboardAggregationRepoTestStub: &dashboardAggregationRepoTestStub{}}
 	svc := &DashboardAggregationService{
 		repo:       repo,
-		lockCache:  lockCache,
-		instanceID: "local",
-		cfg:        config.DashboardAggregationConfig{Enabled: true},
+		lockCache:  cache,
+		instanceID: "startup-instance",
 	}
 
-	svc.runAccountCostMaintenance()
+	svc.runStartupGroupUsageSync()
 
-	require.Zero(t, repo.processTotalsCalls)
-	require.Empty(t, repo.accountCostRanges)
-}
-
-func TestDashboardAggregationService_AccountCostMaintenanceUsesIndependentLeaderLock(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
-	lockCache := &fakeLeaderLockCache{}
-	svc := &DashboardAggregationService{
-		repo:                       repo,
-		lockCache:                  lockCache,
-		instanceID:                 "local",
-		accountCostBackfillYieldFn: func(context.Context) bool { return false },
-		cfg: config.DashboardAggregationConfig{
-			Enabled: true,
-			Retention: config.DashboardAggregationRetentionConfig{
-				UsageLogsDays: 1,
-			},
-		},
-	}
-
-	svc.runAccountCostMaintenance()
-
-	require.Equal(t, 1, repo.processTotalsCalls)
-	require.Len(t, repo.accountCostRanges, 1)
-	require.Empty(t, lockCache.heldBy(dashboardAggregationLeaderLockKey))
-	require.Empty(t, lockCache.heldBy(accountCostMaintenanceLeaderLockKey))
-	require.Zero(t, atomic.LoadInt32(&svc.accountCostMaintenanceRunning))
-}
-
-func TestDashboardAggregationService_AccountLedgerDoesNotWaitForDashboardLeader(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{processTotalsResult: 1}
-	lockCache := &fakeLeaderLockCache{}
-	held, err := lockCache.TryAcquireLeaderLock(
-		context.Background(),
-		dashboardAggregationLeaderLockKey,
-		"dashboard-peer",
-		dashboardAggregationLeaderLockTTL,
-	)
-	require.NoError(t, err)
-	require.True(t, held)
-	svc := &DashboardAggregationService{
-		repo:      repo,
-		lockCache: lockCache,
-		cfg:       config.DashboardAggregationConfig{Enabled: true},
-	}
-
-	svc.processAccountCostTotals()
-
-	require.Equal(t, 2, repo.processTotalsCalls)
+	require.Len(t, cache.acquireKeys, 1)
+	require.NotEqual(t, dashboardAggregationLeaderLockKey, cache.acquireKeys[0])
+	require.Len(t, cache.acquireTTLs, 1)
+	require.Greater(t, cache.acquireTTLs[0], defaultDashboardAggregationBackfillTimeout)
+	require.Equal(t, 1, repo.groupRollupCalls)
 }
 
 func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *testing.T) {
@@ -401,6 +240,7 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
 			Retention: config.DashboardAggregationRetentionConfig{
 				UsageLogsDays: 1,
 				HourlyDays:    1,
@@ -412,7 +252,7 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
-	require.Zero(t, repo.cleanupUsageCalls, "cost aggregation must never delete raw usage logs")
+	require.Equal(t, 1, repo.cleanupUsageCalls)
 	require.Equal(t, 1, repo.cleanupDedupCalls)
 }
 
@@ -421,6 +261,7 @@ func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testin
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
+			Enabled: true,
 			Retention: config.DashboardAggregationRetentionConfig{
 				UsageLogsDays: 1,
 				HourlyDays:    1,
@@ -432,7 +273,6 @@ func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testin
 	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
-	require.Zero(t, repo.cleanupUsageCalls, "cost aggregation must never delete raw usage logs")
 	require.Equal(t, 1, repo.cleanupDedupCalls)
 }
 
@@ -455,8 +295,8 @@ func TestDashboardAggregationService_PartitionFailure_DoesNotAggregate(t *testin
 
 	svc.runScheduledAggregation()
 
-	require.Equal(t, 24, repo.ensurePartitionCalls)
-	require.Equal(t, 24, repo.aggregateCalls)
+	require.Equal(t, 1, repo.ensurePartitionCalls)
+	require.Equal(t, 1, repo.aggregateCalls)
 }
 
 func TestDashboardAggregationService_TriggerBackfill_TooLarge(t *testing.T) {
@@ -474,63 +314,4 @@ func TestDashboardAggregationService_TriggerBackfill_TooLarge(t *testing.T) {
 	err := svc.TriggerBackfill(start, end)
 	require.ErrorIs(t, err, ErrDashboardBackfillTooLarge)
 	require.Equal(t, 0, repo.aggregateCalls)
-}
-
-func TestDashboardAggregationService_TriggerRecomputeInvalidatesAndRefreshesCostSnapshot(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{}
-	cache := &dashboardCacheStub{}
-	svc := NewDashboardAggregationService(repo, nil, &config.Config{
-		DashboardAgg: config.DashboardAggregationConfig{Enabled: true},
-	})
-	svc.SetDashboardCache(cache)
-
-	start := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
-	end := start.Add(time.Hour)
-	require.NoError(t, svc.TriggerRecomputeRange(start, end))
-
-	require.Equal(t, int32(1), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
-	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCostCalls))
-	require.Eventually(t, func() bool {
-		return atomic.LoadInt32(&repo.recomputeDoneCalls) == 1 && atomic.LoadInt32(&repo.refreshDoneCalls) == 1
-	}, time.Second, 10*time.Millisecond)
-}
-
-func TestDashboardAggregationService_AccountCostChangeRefreshesCostSnapshot(t *testing.T) {
-	coverageStart := time.Now().UTC().AddDate(0, 0, -30).Truncate(time.Hour)
-	coverageEnd := time.Now().UTC().Add(-17 * time.Minute).Truncate(time.Minute)
-	repo := &dashboardAggregationRepoTestStub{accountCoverageStart: coverageStart, accountCoverageEnd: coverageEnd}
-	cache := &dashboardCacheStub{}
-	svc := NewDashboardAggregationService(repo, nil, &config.Config{
-		DashboardAgg: config.DashboardAggregationConfig{
-			Retention: config.DashboardAggregationRetentionConfig{UsageLogsDays: 7},
-		},
-	})
-	svc.SetDashboardCache(cache)
-	svc.accountCostSnapshotDelay = 10 * time.Millisecond
-
-	svc.RefreshDashboardCostSnapshotAfterAccountCostChange()
-	svc.RefreshDashboardCostSnapshotAfterAccountCostChange()
-
-	require.Equal(t, int32(2), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
-	require.Equal(t, int32(2), atomic.LoadInt32(&cache.delCostCalls))
-	require.Eventually(t, func() bool {
-		return atomic.LoadInt32(&repo.refreshDoneCalls) == 1
-	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, 1, repo.refreshSnapshotCalls)
-	require.Equal(t, coverageEnd, repo.refreshSnapshotEnd)
-	require.True(t, repo.refreshSnapshotStart.Before(repo.refreshSnapshotEnd))
-	require.False(t, repo.refreshSnapshotEnd.After(time.Now().UTC()), "refresh must stop at the materialized coverage waterline")
-}
-
-func TestDashboardAggregationService_DisabledRecomputeStillInvalidatesCostSnapshot(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{}
-	cache := &dashboardCacheStub{}
-	svc := NewDashboardAggregationService(repo, nil, &config.Config{})
-	svc.SetDashboardCache(cache)
-
-	start := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
-	require.Error(t, svc.TriggerRecomputeRange(start, start.Add(time.Hour)))
-	require.Equal(t, int32(1), atomic.LoadInt32(&repo.markSnapshotStaleCalls))
-	require.Equal(t, int32(1), atomic.LoadInt32(&cache.delCostCalls))
-	require.Zero(t, atomic.LoadInt32(&repo.recomputeDoneCalls))
 }

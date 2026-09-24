@@ -355,7 +355,7 @@ func (r *contentModerationRepository) CreateUserPolicy(ctx context.Context, poli
 	RETURNING id, created_at, updated_at`,
 		policy.UserID, policy.Enabled, policy.Action, policy.BlockStatus, policy.ErrorCode, policy.BlockMessage,
 		policy.BanThreshold, policy.ViolationWindowHours, policy.ApplyToHashBlock, policy.Note,
-		nullableInt64Ptr(policy.CreatedBy), nullableInt64Ptr(policy.UpdatedBy),
+		nullableInt64Value(policy.CreatedBy), nullableInt64Value(policy.UpdatedBy),
 	).Scan(&policy.ID, &policy.CreatedAt, &policy.UpdatedAt)
 	if err != nil {
 		return translatePersistenceError(err, nil, infraerrors.Conflict("CONTENT_MODERATION_POLICY_USER_EXISTS", "该用户已存在风控策略"))
@@ -384,7 +384,7 @@ func (r *contentModerationRepository) UpdateUserPolicy(ctx context.Context, poli
 	WHERE id = $1
 	RETURNING created_at, updated_at`,
 		policy.ID, policy.UserID, policy.Enabled, policy.Action, policy.BlockStatus, policy.ErrorCode, policy.BlockMessage,
-		policy.BanThreshold, policy.ViolationWindowHours, policy.ApplyToHashBlock, policy.Note, nullableInt64Ptr(policy.UpdatedBy),
+		policy.BanThreshold, policy.ViolationWindowHours, policy.ApplyToHashBlock, policy.Note, nullableInt64Value(policy.UpdatedBy),
 	).Scan(&policy.CreatedAt, &policy.UpdatedAt)
 	if err != nil {
 		return translatePersistenceError(
@@ -515,7 +515,7 @@ INSERT INTO content_moderation_allowed_hashes (
     input_hash, source, source_log_id, note, created_by
 ) VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (input_hash) DO NOTHING`,
-		input.InputHash, input.Source, nullableInt64Ptr(input.SourceLogID), input.Note, nullableActorID(input.ActorID),
+		input.InputHash, input.Source, nullableInt64Value(input.SourceLogID), input.Note, nullableActorID(input.ActorID),
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert content moderation allowed hash: %w", err)
@@ -623,7 +623,7 @@ func insertAllowedHashEvent(ctx context.Context, exec contentModerationAllowedHa
 INSERT INTO content_moderation_allowed_hash_events (
     action, input_hash, actor_id, source_log_id, note, metadata
 ) VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-		event.Action, event.InputHash, nullableActorID(event.ActorID), nullableInt64Ptr(event.SourceLogID), event.Note, string(raw),
+		event.Action, event.InputHash, nullableActorID(event.ActorID), nullableInt64Value(event.SourceLogID), event.Note, string(raw),
 	)
 	if err != nil {
 		return fmt.Errorf("insert content moderation allowed hash event: %w", err)
@@ -638,7 +638,7 @@ func nullableIntPtr(value *int) any {
 	return *value
 }
 
-func nullableInt64Ptr(value *int64) any {
+func nullableInt64Value(value *int64) any {
 	if value == nil {
 		return nil
 	}

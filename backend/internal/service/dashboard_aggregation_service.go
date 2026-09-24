@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -65,6 +67,7 @@ type DashboardAggregationRepository interface {
 	GetAccountCostAggregationCoverage(ctx context.Context) (time.Time, time.Time, error)
 	UpdateAggregationWatermark(ctx context.Context, aggregatedAt time.Time) error
 	CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error
+	CleanupUsageLogs(ctx context.Context, cutoff time.Time) error
 	CleanupUsageBillingDedup(ctx context.Context, cutoff time.Time) error
 	EnsureUsageLogsPartitions(ctx context.Context, now time.Time) error
 }
@@ -96,6 +99,7 @@ type AccountCostAggregationState struct {
 // DashboardAggregationService 负责定时聚合与回填。
 type DashboardAggregationService struct {
 	repo                          DashboardAggregationRepository
+	settingRepo                   SettingRepository
 	timingWheel                   *TimingWheelService
 	cfg                           config.DashboardAggregationConfig
 	running                       int32
@@ -156,6 +160,7 @@ func (s *DashboardAggregationService) Start() {
 	}
 	if !s.cfg.Enabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合作业已禁用")
+		s.timingWheel.ScheduleRecurring("dashboard:retention", time.Minute, s.runScheduledRetention)
 		return
 	}
 	go s.runStartupGroupUsageSync()
@@ -188,6 +193,21 @@ func (s *DashboardAggregationService) Start() {
 	if !s.cfg.BackfillEnabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 回填已禁用，如需补齐保留窗口以外历史数据请手动回填")
 	}
+}
+
+func (s *DashboardAggregationService) runScheduledRetention() {
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		return
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
+	defer cancel()
+	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
+	if !ok {
+		return
+	}
+	defer release()
+	s.maybeCleanupRetention(ctx, time.Now().UTC())
 }
 
 // runStartupDashboardBackfill closes the historical prefix that would
@@ -750,12 +770,12 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 	lookback := time.Duration(s.cfg.LookbackSeconds) * time.Second
 	epoch := time.Unix(0, 0).UTC()
 	start := last.Add(-lookback)
-	firstRun := !last.After(epoch)
-	if firstRun {
-		// Establish only a bounded realtime baseline on first boot. The separate
-		// startup dashboard backfill owns historical retention-window work and
-		// advances it in bounded chunks.
-		start = now.Add(-24 * time.Hour)
+	if !last.After(epoch) {
+		retentionDays := s.cfg.Retention.UsageLogsDays
+		if retentionDays <= 0 {
+			retentionDays = 1
+		}
+		start = truncateToDayUTC(now.AddDate(0, 0, -retentionDays))
 	} else if start.After(now) {
 		start = now.Add(-lookback)
 	}
@@ -765,12 +785,8 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		return
 	}
 
-	watermarkUpdated := false
-	var updateErr error
-	if !firstRun {
-		updateErr = s.repo.UpdateAggregationWatermark(ctx, now)
-		watermarkUpdated = updateErr == nil
-	}
+	updateErr := s.repo.UpdateAggregationWatermark(ctx, now)
+	watermarkUpdated := updateErr == nil
 	if updateErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 更新水位失败: %v", updateErr)
 	}
@@ -856,29 +872,13 @@ func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start,
 	if !end.After(start) {
 		return nil
 	}
-	// Keep each aggregation transaction bounded. This is especially important
-	// after a watermark reset or a first boot, where the requested range may
-	// cover the entire retention window.
-	for cursor := start; cursor.Before(end); {
-		chunkEnd := cursor.Add(dashboardAggregationChunkSize)
-		if chunkEnd.After(end) {
-			chunkEnd = end
-		}
-		if err := s.repo.EnsureUsageLogsPartitions(ctx, chunkEnd); err != nil {
-			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分区检查失败: %v", err)
-		}
-		if err := s.repo.AggregateRange(ctx, cursor, chunkEnd); err != nil {
-			return err
-		}
-		cursor = chunkEnd
+	if err := s.repo.EnsureUsageLogsPartitions(ctx, end); err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 分区检查失败: %v", err)
 	}
-	return nil
+	return s.repo.AggregateRange(ctx, start, end)
 }
 
 func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {
-	// Cost aggregation is deliberately read-only with respect to usage_logs.
-	// Raw-log deletion, when explicitly requested, belongs to UsageCleanupService
-	// and is never triggered by the dashboard/account-cost scheduler.
 	lastAny := s.lastRetentionCleanup.Load()
 	if lastAny != nil {
 		if last, ok := lastAny.(time.Time); ok && now.Sub(last) < dashboardAggregationRetentionInterval {
@@ -886,21 +886,75 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 		}
 	}
 
+	usageDays, err := s.requestRetentionDays(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取日志保留设置失败，跳过清理: %v", err)
+		return
+	}
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	dedupCutoff := now.AddDate(0, 0, -s.cfg.Retention.UsageBillingDedupDays)
+	usageCutoff := now.AddDate(0, 0, -usageDays)
+	dedupDays := s.cfg.Retention.UsageBillingDedupDays
+	if dedupDays <= 0 {
+		dedupDays = 365
+	}
+	if dedupDays < usageDays {
+		dedupDays = usageDays
+	}
+	dedupCutoff := now.AddDate(0, 0, -dedupDays)
 
-	aggErr := s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
+	var aggErr, usageErr, dedupErr error
+	if s.cfg.Enabled {
+		aggErr = s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
+	}
 	if aggErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
 	}
-	dedupErr := s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
+	if usageDays > 0 {
+		usageErr = s.repo.CleanupUsageLogs(ctx, usageCutoff)
+	}
+	if usageErr != nil {
+		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
+	}
+	if usageDays > 0 {
+		dedupErr = s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
+	}
 	if dedupErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_billing_dedup 保留清理失败: %v", dedupErr)
 	}
-	if aggErr == nil && dedupErr == nil {
+	if aggErr == nil && usageErr == nil && dedupErr == nil {
 		s.lastRetentionCleanup.Store(now)
 	}
+}
+
+func (s *DashboardAggregationService) requestRetentionDays(ctx context.Context) (int, error) {
+	days := s.cfg.Retention.UsageLogsDays
+	if !s.cfg.Enabled {
+		days = 0
+	}
+	if s.settingRepo == nil {
+		return days, nil
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsRuntimeLogConfig)
+	if errors.Is(err, ErrSettingNotFound) {
+		return days, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var cfg struct {
+		RequestRetentionDays *int `json:"request_retention_days"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return 0, err
+	}
+	if cfg.RequestRetentionDays != nil {
+		days = *cfg.RequestRetentionDays
+		if days < 0 || days > 3650 {
+			return 0, fmt.Errorf("invalid request_retention_days: %d", days)
+		}
+	}
+	return days, nil
 }
 
 func truncateToDayUTC(t time.Time) time.Time {
