@@ -284,8 +284,8 @@ func (s *BackupService) recoverStaleRecords() {
 		if records[i].RestoreStatus == "running" {
 			if records[i].RestoreStartedAt == "" {
 				// Older records did not persist a separate restore start time.
-				// Their backup start is the only reliable age signal after restart.
-				records[i].RestoreStartedAt = records[i].StartedAt
+				// Preserve their protection and start a fresh recovery window.
+				records[i].RestoreStartedAt = now.Format(time.RFC3339)
 				changed = true
 			}
 			if backupOperationExpired(records[i].RestoreStartedAt, now) {
