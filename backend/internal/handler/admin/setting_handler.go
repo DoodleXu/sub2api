@@ -478,7 +478,11 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		payload.DefaultPlatformQuotas = platformQuotas
 	}
 
-	response.Success(c, systemSettingsResponseData(payload, authSourceDefaults))
+	responseData := systemSettingsResponseData(payload, authSourceDefaults)
+	if raw, err := h.settingService.GetValue(c.Request.Context(), service.SettingKeyOpenAIOAuthSchedulingRateMultiplier); err == nil && strings.TrimSpace(raw) == "" {
+		responseData["openai_oauth_scheduling_rate_multiplier"] = nil
+	}
+	response.Success(c, responseData)
 }
 
 // GetDailyCheckinStats returns lightweight operational metrics for the check-in campaign.
@@ -1334,6 +1338,7 @@ type UpdateSettingsRequest struct {
 	// OpenAI account scheduling
 	OpenAILowUpstreamRatePriorityEnabled               *bool    `json:"openai_low_upstream_rate_priority_enabled"`
 	OpenAIOAuthSchedulingRateMultiplier                *float64 `json:"openai_oauth_scheduling_rate_multiplier"`
+	openAIOAuthSchedulingRateMultiplierSet             bool
 	OpenAISchedulingUSDToCNYRate                       *float64 `json:"openai_scheduling_usd_to_cny_rate"`
 	OpenAIAdvancedSchedulerEnabled                     *bool    `json:"openai_advanced_scheduler_enabled"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool    `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
@@ -1467,6 +1472,21 @@ type UpdateSettingsRequest struct {
 	AllowUserViewErrorRequests *bool `json:"allow_user_view_error_requests"`
 }
 
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type alias UpdateSettingsRequest
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, r.openAIOAuthSchedulingRateMultiplierSet = fields["openai_oauth_scheduling_rate_multiplier"]
+	return nil
+}
+
 // ensureActorTotpForStepUp ensures that step-up can only be enabled by an
 // authenticated human administrator who has already configured TOTP.
 func (h *SettingHandler) ensureActorTotpForStepUp(c *gin.Context) bool {
@@ -1595,11 +1615,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	omitted := omittedSettingKeys(sentFields)
-
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if !req.openAIOAuthSchedulingRateMultiplierSet {
+		if values, getErr := h.settingService.GetAllValues(c.Request.Context()); getErr == nil {
+			if _, exists := values[service.SettingKeyOpenAIOAuthSchedulingRateMultiplier]; exists {
+				omitted[service.SettingKeyOpenAIOAuthSchedulingRateMultiplier] = struct{}{}
+			}
+		}
 	}
 	auditRequest := settingsAuditRequest(req)
 	hydrateOmittedSettingsRequest(&req, previousSettings, sentFields)
@@ -2894,6 +2920,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return previousSettings.OpenAILowUpstreamRatePriorityEnabled
 		}(),
 		OpenAIOAuthSchedulingRateMultiplier: func() float64 {
+			if req.openAIOAuthSchedulingRateMultiplierSet && req.OpenAIOAuthSchedulingRateMultiplier == nil {
+				return 0
+			}
 			if req.OpenAIOAuthSchedulingRateMultiplier != nil {
 				return *req.OpenAIOAuthSchedulingRateMultiplier
 			}
@@ -3261,6 +3290,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaultsOmitting(c.Request.Context(), settings, authSourceDefaults, omitted); err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if req.openAIOAuthSchedulingRateMultiplierSet && req.OpenAIOAuthSchedulingRateMultiplier == nil {
+		if err := h.settingService.SetMultiple(c.Request.Context(), map[string]string{
+			service.SettingKeyOpenAIOAuthSchedulingRateMultiplier: "",
+		}); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	// Update OpenAI fast policy (stored under dedicated key, only when provided).
@@ -3643,7 +3680,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	} else {
 		payload.DefaultPlatformQuotas = platformQuotas
 	}
-	response.Success(c, systemSettingsResponseData(payload, updatedAuthSourceDefaults))
+	responseData := systemSettingsResponseData(payload, updatedAuthSourceDefaults)
+	if raw, err := h.settingService.GetValue(c.Request.Context(), service.SettingKeyOpenAIOAuthSchedulingRateMultiplier); err == nil && strings.TrimSpace(raw) == "" {
+		responseData["openai_oauth_scheduling_rate_multiplier"] = nil
+	}
+	response.Success(c, responseData)
 }
 
 // hasPaymentFields returns true if any payment-related field was explicitly provided.

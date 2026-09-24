@@ -6221,6 +6221,25 @@ func (s *SettingService) DeleteAdminAPIKey(ctx context.Context) error {
 	return s.settingRepo.Delete(ctx, SettingKeyAdminAPIKey)
 }
 
+// Delete removes a single persisted setting for explicit nullable settings.
+func (s *SettingService) Delete(ctx context.Context, key string) error {
+	return s.settingRepo.Delete(ctx, key)
+}
+
+// SetMultiple persists explicit setting values while preserving the service's
+// repository abstraction for handlers that need nullable overrides.
+func (s *SettingService) SetMultiple(ctx context.Context, settings map[string]string) error {
+	return s.settingRepo.SetMultiple(ctx, settings)
+}
+
+func (s *SettingService) GetValue(ctx context.Context, key string) (string, error) {
+	return s.settingRepo.GetValue(ctx, key)
+}
+
+func (s *SettingService) GetAllValues(ctx context.Context) (map[string]string, error) {
+	return s.settingRepo.GetAll(ctx)
+}
+
 // IsModelFallbackEnabled 检查是否启用模型兜底机制
 func (s *SettingService) IsModelFallbackEnabled(ctx context.Context) bool {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyEnableModelFallback)

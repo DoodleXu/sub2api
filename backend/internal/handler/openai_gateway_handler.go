@@ -2537,6 +2537,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
 		return
 	}
+	checkSimpleModeTurnBilling := func() error {
+		if h.cfg == nil || h.cfg.RunMode != config.RunModeSimple || !h.cfg.SimpleModeKeyRateLimitEnabled {
+			return nil
+		}
+		if err := checkWSBillingEligibility(); err != nil {
+			return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "billing check failed", err)
+		}
+		return nil
+	}
 	sessionHash := h.gatewayService.GenerateSessionHashWithFallback(
 		c,
 		firstMessage,
@@ -2790,6 +2799,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// turn 级定价：BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号；
 		// passthrough 没有 BeforeTurn 时，AfterTurn 回退到 TurnStarted 的所属 turn 时刻。
 		var turnPricing openAIWSTurnPricing
+		// Passthrough ingress does not invoke BeforeTurn for the first frame.
+		if err := checkSimpleModeTurnBilling(); err != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
+			return
+		}
 		hooks := &service.OpenAIWSIngressHooks{
 			ClientLifecycleContext:      clientLifecycleCtx,
 			InitialRequestModel:         reqModel,
@@ -2920,7 +2934,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
 				currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
-				return nil
+				return checkSimpleModeTurnBilling()
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {
 				turnStart := getTurnStart(turn)
@@ -3361,6 +3375,14 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			status = http.StatusServiceUnavailable
 		}
 		h.handleStreamingAwareError(c, status, "server_error", failoverErr.ClientMessage, streamStarted)
+		return
+	}
+	if failoverErr.ClientStatusCode > 0 && strings.TrimSpace(failoverErr.ClientMessage) != "" {
+		if failoverErr.Reason == service.OpenAIImagesInsufficientBalanceReason {
+			h.handleStreamingAwareErrorWithCode(c, failoverErr.ClientStatusCode, "upstream_error", service.OpenAIImagesInsufficientBalanceCode, failoverErr.ClientMessage, streamStarted, false)
+			return
+		}
+		h.handleStreamingAwareError(c, failoverErr.ClientStatusCode, "upstream_error", failoverErr.ClientMessage, streamStarted)
 		return
 	}
 	statusCode := failoverErr.StatusCode
