@@ -320,14 +320,6 @@ func backupOperationExpired(started string, now time.Time) bool {
 	return err == nil && now.Sub(at) > backupScheduledLeaderLockTTL
 }
 
-func (s *BackupService) saveRecoveredRecord(record *BackupRecord) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.saveRecord(ctx, record); err != nil {
-		logger.LegacyPrintf("service.backup", "[Backup] 保存恢复后的备份记录失败 %s: %v", record.ID, err)
-	}
-}
-
 func (s *BackupService) cleanupStaleBackupObjects(ctx context.Context, record *BackupRecord) error {
 	if len(backupObjectKeys(record)) == 0 {
 		return nil

@@ -21,7 +21,8 @@ VERSION_RE = re.compile(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?')
 
 
 def config(simple=False):
-    return yaml.safe_load((SIMPLE_CONFIG if simple else FULL_CONFIG).read_text())
+    path = SIMPLE_CONFIG if simple and SIMPLE_CONFIG.exists() else FULL_CONFIG
+    return yaml.safe_load(path.read_text())
 
 
 def targets(simple=False):

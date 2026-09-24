@@ -10348,6 +10348,7 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | "openai_oauth_scheduling_rate_multiplier"
 > & {
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
@@ -12622,10 +12623,11 @@ async function saveSettings() {
         form.payment_alipay_mobile_precreate_deep_link,
       openai_low_upstream_rate_priority_enabled:
         form.openai_low_upstream_rate_priority_enabled,
-      openai_oauth_scheduling_rate_multiplier:
-        form.openai_oauth_scheduling_rate_multiplier === ""
+      openai_oauth_scheduling_rate_multiplier: ((
+        (form.openai_oauth_scheduling_rate_multiplier as number | string | null) === ""
           ? null
-          : form.openai_oauth_scheduling_rate_multiplier,
+          : form.openai_oauth_scheduling_rate_multiplier
+      ) as unknown as number | undefined),
       openai_scheduling_usd_to_cny_rate:
         form.openai_scheduling_usd_to_cny_rate,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,

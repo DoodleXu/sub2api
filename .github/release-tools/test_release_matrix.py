@@ -28,7 +28,9 @@ class ReleaseMatrixTest(unittest.TestCase):
         os.chdir(self.temp.name)
         self.addCleanup(os.chdir, self.previous)
         for name in ('.goreleaser.yaml', '.goreleaser.simple.yaml'):
-            shutil.copyfile(ROOT / name, name)
+            source = ROOT / name
+            if source.exists():
+                shutil.copyfile(source, name)
         Path('backend/cmd/server').mkdir(parents=True)
         release.VERSION_FILE.write_text('9.8.7\n')
 
