@@ -47,6 +47,13 @@ func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, b
 	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType, cfg)
 }
 
+// ProvideClaudeCodeVersionSyncService creates and starts the periodic Claude Code version sync.
+func ProvideClaudeCodeVersionSyncService(settingRepo SettingRepository, settingService *SettingService, githubClient GitHubReleaseClient) *ClaudeCodeVersionSyncService {
+	svc := NewClaudeCodeVersionSyncService(settingRepo, settingService, githubClient, claudeCodeVersionSyncInterval)
+	svc.Start()
+	return svc
+}
+
 // ProvideEmailQueueService creates EmailQueueService with default worker count
 func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
@@ -976,6 +983,7 @@ var ProviderSet = wire.NewSet(
 	NewIdentityService,
 	NewCRSSyncService,
 	ProvideUpdateService,
+	ProvideClaudeCodeVersionSyncService,
 	ProvideTokenRefreshService,
 	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	ProvideAccountExpiryService,
@@ -1022,6 +1030,7 @@ var ProviderSet = wire.NewSet(
 	ProvideUserPlatformQuotaUsageFlusher,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
+	ProvideOpenCodeGoUsageService,
 	NewBatchImageService,
 	NewBatchImagePublicService,
 	NewBatchImageDownloadService,

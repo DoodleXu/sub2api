@@ -60,25 +60,33 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if log.UpstreamLatencyMS != nil {
 		latency = *log.UpstreamLatencyMS
 	}
+	var engineMeta any
+	if log.EngineMeta != nil {
+		encoded, marshalErr := json.Marshal(log.EngineMeta)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal moderation engine metadata: %w", marshalErr)
+		}
+		engineMeta = string(encoded)
+	}
 	err = r.db.QueryRowContext(ctx, `
 	INSERT INTO content_moderation_logs (
 		    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
 		    endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
 		    category_scores, threshold_snapshot, input_excerpt, input_hash, matched_keyword, policy_id, policy_action,
 		    policy_snapshot, block_status, error_code, upstream_latency_ms, error,
-		    violation_count, auto_banned, email_sent, email_deduped, last_email_sent_at, queue_delay_ms
+		    violation_count, auto_banned, email_sent, email_deduped, last_email_sent_at, queue_delay_ms, engine_meta
 		) VALUES (
 		    $1, $2, $3, $4, $5, $6, $7,
 		    $8, $9, $10, $11, $12, $13, $14, $15,
 		    $16::jsonb, $17::jsonb, $18, $19, $20, $21, $22,
 		    $23::jsonb, $24, $25, $26, $27,
-		    $28, $29, $30, $31, $32, $33
+		    $28, $29, $30, $31, $32, $33, $34::jsonb
 		) RETURNING id, created_at`,
 		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
 		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, log.InputHash, log.MatchedKeyword, policyID, log.PolicyAction,
 		string(policySnapshot), log.BlockStatus, log.ErrorCode, latency, log.Error,
-		log.ViolationCount, log.AutoBanned, log.EmailSent, log.EmailDeduped, nullableTimePtr(log.LastEmailSentAt), nullableIntPtr(log.QueueDelayMS),
+		log.ViolationCount, log.AutoBanned, log.EmailSent, log.EmailDeduped, nullableTimePtr(log.LastEmailSentAt), nullableIntPtr(log.QueueDelayMS), engineMeta,
 	).Scan(&log.ID, &log.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert content moderation log: %w", err)
@@ -113,7 +121,7 @@ SELECT
 		    l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
 		    l.category_scores, l.threshold_snapshot, l.input_excerpt, l.input_hash, l.matched_keyword,
 		    l.policy_id, l.policy_action, l.policy_snapshot, l.block_status, l.error_code, l.upstream_latency_ms, l.error,
-		    l.violation_count, l.auto_banned, l.email_sent, l.email_deduped, l.last_email_sent_at, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at
+		    l.violation_count, l.auto_banned, l.email_sent, l.email_deduped, l.last_email_sent_at, COALESCE(u.status, ''), l.queue_delay_ms, l.created_at, l.engine_meta
 FROM content_moderation_logs l
 LEFT JOIN users u ON u.id = l.user_id `+whereSQL+`
 ORDER BY l.created_at DESC, l.id DESC
@@ -130,7 +138,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		var item service.ContentModerationLog
 		var userID, apiKeyID, groupID, policyID, latency, queueDelay sql.NullInt64
 		var lastEmailSentAt sql.NullTime
-		var scoresRaw, thresholdsRaw, policySnapshotRaw []byte
+		var scoresRaw, thresholdsRaw, policySnapshotRaw, engineMetaRaw []byte
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
@@ -168,6 +176,7 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.UserStatus,
 			&queueDelay,
 			&item.CreatedAt,
+			&engineMetaRaw,
 		); err != nil {
 			return nil, nil, fmt.Errorf("scan content moderation log: %w", err)
 		}
@@ -205,6 +214,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		_ = json.Unmarshal(thresholdsRaw, &item.ThresholdSnapshot)
 		item.PolicySnapshot = map[string]any{}
 		_ = json.Unmarshal(policySnapshotRaw, &item.PolicySnapshot)
+		if len(engineMetaRaw) > 0 && string(engineMetaRaw) != "null" {
+			item.EngineMeta = &service.ContentModerationEngineMeta{}
+			if err := json.Unmarshal(engineMetaRaw, item.EngineMeta); err != nil {
+				return nil, nil, fmt.Errorf("decode content moderation engine metadata: %w", err)
+			}
+		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

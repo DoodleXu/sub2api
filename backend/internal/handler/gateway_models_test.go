@@ -932,7 +932,7 @@ func TestGatewayModels_GeminiGroupUsesAntigravityDefaultMappingWhenUnset(t *test
 }
 
 // Codex 通过 /models?client_version= 走 CodexModels，同样应看到混合调度账号的 gemini-* 映射。
-func TestGatewayModels_CodexGeminiGroupListsAntigravityGeminiMappings(t *testing.T) {
+func TestGatewayModels_CodexGeminiGroupReturnsEmptyManifest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(24)
@@ -967,16 +967,9 @@ func TestGatewayModels_CodexGeminiGroupListsAntigravityGeminiMappings(t *testing
 	h.CodexModels(c)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	var got codexModelsResponseForTest
+	var got gatewayCodexModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	slugs := codexModelSlugsForTest(got.Models)
-	require.Contains(t, slugs, "gemini-3.8-flash-high")
-	require.Contains(t, slugs, "gemini-synced-custom")
-	require.NotContains(t, slugs, "claude-sonnet-4-6")
-	require.NotContains(t, slugs, "gemini-2.0-flash")
-	for _, slug := range slugs {
-		require.True(t, strings.HasPrefix(slug, "gemini-"), "unexpected non-gemini model on gemini group: %s", slug)
-	}
+	require.Empty(t, got.Models)
 }
 
 func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t *testing.T) {

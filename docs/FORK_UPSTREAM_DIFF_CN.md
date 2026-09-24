@@ -12,6 +12,12 @@
 - 保留 fork 的签到、运营中心、成本核算、账号归档、Web 创作台、生图管理、Responses Lite、WS/网关兼容、人民币成本和支付安全等定制能力；未执行生产迁移、部署、远程推送、tag 或 release。
 - 验证：`gofmt`、`git diff --check`、后端 `TZ=UTC go test -tags=unit -run '^$' ./...` 和请求日志保留、Claude 设置、仪表盘聚合定向测试通过。后端全量 unit 行为测试尚未作为本次合并的绿色门禁，既有 fork 与外部状态依赖失败需单独处理。
 
+## 2026-09-24 合并后审核修复
+
+- 修复内容审核引擎选择链路：TypeSafe 配置现在按生效引擎调用 `/v1/systemone`，OpenAI 仍调用 `/v1/moderations`；API Key 健康状态按引擎隔离，运行时切换不会污染在途请求。
+- 补齐 `engine_meta` 的日志落库、查询回读、测试审计结果和配置视图，管理端测试 API Key 在省略引擎时也会使用当前生效引擎；保留 OpenAI 与 TypeSafe 的独立端点、模型和阈值配置。
+- Wire provider 与网关测试辅助结构同步当前服务定义，恢复后端全量编译。验证：内容审核引擎/仓储定向测试、后端 `TZ=UTC go test -tags=unit -run '^$' ./...`、前端 `vue-tsc --noEmit` 与生产构建通过；reminder 语义和 OpenAI 调度 fallback 仍有合并前可复现的既有测试失败，未归因于本修复。
+
 ## 2026-09-20 合并上游 v0.2.7
 
 - 合入官方 release `v0.2.7`（`aea725f2ea644d5592d0bbb1d63b607efa7e200a`，发布于 2026-09-19）；合并前 `git merge-tree --write-tree` 预检识别 11 个冲突路径。
