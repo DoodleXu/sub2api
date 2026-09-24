@@ -118,8 +118,10 @@ class ReleaseMatrixTest(unittest.TestCase):
         Path('backend/resources').mkdir()
         Path('backend/resources/data').write_text('fixture')
         release.contexts(args)
-        for arch in ('amd64', 'arm64'):
-            binary = Path('contexts') / arch / 'sub2api'
+        for target in release.targets():
+            if target['goos'] != 'linux':
+                continue
+            binary = Path('contexts') / target['goarch'] / 'sub2api'
             self.assertEqual(binary.read_bytes(), b'fixture')
             self.assertEqual(binary.stat().st_mode & 0o777, 0o755)
 

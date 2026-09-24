@@ -99,6 +99,7 @@ def generate_config(args):
         extra = [{'glob': 'release-input/sub2api_*.tar.gz'}, {'glob': 'release-input/sub2api_*.zip'}]
         if args.simple:
             data['checksum'] = {'disable': True}
+            data['release']['skip_upload'] = True
         else:
             data['release']['extra_files'] = extra
             data['checksum'] = {'name_template': 'checksums.txt', 'algorithm': 'sha256', 'extra_files': extra}
