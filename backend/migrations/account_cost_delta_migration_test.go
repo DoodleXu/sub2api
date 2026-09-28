@@ -20,3 +20,25 @@ func TestAccountCostDeltaMigrationAvoidsRoutineFullRebuilds(t *testing.T) {
 	require.Contains(t, sql, "trg_accounts_cost_total_initialize")
 	require.Contains(t, sql, "initialized = FALSE")
 }
+
+func TestRemoveForkCostLedgersMigrationDropsAllForkStructures(t *testing.T) {
+	content, err := FS.ReadFile("241_remove_fork_cost_ledgers.sql")
+	require.NoError(t, err)
+	sql := string(content)
+	for _, name := range []string{
+		"usage_dashboard_cost_snapshot",
+		"usage_dashboard_account_cost_daily",
+		"usage_dashboard_account_cost_hourly",
+		"usage_account_cost_dirty_buckets",
+		"usage_account_cost_totals",
+	} {
+		require.Contains(t, sql, "DROP TABLE IF EXISTS "+name)
+	}
+	for _, name := range []string{
+		"trg_usage_logs_account_cost_pending",
+		"trg_usage_logs_account_cost_rebuild",
+		"trg_accounts_cost_total_initialize",
+	} {
+		require.Contains(t, sql, "DROP TRIGGER IF EXISTS "+name)
+	}
+}
