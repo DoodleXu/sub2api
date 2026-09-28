@@ -1881,10 +1881,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 		}
 	}
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
-	if err := r.fillDashboardAggregatedAccountCostFromUsageLogs(ctx, stats, todayUTC); err != nil {
+	if err := r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC); err != nil {
 		return err
 	}
-
 	hourlyActiveQuery := `
 		SELECT active_users
 		FROM usage_dashboard_hourly
@@ -1900,21 +1899,30 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 	return nil
 }
 
-func (r *usageLogRepository) fillDashboardAggregatedAccountCostFromUsageLogs(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
-	if err := r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC); err != nil {
-		return err
-	}
-	return r.fillDashboardAPIKeyProfitFromUsageLogs(ctx, stats, time.Unix(0, 0).UTC(), time.Now().UTC(), todayUTC, todayUTC.Add(24*time.Hour))
-}
-
 func (r *usageLogRepository) fillDashboardAccountCostFromAggregates(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
 	query := `
 		SELECT
 			COALESCE(SUM(account_cost), 0) AS total_account_cost,
-			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_account_cost
+			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_account_cost,
+			COALESCE(SUM(api_key_actual_cost), 0) AS api_key_actual_cost,
+			COALESCE(SUM(api_key_account_cost), 0) AS api_key_account_cost,
+			COALESCE(SUM(api_key_actual_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_api_key_actual_cost,
+			COALESCE(SUM(api_key_account_cost) FILTER (WHERE bucket_date = $1::date), 0) AS today_api_key_account_cost
 		FROM usage_dashboard_daily
 	`
-	return scanSingleRow(ctx, r.sql, query, []any{todayUTC}, &stats.TotalAccountCost, &stats.TodayAccountCost)
+	var totalAPIKeyActual, totalAPIKeyAccount, todayAPIKeyActual, todayAPIKeyAccount float64
+	if err := scanSingleRow(ctx, r.sql, query, []any{todayUTC}, &stats.TotalAccountCost, &stats.TodayAccountCost, &totalAPIKeyActual, &totalAPIKeyAccount, &todayAPIKeyActual, &todayAPIKeyAccount); err != nil {
+		return err
+	}
+	stats.TotalAPIKeyProfit = totalAPIKeyActual - totalAPIKeyAccount
+	stats.TodayAPIKeyProfit = todayAPIKeyActual - todayAPIKeyAccount
+	if totalAPIKeyActual > 0 {
+		stats.TotalAPIKeyProfitRate = stats.TotalAPIKeyProfit / totalAPIKeyActual
+	}
+	if todayAPIKeyActual > 0 {
+		stats.TodayAPIKeyProfitRate = stats.TodayAPIKeyProfit / todayAPIKeyActual
+	}
+	return nil
 }
 
 func isUndefinedColumnError(err error) bool {

@@ -981,6 +981,47 @@ func (s *UsageLogRepoSuite) TestListWithFilters() {
 
 // --- GetDashboardStats ---
 
+func (s *UsageLogRepoSuite) TestDashboardStats_APIKeyProfitUsesDailyAggregates() {
+	now := time.Now().UTC()
+	todayStart := timezone.Today()
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-apikey-profit@example.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-dashboard-profit", Name: "profit"})
+	apiKeyAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "dashboard-profit-apikey", Type: service.AccountTypeAPIKey})
+	oauthAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "dashboard-profit-oauth", Type: service.AccountTypeOAuth})
+
+	for _, item := range []struct {
+		account *service.Account
+		at      time.Time
+		charged float64
+		cost    float64
+	}{
+		{apiKeyAccount, todayStart.Add(-time.Hour), 4, 2},
+		{apiKeyAccount, now.Add(-time.Minute), 3, 1},
+		{oauthAccount, now.Add(-time.Minute), 10, 1},
+	} {
+		_, err := s.repo.Create(s.ctx, &service.UsageLog{
+			UserID:     user.ID,
+			APIKeyID:   apiKey.ID,
+			AccountID:  item.account.ID,
+			Model:      "profit-test",
+			TotalCost:  item.cost,
+			ActualCost: item.charged,
+			CreatedAt:  item.at,
+		})
+		s.Require().NoError(err)
+	}
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateRange(s.ctx, todayStart.Add(-24*time.Hour), now.Add(time.Minute)))
+	stats, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().InDelta(4, stats.TotalAPIKeyProfit, 0.000001)
+	s.Require().InDelta(2, stats.TodayAPIKeyProfit, 0.000001)
+	s.Require().InDelta(4.0/7.0, stats.TotalAPIKeyProfitRate, 0.000001)
+	s.Require().InDelta(2.0/3.0, stats.TodayAPIKeyProfitRate, 0.000001)
+	s.Require().InDelta(4, stats.TotalAccountCost, 0.000001)
+}
+
 func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)

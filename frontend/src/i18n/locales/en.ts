@@ -3587,6 +3587,7 @@ export default {
         priority: 'Priority',
         billingRateMultiplier: 'Billing Rate',
         totalCostCny: 'Cost',
+        costProfit: 'Cost / Profit',
         costStatsPendingHint: 'Recalculation is in progress. Showing the last complete result.',
         weight: 'Weight',
         schedulerScore: 'Scheduler Score',

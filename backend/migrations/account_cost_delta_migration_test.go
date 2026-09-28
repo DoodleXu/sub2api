@@ -42,3 +42,15 @@ func TestRemoveForkCostLedgersMigrationDropsAllForkStructures(t *testing.T) {
 		require.Contains(t, sql, "DROP TRIGGER IF EXISTS "+name)
 	}
 }
+
+func TestAPIKeyDashboardProfitMigrationAddsAggregateColumns(t *testing.T) {
+	content, err := FS.ReadFile("242_add_api_key_dashboard_profit.sql")
+	require.NoError(t, err)
+	sql := string(content)
+	for _, table := range []string{"usage_dashboard_hourly", "usage_dashboard_daily"} {
+		require.Contains(t, sql, "ALTER TABLE "+table)
+		require.Contains(t, sql, "api_key_actual_cost")
+		require.Contains(t, sql, "api_key_account_cost")
+	}
+	require.Contains(t, sql, "last_aggregated_at = TIMESTAMPTZ '1970-01-01 00:00:00+00'")
+}

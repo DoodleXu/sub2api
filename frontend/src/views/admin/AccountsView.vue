@@ -909,7 +909,7 @@ const refreshTodayStatsBatch = async () => {
   // Why this checks both columns:
   // - today_stats column shows dedicated today's metrics.
   // - usage column also embeds today's stats for Key/Bedrock rows.
-  // - cost column calculates the current-window profit or estimated cost.
+  // - cost column shows today's API Key profit or OAuth's cumulative manual cost.
   // Skip fetching only when all three columns are hidden.
   if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage') && hiddenColumns.has('total_cost_cny')) {
     todayStatsLoading.value = false
@@ -1770,7 +1770,7 @@ const allColumns = computed(() => {
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'upstream_billing_rate', label: t('admin.accounts.columns.upstreamBillingRate'), sortable: true },
-    { key: 'total_cost_cny', label: t('admin.accounts.columns.totalCostCny'), sortable: false },
+    { key: 'total_cost_cny', label: t('admin.accounts.columns.costProfit'), sortable: false },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
@@ -2048,13 +2048,11 @@ const formatAccountCost = (account: Account): string => {
     if (!Number.isFinite(userCharge) || userCharge <= 0) return '-'
     const profit = userCharge - accountCost
     const rate = profit / userCharge
-    return `$${profit.toFixed(4)} | ${(rate * 100).toFixed(2)}%`
+    return `今日 $${profit.toFixed(4)} | ${(rate * 100).toFixed(2)}%`
   }
-  const estimated = Number(stats?.cost ?? 0)
-  const standard = Number(stats?.standard_cost ?? 0)
   const totalCny = Number(account.total_cost_cny ?? 0)
-  if (!Number.isFinite(totalCny) || estimated <= 0) return '-'
-  return `¥${((totalCny / estimated) * standard).toFixed(2)}`
+  if (!Number.isFinite(totalCny) || totalCny <= 0) return '-'
+  return `累计 ¥${totalCny.toFixed(2)}`
 }
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
