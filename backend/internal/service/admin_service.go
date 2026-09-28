@@ -4020,6 +4020,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		account.TotalCostCNY += *input.AddCostCNY
 	}
+	if account.Type == AccountTypeAPIKey {
+		// API Key costs are derived from usage; never retain a manual CNY value.
+		account.TotalCostCNY = 0
+	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
 			account.LoadFactor = nil // 0 或负数表示清除

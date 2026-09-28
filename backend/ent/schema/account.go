@@ -113,8 +113,8 @@ func (Account) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
 
-		// total_cost_cny: 账号累计人民币成本。
-		// 用于按累计账号美元成本计算整体每美元人民币成本。
+		// total_cost_cny: OAuth 账号累计手工人民币成本。
+		// API Key 账号不读取此字段；其成本直接由当前用量统计计算。
 		field.Float("total_cost_cny").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(18,4)"}).
 			Default(0),
