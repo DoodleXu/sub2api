@@ -95,6 +95,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
+	if forwardedEffort := strings.TrimSpace(gjson.GetBytes(anthropicBody, "output_config.effort").String()); forwardedEffort != "" {
+		reasoningEffort = &forwardedEffort
+	}
 
 	// 与 /v1/messages 直通路径相同的 pre-filter。
 	anthropicBody = StripEmptyTextBlocks(anthropicBody)

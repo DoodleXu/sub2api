@@ -539,10 +539,7 @@ func validateOpenAIImageUpload(data []byte, declaredContentType string) (string,
 	declared := normalizeImageContentType(declaredContentType)
 	detectedType, ok := detectImageContentType(data)
 	if !ok {
-		// 客户端显式声明受支持的 image/* 类型时按声明放行：Codex 直连端点与
-		// 内联合成图片载荷不一定能被本地嗅探识别，字节内容最终由上游校验。
-		// 未声明类型或声明为非图片类型时仍然拒绝。
-		if isSupportedImageContentType(declared) {
+		if declared == "application/octet-stream" {
 			return declared, 0, 0, nil
 		}
 		return "", 0, 0, fmt.Errorf("image upload is not a supported PNG, JPEG, WebP, or GIF")

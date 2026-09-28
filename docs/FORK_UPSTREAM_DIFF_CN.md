@@ -1215,3 +1215,5 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 - 账号页成本列明确区分口径：API Key 显示今日利润及利润率，OAuth 显示累计手工成本；不再用今日估算值缩放累计人民币成本。
 - 删除 API Key 每刀成本字段、累计成本账本、成本增量表、成本快照及调度器成本信号；Dashboard 回到官方的用户实际扣费、账号实际成本和标准计费三类字段。
 - `241_remove_fork_cost_ledgers.sql` 仅清理 fork 专属账本结构，保留官方 usage 聚合表及 OAuth 手工成本字段。
+- 发版门禁修复：清理 migration 241 后已无执行入口的成本账本维护与历史回填实现，保留账号成本变更后的 Dashboard 快照刷新接口。渠道定价补齐音频、视频和推理档位传递；Simple Mode 的 API Key 窗口限额仅在显式启用时累计，不向用户扣费。
+- 兼容回归修复：DeepSeek Responses 图片工具输出、Kimi 无状态请求、Claude Opus 5.5 参数校验、模型回写、上游错误状态别名和分组调度回退恢复预期行为；内容审核的提醒片段分别按语义与关键词口径处理，避免提醒文本进入语义审核或本地关键词漏检。

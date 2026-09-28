@@ -80,6 +80,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(chatBody, upstreamModel); normalized {
 		chatBody = normalizedBody
+		if forwardedEffort := strings.TrimSpace(gjson.GetBytes(chatBody, "reasoning_effort").String()); forwardedEffort != "" {
+			reasoningEffort = &forwardedEffort
+		}
 	}
 	if account.Platform == PlatformOpenAI {
 		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, chatBody)

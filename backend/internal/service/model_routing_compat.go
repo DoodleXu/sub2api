@@ -28,6 +28,7 @@ func isOpenAICompatibleModelNotFound400(body []byte) bool {
 		message = strings.ToLower(strings.TrimSpace(string(body)))
 	}
 	return strings.Contains(message, "unknown provider for model") ||
+		strings.Contains(message, "unknown model") ||
 		strings.Contains(message, "model not found") ||
 		strings.Contains(message, "model is not supported")
 }

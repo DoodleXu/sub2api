@@ -143,11 +143,6 @@ type AccountCascadeDeleteRepository interface {
 	DeleteWithShadows(ctx context.Context, id int64) error
 }
 
-// OpenAISchedulingCostStatsAttacher is an optional repository capability used
-// only while an OpenAI cost-aware scheduling strategy is active.
-type OpenAISchedulingCostStatsAttacher interface {
-}
-
 type AccountDuplicateRepository interface {
 	// CreateWithAccountGroups atomically persists an account, its exact group priorities,
 	// and the scheduler outbox event for the new routing snapshot.

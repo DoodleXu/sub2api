@@ -5135,11 +5135,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
+	applyOpenCodeUpstreamUserAgent(account, targetURL, req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body)
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
+	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -6186,11 +6190,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
+	applyOpenCodeUpstreamUserAgent(account, targetURL, req.Header)
 	account.ApplyHeaderOverrides(req.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
+	if err := applyMappedGPT55LiteCompatibility(req, account, body); err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -6732,24 +6740,23 @@ func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel st
 		return line
 	}
 
-	// 使用 gjson 精确检查 model 字段，避免全量 JSON 反序列化
-	if m := gjson.Get(data, "model"); m.Exists() && m.Str == fromModel {
-		newData, err := sjson.Set(data, "model", toModel)
-		if err != nil {
-			return line
-		}
-		return "data: " + newData
+	if fromModel == "" || toModel == "" || fromModel == toModel || !gjson.Valid(data) {
+		return line
 	}
-
-	// 检查嵌套的 response.model 字段
-	if m := gjson.Get(data, "response.model"); m.Exists() && m.Str == fromModel {
-		newData, err := sjson.Set(data, "response.model", toModel)
-		if err != nil {
-			return line
+	changed := false
+	for _, path := range []string{"model", "response.model"} {
+		if m := gjson.Get(data, path); m.Exists() && m.Type == gjson.String {
+			newData, err := sjson.Set(data, path, toModel)
+			if err != nil {
+				return line
+			}
+			data = newData
+			changed = true
 		}
-		return "data: " + newData
 	}
-
+	if changed {
+		return "data: " + data
+	}
 	return line
 }
 
@@ -7444,21 +7451,88 @@ func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
 }
 
 func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte {
-	if account == nil || !account.UsesNativeCNResponses() {
+	if account != nil && account.Platform == PlatformKimi && account.UsesNativeCNResponses() {
+		normalized, err := sjson.SetBytes(body, "store", false)
+		if err != nil {
+			return body
+		}
+		if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
+			return stripped
+		}
+		return normalized
+	}
+	if !targetsDeepSeekAPIHost(account) {
 		return body
 	}
-	normalized, err := sjson.SetBytes(body, "store", false)
-	if err != nil {
-		return body
-	}
-	if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
-		normalized = stripped
+	normalized := body
+	if account.UsesNativeCNResponses() {
+		var err error
+		normalized, err = sjson.SetBytes(normalized, "store", false)
+		if err != nil {
+			return body
+		}
+		if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
+			normalized = stripped
+		}
 	}
 	var requestBody map[string]any
 	if err := decodeOpenAIJSONUseNumber(normalized, &requestBody); err != nil {
 		return normalized
 	}
 	liftedInput, changed := apicompat.LiftResponsesToolOutputMedia(requestBody["input"])
+	input, _ := liftedInput.([]any)
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		var parts []any
+		switch content := item["content"].(type) {
+		case []any:
+			parts = content
+		case []map[string]any:
+			parts = make([]any, len(content))
+			for i := range content {
+				parts[i] = content[i]
+			}
+		default:
+			continue
+		}
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch part["type"] {
+			case "input_image", "image_url", "image":
+			default:
+				continue
+			}
+			imageURL, _ := part["image_url"].(string)
+			if imageURL == "" {
+				if image, ok := part["image_url"].(map[string]any); ok {
+					imageURL, _ = image["url"].(string)
+				}
+			}
+			if imageURL == "" {
+				if source, ok := part["source"].(map[string]any); ok && source["type"] == "base64" {
+					mediaType, _ := source["media_type"].(string)
+					data, _ := source["data"].(string)
+					if mediaType != "" && data != "" {
+						imageURL = "data:" + mediaType + ";base64," + data
+					}
+				}
+			}
+			if imageURL == "" {
+				continue
+			}
+			part["type"] = "input_image"
+			part["image_url"] = imageURL
+			part["url"] = imageURL
+			delete(part, "source")
+			changed = true
+		}
+	}
 	if !changed {
 		return normalized
 	}
@@ -8004,8 +8078,12 @@ func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 }
 
 func (s *OpenAIGatewayService) replaceModelInResponseBody(body []byte, fromModel, toModel string) []byte {
-	// 使用 gjson/sjson 精确替换 model 字段，避免全量 JSON 反序列化
-	if m := gjson.GetBytes(body, "model"); m.Exists() && m.Str == fromModel {
+	// Only rewrite the top-level model of a complete response.
+	if fromModel != "" && toModel != "" && fromModel != toModel && gjson.ValidBytes(body) {
+		m := gjson.GetBytes(body, "model")
+		if !m.Exists() || m.Type != gjson.String {
+			return body
+		}
 		newBody, err := sjson.SetBytes(body, "model", toModel)
 		if err != nil {
 			return body
@@ -8414,6 +8492,12 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if err := writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway"); err != nil && input.RequireUsageLogPersistence {
 			return fmt.Errorf("persist simple-mode usage log: %w", err)
 		}
+		if s.cfg.SimpleModeKeyRateLimitEnabled {
+			_, _ = applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
+				Cost: cost, User: user, APIKey: apiKey, Account: account,
+				AccountRateMultiplier: accountRateMultiplier, SimpleModeKeyRateLimitOnly: true,
+			}, s.billingDeps(), s.usageBillingRepo)
+		}
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -8591,6 +8675,32 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			return s.calculateOpenAIVideoCost(ctx, billingModel, apiKey, result, videoMultiplier), nil
 		}
 	}
+	if result != nil && result.VideoCount > 0 {
+		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved != nil {
+			gid := apiKey.Group.ID
+			cost, err := s.billingService.CalculateCostUnified(CostInput{
+				Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
+				UsageUnits: float64(result.VideoCount * result.VideoDurationSeconds), RateMultiplier: videoMultiplier,
+				ReasoningEffort: optionalStringValue(result.ReasoningEffort), Resolver: s.resolver, Resolved: resolved,
+			})
+			if err == nil {
+				return cost, nil
+			}
+		}
+	}
+	if result != nil && result.AudioUsage != nil {
+		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved != nil {
+			gid := apiKey.Group.ID
+			cost, err := s.billingService.CalculateCostUnified(CostInput{
+				Ctx: ctx, Model: billingModel, GroupID: &gid, Group: apiKey.Group,
+				UsageUnits: result.AudioUsage.DurationOrUnits, RateMultiplier: multiplier,
+				ReasoningEffort: optionalStringValue(result.ReasoningEffort), Resolver: s.resolver, Resolved: resolved,
+			})
+			if err == nil {
+				return cost, nil
+			}
+		}
+	}
 	if result != nil && result.ImageCount > 0 {
 		// 渠道定价为 token 计费时走 token 路径，否则走图片计费
 		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
@@ -8606,7 +8716,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 			if candidate == "" {
 				continue
 			}
-			cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, pricingAt, tokens, serviceTier, longContextBillingGate)
+			cost, err := s.calculateOpenAIRecordUsageTokenCost(ctx, apiKey, candidate, multiplier, pricingAt, tokens, serviceTier, longContextBillingGate, optionalStringValue(result.ReasoningEffort))
 			if err == nil {
 				tokenCost = cost
 				break
@@ -8730,6 +8840,7 @@ func (s *OpenAIGatewayService) ValidateOpenAIUsagePricing(
 			UsageTokens{},
 			strings.TrimSpace(serviceTier),
 			longContextBillingGate,
+			"",
 		)
 		if err == nil {
 			return nil
@@ -8748,6 +8859,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 	tokens UsageTokens,
 	serviceTier string,
 	longContextBillingGate *bool,
+	reasoningEffort string,
 ) (*CostBreakdown, error) {
 	if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
@@ -8761,6 +8873,7 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 			RateMultiplier:            multiplier,
 			PricingAt:                 pricingAt,
 			ServiceTier:               serviceTier,
+			ReasoningEffort:           reasoningEffort,
 			Resolver:                  s.resolver,
 			LongContextBillingEnabled: longContextBillingGate,
 		})
@@ -8819,14 +8932,15 @@ func (s *OpenAIGatewayService) calculateOpenAIImageCost(
 		(resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage) {
 		gid := apiKey.Group.ID
 		cost, err := s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			RequestCount:   result.ImageCount,
-			SizeTier:       sizeTier,
-			RateMultiplier: multiplier,
-			Resolver:       s.resolver,
-			Resolved:       resolved,
+			Ctx:             ctx,
+			Model:           billingModel,
+			GroupID:         &gid,
+			RequestCount:    result.ImageCount,
+			SizeTier:        sizeTier,
+			RateMultiplier:  multiplier,
+			ReasoningEffort: optionalStringValue(result.ReasoningEffort),
+			Resolver:        s.resolver,
+			Resolved:        resolved,
 		})
 		if err == nil {
 			return cost
@@ -9142,12 +9256,18 @@ func getOpenAIReasoningEffortFromReqBody(reqBody map[string]any, requestedModel 
 	// Primary: reasoning.effort
 	if reasoning, ok := reqBody["reasoning"].(map[string]any); ok {
 		if effort, ok := reasoning["effort"].(string); ok {
+			if strings.EqualFold(strings.TrimSpace(effort), "none") || strings.EqualFold(strings.TrimSpace(effort), "minimal") {
+				return strings.ToLower(strings.TrimSpace(effort)), true
+			}
 			return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
 		}
 	}
 
 	// Fallback: some clients may use a flat field.
 	if effort, ok := reqBody["reasoning_effort"].(string); ok {
+		if strings.EqualFold(strings.TrimSpace(effort), "none") || strings.EqualFold(strings.TrimSpace(effort), "minimal") {
+			return strings.ToLower(strings.TrimSpace(effort)), true
+		}
 		return normalizeOpenAIReasoningEffortForModel(effort, requestedModel), true
 	}
 
@@ -9517,6 +9637,9 @@ func extractOpenAIReasoningEffortFromBody(body []byte, modelCandidates ...string
 		reasoningEffort = strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())
 	}
 	if reasoningEffort != "" {
+		if strings.EqualFold(reasoningEffort, "none") || strings.EqualFold(reasoningEffort, "minimal") {
+			return &reasoningEffort
+		}
 		normalized := normalizeOpenAIReasoningEffortForModel(reasoningEffort, firstNonEmpty(modelCandidates...))
 		if normalized == "" {
 			return nil
@@ -10216,7 +10339,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
 	if strings.EqualFold(strings.TrimSpace(raw), "max") {
 		normalizedModel := strings.ToLower(strings.TrimSpace(model))
-		if isOpenAIGPT56Model(model) || isOpenAIGPT6AstraModel(model) || strings.Contains(normalizedModel, "astra") || strings.Contains(normalizedModel, "deepseek") || strings.Contains(normalizedModel, "kimi") || strings.Contains(normalizedModel, "glm") {
+		if isOpenAIGPT56Model(model) || isOpenAIGPT6Model(model) || isOpenAIGPT6AstraModel(model) || strings.Contains(normalizedModel, "astra") || strings.Contains(normalizedModel, "deepseek") || strings.Contains(normalizedModel, "kimi") || strings.Contains(normalizedModel, "glm") {
 			return "max"
 		}
 	}

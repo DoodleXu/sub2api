@@ -3716,10 +3716,8 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 }
 
 type accountCostTotal struct {
-	totalAccountCost         float64
-	totalStandardAccountCost float64
-	hasPublishedResult       bool
-	complete                 bool
+	totalAccountCost   float64
+	hasPublishedResult bool
 }
 
 func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountIDs []int64) (map[int64]accountCostTotal, error) {

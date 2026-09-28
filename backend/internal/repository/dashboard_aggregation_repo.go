@@ -488,50 +488,6 @@ func (r *dashboardAggregationRepository) advanceUserAggregateCoverage(ctx contex
 	return nil
 }
 
-func (r *dashboardAggregationRepository) advanceAccountCostAggregateCoverage(ctx context.Context, start, end time.Time) error {
-	if !end.After(start) {
-		return nil
-	}
-	epoch := time.Unix(0, 0).UTC()
-	query := `
-		INSERT INTO usage_dashboard_aggregation_watermark (
-			id,
-			last_aggregated_at,
-			account_cost_hourly_aggregated_from,
-			account_cost_hourly_last_aggregated_at,
-			updated_at
-		)
-		VALUES (1, $3, $1, $2, NOW())
-		ON CONFLICT (id)
-		DO UPDATE SET
-			account_cost_hourly_aggregated_from = CASE
-				WHEN usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at <= $3
-					THEN EXCLUDED.account_cost_hourly_aggregated_from
-				WHEN EXCLUDED.account_cost_hourly_last_aggregated_at < usage_dashboard_aggregation_watermark.account_cost_hourly_aggregated_from
-				  OR EXCLUDED.account_cost_hourly_aggregated_from > usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at
-					THEN usage_dashboard_aggregation_watermark.account_cost_hourly_aggregated_from
-				ELSE LEAST(
-					usage_dashboard_aggregation_watermark.account_cost_hourly_aggregated_from,
-					EXCLUDED.account_cost_hourly_aggregated_from
-				)
-			END,
-			account_cost_hourly_last_aggregated_at = CASE
-				WHEN usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at <= $3
-					THEN EXCLUDED.account_cost_hourly_last_aggregated_at
-				WHEN EXCLUDED.account_cost_hourly_last_aggregated_at < usage_dashboard_aggregation_watermark.account_cost_hourly_aggregated_from
-				  OR EXCLUDED.account_cost_hourly_aggregated_from > usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at
-					THEN usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at
-				ELSE GREATEST(
-					usage_dashboard_aggregation_watermark.account_cost_hourly_last_aggregated_at,
-					EXCLUDED.account_cost_hourly_last_aggregated_at
-				)
-			END,
-			updated_at = EXCLUDED.updated_at
-	`
-	_, err := r.sql.ExecContext(ctx, query, start.UTC(), end.UTC(), epoch)
-	return err
-}
-
 func (r *dashboardAggregationRepository) advanceModelAggregateCoverage(ctx context.Context, start, end time.Time) error {
 	return r.advanceUserAggregateCoverageColumns(
 		ctx,

@@ -1731,7 +1731,6 @@ func TestOpenAIStreamingReadErrorBeforeOutputReturnsFailover(t *testing.T) {
 }
 
 func TestOpenAIStreamingReadErrorAfterOutputUsesResponsesErrorSchema(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	for _, tc := range []struct {
 		name  string
 		cause error

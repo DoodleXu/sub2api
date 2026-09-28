@@ -27,7 +27,8 @@ func (r *lockingRenewalRepo) GetByUserIDAndGroupID(context.Context, int64, int64
 }
 
 func (r *lockingRenewalRepo) GetActiveByUserIDAndGroupID(context.Context, int64, int64) (*UserSubscription, error) {
-	return nil, ErrSubscriptionNotFound
+	copy := r.stale
+	return &copy, nil
 }
 
 func (r *lockingRenewalRepo) GetByID(_ context.Context, _ int64) (*UserSubscription, error) {

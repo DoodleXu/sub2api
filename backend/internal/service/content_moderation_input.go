@@ -21,21 +21,111 @@ func extractContentModerationKeywordText(protocol string, body []byte) string {
 	var collector contentModerationInputCollector
 	switch protocol {
 	case ContentModerationProtocolAnthropicMessages:
-		collectLatestAnthropicUserMessage(gjson.GetBytes(body, "messages"), &collector)
+		collectLatestKeywordRoleMessage(gjson.GetBytes(body, "messages"), "user", &collector)
 	case ContentModerationProtocolOpenAIChat:
-		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
+		collectLatestKeywordRoleMessage(gjson.GetBytes(body, "messages"), "user", &collector)
 	case ContentModerationProtocolOpenAIResponses, ContentModerationProtocolOpenAIAlphaSearch:
-		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
+		collectKeywordResponsesInput(gjson.GetBytes(body, "input"), &collector)
 	case ContentModerationProtocolGemini:
-		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
+		collectLatestKeywordGeminiContent(gjson.GetBytes(body, "contents"), &collector)
 	case ContentModerationProtocolOpenAIImages:
 		addKeywordModerationText(&collector.parts, gjson.GetBytes(body, "prompt").String())
 	default:
-		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
-		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
-		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
+		collectKeywordResponsesInput(gjson.GetBytes(body, "input"), &collector)
 	}
 	return normalizeContentModerationText(strings.Join(collector.parts, "\n"))
+}
+
+func collectLatestKeywordRoleMessage(messages gjson.Result, role string, collector *contentModerationInputCollector) {
+	if !messages.IsArray() {
+		return
+	}
+	items := messages.Array()
+	item := items[len(items)-1]
+	if strings.EqualFold(strings.TrimSpace(item.Get("role").String()), role) {
+		collectRawKeywordContent(item.Get("content"), &collector.parts)
+	}
+}
+
+func collectKeywordResponsesInput(input gjson.Result, collector *contentModerationInputCollector) {
+	if input.Type == gjson.String {
+		collector.parts = append(collector.parts, input.String())
+		return
+	}
+	if input.IsArray() {
+		items := input.Array()
+		if len(items) == 0 {
+			return
+		}
+		item := items[len(items)-1]
+		typ := strings.ToLower(strings.TrimSpace(item.Get("type").String()))
+		role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+		if role == "user" {
+			collectRawKeywordContent(item.Get("content"), &collector.parts)
+		} else if typ == "input_text" || isResponsesUserTextItem(item) {
+			collectRawKeywordContent(item, &collector.parts)
+		}
+		return
+	}
+	if input.IsObject() && strings.EqualFold(strings.TrimSpace(input.Get("role").String()), "user") {
+		collectRawKeywordContent(input.Get("content"), &collector.parts)
+		return
+	}
+	collectRawKeywordStrings(input, &collector.parts)
+}
+
+func collectLatestKeywordGeminiContent(contents gjson.Result, collector *contentModerationInputCollector) {
+	if !contents.IsArray() {
+		return
+	}
+	items := contents.Array()
+	if len(items) == 0 {
+		return
+	}
+	item := items[len(items)-1]
+	if role := strings.ToLower(strings.TrimSpace(item.Get("role").String())); role != "" && role != "user" {
+		return
+	}
+	parts := item.Get("parts")
+	if !parts.IsArray() {
+		return
+	}
+	parts.ForEach(func(_, part gjson.Result) bool {
+		if part.Get("functionResponse").Exists() || part.Get("functionCall").Exists() {
+			return true
+		}
+		addKeywordModerationText(&collector.parts, part.Get("text").String())
+		return true
+	})
+}
+
+func collectRawKeywordStrings(value gjson.Result, parts *[]string) {
+	if value.Type == gjson.String {
+		addKeywordModerationText(parts, value.String())
+		return
+	}
+	if value.IsArray() {
+		value.ForEach(func(_, item gjson.Result) bool { collectRawKeywordStrings(item, parts); return true })
+		return
+	}
+	if value.IsObject() {
+		value.ForEach(func(_, item gjson.Result) bool { collectRawKeywordStrings(item, parts); return true })
+	}
+}
+
+func collectRawKeywordContent(value gjson.Result, parts *[]string) {
+	if value.IsArray() {
+		value.ForEach(func(_, item gjson.Result) bool {
+			typ := strings.ToLower(strings.TrimSpace(item.Get("type").String()))
+			if typ == "tool_result" || typ == "function_result" {
+				return true
+			}
+			collectRawKeywordStrings(item, parts)
+			return true
+		})
+		return
+	}
+	collectRawKeywordStrings(value, parts)
 }
 
 func addKeywordModerationText(parts *[]string, text string) {
@@ -289,7 +379,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 	case !value.Exists():
 		return
 	case value.Type == gjson.String:
-		addModerationText(parts, stripSystemReminderBlocks(value.String()))
+		addModerationText(parts, value.String())
 	case value.IsArray():
 		value.ForEach(func(_, item gjson.Result) bool {
 			collectAnthropicUserContentValue(item, parts, images)
@@ -300,7 +390,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 		switch typ {
 		case "", "text", "input_text", "message":
 			if value.Get("text").Exists() {
-				addModerationText(parts, stripSystemReminderBlocks(value.Get("text").String()))
+				addModerationText(parts, value.Get("text").String())
 			}
 			if value.Get("content").Exists() {
 				collectAnthropicUserContentValue(value.Get("content"), parts, images)
@@ -582,9 +672,7 @@ func addModerationText(parts *[]string, text string) {
 	if text == "" {
 		return
 	}
-	text = stripSystemReminderBlocks(text)
-	text = strings.TrimSpace(text)
-	if text == "" {
+	if strings.Contains(text, "<system-reminder>") {
 		return
 	}
 	*parts = append(*parts, text)

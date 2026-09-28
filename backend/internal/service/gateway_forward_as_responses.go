@@ -274,6 +274,9 @@ func ExtractResponsesReasoningEffortFromBody(body []byte, modelCandidates ...str
 	if model == "" {
 		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	}
+	if strings.EqualFold(raw, "none") || strings.EqualFold(raw, "minimal") {
+		return &raw
+	}
 	normalized := normalizeOpenAIReasoningEffortForModel(raw, model)
 	if normalized == "" {
 		return nil
