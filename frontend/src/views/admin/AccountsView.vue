@@ -403,10 +403,7 @@
           </template>
           <template #cell-total_cost_cny="{ row }">
             <span class="inline-flex items-center gap-1 text-sm font-mono text-gray-500 dark:text-dark-400">
-              <span>{{ formatCostPerUsd(row) }}</span>
-              <HelpTooltip v-if="row.cost_stats_pending && hasCostPerUsdValue(row)" :content="t('admin.accounts.costStatsPendingHint')" width-class="w-64">
-                <Icon name="refresh" size="xs" class="text-amber-500" />
-              </HelpTooltip>
+              <span>{{ formatAccountCost(row) }}</span>
             </span>
           </template>
           <template #cell-priority="{ value }">
@@ -912,8 +909,9 @@ const refreshTodayStatsBatch = async () => {
   // Why this checks both columns:
   // - today_stats column shows dedicated today's metrics.
   // - usage column also embeds today's stats for Key/Bedrock rows.
-  // So we only skip fetching when BOTH columns are hidden.
-  if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage')) {
+  // - cost column calculates the current-window profit or estimated cost.
+  // Skip fetching only when all three columns are hidden.
+  if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage') && hiddenColumns.has('total_cost_cny')) {
     todayStatsLoading.value = false
     todayStatsError.value = null
     return
@@ -2042,23 +2040,22 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   }
 }
 
-const formatCostPerUsd = (account: Account): string => {
+const formatAccountCost = (account: Account): string => {
+  const stats = todayStatsByAccountId.value[String(account.id)]
+  const userCharge = Number(stats?.user_cost ?? 0)
+  const accountCost = Number(stats?.cost ?? 0)
+  if (account.type === 'apikey') {
+    if (!Number.isFinite(userCharge) || userCharge <= 0) return '-'
+    const profit = userCharge - accountCost
+    const rate = profit / userCharge
+    return `$${profit.toFixed(4)} | ${(rate * 100).toFixed(2)}%`
+  }
+  const estimated = Number(stats?.cost ?? 0)
+  const standard = Number(stats?.standard_cost ?? 0)
   const totalCny = Number(account.total_cost_cny ?? 0)
-  if (!Number.isFinite(totalCny) || totalCny <= 0) {
-    return '-'
-  }
-  const backendCostPerUsd = Number(account.cost_cny_per_usd ?? 0)
-  if (Number.isFinite(backendCostPerUsd) && backendCostPerUsd > 0) {
-    return `¥${backendCostPerUsd.toFixed(4)}`
-  }
-  const totalAccountCost = Number(account.total_account_cost ?? 0)
-  if (!Number.isFinite(totalCny) || !Number.isFinite(totalAccountCost) || totalAccountCost <= 0) {
-    return '-'
-  }
-  return `¥${(totalCny / totalAccountCost).toFixed(4)}`
+  if (!Number.isFinite(totalCny) || estimated <= 0) return '-'
+  return `¥${((totalCny / estimated) * standard).toFixed(2)}`
 }
-
-const hasCostPerUsdValue = (account: Account): boolean => formatCostPerUsd(account) !== '-'
 const buildBulkEditFilterSnapshot = () => {
   const rawParams = toRaw(params) as Record<string, unknown>
   const sortOrder: AccountSortOrder = rawParams.sort_order === 'desc' ? 'desc' : 'asc'
@@ -2212,15 +2209,7 @@ const mergeRuntimeFields = (oldAccount: Account, updatedAccount: Account): Accou
     archived_at: Object.prototype.hasOwnProperty.call(updatedAccount, 'archived_at') ? (updatedAccount.archived_at ?? null) : (oldAccount.archived_at ?? null),
     parent_archived_at: Object.prototype.hasOwnProperty.call(updatedAccount, 'parent_archived_at') ? (updatedAccount.parent_archived_at ?? null) : (oldAccount.parent_archived_at ?? null),
     total_account_cost: updatedAccount.total_account_cost ?? oldAccount.total_account_cost,
-    cost_cny_per_usd: updatedAccount.cost_cny_per_usd ?? oldAccount.cost_cny_per_usd
-  }
-
-  const totalCny = Number(mergedAccount.total_cost_cny ?? 0)
-  const totalAccountCost = Number(mergedAccount.total_account_cost ?? 0)
-  if (Number.isFinite(totalCny) && totalCny > 0 && Number.isFinite(totalAccountCost) && totalAccountCost > 0) {
-    mergedAccount.cost_cny_per_usd = totalCny / totalAccountCost
-  } else if (!Number.isFinite(totalCny) || totalCny <= 0) {
-    mergedAccount.cost_cny_per_usd = 0
+    total_cost_cny: updatedAccount.total_cost_cny ?? oldAccount.total_cost_cny
   }
 
   return mergedAccount

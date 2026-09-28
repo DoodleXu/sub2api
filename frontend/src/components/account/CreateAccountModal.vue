@@ -3041,7 +3041,7 @@
           <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
         </div>
-        <div>
+        <div v-if="form.type === 'oauth'">
           <label class="input-label">{{ t('admin.accounts.totalCostCny') }}</label>
           <input v-model.number="form.total_cost_cny" type="number" min="0" step="0.0001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.totalCostCnyHint') }}</p>
@@ -6006,7 +6006,7 @@ const createAccountAndFinish = async (
     load_factor: form.load_factor ?? undefined,
     priority: form.priority,
     rate_multiplier: form.rate_multiplier,
-    total_cost_cny: form.total_cost_cny || 0,
+    total_cost_cny: type === 'oauth' ? (form.total_cost_cny || 0) : undefined,
     group_ids: form.group_ids,
     expires_at: form.expires_at,
     // 上游倍率探测对全部 API-key 平台开放（antigravity upstream 走本 helper）；

@@ -1705,15 +1705,10 @@
       </div>
 
       <div data-testid="account-cost-fields" class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div>
+        <div v-if="account.type === 'oauth'">
           <label class="input-label">{{ t('admin.accounts.totalCostCny') }}</label>
           <input v-model.number="form.total_cost_cny" type="number" min="0" step="0.0001" class="input" />
           <p class="input-hint">{{ t('admin.accounts.totalCostCnyHint') }}</p>
-        </div>
-        <div v-if="account.type === 'apikey'">
-          <label class="input-label">{{ t('admin.accounts.addCostCny') }}</label>
-          <input v-model.number="addCostCny" type="number" min="0" step="0.0001" class="input" />
-          <p class="input-hint">{{ t('admin.accounts.addCostCnyHint') }}</p>
         </div>
       </div>
 
@@ -3393,7 +3388,6 @@ interface TempUnschedRuleForm {
 
 // State
 const submitting = ref(false)
-const addCostCny = ref<number | null>(null)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 
@@ -4172,7 +4166,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
   form.total_cost_cny = newAccount.total_cost_cny ?? 0
-  addCostCny.value = null
   form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
     ? newAccount.status
     : 'active'
@@ -5192,11 +5185,10 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-    if (props.account.type === 'apikey' && addCostCny.value != null && addCostCny.value > 0) {
-      updatePayload.add_cost_cny = addCostCny.value
-      delete updatePayload.total_cost_cny
-    } else {
+    if (props.account.type === 'oauth') {
       updatePayload.total_cost_cny = form.total_cost_cny || 0
+    } else {
+      delete updatePayload.total_cost_cny
     }
     if (props.account.type === 'apikey') {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value

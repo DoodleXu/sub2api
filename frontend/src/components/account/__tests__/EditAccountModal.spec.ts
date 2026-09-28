@@ -1186,6 +1186,32 @@ describe('EditAccountModal', () => {
     ).toBe(false)
   })
 
+  it('omits retired CNY cost fields when editing an API Key account', async () => {
+    updateAccountMock.mockReset().mockResolvedValue(buildAccount())
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(buildAccount())
+
+    expect(wrapper.get('[data-testid="account-cost-fields"]').find('input').exists()).toBe(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('total_cost_cny')
+    expect(payload).not.toHaveProperty('add_cost_cny')
+  })
+
+  it('keeps manual CNY cost for OAuth accounts', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    account.total_cost_cny = 12
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="account-cost-fields"]').find('input').exists()).toBe(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.total_cost_cny).toBe(12)
+  })
+
   it('disabling probing also disables rate sync and restores manual rate editing', async () => {
     const account = buildAccount()
     account.extra = {
