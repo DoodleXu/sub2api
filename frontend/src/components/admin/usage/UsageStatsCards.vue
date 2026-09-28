@@ -68,8 +68,8 @@
           ${{ (stats?.total_actual_cost || 0).toFixed(4) }}
         </p>
         <p class="text-xs text-gray-400">
-          <template v-if="showAccountCost && totalRealCostCNY != null">
-            <span class="text-orange-500">{{ t('admin.dashboard.realCostCny') }} ¥{{ totalRealCostCNY.toFixed(4) }}</span>
+          <template v-if="showAccountCost">
+            <span class="text-orange-500">{{ t('admin.dashboard.accountCost') }} ${{ totalAccountCost.toFixed(4) }}</span>
             <span> · </span>
           </template>
           <span>
@@ -106,12 +106,9 @@ const props = withDefaults(defineProps<{
 
 const { t } = useI18n()
 
-const totalRealCostCNY = computed(() => {
-  const stats = props.stats as (AdminUsageStatsResponse & { total_real_cost_cny?: number }) | null
-  return stats?.total_real_cost_cny ?? null
-})
 const showAccountCost = computed(() => props.showAccountCost)
 const strikeStandardCost = computed(() => props.strikeStandardCost)
+const totalAccountCost = computed(() => Number((props.stats as AdminUsageStatsResponse | null)?.total_account_cost ?? 0))
 
 const formatDuration = (ms: number) =>
   ms < 1000 ? `${ms.toFixed(0)}ms` : `${(ms / 1000).toFixed(2)}s`

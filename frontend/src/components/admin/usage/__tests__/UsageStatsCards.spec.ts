@@ -14,7 +14,7 @@ const messages: Record<string, string> = {
   'usage.cacheCreationTokensLabel': 'Cache Creation',
   'usage.cacheReadTokensLabel': 'Cache Read',
   'usage.totalCost': 'Total Cost',
-  'admin.dashboard.realCostCny': 'Real Cost',
+  'admin.dashboard.accountCost': 'Cost',
   'usage.standardCost': 'Standard',
   'usage.avgDuration': 'Avg Duration',
 }
@@ -40,18 +40,17 @@ const stats = {
   total_cost: 0.001,
   total_actual_cost: 0.001,
   total_account_cost: 0.001,
-  total_real_cost_cny: 0.001,
   average_duration_ms: 250,
 }
 
 describe('UsageStatsCards', () => {
-  it('renders the orange real cost in CNY', () => {
+  it('renders the orange account cost in USD', () => {
     const wrapper = mount(UsageStatsCards, {
       props: { stats },
       global: { stubs: { Icon: true } },
     })
 
-    expect(wrapper.text()).toContain('Real Cost ¥0.0010')
+    expect(wrapper.text()).toContain('Cost $0.0010')
   })
 
   it('shows cache token breakdown values', () => {

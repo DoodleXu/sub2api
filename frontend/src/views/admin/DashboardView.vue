@@ -29,7 +29,7 @@
             </div>
           </div>
 
-          <!-- Average Cost -->
+          <!-- Total actual charges -->
           <div class="card p-4">
             <div class="flex items-center gap-3">
               <div class="rounded-lg bg-cyan-100 p-2 dark:bg-cyan-900/30">
@@ -37,52 +37,12 @@
               </div>
               <div>
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {{ t('admin.dashboard.averageCost') }}
+                  {{ t('admin.dashboard.totalActualCost') }}
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
-                  {{ formatMaterializedCny(stats.average_cost_cny_per_usd) }}
-                  <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.dashboard.perUsd') }}</span>
+                  ${{ formatCost(stats.total_actual_cost) }}
                 </p>
-                <p class="text-xs">
-                  <span
-                    class="text-green-600 dark:text-green-400"
-                    :title="t('admin.dashboard.openaiAverageCost')"
-                    >{{ formatMaterializedCny(stats.openai_cost_cny_per_usd) }}</span
-                  >
-                  <span class="text-gray-400 dark:text-gray-500"> / </span>
-                  <span
-                    class="text-orange-500 dark:text-orange-400"
-                    :title="t('admin.dashboard.anthropicAverageCost')"
-                    >{{ formatMaterializedCny(stats.anthropic_cost_cny_per_usd) }}</span
-                  >
-                  <span class="text-gray-400 dark:text-gray-500"> / </span>
-                  <span
-                    class="text-gray-400 dark:text-gray-500"
-                    :title="t('admin.dashboard.totalCostCny')"
-                    >{{ formatMaterializedCny(stats.total_cost_cny) }}</span
-                  >
-                </p>
-                <p v-if="costSummaryError" class="text-xs text-red-500 dark:text-red-400">
-                  {{ t('admin.dashboard.costUnavailable') }}
-                </p>
-                <p
-                  v-else-if="costSummary && costSummary.ledger_pending"
-                  class="text-xs text-amber-600 dark:text-amber-400"
-                >
-                  {{ t('admin.dashboard.costPending') }}
-                </p>
-                <p
-                  v-else-if="costSummary && !costSummary.aggregation_complete"
-                  class="text-xs text-amber-600 dark:text-amber-400"
-                >
-                  {{ t('admin.dashboard.costAggregating') }}
-                </p>
-                <p
-                  v-else-if="costSummary?.stale"
-                  class="text-xs text-amber-600 dark:text-amber-400"
-                >
-                  {{ t('admin.dashboard.costStaleAt', { time: formatCostSnapshotTime(costSummary.as_of) }) }}
-                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.dashboard.actual') }}</p>
               </div>
             </div>
           </div>
@@ -152,8 +112,8 @@
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span
                     class="text-orange-500 dark:text-orange-400"
-                    :title="t('admin.dashboard.realCostCny')"
-                    >{{ formatMaterializedCny(stats.today_real_cost_cny) }}</span
+                    :title="t('admin.dashboard.accountCost')"
+                    >${{ formatCost(stats.today_account_cost) }}</span
                   >
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span
@@ -188,8 +148,8 @@
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span
                     class="text-orange-500 dark:text-orange-400"
-                    :title="t('admin.dashboard.realCostCny')"
-                    >{{ formatMaterializedCny(stats.total_cost_cny) }}</span
+                    :title="t('admin.dashboard.accountCost')"
+                    >${{ formatCost(stats.total_account_cost) }}</span
                   >
                   <span class="text-gray-400 dark:text-gray-500"> / </span>
                   <span
@@ -340,7 +300,6 @@ import type {
   UserUsageTrendPoint,
   UserSpendingRankingItem
 } from '@/types'
-import type { DashboardCostSummary } from '@/api/admin/dashboard'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -380,9 +339,6 @@ const chartsLoading = ref(false)
 const userTrendLoading = ref(false)
 const rankingLoading = ref(false)
 const rankingError = ref(false)
-const costSummary = ref<DashboardCostSummary | null>(null)
-const costSummaryLoading = ref(false)
-const costSummaryError = ref(false)
 
 // Chart data
 const trendData = ref<TrendDataPoint[]>([])
@@ -591,21 +547,6 @@ const formatCost = (value: number | null | undefined): string => {
   return safeValue.toFixed(4)
 }
 
-const formatCnyCost = (value: number): string => {
-  if (!Number.isFinite(value)) return '0.00'
-  return value >= 1000 ? `${(value / 1000).toFixed(2)}K` : value.toFixed(2)
-}
-
-const formatMaterializedCny = (value: number | null | undefined): string => {
-  if (costSummaryLoading.value && !costSummary.value) return '…'
-  if (!costSummary.value?.aggregation_complete && !costSummary.value?.ledger_pending) return '—'
-  return `¥${formatCnyCost(toFiniteNumber(value))}`
-}
-
-const formatCostSnapshotTime = (value: string): string => {
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
-}
 
 const formatDuration = (ms: number): string => {
   if (ms >= 1000) {
@@ -682,31 +623,6 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
   }
 }
 
-const loadCostSummary = async () => {
-  costSummaryLoading.value = true
-  costSummaryError.value = false
-  try {
-    const response = await adminAPI.dashboard.getCostSummary()
-    costSummary.value = response
-    if (stats.value && response.aggregation_complete) {
-      stats.value = {
-        ...stats.value,
-        today_real_cost_cny: response.today_real_cost_cny,
-        total_cost_cny: response.total_cost_cny,
-        total_account_cost: response.total_account_cost,
-        today_account_cost: response.today_account_cost,
-        average_cost_cny_per_usd: response.average_cost_cny_per_usd,
-        anthropic_cost_cny_per_usd: response.anthropic_cost_cny_per_usd,
-        openai_cost_cny_per_usd: response.openai_cost_cny_per_usd
-      }
-    }
-  } catch (error) {
-    costSummaryError.value = true
-    console.error('Error loading dashboard cost summary:', error)
-  } finally {
-    costSummaryLoading.value = false
-  }
-}
 
 const loadUsersTrend = async () => {
   const currentSeq = ++usersTrendLoadSeq
@@ -764,7 +680,6 @@ const loadUserSpendingRanking = async () => {
 const loadDashboardStats = async () => {
   await loadDashboardSnapshot(true)
   await Promise.allSettled([
-    loadCostSummary(),
     loadUsersTrend(),
     loadUserSpendingRanking()
   ])

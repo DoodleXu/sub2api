@@ -1269,8 +1269,6 @@ export interface Account {
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
   total_cost_cny?: number
   total_account_cost?: number
-  cost_cny_per_usd?: number
-  cost_stats_pending?: boolean
 	status: 'active' | 'inactive' | 'error'
 	archived_at?: string | null
 	/** Effective archive inherited from a shadow account's parent. */
@@ -1963,10 +1961,6 @@ export interface DashboardStats {
   total_cost: number // 累计标准计费
   total_actual_cost: number // 累计实际扣除
   total_account_cost: number // 累计账号成本
-  total_cost_cny: number // 累计人民币成本
-  average_cost_cny_per_usd: number // 整体每美元人民币成本
-  anthropic_cost_cny_per_usd: number // Anthropic 每美元人民币成本
-  openai_cost_cny_per_usd: number // OpenAI 每美元人民币成本
 
   // 今日 Token 使用统计
   today_requests: number
@@ -1978,7 +1972,6 @@ export interface DashboardStats {
   today_cost: number // 今日标准计费
   today_actual_cost: number // 今日实际扣除
   today_account_cost: number // 今日账号成本
-  today_real_cost_cny: number // 今日实际人民币成本
 
   // 系统运行统计
   average_duration_ms: number // 平均响应时间
@@ -2032,7 +2025,6 @@ export interface ModelStat {
   cost: number // 标准计费
   actual_cost: number // 实际扣除
   account_cost?: number // 账号计费（美元，含账号倍率，仅管理员接口返回）
-  real_cost_cny?: number // 实际人民币成本（账号每刀成本 × 本范围标准计费，仅管理员接口返回）
 }
 
 export interface EndpointStat {
@@ -2051,7 +2043,6 @@ export interface GroupStat {
   cost: number // 标准计费
   actual_cost: number // 实际扣除
   account_cost?: number // 账号计费（美元，含账号倍率，仅管理员接口返回）
-  real_cost_cny?: number // 实际人民币成本（账号每刀成本 × 本范围标准计费，仅管理员接口返回）
 }
 
 export interface UserBreakdownItem {
@@ -2065,7 +2056,6 @@ export interface UserBreakdownItem {
   cost: number
   actual_cost: number
   account_cost: number // 账号计费（美元，含账号倍率）
-  real_cost_cny: number // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 export interface UserUsageTrendPoint {

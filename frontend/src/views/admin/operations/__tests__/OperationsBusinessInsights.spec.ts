@@ -74,13 +74,12 @@ describe('OperationsBusinessInsights', () => {
           admin_recharge_amount: 5,
           total_count: 2,
         },
-        models: [{ model: 'test-model', requests: 1, actual_cost: 8, account_cost: 8, real_cost_cny: 4 }],
+        models: [{ model: 'test-model', requests: 1, actual_cost: 8, account_cost: 8 }],
       },
     })
 
     expect(wrapper.text()).toContain('CNY 10.00 / USD 20.00')
     expect(wrapper.text()).toContain('USD 5.00')
-    expect(wrapper.text()).toContain('CNY 4.00')
     expect(wrapper.text()).toContain('USD 8.00')
     expect(wrapper.text()).toContain('USD 3.00 / 25.0%')
   })

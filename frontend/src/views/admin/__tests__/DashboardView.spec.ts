@@ -5,9 +5,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getCostSummary, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
+const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
   getSnapshotV2: vi.fn(),
-  getCostSummary: vi.fn(),
   getUserUsageTrend: vi.fn(),
   getUserSpendingRanking: vi.fn()
 }))
@@ -16,7 +15,6 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     dashboard: {
       getSnapshotV2,
-      getCostSummary,
       getUserUsageTrend,
       getUserSpendingRanking
     }
@@ -75,10 +73,6 @@ const createDashboardStats = (): DashboardStats => ({
   total_cost: 0,
   total_actual_cost: 0,
   total_account_cost: 0,
-  total_cost_cny: 0,
-  average_cost_cny_per_usd: 0,
-  anthropic_cost_cny_per_usd: 0,
-  openai_cost_cny_per_usd: 0,
   today_requests: 0,
   today_input_tokens: 0,
   today_output_tokens: 0,
@@ -88,7 +82,6 @@ const createDashboardStats = (): DashboardStats => ({
   today_cost: 0,
   today_actual_cost: 0,
   today_account_cost: 0,
-  today_real_cost_cny: 0,
   average_duration_ms: 0,
   uptime: 0,
   rpm: 0,
@@ -100,7 +93,6 @@ describe('admin DashboardView', () => {
     setActivePinia(createPinia())
 
     getSnapshotV2.mockReset()
-    getCostSummary.mockReset()
     getUserUsageTrend.mockReset()
     getUserSpendingRanking.mockReset()
 
@@ -108,18 +100,6 @@ describe('admin DashboardView', () => {
       stats: createDashboardStats(),
       trend: [],
       models: []
-    })
-    getCostSummary.mockResolvedValue({
-      today_real_cost_cny: 1,
-      total_cost_cny: 10,
-      total_account_cost: 2,
-      today_account_cost: 0.2,
-      average_cost_cny_per_usd: 5,
-      anthropic_cost_cny_per_usd: 6,
-      openai_cost_cny_per_usd: 4,
-      as_of: new Date().toISOString(),
-      stale: false,
-      aggregation_complete: true
     })
     getUserUsageTrend.mockResolvedValue({
       trend: [],
@@ -164,7 +144,6 @@ describe('admin DashboardView', () => {
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
-    expect(getCostSummary).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
       start_date: formatLocalDate(yesterday),
       end_date: formatLocalDate(now),
@@ -207,7 +186,6 @@ describe('admin DashboardView', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
-    expect(getCostSummary).toHaveBeenCalledTimes(1)
     expect(getUserUsageTrend).toHaveBeenCalledTimes(1)
     expect(getUserSpendingRanking).toHaveBeenCalledTimes(1)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
@@ -242,7 +220,6 @@ describe('admin DashboardView', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(2)
-    expect(getCostSummary).toHaveBeenCalledTimes(2)
     expect(getUserUsageTrend).toHaveBeenCalledTimes(2)
     expect(getUserSpendingRanking).toHaveBeenCalledTimes(2)
     expect(getSnapshotV2).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -253,9 +230,7 @@ describe('admin DashboardView', () => {
     wrapper.unmount()
   })
 
-  it('keeps core token statistics visible when cost loading fails', async () => {
-    getCostSummary.mockRejectedValueOnce(new Error('cost timeout'))
-
+  it('keeps core token statistics visible with the snapshot response', async () => {
     const wrapper = mount(DashboardView, {
       global: {
         stubs: {
@@ -274,7 +249,6 @@ describe('admin DashboardView', () => {
     await flushPromises()
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
-    expect(getCostSummary).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('admin.dashboard.todayTokens')
     expect(wrapper.text()).toContain('admin.dashboard.totalTokens')
 

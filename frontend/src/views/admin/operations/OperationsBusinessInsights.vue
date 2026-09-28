@@ -51,8 +51,6 @@
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatCount(payment?.total_count) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.actualCharges') }}</div>
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessUSD(actualCharges) }}</div>
-          <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.upstreamCost') }}</div>
-          <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessCNY(realUpstreamCostCNY) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.accountCostUsdBasis') }}</div>
           <div class="text-right font-medium text-gray-900 dark:text-white">{{ formatBusinessUSD(accountCostUSD) }}</div>
           <div class="text-gray-500 dark:text-gray-400">{{ t('admin.operations.rewardCost') }}</div>
@@ -150,7 +148,6 @@ const RankingList = defineComponent({
 })
 
 const actualCharges = computed(() => Number(props.ranking?.total_actual_cost || 0))
-const realUpstreamCostCNY = computed(() => props.models.reduce((sum, item) => sum + Number(item.real_cost_cny || 0), 0))
 const accountCostUSD = computed(() => props.models.reduce((sum, item) => sum + Number(item.account_cost || 0), 0))
 const adminRechargeCredits = computed(() => Number(props.payment?.admin_recharge_amount || 0))
 const contributionMargin = computed(() => actualCharges.value - accountCostUSD.value - Number(props.rewardCost || 0))
@@ -172,10 +169,6 @@ function formatUSD(value: number | undefined | null): string {
 
 function formatBusinessUSD(value: number | undefined | null): string {
   return props.dataAvailable ? formatUSD(value) : '-'
-}
-
-function formatBusinessCNY(value: number | undefined | null): string {
-  return props.dataAvailable ? `CNY ${Number(value || 0).toFixed(2)}` : '-'
 }
 
 function formatBusinessCount(value: number | undefined | null): string {
