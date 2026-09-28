@@ -48,6 +48,7 @@ export default {
       actual: 'Actual',
       standard: 'Standard',
       accountCost: 'Cost',
+      apiKeyProfit: 'API Key profit',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
       viewModelDistribution: 'Model Distribution',

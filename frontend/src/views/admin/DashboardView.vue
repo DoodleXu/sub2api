@@ -121,6 +121,10 @@
                     :title="t('admin.dashboard.standard')"
                     >${{ formatCost(stats.today_cost) }}</span
                   >
+                  <span class="text-gray-400 dark:text-gray-500"> / </span>
+                  <span class="text-blue-600 dark:text-blue-400" :title="t('admin.dashboard.apiKeyProfit')">
+                    ${{ formatCost(stats.today_api_key_profit) }} ({{ (stats.today_api_key_profit_rate * 100).toFixed(2) }}%)
+                  </span>
                 </p>
               </div>
             </div>
@@ -157,6 +161,10 @@
                     :title="t('admin.dashboard.standard')"
                     >${{ formatCost(stats.total_cost) }}</span
                   >
+                  <span class="text-gray-400 dark:text-gray-500"> / </span>
+                  <span class="text-blue-600 dark:text-blue-400" :title="t('admin.dashboard.apiKeyProfit')">
+                    ${{ formatCost(stats.total_api_key_profit) }} ({{ (stats.total_api_key_profit_rate * 100).toFixed(2) }}%)
+                  </span>
                 </p>
               </div>
             </div>
