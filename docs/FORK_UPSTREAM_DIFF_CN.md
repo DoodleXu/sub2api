@@ -699,6 +699,8 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 
 定位：在官方 token 计费基础上，fork 增加人民币实际成本、账号成本和每美元成本统计，用于经营分析。
 
+> 历史说明：本节中 2026-09-24 之前关于 API Key 每刀成本、成本账本、成本快照和调度成本信号的条目仅用于追溯旧版本行为，已由本次收敛迁移删除。当前实现只保留 OAuth `total_cost_cny` 手工输入；API Key 账号按当前窗口的用户实际扣费与账号实际成本计算利润及利润率。
+
 主要差异：
 
 - 账号上增加 `total_cost_cny`，支持创建、更新、批量更新和增量成本录入。
@@ -1204,3 +1206,9 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 
 - 通过：`go test ./... -count=1`、完整 `internal/service` 测试、迁移与 repository schema 定向测试、`go build ./...`、`pnpm exec vue-tsc --noEmit`、`pnpm run build`、`git diff --check`。
 - 已修复旧调度器与高级调度设置缓存隔离、load-batch 诊断路径及公开插件设置注入字段；服务包全量回归稳定通过，候选具备替换 `main` 的条件。
+# 成本口径收敛（upstream/v0.2.8）
+
+- 保留 OAuth 账号的 `total_cost_cny` 手工成本输入；账号页按当前用量窗口和官方标准计费量推导窗口成本。
+- API Key 账号不再读取“每刀成本”或人民币成本账本，账号页显示用户实际扣费、账号实际成本计算出的“利润｜利润率”。
+- 删除 API Key 每刀成本字段、累计成本账本、成本增量表、成本快照及调度器成本信号；Dashboard 回到官方的用户实际扣费、账号实际成本和标准计费三类字段。
+- `241_remove_fork_cost_ledgers.sql` 仅清理 fork 专属账本结构，保留官方 usage 聚合表及 OAuth 手工成本字段。
