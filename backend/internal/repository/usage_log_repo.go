@@ -1901,7 +1901,10 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 }
 
 func (r *usageLogRepository) fillDashboardAggregatedAccountCostFromUsageLogs(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
-	return r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC)
+	if err := r.fillDashboardAccountCostFromAggregates(ctx, stats, todayUTC); err != nil {
+		return err
+	}
+	return r.fillDashboardAPIKeyProfitFromUsageLogs(ctx, stats, time.Unix(0, 0).UTC(), time.Now().UTC(), todayUTC, todayUTC.Add(24*time.Hour))
 }
 
 func (r *usageLogRepository) fillDashboardAccountCostFromAggregates(ctx context.Context, stats *DashboardStats, todayUTC time.Time) error {
@@ -1994,6 +1997,9 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 	); err != nil {
 		return err
 	}
+	if err := r.fillDashboardAPIKeyProfitFromUsageLogs(ctx, stats, startUTC, endUTC, todayUTC, todayEnd); err != nil {
+		return err
+	}
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
 	if stats.TotalRequests > 0 {
 		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
@@ -2019,6 +2025,34 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 		return err
 	}
 
+	return nil
+}
+
+func (r *usageLogRepository) fillDashboardAPIKeyProfitFromUsageLogs(ctx context.Context, stats *DashboardStats, startUTC, endUTC, todayUTC, todayEnd time.Time) error {
+	query := `
+		SELECT
+			COALESCE(SUM(ul.actual_cost) FILTER (WHERE ul.created_at >= $1 AND ul.created_at < $2), 0),
+			COALESCE(SUM((COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1))) FILTER (WHERE ul.created_at >= $1 AND ul.created_at < $2), 0),
+			COALESCE(SUM(ul.actual_cost) FILTER (WHERE ul.created_at >= $3 AND ul.created_at < $4), 0),
+			COALESCE(SUM((COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1))) FILTER (WHERE ul.created_at >= $3 AND ul.created_at < $4), 0)
+		FROM usage_logs ul
+		JOIN accounts a ON a.id = ul.account_id AND a.type = 'apikey'
+		WHERE TRUE
+		  AND ul.created_at >= LEAST($1, $3) AND ul.created_at < GREATEST($2, $4)
+		  AND COALESCE(ul.succeeded, ul.actual_cost > 0)
+	`
+	var charged, accountCost, todayCharged, todayAccountCost float64
+	if err := scanSingleRow(ctx, r.sql, query, []any{startUTC, endUTC, todayUTC, todayEnd}, &charged, &accountCost, &todayCharged, &todayAccountCost); err != nil {
+		return err
+	}
+	stats.TotalAPIKeyProfit = charged - accountCost
+	stats.TodayAPIKeyProfit = todayCharged - todayAccountCost
+	if charged > 0 {
+		stats.TotalAPIKeyProfitRate = stats.TotalAPIKeyProfit / charged
+	}
+	if todayCharged > 0 {
+		stats.TodayAPIKeyProfitRate = stats.TodayAPIKeyProfit / todayCharged
+	}
 	return nil
 }
 
