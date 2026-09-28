@@ -16,26 +16,15 @@ import (
 
 type usageRepoStub struct {
 	UsageLogRepository
-	stats       *usagestats.DashboardStats
-	rangeStats  *usagestats.DashboardStats
-	costSummary *usagestats.DashboardCostSummary
-	err         error
-	rangeErr    error
-	costErr     error
-	calls       int32
-	rangeCalls  int32
-	costCalls   int32
-	rangeStart  time.Time
-	rangeEnd    time.Time
-	onCall      chan struct{}
-}
-
-func (s *usageRepoStub) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
-	atomic.AddInt32(&s.costCalls, 1)
-	if s.costErr != nil {
-		return nil, s.costErr
-	}
-	return s.costSummary, nil
+	stats      *usagestats.DashboardStats
+	rangeStats *usagestats.DashboardStats
+	err        error
+	rangeErr   error
+	calls      int32
+	rangeCalls int32
+	rangeStart time.Time
+	rangeEnd   time.Time
+	onCall     chan struct{}
 }
 
 func (s *usageRepoStub) GetDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
@@ -66,20 +55,14 @@ func (s *usageRepoStub) GetDashboardStatsWithRange(ctx context.Context, start, e
 }
 
 type dashboardCacheStub struct {
-	get          func(ctx context.Context) (string, error)
-	set          func(ctx context.Context, data string, ttl time.Duration) error
-	del          func(ctx context.Context) error
-	getCost      func(ctx context.Context) (string, error)
-	setCost      func(ctx context.Context, data string, ttl time.Duration) error
-	delCost      func(ctx context.Context) error
-	getCalls     int32
-	setCalls     int32
-	delCalls     int32
-	getCostCalls int32
-	setCostCalls int32
-	delCostCalls int32
-	lastSetMu    sync.Mutex
-	lastSet      string
+	get       func(ctx context.Context) (string, error)
+	set       func(ctx context.Context, data string, ttl time.Duration) error
+	del       func(ctx context.Context) error
+	getCalls  int32
+	setCalls  int32
+	delCalls  int32
+	lastSetMu sync.Mutex
+	lastSet   string
 }
 
 func (c *dashboardCacheStub) GetDashboardStats(ctx context.Context) (string, error) {
@@ -105,30 +88,6 @@ func (c *dashboardCacheStub) DeleteDashboardStats(ctx context.Context) error {
 	atomic.AddInt32(&c.delCalls, 1)
 	if c.del != nil {
 		return c.del(ctx)
-	}
-	return nil
-}
-
-func (c *dashboardCacheStub) GetDashboardCostSummary(ctx context.Context) (string, error) {
-	atomic.AddInt32(&c.getCostCalls, 1)
-	if c.getCost != nil {
-		return c.getCost(ctx)
-	}
-	return "", ErrDashboardStatsCacheMiss
-}
-
-func (c *dashboardCacheStub) SetDashboardCostSummary(ctx context.Context, data string, ttl time.Duration) error {
-	atomic.AddInt32(&c.setCostCalls, 1)
-	if c.setCost != nil {
-		return c.setCost(ctx, data, ttl)
-	}
-	return nil
-}
-
-func (c *dashboardCacheStub) DeleteDashboardCostSummary(ctx context.Context) error {
-	atomic.AddInt32(&c.delCostCalls, 1)
-	if c.delCost != nil {
-		return c.delCost(ctx)
 	}
 	return nil
 }
@@ -304,6 +263,7 @@ func TestDashboardService_CacheDisabled_SkipsCache(t *testing.T) {
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.setCalls))
 }
 
+/*
 func TestDashboardService_GetDashboardCostSummary_UsesFreshSharedCache(t *testing.T) {
 	summary := &usagestats.DashboardCostSummary{
 		TodayRealCostCNY:    12.5,
@@ -362,6 +322,7 @@ func TestDashboardService_GetDashboardCostSummary_RejectsCacheOlderThanThirtyMin
 	_, err = svc.GetDashboardCostSummary(context.Background())
 	require.Error(t, err)
 }
+*/
 
 func TestDashboardService_CacheHitStale_TriggersAsyncRefresh(t *testing.T) {
 	staleStats := &usagestats.DashboardStats{

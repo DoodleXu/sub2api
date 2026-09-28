@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 )
@@ -95,117 +94,14 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 	return r.aggregateRangeInTx(ctx, hourStart, hourEnd, endLocal, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd)
 }
 
-// ProcessAccountCostTotals processes one account's bounded usage_logs.id range
-// and updates that account's totals and checkpoint in one transaction. New
-// usage rows only mark the account pending, so archived accounts with no new
-// usage are never scanned again.
+// ProcessAccountCostTotals is retained for repository interface compatibility.
 func (r *dashboardAggregationRepository) ProcessAccountCostTotals(ctx context.Context, batchSize int64) (int64, error) {
-	if r == nil || r.sql == nil {
-		return 0, nil
-	}
-	if batchSize <= 0 {
-		batchSize = 10000
-	}
-
-	if db, ok := r.sql.(*sql.DB); ok {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return 0, err
-		}
-		processed, err := newDashboardAggregationRepositoryWithSQL(tx).processAccountCostTotalsInTx(ctx, batchSize)
-		if err != nil {
-			_ = tx.Rollback()
-			return 0, err
-		}
-		if err := tx.Commit(); err != nil {
-			return 0, err
-		}
-		return processed, nil
-	}
-
-	processed, err := r.processAccountCostTotalsInTx(ctx, batchSize)
-	return processed, err
-}
-
-func (r *dashboardAggregationRepository) processAccountCostTotalsInTx(ctx context.Context, batchSize int64) (int64, error) {
-	var accountID, lastProcessedID int64
-	if err := scanSingleRow(ctx, r.sql, `
-		SELECT account_id, last_processed_usage_id
-		FROM usage_account_cost_totals
-		WHERE needs_processing OR NOT initialized
-		ORDER BY computed_at, account_id
-		LIMIT 1
-		FOR UPDATE SKIP LOCKED
-	`, nil, &accountID, &lastProcessedID); err == sql.ErrNoRows {
-		return 0, nil
-	} else if err != nil {
-		return 0, err
-	}
-
-	var processedRows int64
-	err := scanSingleRow(ctx, r.sql, `
-		WITH batch AS MATERIALIZED (
-			SELECT
-				id,
-				total_cost,
-				COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1) AS account_cost
-			FROM usage_logs
-			WHERE account_id = $1 AND id > $2
-			ORDER BY id
-			LIMIT $3
-		), totals AS (
-			SELECT
-				COUNT(*)::BIGINT AS processed_rows,
-				COALESCE(MAX(id), $2) AS newest_id,
-				COALESCE(SUM(account_cost), 0) AS account_cost,
-				COALESCE(SUM(total_cost), 0) AS standard_cost
-			FROM batch
-		), updated AS (
-			UPDATE usage_account_cost_totals ledger
-			SET total_account_cost = ledger.total_account_cost + totals.account_cost,
-				total_standard_account_cost = ledger.total_standard_account_cost + totals.standard_cost,
-				published_account_cost = CASE
-					WHEN totals.processed_rows < $3 THEN ledger.total_account_cost + totals.account_cost
-					ELSE ledger.published_account_cost
-				END,
-				published_standard_account_cost = CASE
-					WHEN totals.processed_rows < $3 THEN ledger.total_standard_account_cost + totals.standard_cost
-					ELSE ledger.published_standard_account_cost
-				END,
-				published_initialized = ledger.published_initialized OR totals.processed_rows < $3,
-				last_processed_usage_id = totals.newest_id,
-				initialized = ledger.initialized OR totals.processed_rows < $3,
-				needs_processing = totals.processed_rows >= $3,
-				computed_at = NOW()
-			FROM totals
-			WHERE ledger.account_id = $1
-			RETURNING totals.processed_rows
-		)
-		SELECT processed_rows FROM updated
-	`, []any{accountID, lastProcessedID, batchSize}, &processedRows)
-	if err != nil {
-		return 0, err
-	}
-	// 返回“已处理账号数”而非 usage 行数，保证空账号的首次回填也能继续推进
-	// 其它账号；无候选账号时上层收到 0 并停止本轮回填。
-	return 1, nil
+	// Fork-specific account cost ledgers were removed in migration 241.
+	return 0, nil
 }
 
 func (r *dashboardAggregationRepository) GetAccountCostAggregationState(ctx context.Context) (service.AccountCostAggregationState, error) {
-	var state service.AccountCostAggregationState
-	if r == nil || r.sql == nil {
-		return state, nil
-	}
-	err := scanSingleRow(ctx, r.sql, `
-		SELECT
-			COALESCE(MAX(last_processed_usage_id), 0),
-			COUNT(*)::BIGINT,
-			COUNT(*) FILTER (WHERE needs_processing OR NOT initialized)::BIGINT,
-			COALESCE(BOOL_AND(initialized AND NOT needs_processing), TRUE),
-			COALESCE(MAX(computed_at), NOW())
-		FROM usage_account_cost_totals
-	`, nil, &state.LastProcessedUsageID, &state.TotalAccounts, &state.PendingAccounts, &state.BackfillComplete, &state.ComputedAt)
-	return state, err
+	return service.AccountCostAggregationState{BackfillComplete: true, ComputedAt: time.Now()}, nil
 }
 
 func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context, hourStart, hourEnd, accountCostEnd, dayStart, dayEnd, dailyCoverageStart, dailyCoverageEnd time.Time) error {
@@ -219,9 +115,6 @@ func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context,
 	if err := r.upsertHourlyAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
-	if err := r.upsertHourlyAccountCostAggregates(ctx, hourStart, accountCostEnd); err != nil {
-		return err
-	}
 	if err := r.upsertHourlyModelAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
@@ -231,9 +124,6 @@ func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context,
 	if err := r.upsertDailyAggregates(ctx, dayStart, dayEnd); err != nil {
 		return err
 	}
-	if err := r.upsertDailyAccountCostAggregates(ctx, dayStart, dayEnd); err != nil {
-		return err
-	}
 	if err := r.upsertDailyModelAggregates(ctx, dayStart, dayEnd); err != nil {
 		return err
 	}
@@ -241,9 +131,6 @@ func (r *dashboardAggregationRepository) aggregateRangeInTx(ctx context.Context,
 		return err
 	}
 	if err := r.advanceUserAggregateCoverage(ctx, hourStart, hourEnd, dailyCoverageStart, dailyCoverageEnd); err != nil {
-		return err
-	}
-	if err := r.advanceAccountCostAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
 		return err
 	}
 	if err := r.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
@@ -296,10 +183,6 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 			_ = tx.Rollback()
 			return err
 		}
-		if err := txRepo.advanceAccountCostAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
 		if err := txRepo.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
 			_ = tx.Rollback()
 			return err
@@ -318,9 +201,6 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 	if err := r.recomputeRangeInTx(ctx, hourStart, hourEnd, accountCostEnd, dayStart, dayEnd); err != nil {
 		return err
 	}
-	if err := r.advanceAccountCostAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
-		return err
-	}
 	if err := r.advanceModelAggregateCoverage(ctx, hourStart, accountCostEnd); err != nil {
 		return err
 	}
@@ -336,9 +216,6 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 		return err
 	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_users WHERE bucket_start >= $1 AND bucket_start < $2", hourStart, hourEnd); err != nil {
-		return err
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_hourly WHERE bucket_start >= $1 AND bucket_start < $2", hourStart, hourEnd); err != nil {
 		return err
 	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_model_hourly WHERE bucket_start >= $1 AND bucket_start < $2", hourStart, hourEnd); err != nil {
@@ -359,9 +236,6 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_user_stats WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
 		return err
 	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_daily WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
-		return err
-	}
 	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_model_daily WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
 		return err
 	}
@@ -377,9 +251,6 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 	if err := r.upsertHourlyAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
-	if err := r.upsertHourlyAccountCostAggregates(ctx, hourStart, accountCostEnd); err != nil {
-		return err
-	}
 	if err := r.upsertHourlyModelAggregates(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
@@ -387,9 +258,6 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 		return err
 	}
 	if err := r.upsertDailyAggregates(ctx, dayStart, dayEnd); err != nil {
-		return err
-	}
-	if err := r.upsertDailyAccountCostAggregates(ctx, dayStart, dayEnd); err != nil {
 		return err
 	}
 	if err := r.upsertDailyModelAggregates(ctx, dayStart, dayEnd); err != nil {
@@ -467,12 +335,6 @@ func (r *dashboardAggregationRepository) AggregateAccountCostRange(ctx context.C
 	}
 
 	run := func(repo *dashboardAggregationRepository) error {
-		if _, err := repo.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_hourly WHERE bucket_start >= $1 AND bucket_start < $2", startLocal, endLocal); err != nil {
-			return err
-		}
-		if err := repo.upsertHourlyAccountCostAggregates(ctx, startLocal, endLocal); err != nil {
-			return err
-		}
 		if _, err := repo.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_model_hourly WHERE bucket_start >= $1 AND bucket_start < $2", startLocal, endLocal); err != nil {
 			return err
 		}
@@ -487,12 +349,6 @@ func (r *dashboardAggregationRepository) AggregateAccountCostRange(ctx context.C
 		if endLocal.After(dayEnd) {
 			dayEnd = dayEnd.Add(24 * time.Hour)
 		}
-		if _, err := repo.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_account_cost_daily WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
-			return err
-		}
-		if err := repo.upsertDailyAccountCostAggregates(ctx, dayStart, dayEnd); err != nil {
-			return err
-		}
 		if _, err := repo.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_model_daily WHERE bucket_date >= $1::date AND bucket_date < $2::date", dayStart, dayEnd); err != nil {
 			return err
 		}
@@ -500,9 +356,6 @@ func (r *dashboardAggregationRepository) AggregateAccountCostRange(ctx context.C
 			return err
 		}
 		if err := repo.upsertDailyModelAggregates(ctx, dayStart, dayEnd); err != nil {
-			return err
-		}
-		if err := repo.advanceAccountCostAggregateCoverage(ctx, startLocal, endLocal); err != nil {
 			return err
 		}
 		return repo.advanceModelAggregateCoverage(ctx, startLocal, endLocal)
@@ -521,73 +374,71 @@ func (r *dashboardAggregationRepository) AggregateAccountCostRange(ctx context.C
 	return run(r)
 }
 
-// ProcessDirtyAccountCostBuckets recomputes historical account-cost/model
-// buckets invalidated by usage corrections. Reprocessing is idempotent; the
-// bucket is removed only after its replacement aggregates have committed.
+// ProcessDirtyAccountCostBuckets is retained for interface compatibility.
 func (r *dashboardAggregationRepository) ProcessDirtyAccountCostBuckets(ctx context.Context, limit int) (int, error) {
-	if r == nil || r.sql == nil || limit <= 0 {
-		return 0, nil
-	}
-	processed := 0
-	for processed < limit {
-		if db, ok := r.sql.(*sql.DB); ok {
-			tx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				return processed, err
+	return 0, nil
+	/*
+		processed := 0
+		for processed < limit {
+			if db, ok := r.sql.(*sql.DB); ok {
+				tx, err := db.BeginTx(ctx, nil)
+				if err != nil {
+					return processed, err
+				}
+				txRepo := newDashboardAggregationRepositoryWithSQL(tx)
+				var bucket, requestedAt time.Time
+				err = scanSingleRow(ctx, tx, `SELECT bucket_start, requested_at FROM usage_account_cost_dirty_buckets ORDER BY requested_at, bucket_start FOR UPDATE SKIP LOCKED LIMIT 1`, nil, &bucket, &requestedAt)
+				if err == sql.ErrNoRows {
+					_ = tx.Rollback()
+					break
+				}
+				if err != nil {
+					_ = tx.Rollback()
+					if isUndefinedTableError(err) {
+						return processed, nil
+					}
+					return processed, err
+				}
+				if err = txRepo.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
+					_ = tx.Rollback()
+					return processed, err
+				}
+				if _, err = tx.ExecContext(ctx, `DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
+					_ = tx.Rollback()
+					return processed, err
+				}
+				if err = tx.Commit(); err != nil {
+					return processed, err
+				}
+				processed++
+				continue
 			}
-			txRepo := newDashboardAggregationRepositoryWithSQL(tx)
 			var bucket, requestedAt time.Time
-			err = scanSingleRow(ctx, tx, `SELECT bucket_start, requested_at FROM usage_account_cost_dirty_buckets ORDER BY requested_at, bucket_start FOR UPDATE SKIP LOCKED LIMIT 1`, nil, &bucket, &requestedAt)
+			err := scanSingleRow(ctx, r.sql, `
+				SELECT bucket_start, requested_at
+				FROM usage_account_cost_dirty_buckets
+				ORDER BY requested_at, bucket_start
+				LIMIT 1`, nil, &bucket, &requestedAt)
 			if err == sql.ErrNoRows {
-				_ = tx.Rollback()
 				break
 			}
 			if err != nil {
-				_ = tx.Rollback()
 				if isUndefinedTableError(err) {
 					return processed, nil
 				}
 				return processed, err
 			}
-			if err = txRepo.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
-				_ = tx.Rollback()
+			if err := r.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
 				return processed, err
 			}
-			if _, err = tx.ExecContext(ctx, `DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
-				_ = tx.Rollback()
-				return processed, err
-			}
-			if err = tx.Commit(); err != nil {
+			if _, err := r.sql.ExecContext(ctx,
+				`DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
 				return processed, err
 			}
 			processed++
-			continue
 		}
-		var bucket, requestedAt time.Time
-		err := scanSingleRow(ctx, r.sql, `
-			SELECT bucket_start, requested_at
-			FROM usage_account_cost_dirty_buckets
-			ORDER BY requested_at, bucket_start
-			LIMIT 1`, nil, &bucket, &requestedAt)
-		if err == sql.ErrNoRows {
-			break
-		}
-		if err != nil {
-			if isUndefinedTableError(err) {
-				return processed, nil
-			}
-			return processed, err
-		}
-		if err := r.AggregateAccountCostRange(ctx, bucket, bucket.Add(time.Hour)); err != nil {
-			return processed, err
-		}
-		if _, err := r.sql.ExecContext(ctx,
-			`DELETE FROM usage_account_cost_dirty_buckets WHERE bucket_start = $1 AND requested_at <= $2`, bucket, requestedAt); err != nil {
-			return processed, err
-		}
-		processed++
-	}
-	return processed, nil
+		return processed, nil
+	*/
 }
 
 func completedAccountCostBucketEnd(hourEnd time.Time) time.Time {
@@ -1135,75 +986,6 @@ func (r *dashboardAggregationRepository) upsertHourlyAggregates(ctx context.Cont
 	return err
 }
 
-func (r *dashboardAggregationRepository) upsertHourlyAccountCostAggregates(ctx context.Context, start, end time.Time) error {
-	tzName := timezone.Name()
-	query := `
-		WITH hourly AS (
-			SELECT
-				date_trunc('hour', created_at AT TIME ZONE $3) AT TIME ZONE $3 AS bucket_start,
-				account_id,
-				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost,
-				COALESCE(SUM(total_cost), 0) AS standard_account_cost
-			FROM usage_logs
-			WHERE created_at >= $1 AND created_at < $2
-			GROUP BY 1, account_id
-		)
-		INSERT INTO usage_dashboard_account_cost_hourly (
-			bucket_start,
-			account_id,
-			account_cost,
-			standard_account_cost,
-			computed_at
-		)
-		SELECT
-			bucket_start,
-			account_id,
-			account_cost,
-			standard_account_cost,
-			NOW()
-		FROM hourly
-		ON CONFLICT (bucket_start, account_id)
-		DO UPDATE SET
-			account_cost = EXCLUDED.account_cost,
-			standard_account_cost = EXCLUDED.standard_account_cost,
-			computed_at = EXCLUDED.computed_at
-	`
-	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
-	return err
-}
-
-func (r *dashboardAggregationRepository) upsertDailyAccountCostAggregates(ctx context.Context, start, end time.Time) error {
-	tzName := timezone.Name()
-	query := `
-		WITH daily AS (
-			SELECT
-				(bucket_start AT TIME ZONE $3)::date AS bucket_date,
-				account_id,
-				COALESCE(SUM(account_cost), 0) AS account_cost,
-				COALESCE(SUM(standard_account_cost), 0) AS standard_account_cost
-			FROM usage_dashboard_account_cost_hourly
-			WHERE bucket_start >= $1 AND bucket_start < $2
-			GROUP BY 1, account_id
-		)
-		INSERT INTO usage_dashboard_account_cost_daily (
-			bucket_date,
-			account_id,
-			account_cost,
-			standard_account_cost,
-			computed_at
-		)
-		SELECT bucket_date, account_id, account_cost, standard_account_cost, NOW()
-		FROM daily
-		ON CONFLICT (bucket_date, account_id)
-		DO UPDATE SET
-			account_cost = EXCLUDED.account_cost,
-			standard_account_cost = EXCLUDED.standard_account_cost,
-			computed_at = EXCLUDED.computed_at
-	`
-	_, err := r.sql.ExecContext(ctx, query, start, end, tzName)
-	return err
-}
-
 func (r *dashboardAggregationRepository) upsertHourlyModelAggregates(ctx context.Context, start, end time.Time) error {
 	tzName := timezone.Name()
 	query := `
@@ -1345,209 +1127,132 @@ func (r *dashboardAggregationRepository) upsertDailyModelAggregates(ctx context.
 }
 
 func (r *dashboardAggregationRepository) RefreshDashboardCostSnapshot(ctx context.Context, targetStart, targetEnd time.Time) (bool, error) {
-	if r == nil || r.sql == nil || !targetEnd.After(targetStart) {
-		return false, nil
-	}
-	today := timezone.Today()
-	query := `
-		WITH coverage AS (
+	// Fork-specific CNY snapshots were removed; official dashboard aggregates
+	// are refreshed through the standard range aggregation methods.
+	return false, nil
+	/*
+		today := timezone.Today()
+		query := `
+			WITH coverage AS (
+				SELECT
+					account_cost_hourly_aggregated_from AS start_time,
+					account_cost_hourly_last_aggregated_at AS end_time
+				FROM usage_dashboard_aggregation_watermark
+				WHERE id = 1
+			),
+			ledger_state AS (
+				SELECT
+					COALESCE(BOOL_AND(
+						COALESCE(l.published_initialized, FALSE)
+						AND COALESCE(l.initialized, FALSE)
+						AND NOT COALESCE(l.needs_processing, TRUE)
+					), TRUE) AS complete
+				FROM accounts a
+				LEFT JOIN usage_account_cost_totals l ON l.account_id = a.id
+			),
+			cost_by_account AS (
+				SELECT
+					account_id,
+					published_account_cost AS total_account_cost,
+					published_standard_account_cost AS total_standard_account_cost
+				FROM usage_account_cost_totals
+			),
+			today_by_account AS (
+				SELECT
+					account_id,
+					COALESCE(SUM(account_cost), 0) AS today_account_cost,
+					COALESCE(SUM(standard_account_cost), 0) AS today_standard_account_cost
+				FROM usage_dashboard_account_cost_daily
+				WHERE bucket_date = $3::date
+				GROUP BY account_id
+			),
+			costed_accounts AS (
+				SELECT
+					a.id,
+					a.platform,
+					a.total_cost_cny,
+					COALESCE(c.total_account_cost, 0) AS total_account_cost,
+					COALESCE(c.total_standard_account_cost, 0) AS total_standard_account_cost,
+					COALESCE(t.today_account_cost, 0) AS today_account_cost,
+					COALESCE(t.today_standard_account_cost, 0) AS today_standard_account_cost
+				FROM accounts a
+				LEFT JOIN cost_by_account c ON c.account_id = a.id
+				LEFT JOIN today_by_account t ON t.account_id = a.id
+				WHERE a.total_cost_cny > 0
+			),
+			metrics AS (
+				SELECT
+					COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts), 0) AS total_cost_cny,
+					COALESCE((SELECT SUM(total_account_cost) FROM cost_by_account), 0) AS total_account_cost,
+					COALESCE((SELECT SUM(today_account_cost) FROM today_by_account), 0) AS today_account_cost,
+					COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts), 0) AS costed_total_standard_account_cost,
+					COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_cost_cny,
+					COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_standard_account_cost,
+					COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $5), 0) AS openai_cost_cny,
+					COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $5), 0) AS openai_standard_account_cost,
+					COALESCE((
+						SELECT SUM(today_standard_account_cost * total_cost_cny / NULLIF(total_standard_account_cost, 0))
+						FROM costed_accounts
+						WHERE total_standard_account_cost > 0
+					), 0) AS today_real_cost_cny
+			)
+			INSERT INTO usage_dashboard_cost_snapshot (
+				id, today_real_cost_cny, total_cost_cny, total_account_cost, today_account_cost,
+				average_cost_cny_per_usd, anthropic_cost_cny_per_usd, openai_cost_cny_per_usd,
+				coverage_start, coverage_end, aggregation_complete,
+				ledger_pending, data_through, stale_reason, computed_at
+			)
 			SELECT
-				account_cost_hourly_aggregated_from AS start_time,
-				account_cost_hourly_last_aggregated_at AS end_time
-			FROM usage_dashboard_aggregation_watermark
-			WHERE id = 1
-		),
-		ledger_state AS (
-			SELECT
-				COALESCE(BOOL_AND(
-					COALESCE(l.published_initialized, FALSE)
-					AND COALESCE(l.initialized, FALSE)
-					AND NOT COALESCE(l.needs_processing, TRUE)
-				), TRUE) AS complete
-			FROM accounts a
-			LEFT JOIN usage_account_cost_totals l ON l.account_id = a.id
-		),
-		cost_by_account AS (
-			SELECT
-				account_id,
-				published_account_cost AS total_account_cost,
-				published_standard_account_cost AS total_standard_account_cost
-			FROM usage_account_cost_totals
-		),
-		today_by_account AS (
-			SELECT
-				account_id,
-				COALESCE(SUM(account_cost), 0) AS today_account_cost,
-				COALESCE(SUM(standard_account_cost), 0) AS today_standard_account_cost
-			FROM usage_dashboard_account_cost_daily
-			WHERE bucket_date = $3::date
-			GROUP BY account_id
-		),
-		costed_accounts AS (
-			SELECT
-				a.id,
-				a.platform,
-				a.total_cost_cny,
-				COALESCE(c.total_account_cost, 0) AS total_account_cost,
-				COALESCE(c.total_standard_account_cost, 0) AS total_standard_account_cost,
-				COALESCE(t.today_account_cost, 0) AS today_account_cost,
-				COALESCE(t.today_standard_account_cost, 0) AS today_standard_account_cost
-			FROM accounts a
-			LEFT JOIN cost_by_account c ON c.account_id = a.id
-			LEFT JOIN today_by_account t ON t.account_id = a.id
-			WHERE a.total_cost_cny > 0
-		),
-		metrics AS (
-			SELECT
-				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts), 0) AS total_cost_cny,
-				COALESCE((SELECT SUM(total_account_cost) FROM cost_by_account), 0) AS total_account_cost,
-				COALESCE((SELECT SUM(today_account_cost) FROM today_by_account), 0) AS today_account_cost,
-				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts), 0) AS costed_total_standard_account_cost,
-				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_cost_cny,
-				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $4), 0) AS anthropic_standard_account_cost,
-				COALESCE((SELECT SUM(total_cost_cny) FROM costed_accounts WHERE platform = $5), 0) AS openai_cost_cny,
-				COALESCE((SELECT SUM(total_standard_account_cost) FROM costed_accounts WHERE platform = $5), 0) AS openai_standard_account_cost,
-				COALESCE((
-					SELECT SUM(today_standard_account_cost * total_cost_cny / NULLIF(total_standard_account_cost, 0))
-					FROM costed_accounts
-					WHERE total_standard_account_cost > 0
-				), 0) AS today_real_cost_cny
+				1,
+				m.today_real_cost_cny,
+				m.total_cost_cny,
+				m.total_account_cost,
+				m.today_account_cost,
+				CASE WHEN m.costed_total_standard_account_cost > 0 THEN m.total_cost_cny / m.costed_total_standard_account_cost ELSE 0 END,
+				CASE WHEN m.anthropic_standard_account_cost > 0 THEN m.anthropic_cost_cny / m.anthropic_standard_account_cost ELSE 0 END,
+				CASE WHEN m.openai_standard_account_cost > 0 THEN m.openai_cost_cny / m.openai_standard_account_cost ELSE 0 END,
+				c.start_time,
+				c.end_time,
+				l.complete,
+				NOT l.complete,
+				c.end_time,
+				CASE WHEN NOT l.complete THEN 'ledger_pending' ELSE NULL END,
+				NOW()
+			FROM coverage c
+			CROSS JOIN ledger_state l
+			CROSS JOIN metrics m
+			WHERE c.start_time <= $1
+				AND c.end_time >= $2
+			ON CONFLICT (id)
+			DO UPDATE SET
+				today_real_cost_cny = EXCLUDED.today_real_cost_cny,
+				total_cost_cny = EXCLUDED.total_cost_cny,
+				total_account_cost = EXCLUDED.total_account_cost,
+				today_account_cost = EXCLUDED.today_account_cost,
+				average_cost_cny_per_usd = EXCLUDED.average_cost_cny_per_usd,
+				anthropic_cost_cny_per_usd = EXCLUDED.anthropic_cost_cny_per_usd,
+				openai_cost_cny_per_usd = EXCLUDED.openai_cost_cny_per_usd,
+				coverage_start = EXCLUDED.coverage_start,
+				coverage_end = EXCLUDED.coverage_end,
+				aggregation_complete = EXCLUDED.aggregation_complete,
+				ledger_pending = EXCLUDED.ledger_pending,
+				data_through = EXCLUDED.data_through,
+				stale_reason = EXCLUDED.stale_reason,
+				computed_at = EXCLUDED.computed_at
+			RETURNING aggregation_complete
+		`
+		var complete bool
+		err := scanSingleRow(
+			ctx,
+			r.sql,
+			query,
+			[]any{targetStart.UTC(), targetEnd.UTC(), today, service.PlatformAnthropic, service.PlatformOpenAI},
+			&complete,
 		)
-		INSERT INTO usage_dashboard_cost_snapshot (
-			id, today_real_cost_cny, total_cost_cny, total_account_cost, today_account_cost,
-			average_cost_cny_per_usd, anthropic_cost_cny_per_usd, openai_cost_cny_per_usd,
-			coverage_start, coverage_end, aggregation_complete,
-			ledger_pending, data_through, stale_reason, computed_at
-		)
-		SELECT
-			1,
-			m.today_real_cost_cny,
-			m.total_cost_cny,
-			m.total_account_cost,
-			m.today_account_cost,
-			CASE WHEN m.costed_total_standard_account_cost > 0 THEN m.total_cost_cny / m.costed_total_standard_account_cost ELSE 0 END,
-			CASE WHEN m.anthropic_standard_account_cost > 0 THEN m.anthropic_cost_cny / m.anthropic_standard_account_cost ELSE 0 END,
-			CASE WHEN m.openai_standard_account_cost > 0 THEN m.openai_cost_cny / m.openai_standard_account_cost ELSE 0 END,
-			c.start_time,
-			c.end_time,
-			l.complete,
-			NOT l.complete,
-			c.end_time,
-			CASE WHEN NOT l.complete THEN 'ledger_pending' ELSE NULL END,
-			NOW()
-		FROM coverage c
-		CROSS JOIN ledger_state l
-		CROSS JOIN metrics m
-		WHERE c.start_time <= $1
-			AND c.end_time >= $2
-		ON CONFLICT (id)
-		DO UPDATE SET
-			today_real_cost_cny = EXCLUDED.today_real_cost_cny,
-			total_cost_cny = EXCLUDED.total_cost_cny,
-			total_account_cost = EXCLUDED.total_account_cost,
-			today_account_cost = EXCLUDED.today_account_cost,
-			average_cost_cny_per_usd = EXCLUDED.average_cost_cny_per_usd,
-			anthropic_cost_cny_per_usd = EXCLUDED.anthropic_cost_cny_per_usd,
-			openai_cost_cny_per_usd = EXCLUDED.openai_cost_cny_per_usd,
-			coverage_start = EXCLUDED.coverage_start,
-			coverage_end = EXCLUDED.coverage_end,
-			aggregation_complete = EXCLUDED.aggregation_complete,
-			ledger_pending = EXCLUDED.ledger_pending,
-			data_through = EXCLUDED.data_through,
-			stale_reason = EXCLUDED.stale_reason,
-			computed_at = EXCLUDED.computed_at
-		RETURNING aggregation_complete
-	`
-	var complete bool
-	err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{targetStart.UTC(), targetEnd.UTC(), today, service.PlatformAnthropic, service.PlatformOpenAI},
-		&complete,
-	)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return complete, err
-}
-
-// MarkDashboardCostSnapshotStale prevents a pre-cleanup snapshot from being
-// presented as complete while the affected usage range is being recomputed.
-func (r *dashboardAggregationRepository) MarkDashboardCostSnapshotStale(ctx context.Context) error {
-	if r == nil || r.sql == nil {
-		return nil
-	}
-	_, err := r.sql.ExecContext(ctx, `
-		UPDATE usage_dashboard_cost_snapshot
-		SET aggregation_complete = FALSE
-		WHERE id = 1
-	`)
-	if isUndefinedTableError(err) {
-		return nil
-	}
-	return err
-}
-
-func (r *dashboardAggregationRepository) GetDashboardCostSummary(ctx context.Context) (*usagestats.DashboardCostSummary, error) {
-	query := `
-		SELECT
-			today_real_cost_cny,
-			total_cost_cny,
-			total_account_cost,
-			today_account_cost,
-			average_cost_cny_per_usd,
-			anthropic_cost_cny_per_usd,
-			openai_cost_cny_per_usd,
-			coverage_start,
-			coverage_end,
-			aggregation_complete,
-			ledger_pending,
-			data_through,
-			stale_reason,
-			computed_at
-		FROM usage_dashboard_cost_snapshot
-		WHERE id = 1
-	`
-	result := &usagestats.DashboardCostSummary{}
-	var coverageStart, coverageEnd, computedAt time.Time
-	var dataThrough sql.NullTime
-	var staleReason sql.NullString
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		nil,
-		&result.TodayRealCostCNY,
-		&result.TotalCostCNY,
-		&result.TotalAccountCost,
-		&result.TodayAccountCost,
-		&result.AverageCostCNYPerUSD,
-		&result.AnthropicCostCNYPerUSD,
-		&result.OpenAICostCNYPerUSD,
-		&coverageStart,
-		&coverageEnd,
-		&result.AggregationComplete,
-		&result.LedgerPending,
-		&dataThrough,
-		&staleReason,
-		&computedAt,
-	); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return false, nil
 		}
-		return nil, err
-	}
-	result.AsOf = computedAt.UTC().Format(time.RFC3339)
-	result.CoverageStart = coverageStart.UTC().Format(time.RFC3339)
-	result.CoverageEnd = coverageEnd.UTC().Format(time.RFC3339)
-	if dataThrough.Valid {
-		result.DataThrough = dataThrough.Time.UTC().Format(time.RFC3339)
-	}
-	if staleReason.Valid {
-		result.StaleReason = staleReason.String
-	}
-	return result, nil
+		return complete, err */
 }
 
 func (r *dashboardAggregationRepository) upsertDailyAggregates(ctx context.Context, start, end time.Time) error {

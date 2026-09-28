@@ -534,7 +534,7 @@ func TestUsageLogRepositoryUpstreamModelMismatchFilterReachesAllAdminQueries(t *
 
 		mock.ExpectQuery("AND ul\\.upstream_model_mismatch IS FALSE").
 			WithArgs(start, end).
-			WillReturnRows(sqlmock.NewRows([]string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost", "real_cost_cny"}))
+			WillReturnRows(sqlmock.NewRows([]string{"model", "requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens", "total_tokens", "cost", "actual_cost", "account_cost"}))
 
 		models, err := repo.GetModelStatsWithUsageFiltersBySource(context.Background(), start, end, filters, usagestats.ModelSourceRequested)
 		require.NoError(t, err)
@@ -549,7 +549,7 @@ func TestUsageLogRepositoryUpstreamModelMismatchFilterReachesAllAdminQueries(t *
 
 		mock.ExpectQuery("AND ul.upstream_model_mismatch IS TRUE").
 			WithArgs(start, end).
-			WillReturnRows(sqlmock.NewRows([]string{"group_id", "group_name", "requests", "total_tokens", "cost", "actual_cost", "account_cost", "real_cost_cny"}))
+			WillReturnRows(sqlmock.NewRows([]string{"group_id", "group_name", "requests", "total_tokens", "cost", "actual_cost", "account_cost"}))
 
 		groups, err := repo.GetGroupStatsWithUsageFilters(context.Background(), start, end, filters)
 		require.NoError(t, err)
@@ -569,8 +569,8 @@ func TestUsageLogRepositoryUpstreamModelMismatchFilterReachesAllAdminQueries(t *
 			WillReturnRows(sqlmock.NewRows([]string{
 				"inbound_grouped", "upstream_grouped", "inbound_endpoint", "upstream_endpoint",
 				"requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
-				"cost", "actual_cost", "account_cost", "real_cost_cny", "avg_duration_ms",
-			}).AddRow(1, 1, nil, nil, int64(0), int64(0), int64(0), int64(0), int64(0), 0.0, 0.0, 0.0, 0.0, 0.0))
+				"cost", "actual_cost", "account_cost", "avg_duration_ms",
+			}).AddRow(1, 1, nil, nil, int64(0), int64(0), int64(0), int64(0), int64(0), 0.0, 0.0, 0.0, 0.0))
 
 		stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 		require.NoError(t, err)
@@ -615,8 +615,8 @@ func TestUsageLogRepositoryGetUserModelStatsUsesRequestedModel(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
 			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
-		}).AddRow("gpt-5.5", int64(2), int64(10), int64(20), int64(0), int64(0), int64(30), 0.1, 0.08, 0.07, 0.06))
+			"cost", "actual_cost", "account_cost",
+		}).AddRow("gpt-5.5", int64(2), int64(10), int64(20), int64(0), int64(0), int64(30), 0.1, 0.08, 0.07))
 
 	stats, err := repo.GetUserModelStats(context.Background(), 7, start, end)
 	require.NoError(t, err)
@@ -649,13 +649,12 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestedModelSource(t *testing.T)
 			"cost",
 			"actual_cost",
 			"account_cost",
-			"real_cost_cny",
 			"avg_duration_ms",
 		}).
-			AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 1.1, 20.0).
-			AddRow(0, 1, "/v1/responses", nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 1.1, 20.0).
-			AddRow(1, 0, nil, "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 1.1, 20.0).
-			AddRow(0, 0, "/v1/responses", "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 1.1, 20.0))
+			AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
+			AddRow(0, 1, "/v1/responses", nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
+			AddRow(1, 0, nil, "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0).
+			AddRow(0, 0, "/v1/responses", "/v1/responses", int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
@@ -691,9 +690,8 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) 
 			"cost",
 			"actual_cost",
 			"account_cost",
-			"real_cost_cny",
 			"avg_duration_ms",
-		}).AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 1.1, 20.0))
+		}).AddRow(1, 1, nil, nil, int64(1), int64(2), int64(3), int64(1), int64(3), 1.2, 1.0, 1.2, 20.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
@@ -719,10 +717,10 @@ func TestUsageLogRepositoryGetModelStatsAccountCostColumn(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
 			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
+			"cost", "actual_cost", "account_cost",
 		}).
-			AddRow("claude-opus-4-6", int64(10), int64(100), int64(200), int64(5), int64(3), int64(308), 2.5, 2.0, 1.8, 9.0).
-			AddRow("claude-sonnet-4-6", int64(5), int64(50), int64(100), int64(0), int64(0), int64(150), 1.0, 0.8, 0.7, 3.5))
+			AddRow("claude-opus-4-6", int64(10), int64(100), int64(200), int64(5), int64(3), int64(308), 2.5, 2.0, 1.8).
+			AddRow("claude-sonnet-4-6", int64(5), int64(50), int64(100), int64(0), int64(0), int64(150), 1.0, 0.8, 0.7))
 
 	results, err := repo.GetModelStatsWithFilters(context.Background(), start, end, 0, 0, 0, 0, nil, nil, nil)
 	require.NoError(t, err)
@@ -731,7 +729,6 @@ func TestUsageLogRepositoryGetModelStatsAccountCostColumn(t *testing.T) {
 	require.Equal(t, 2.5, results[0].Cost)
 	require.Equal(t, 2.0, results[0].ActualCost)
 	require.Equal(t, 1.8, results[0].AccountCost)
-	require.Equal(t, 9.0, results[0].RealCostCNY)
 	require.Equal(t, "claude-sonnet-4-6", results[1].Model)
 	require.Equal(t, 0.7, results[1].AccountCost)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -753,8 +750,8 @@ func TestUsageLogRepositoryGetModelStatsUsesCoveredHourlyPrefixForCurrentDate(t 
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
 			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
-		}).AddRow("gpt-image-1", int64(2), int64(10), int64(20), int64(0), int64(0), int64(30), 0.2, 0.15, 0.1, 0.5))
+			"cost", "actual_cost", "account_cost",
+		}).AddRow("gpt-image-1", int64(2), int64(10), int64(20), int64(0), int64(0), int64(30), 0.2, 0.15, 0.1))
 
 	results, err := repo.GetModelStatsWithFilters(context.Background(), start, requestedEnd, 0, 0, 0, 0, nil, nil, nil)
 	require.NoError(t, err)
@@ -782,28 +779,6 @@ func TestUsageLogRepositoryReportsModelAggregateCoverage(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUsageLogRepositoryGetDashboardCostSummaryReadsSnapshotOnly(t *testing.T) {
-	db, mock := newSQLMock(t)
-	repo := &usageLogRepository{sql: db}
-	computedAt := time.Now().UTC().Truncate(time.Second)
-	coverageStart := computedAt.AddDate(0, 0, -90)
-	coverageEnd := computedAt
-
-	mock.ExpectQuery("FROM usage_dashboard_cost_snapshot").
-		WillReturnRows(sqlmock.NewRows([]string{
-			"today_real_cost_cny", "total_cost_cny", "total_account_cost", "today_account_cost",
-			"average_cost_cny_per_usd", "anthropic_cost_cny_per_usd", "openai_cost_cny_per_usd",
-			"coverage_start", "coverage_end", "aggregation_complete", "ledger_pending", "data_through", "stale_reason", "computed_at",
-		}).AddRow(1.2, 100.0, 20.0, 3.0, 5.0, 6.0, 4.0, coverageStart, coverageEnd, true, false, coverageEnd, "", computedAt))
-
-	got, err := repo.GetDashboardCostSummary(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, 1.2, got.TodayRealCostCNY)
-	require.True(t, got.AggregationComplete)
-	require.Equal(t, computedAt.Format(time.RFC3339), got.AsOf)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestUsageLogRepositoryGetModelStatsWithUsageFiltersAppliesRequestedModelFilter(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
@@ -817,8 +792,8 @@ func TestUsageLogRepositoryGetModelStatsWithUsageFiltersAppliesRequestedModelFil
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
 			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
-		}).AddRow("gpt-5", int64(1), int64(10), int64(20), int64(0), int64(0), int64(30), 0.1, 0.08, 0.07, 0.35))
+			"cost", "actual_cost", "account_cost",
+		}).AddRow("gpt-5", int64(1), int64(10), int64(20), int64(0), int64(0), int64(30), 0.1, 0.08, 0.07))
 
 	results, err := repo.GetModelStatsWithUsageFiltersBySource(context.Background(), start, end, filters, usagestats.ModelSourceRequested)
 	require.NoError(t, err)
@@ -838,10 +813,10 @@ func TestUsageLogRepositoryGetGroupStatsAccountCostColumn(t *testing.T) {
 		WithArgs(start, end).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"group_id", "group_name", "requests", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
+			"cost", "actual_cost", "account_cost",
 		}).
-			AddRow(int64(1), "azure-cc", int64(100), int64(5000), 10.0, 8.5, 7.2, 36.0).
-			AddRow(int64(2), "max", int64(50), int64(2000), 5.0, 4.0, 3.5, 17.5))
+			AddRow(int64(1), "azure-cc", int64(100), int64(5000), 10.0, 8.5, 7.2).
+			AddRow(int64(2), "max", int64(50), int64(2000), 5.0, 4.0, 3.5))
 
 	results, err := repo.GetGroupStatsWithFilters(context.Background(), start, end, 0, 0, 0, 0, nil, nil, nil)
 	require.NoError(t, err)
@@ -851,7 +826,6 @@ func TestUsageLogRepositoryGetGroupStatsAccountCostColumn(t *testing.T) {
 	require.Equal(t, 10.0, results[0].Cost)
 	require.Equal(t, 8.5, results[0].ActualCost)
 	require.Equal(t, 7.2, results[0].AccountCost)
-	require.Equal(t, 36.0, results[0].RealCostCNY)
 	require.Equal(t, int64(2), results[1].GroupID)
 	require.Equal(t, 3.5, results[1].AccountCost)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -869,8 +843,8 @@ func TestUsageLogRepositoryGetGroupStatsWithUsageFiltersAppliesRequestedModelFil
 		WithArgs(start, end, "gpt-5").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"group_id", "group_name", "requests", "total_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny",
-		}).AddRow(int64(1), "default", int64(1), int64(30), 0.1, 0.08, 0.07, 0.35))
+			"cost", "actual_cost", "account_cost",
+		}).AddRow(int64(1), "default", int64(1), int64(30), 0.1, 0.08, 0.07))
 
 	results, err := repo.GetGroupStatsWithUsageFilters(context.Background(), start, end, filters)
 	require.NoError(t, err)
@@ -890,15 +864,13 @@ func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testin
 		WillReturnRows(sqlmock.NewRows([]string{
 			"inbound_grouped", "upstream_grouped", "inbound_endpoint", "upstream_endpoint",
 			"requests", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
-			"cost", "actual_cost", "account_cost", "real_cost_cny", "avg_duration_ms",
-		}).AddRow(1, 1, nil, nil, int64(50), int64(1000), int64(2000), int64(60), int64(40), 15.0, 12.5, 11.0, 55.0, 100.0))
+			"cost", "actual_cost", "account_cost", "avg_duration_ms",
+		}).AddRow(1, 1, nil, nil, int64(50), int64(1000), int64(2000), int64(60), int64(40), 15.0, 12.5, 11.0, 100.0))
 
 	stats, err := repo.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
 	require.NotNil(t, stats.TotalAccountCost, "TotalAccountCost must always be returned, even without AccountID filter")
 	require.Equal(t, 11.0, *stats.TotalAccountCost)
-	require.NotNil(t, stats.TotalRealCostCNY)
-	require.Equal(t, 55.0, *stats.TotalRealCostCNY)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

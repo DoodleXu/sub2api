@@ -58,11 +58,7 @@ type DashboardStats struct {
 	TotalTokens              int64   `json:"total_tokens"`
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
-	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号计费（含账号倍率；每美元成本分母另按标准计费计算）
-	TotalCostCNY             float64 `json:"total_cost_cny"`     // 累计人民币成本
-	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd"`
-	AnthropicCostCNYPerUSD   float64 `json:"anthropic_cost_cny_per_usd"`
-	OpenAICostCNYPerUSD      float64 `json:"openai_cost_cny_per_usd"`
+	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号计费（含账号倍率）
 
 	// 今日 Token 使用统计
 	TodayRequests            int64   `json:"today_requests"`
@@ -74,7 +70,6 @@ type DashboardStats struct {
 	TodayCost                float64 `json:"today_cost"`         // 今日标准计费
 	TodayActualCost          float64 `json:"today_actual_cost"`  // 今日实际扣除
 	TodayAccountCost         float64 `json:"today_account_cost"` // 今日账号成本
-	TodayRealCostCNY         float64 `json:"today_real_cost_cny"`
 
 	// 系统运行统计
 	AverageDurationMs float64 `json:"average_duration_ms"` // 平均响应时间
@@ -82,27 +77,6 @@ type DashboardStats struct {
 	// 性能指标
 	Rpm int64 `json:"rpm"` // 近5分钟平均每分钟请求数
 	Tpm int64 `json:"tpm"` // 近5分钟平均每分钟Token数
-}
-
-// DashboardCostSummary is the materialized CNY/account-cost snapshot used by
-// the admin dashboard. It is intentionally independent from DashboardStats so
-// cost aggregation failures never block the core dashboard response.
-type DashboardCostSummary struct {
-	TodayRealCostCNY       float64 `json:"today_real_cost_cny"`
-	TotalCostCNY           float64 `json:"total_cost_cny"`
-	TotalAccountCost       float64 `json:"total_account_cost"`
-	TodayAccountCost       float64 `json:"today_account_cost"`
-	AverageCostCNYPerUSD   float64 `json:"average_cost_cny_per_usd"`
-	AnthropicCostCNYPerUSD float64 `json:"anthropic_cost_cny_per_usd"`
-	OpenAICostCNYPerUSD    float64 `json:"openai_cost_cny_per_usd"`
-	AsOf                   string  `json:"as_of"`
-	Stale                  bool    `json:"stale"`
-	AggregationComplete    bool    `json:"aggregation_complete"`
-	LedgerPending          bool    `json:"ledger_pending"`
-	DataThrough            string  `json:"data_through,omitempty"`
-	StaleReason            string  `json:"stale_reason,omitempty"`
-	CoverageStart          string  `json:"coverage_start,omitempty"`
-	CoverageEnd            string  `json:"coverage_end,omitempty"`
 }
 
 // TrendDataPoint represents a single point in trend data
@@ -127,10 +101,9 @@ type ModelStat struct {
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalTokens         int64   `json:"total_tokens"`
-	Cost                float64 `json:"cost"`          // 标准计费
-	ActualCost          float64 `json:"actual_cost"`   // 实际扣除
-	AccountCost         float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
-	RealCostCNY         float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
+	Cost                float64 `json:"cost"`         // 标准计费
+	ActualCost          float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost         float64 `json:"account_cost"` // 账号计费（美元，含账号倍率）
 }
 
 // EndpointStat represents usage statistics for a single request endpoint.
@@ -156,10 +129,9 @@ type GroupStat struct {
 	GroupName   string  `json:"group_name"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`          // 标准计费
-	ActualCost  float64 `json:"actual_cost"`   // 实际扣除
-	AccountCost float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
-	RealCostCNY float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
+	Cost        float64 `json:"cost"`         // 标准计费
+	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost float64 `json:"account_cost"` // 账号计费（美元，含账号倍率）
 }
 
 // UserUsageTrendPoint represents user usage trend data point
@@ -215,7 +187,6 @@ type UserBreakdownItem struct {
 	Cost         float64 `json:"cost"`          // 标准计费
 	ActualCost   float64 `json:"actual_cost"`   // 实际扣除
 	AccountCost  float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
-	RealCostCNY  float64 `json:"real_cost_cny"` // 实际人民币成本（账号每刀成本 × 本范围标准计费）
 }
 
 // UserBreakdownDimension specifies the dimension to filter for user breakdown.
@@ -341,7 +312,6 @@ type UsageStats struct {
 	TotalCost                float64        `json:"total_cost"`
 	TotalActualCost          float64        `json:"total_actual_cost"`
 	TotalAccountCost         *float64       `json:"total_account_cost,omitempty"`
-	TotalRealCostCNY         *float64       `json:"total_real_cost_cny,omitempty"`
 	AverageDurationMs        float64        `json:"average_duration_ms"`
 	Endpoints                []EndpointStat `json:"endpoints,omitempty"`
 	UpstreamEndpoints        []EndpointStat `json:"upstream_endpoints,omitempty"`

@@ -601,7 +601,6 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 		}
 		found[account.ID] = struct{}{}
 		if s.cache != nil {
-			s.preserveCachedOpenAISchedulingCostStats(ctx, account)
 			if err := s.cache.SetAccount(ctx, account); err != nil {
 				return err
 			}
@@ -760,7 +759,6 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 		return err
 	}
 	if s.cache != nil {
-		s.preserveCachedOpenAISchedulingCostStats(ctx, account)
 		if err := s.cache.SetAccount(ctx, account); err != nil {
 			return err
 		}
@@ -1612,27 +1610,7 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 	if err != nil {
 		return nil, err
 	}
-	if bucket.Platform == PlatformOpenAI && openAIAccountCostSchedulingEnabled(ctx, s.cfg, s.settingService) {
-		if err := attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts); err != nil {
-			for i := range accounts {
-				s.preserveCachedOpenAISchedulingCostStats(ctx, &accounts[i])
-			}
-		}
-	}
 	return accounts, nil
-}
-
-func (s *SchedulerSnapshotService) preserveCachedOpenAISchedulingCostStats(ctx context.Context, account *Account) {
-	if s == nil || s.cache == nil || account == nil || account.ID <= 0 ||
-		!isOpenAIUnsupportedBillingProbeAccount(account) ||
-		!openAIAccountCostSchedulingEnabled(ctx, s.cfg, s.settingService) {
-		return
-	}
-	cached, err := s.cache.GetAccount(ctx, account.ID)
-	if err != nil || cached == nil {
-		return
-	}
-	preserveOpenAISchedulingCostStats(account, cached)
 }
 
 func (s *SchedulerSnapshotService) loadAccountsForRebuild(

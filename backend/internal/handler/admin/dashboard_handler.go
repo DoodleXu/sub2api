@@ -162,10 +162,6 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"total_cost":                  stats.TotalCost,       // 标准计费
 		"total_actual_cost":           stats.TotalActualCost, // 实际扣除
 		"total_account_cost":          stats.TotalAccountCost,
-		"total_cost_cny":              stats.TotalCostCNY,
-		"average_cost_cny_per_usd":    stats.AverageCostCNYPerUSD,
-		"anthropic_cost_cny_per_usd":  stats.AnthropicCostCNYPerUSD,
-		"openai_cost_cny_per_usd":     stats.OpenAICostCNYPerUSD,
 
 		// 今日 Token 使用统计
 		"today_requests":              stats.TodayRequests,
@@ -177,7 +173,6 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"today_cost":                  stats.TodayCost,       // 今日标准计费
 		"today_actual_cost":           stats.TodayActualCost, // 今日实际扣除
 		"today_account_cost":          stats.TodayAccountCost,
-		"today_real_cost_cny":         stats.TodayRealCostCNY,
 
 		// 系统运行统计
 		"average_duration_ms": stats.AverageDurationMs,
@@ -192,20 +187,6 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"stats_updated_at":    stats.StatsUpdatedAt,
 		"stats_stale":         stats.StatsStale,
 	})
-}
-
-// GetCostSummary returns the materialized dashboard cost snapshot. The query is
-// deliberately isolated from the core dashboard so a cost refresh failure can
-// never make token/request statistics unavailable.
-func (h *DashboardHandler) GetCostSummary(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
-	defer cancel()
-	summary, err := h.dashboardService.GetDashboardCostSummary(ctx)
-	if err != nil {
-		response.Error(c, 500, "Failed to get dashboard cost summary")
-		return
-	}
-	response.Success(c, summary)
 }
 
 type DashboardAggregationBackfillRequest struct {

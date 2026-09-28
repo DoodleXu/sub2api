@@ -3724,37 +3724,8 @@ type accountCostTotal struct {
 
 func (r *accountRepository) loadTotalAccountCosts(ctx context.Context, accountIDs []int64) (map[int64]accountCostTotal, error) {
 	result := make(map[int64]accountCostTotal, len(accountIDs))
-	if len(accountIDs) == 0 {
-		return result, nil
-	}
-
-	query := `
-		SELECT
-			account_id,
-			published_account_cost,
-			published_standard_account_cost,
-			published_initialized,
-			initialized AND NOT needs_processing AS complete
-		FROM usage_account_cost_totals
-		WHERE account_id = ANY($1)
-	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var accountID int64
-		var cost accountCostTotal
-		if err := rows.Scan(&accountID, &cost.totalAccountCost, &cost.totalStandardAccountCost, &cost.hasPublishedResult, &cost.complete); err != nil {
-			return nil, err
-		}
-		result[accountID] = cost
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	// Fork-specific cumulative cost ledgers were removed in migration 241.
+	// Windowed usage statistics are the source of truth for account cost now.
 	return result, nil
 }
 
@@ -3792,59 +3763,26 @@ func (r *accountRepository) attachMatchingAccountCostStats(ctx context.Context, 
 		}
 		cost, found := costs[accounts[i].ID]
 		if !found || !cost.hasPublishedResult {
-			accounts[i].CostStatsPending = true
-			if include != nil {
-				r.preserveCachedAccountCostStats(ctx, &accounts[i])
-			}
 			continue
 		}
-		accounts[i].CostStatsPending = !cost.complete
 		accounts[i].TotalAccountCost = cost.totalAccountCost
-		if accounts[i].TotalCostCNY <= 0 {
-			continue
-		}
-		if cost.totalStandardAccountCost > 0 {
-			// 每美元成本的分母保持标准 usage 成本口径，不受账号倍率影响。
-			accounts[i].CostCNYPerUSD = accounts[i].TotalCostCNY / cost.totalStandardAccountCost
-		}
 	}
 	return nil
 }
 
 func accountUsesCostPerUSDForScheduling(account *service.Account) bool {
-	if account == nil || account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeAPIKey || account.TotalCostCNY <= 0 {
-		return false
-	}
-	probe, ok := account.Extra[service.UpstreamBillingProbeExtraKey].(map[string]any)
-	if !ok {
-		return false
-	}
-	status, _ := probe["status"].(string)
-	return status == service.UpstreamBillingProbeStatusUnsupported
+	return false
 }
 
 func (r *accountRepository) preserveCachedAccountCostStats(ctx context.Context, account *service.Account) {
 	if r == nil || r.schedulerCache == nil || account == nil || account.ID <= 0 {
 		return
 	}
-	if !accountUsesCostPerUSDForScheduling(account) {
-		return
-	}
 	cached, err := r.schedulerCache.GetAccount(ctx, account.ID)
 	if err != nil || cached == nil || cached.TotalAccountCost <= 0 {
 		return
 	}
-	if r.sql != nil {
-		if costs, err := r.loadTotalAccountCosts(ctx, []int64{account.ID}); err == nil {
-			if cost, ok := costs[account.ID]; ok && cost.hasPublishedResult && cost.totalStandardAccountCost > 0 && account.TotalCostCNY > 0 {
-				account.TotalAccountCost = cost.totalAccountCost
-				account.CostCNYPerUSD = account.TotalCostCNY / cost.totalStandardAccountCost
-				return
-			}
-		}
-	}
 	account.TotalAccountCost = cached.TotalAccountCost
-	account.CostCNYPerUSD = cached.CostCNYPerUSD
 }
 
 func (r *accountRepository) loadAccountGroups(ctx context.Context, accountIDs []int64) (map[int64][]*service.Group, map[int64][]int64, map[int64][]service.AccountGroup, error) {

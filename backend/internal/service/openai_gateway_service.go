@@ -2935,9 +2935,6 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 		return nil, fmt.Errorf("query accounts failed: %w", err)
 	}
 	accounts = s.filterOpenAIAccountsBySchedulingThreshold(ctx, accounts)
-	if platform == PlatformOpenAI && s.shouldLoadOpenAISchedulingCostStats(ctx) {
-		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
-	}
 	return accounts, nil
 }
 
@@ -3098,7 +3095,6 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if err != nil || latest == nil {
 		return nil
 	}
-	preserveOpenAISchedulingCostStats(latest, account)
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
 		return nil
 	}

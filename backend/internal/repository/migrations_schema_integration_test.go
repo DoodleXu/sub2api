@@ -87,18 +87,17 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireIndex(t, tx, "usage_logs", "idx_usage_logs_account_id_id")
 	requireForeignKeyOnDelete(t, tx, "usage_logs", "account_id", "accounts", "CASCADE")
 
-	requireColumn(t, tx, "usage_account_cost_totals", "last_processed_usage_id", "bigint", 0, false)
-	requireColumn(t, tx, "usage_account_cost_totals", "initialized", "boolean", 0, false)
-	requireColumn(t, tx, "usage_account_cost_totals", "needs_processing", "boolean", 0, false)
-	requireColumn(t, tx, "usage_account_cost_totals", "published_account_cost", "numeric", 0, false)
-	requireColumn(t, tx, "usage_account_cost_totals", "published_standard_account_cost", "numeric", 0, false)
-	requireColumn(t, tx, "usage_account_cost_totals", "published_initialized", "boolean", 0, false)
-	requireIndex(t, tx, "usage_account_cost_totals", "idx_usage_account_cost_totals_pending")
-	requireForeignKeyOnDelete(t, tx, "usage_account_cost_totals", "account_id", "accounts", "CASCADE")
-	requireIndex(t, tx, "usage_account_cost_dirty_buckets", "idx_usage_account_cost_dirty_buckets_requested")
-	requireColumn(t, tx, "usage_dashboard_cost_snapshot", "ledger_pending", "boolean", 0, false)
-	requireColumn(t, tx, "usage_dashboard_cost_snapshot", "data_through", "timestamp with time zone", 0, true)
-	requireColumn(t, tx, "usage_dashboard_cost_snapshot", "stale_reason", "text", 0, true)
+	for _, table := range []string{
+		"usage_account_cost_totals",
+		"usage_account_cost_dirty_buckets",
+		"usage_dashboard_cost_snapshot",
+		"usage_dashboard_account_cost_hourly",
+		"usage_dashboard_account_cost_daily",
+	} {
+		var regclass sql.NullString
+		require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass($1)", "public."+table).Scan(&regclass))
+		require.False(t, regclass.Valid, "expected fork cost table %s to be removed", table)
+	}
 
 	requireColumn(t, tx, "usage_dashboard_account_model_hourly", "account_id", "bigint", 0, false)
 	requireColumn(t, tx, "usage_dashboard_account_model_hourly", "model", "text", 0, false)

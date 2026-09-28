@@ -1031,10 +1031,6 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
 		return
 	}
-	if req.TotalCostCNY != nil && *req.TotalCostCNY < 0 {
-		response.BadRequest(c, "total_cost_cny must be >= 0")
-		return
-	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
 	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
@@ -1171,14 +1167,6 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
-		return
-	}
-	if req.TotalCostCNY != nil && *req.TotalCostCNY < 0 {
-		response.BadRequest(c, "total_cost_cny must be >= 0")
-		return
-	}
-	if req.AddCostCNY != nil && *req.AddCostCNY < 0 {
-		response.BadRequest(c, "add_cost_cny must be >= 0")
 		return
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
@@ -2380,10 +2368,6 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
-		return
-	}
-	if req.TotalCostCNY != nil && *req.TotalCostCNY < 0 {
-		response.BadRequest(c, "total_cost_cny must be >= 0")
 		return
 	}
 	if len(req.AccountIDs) == 0 && req.Filters == nil {

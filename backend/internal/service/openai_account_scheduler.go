@@ -2125,38 +2125,6 @@ func (s *OpenAIGatewayService) isOpenAILowUpstreamRatePriorityEnabled(ctx contex
 	return !strings.EqualFold(strings.TrimSpace(enabled), "true") && strings.EqualFold(strings.TrimSpace(lowRate), "true")
 }
 
-func (s *OpenAIGatewayService) shouldLoadOpenAISchedulingCostStats(ctx context.Context) bool {
-	if s == nil {
-		return false
-	}
-	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
-	if !settings.enabled {
-		return settings.lowUpstreamRatePriorityEnabled
-	}
-	return s.openAIWSSchedulerWeightsForRequest(ctx).UpstreamCost > 0
-}
-
-func openAIAccountCostSchedulingEnabled(ctx context.Context, cfg *config.Config, settingService *SettingService) bool {
-	if settingService == nil {
-		return false
-	}
-	gateway := &OpenAIGatewayService{cfg: cfg}
-	gateway.rateLimitService = &RateLimitService{settingService: settingService}
-	return gateway.shouldLoadOpenAISchedulingCostStats(ctx)
-}
-
-func attachOpenAISchedulingCostStats(ctx context.Context, repo AccountRepository, accounts []Account) error {
-	attacher, ok := repo.(OpenAISchedulingCostStatsAttacher)
-	if !ok || len(accounts) == 0 {
-		return nil
-	}
-	if err := attacher.AttachOpenAISchedulingCostStats(ctx, accounts); err != nil {
-		slog.Warn("openai_scheduling_cost_stats_load_failed", "error", err, "account_count", len(accounts))
-		return err
-	}
-	return nil
-}
-
 func (s *OpenAIGatewayService) openAIOAuthSchedulingRateMultiplier(ctx context.Context) float64 {
 	return s.openAIAdvancedSchedulerRuntimeSettings(ctx).oauthSchedulingRateMultiplier
 }
@@ -3201,7 +3169,6 @@ func newOpenAILegacyUpstreamRateOrder(accounts []*Account, now time.Time, args .
 
 func openAISchedulingRate(account *Account, now time.Time, args ...any) (float64, bool) {
 	oauthSchedulingRateMultiplier := defaultOpenAIOAuthSchedulingRateMultiplier
-	schedulingUSDToCNYRate := defaultOpenAISchedulingUSDToCNYRate
 	if len(args) > 0 {
 		switch v := args[0].(type) {
 		case *float64:
@@ -3212,32 +3179,13 @@ func openAISchedulingRate(account *Account, now time.Time, args ...any) (float64
 			oauthSchedulingRateMultiplier = v
 		}
 	}
-	if len(args) > 1 {
-		if v, ok := args[1].(float64); ok {
-			schedulingUSDToCNYRate = v
-		}
-	}
 	if account != nil && account.IsOpenAIOAuth() {
 		return oauthSchedulingRateMultiplier, true
 	}
 	if rate, ok := openAIFreshUpstreamBillingRate(account, now); ok {
 		return rate, true
 	}
-	return openAIUnsupportedBillingCostRate(account, schedulingUSDToCNYRate)
-}
-
-func openAIUnsupportedBillingCostRate(account *Account, schedulingUSDToCNYRate float64) (float64, bool) {
-	if !isOpenAIUnsupportedBillingProbeAccount(account) {
-		return 0, false
-	}
-	if schedulingUSDToCNYRate <= 0 || math.IsNaN(schedulingUSDToCNYRate) || math.IsInf(schedulingUSDToCNYRate, 0) {
-		return 0, false
-	}
-	rate := account.CostCNYPerUSD / schedulingUSDToCNYRate
-	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
-		return 0, false
-	}
-	return rate, true
+	return 0, false
 }
 
 func isOpenAIUnsupportedBillingProbeAccount(account *Account) bool {
@@ -3246,35 +3194,6 @@ func isOpenAIUnsupportedBillingProbeAccount(account *Account) bool {
 	}
 	snapshot := decodeUpstreamBillingProbeSnapshot(account.Extra)
 	return snapshot != nil && snapshot.Status == UpstreamBillingProbeStatusUnsupported
-}
-
-func preserveOpenAISchedulingCostStats(target, source *Account) {
-	if target == nil || source == nil {
-		return
-	}
-	if _, ok := openAIUnsupportedBillingCostRate(source, defaultOpenAISchedulingUSDToCNYRate); !ok {
-		return
-	}
-	if !isOpenAIUnsupportedBillingProbeAccount(target) {
-		return
-	}
-	if target.TotalCostCNY <= 0 || source.TotalCostCNY <= 0 || source.CostCNYPerUSD <= 0 {
-		return
-	}
-	// CostCNYPerUSD is defined against standard account cost, while
-	// TotalAccountCost may include the account's billing multiplier. Recover
-	// the standard denominator from the canonical cached ratio instead of using
-	// the multiplier-aware actual cost directly.
-	standardAccountCost := source.TotalCostCNY / source.CostCNYPerUSD
-	if standardAccountCost <= 0 || math.IsNaN(standardAccountCost) || math.IsInf(standardAccountCost, 0) {
-		return
-	}
-	rate := target.TotalCostCNY / standardAccountCost
-	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
-		return
-	}
-	target.TotalAccountCost = source.TotalAccountCost
-	target.CostCNYPerUSD = rate
 }
 
 // compare returns -1 when a should be selected before b, 1 when b should be

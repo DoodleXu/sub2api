@@ -38,10 +38,6 @@ type Account struct {
 	RateMultiplier   *float64
 	TotalCostCNY     float64
 	TotalAccountCost float64
-	CostCNYPerUSD    float64
-	// CostStatsPending is true while the incremental account-cost ledger has
-	// not caught up. Callers must not treat the zero-value totals as final.
-	CostStatsPending bool
 	LoadFactor       *int // 调度负载因子；nil 表示使用 Concurrency
 	Status           string
 	ArchivedAt       *time.Time

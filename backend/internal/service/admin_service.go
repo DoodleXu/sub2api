@@ -442,7 +442,7 @@ type UpdateAccountInput struct {
 	Priority              *int     // 使用指针区分"未提供"和"设置为0"
 	RateMultiplier        *float64 // 账号计费倍率（>=0，允许 0）
 	TotalCostCNY          *float64 // 账号累计人民币成本（>=0）
-	AddCostCNY            *float64 // API Key 账号增量人民币成本（>=0）
+	AddCostCNY            *float64 // OAuth 账号增量人民币成本（>=0）
 	LoadFactor            *int
 	Status                string
 	Archived              *bool
@@ -722,7 +722,6 @@ type adminServiceImpl struct {
 	affiliateService        adminRechargeAffiliateAccruer
 	compositeRouteRepo      CompositeModelRouteRepository
 	compositeResolver       *CompositeRouteResolver
-	dashboardCostRefresh    DashboardCostSnapshotRefresher
 	channelCacheInvalidator ChannelCacheInvalidator
 }
 
@@ -801,7 +800,7 @@ func NewAdminService(
 	affiliateService *AffiliateService,
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
-	dashboardCostRefresh DashboardCostSnapshotRefresher,
+	_ DashboardCostSnapshotRefresher,
 	channelCacheInvalidators ...ChannelCacheInvalidator,
 ) AdminService {
 	var channelCacheInvalidator ChannelCacheInvalidator
@@ -839,7 +838,6 @@ func NewAdminService(
 		affiliateService:        affiliateService,
 		compositeRouteRepo:      compositeRouteRepo,
 		compositeResolver:       compositeResolver,
-		dashboardCostRefresh:    dashboardCostRefresh,
 		channelCacheInvalidator: channelCacheInvalidator,
 	}
 }
@@ -3477,9 +3475,6 @@ func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	if s.settingService != nil && openAIAccountCostSchedulingEnabled(ctx, s.settingService.cfg, s.settingService) {
-		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
-	}
 	return accounts, nil
 }
 
@@ -3498,9 +3493,6 @@ func (s *adminServiceImpl) ListOpenAISchedulableAccountsForSchedulerScore(ctx co
 	}
 	if err != nil {
 		return nil, err
-	}
-	if s.settingService != nil && openAIAccountCostSchedulingEnabled(ctx, s.settingService.cfg, s.settingService) {
-		_ = attachOpenAISchedulingCostStats(ctx, s.accountRepo, accounts)
 	}
 	return accounts, nil
 }
@@ -3755,7 +3747,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 		account.RateMultiplier = input.RateMultiplier
 	}
-	if input.TotalCostCNY != nil {
+	if account.Type == AccountTypeOAuth && input.TotalCostCNY != nil {
 		if *input.TotalCostCNY < 0 {
 			return nil, errors.New("total_cost_cny must be >= 0")
 		}
@@ -3777,10 +3769,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 			return nil, err
 		}
 	}
-	if input.TotalCostCNY != nil && s.dashboardCostRefresh != nil {
-		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
-	}
-
 	// OAuth 账号：创建后异步设置隐私。
 	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
 	if account.Type == AccountTypeOAuth && !account.IsArchived() {
@@ -4020,23 +4008,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		account.RateMultiplier = input.RateMultiplier
 	}
-	accountCostChanged := false
-	if input.TotalCostCNY != nil {
+	if account.Type == AccountTypeOAuth && input.TotalCostCNY != nil {
 		if *input.TotalCostCNY < 0 {
 			return nil, errors.New("total_cost_cny must be >= 0")
 		}
-		accountCostChanged = account.TotalCostCNY != *input.TotalCostCNY
 		account.TotalCostCNY = *input.TotalCostCNY
 	}
-	if input.AddCostCNY != nil {
+	if account.Type == AccountTypeOAuth && input.AddCostCNY != nil {
 		if *input.AddCostCNY < 0 {
 			return nil, errors.New("add_cost_cny must be >= 0")
-		}
-		if account.Type != AccountTypeAPIKey {
-			return nil, errors.New("add_cost_cny only supports apikey accounts")
-		}
-		if *input.AddCostCNY != 0 {
-			accountCostChanged = true
 		}
 		account.TotalCostCNY += *input.AddCostCNY
 	}
@@ -4169,9 +4149,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-	if accountCostChanged && s.dashboardCostRefresh != nil {
-		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
 	}
 	return updated, nil
 }
@@ -4371,8 +4348,10 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 	}
 	if input.TotalCostCNY != nil {
-		if *input.TotalCostCNY < 0 {
-			return nil, errors.New("total_cost_cny must be >= 0")
+		for _, account := range cachedTargets {
+			if account != nil && account.Type == AccountTypeOAuth && *input.TotalCostCNY < 0 {
+				return nil, errors.New("total_cost_cny must be >= 0")
+			}
 		}
 	}
 
@@ -4418,9 +4397,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.RateMultiplier != nil {
 		repoUpdates.RateMultiplier = input.RateMultiplier
 	}
-	if input.TotalCostCNY != nil {
-		repoUpdates.TotalCostCNY = input.TotalCostCNY
-	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
 			repoUpdates.LoadFactor = nil // 0 或负数表示清除
@@ -4443,6 +4419,19 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Run bulk update for column/jsonb fields first.
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
+	}
+	if input.TotalCostCNY != nil {
+		oauthIDs := make([]int64, 0, len(cachedTargets))
+		for _, account := range cachedTargets {
+			if account != nil && account.Type == AccountTypeOAuth {
+				oauthIDs = append(oauthIDs, account.ID)
+			}
+		}
+		if len(oauthIDs) > 0 {
+			if _, err := s.accountRepo.BulkUpdate(ctx, oauthIDs, AccountBulkUpdate{TotalCostCNY: input.TotalCostCNY}); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// 将 proxy 变更传播到每个目标账号的 spark 影子账号
@@ -4478,10 +4467,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		result.SuccessIDs = append(result.SuccessIDs, accountID)
 		result.Results = append(result.Results, entry)
 	}
-	if input.TotalCostCNY != nil && s.dashboardCostRefresh != nil {
-		s.dashboardCostRefresh.RefreshDashboardCostSnapshotAfterAccountCostChange()
-	}
-
 	return result, nil
 }
 

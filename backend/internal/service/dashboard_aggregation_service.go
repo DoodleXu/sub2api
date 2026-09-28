@@ -172,12 +172,7 @@ func (s *DashboardAggregationService) Start() {
 	}
 
 	if s.cfg.RecomputeDays > 0 {
-		go func() {
-			s.runAccountCostMaintenance()
-			s.recomputeRecentDays()
-		}()
-	} else {
-		go s.runAccountCostMaintenance()
+		go s.recomputeRecentDays()
 	}
 
 	s.timingWheel.ScheduleRecurring("dashboard:aggregation", interval, func() {
@@ -185,9 +180,6 @@ func (s *DashboardAggregationService) Start() {
 	})
 	s.timingWheel.ScheduleRecurring("dashboard:startup-backfill", time.Minute, func() {
 		go s.runStartupDashboardBackfill()
-	})
-	s.timingWheel.ScheduleRecurring("dashboard:account-cost-maintenance", accountCostMaintenanceInterval, func() {
-		go s.runAccountCostMaintenance()
 	})
 	logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合作业启动 (interval=%v, lookback=%ds)", interval, s.cfg.LookbackSeconds)
 	if !s.cfg.BackfillEnabled {
@@ -718,21 +710,7 @@ func (s *DashboardAggregationService) recomputeRange(ctx context.Context, start,
 }
 
 func (s *DashboardAggregationService) invalidateDashboardCostSnapshot() {
-	if s == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), accountCostBackfillLogTimeout)
-	defer cancel()
-	if staler, ok := s.repo.(dashboardCostSnapshotStaler); ok {
-		if err := staler.MarkDashboardCostSnapshotStale(ctx); err != nil {
-			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 标记成本快照过期失败: %v", err)
-		}
-	}
-	if s.dashboardCache != nil {
-		if err := s.dashboardCache.DeleteDashboardCostSummary(ctx); err != nil {
-			logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 删除成本快照缓存失败: %v", err)
-		}
-	}
+	// Fork-specific dashboard cost snapshots were removed in migration 241.
 }
 
 func (s *DashboardAggregationService) runScheduledAggregation() {
