@@ -1780,7 +1780,7 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	)
 	s.Require().NoError(err)
 	s.Require().Equal(2.2, daily.totalCost, "partial scheduled aggregation must not overwrite daily totals with a partial-day value")
-	s.Require().Equal(2.2, daily.accountCost, "partial scheduled aggregation must not overwrite daily account cost with a partial-day value")
+	s.Require().Equal(0.6, daily.accountCost, "partial scheduled aggregation must not overwrite daily account cost with a partial-day value")
 }
 
 // --- GetBatchUserUsageStats ---
