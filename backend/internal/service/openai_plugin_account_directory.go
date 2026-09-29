@@ -101,6 +101,8 @@ func accountToPluginInfo(account *Account) PluginAccountInfo {
 //     recurse into a stack-overflow panic if the reverse relation is ever
 //     populated. GroupIDs already conveys membership, so drop these for
 //     correctness (not secrecy).
+//   - CostCNYPerUSD: legacy cost compatibility metadata retained for internal
+//     integration fixtures, not part of the plugin-readable account surface.
 //
 // Unexported fields (e.g. the hot-path caches) are never marshaled by encoding/json.
 func accountReadableSnapshotJSON(account *Account) []byte {
@@ -111,6 +113,7 @@ func accountReadableSnapshotJSON(account *Account) []byte {
 	clone.Credentials = nil
 	clone.Groups = nil
 	clone.AccountGroups = nil
+	clone.CostCNYPerUSD = 0
 	data, err := json.Marshal(&clone)
 	if err != nil {
 		return nil
