@@ -114,6 +114,7 @@ func accountReadableSnapshotJSON(account *Account) []byte {
 	clone.Groups = nil
 	clone.AccountGroups = nil
 	clone.CostCNYPerUSD = 0
+	clone.CostStatsPending = false
 	data, err := json.Marshal(&clone)
 	if err != nil {
 		return nil
