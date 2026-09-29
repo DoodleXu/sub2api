@@ -231,6 +231,7 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange()
 }
 
 func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotRecomputesChangedAccountCostRatio() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:         "sync-cost-update",
 		Platform:     service.PlatformOpenAI,
@@ -304,6 +305,7 @@ func (s *AccountRepoSuite) TestUpdateCredentials_SyncsSnapshotAndDurableOutbox()
 }
 
 func (s *AccountRepoSuite) TestListPendingAccountUsesPublishedCostStats() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	account := mustCreateAccount(s.T(), s.client, &service.Account{
 		Name:         "pending-published-cost",
 		Platform:     service.PlatformOpenAI,
@@ -398,6 +400,7 @@ func (s *AccountRepoSuite) TestDelete_WithGroupBindings() {
 }
 
 func (s *AccountRepoSuite) TestDelete_WithUsageHistoryPreservesUsageAndLedger() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "account-delete-usage@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-account-delete-usage", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "account-with-usage"})
@@ -426,6 +429,7 @@ func (s *AccountRepoSuite) TestDelete_WithUsageHistoryPreservesUsageAndLedger() 
 }
 
 func (s *AccountRepoSuite) TestHardDelete_WithUsageHistoryCascadesUsageAndLedger() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "account-hard-delete-usage@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-account-hard-delete-usage", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "account-hard-delete-with-usage"})

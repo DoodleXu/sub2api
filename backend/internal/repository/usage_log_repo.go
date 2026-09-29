@@ -4378,7 +4378,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	}
 
 	query := fmt.Sprintf(`
-		scoped AS (
+		WITH scoped AS (
 			SELECT
 				COALESCE(NULLIF(TRIM(ul.inbound_endpoint), ''), 'unknown') AS inbound_endpoint,
 				COALESCE(NULLIF(TRIM(ul.upstream_endpoint), ''), 'unknown') AS upstream_endpoint,

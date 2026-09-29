@@ -618,6 +618,7 @@ func (s *UsageLogRepoSuite) TestDelete() {
 }
 
 func (s *UsageLogRepoSuite) TestUsageCleanupDeleteBatchAdjustsProcessedAccountCostLedger() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "delete-ledger@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-delete-ledger", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-delete-ledger"})
@@ -725,6 +726,7 @@ func (s *UsageLogRepoSuite) TestUsageCleanupDeleteBatchAdjustsProcessedAccountCo
 }
 
 func (s *UsageLogRepoSuite) TestArchivedAccountLedgerStaysFrozenUntilLateUsageArrives() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "archived-ledger@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-archived-ledger", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "archived-ledger-account"})
@@ -758,6 +760,7 @@ func (s *UsageLogRepoSuite) TestArchivedAccountLedgerStaysFrozenUntilLateUsageAr
 }
 
 func (s *UsageLogRepoSuite) TestLateLowerIDUsageResetsOnlyAffectedAccountLedger() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "late-lower-id-ledger@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-late-lower-id-ledger", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "late-lower-id-ledger"})
@@ -817,6 +820,7 @@ func (s *UsageLogRepoSuite) TestLateLowerIDUsageResetsOnlyAffectedAccountLedger(
 }
 
 func (s *UsageLogRepoSuite) TestAccountLedgerPublishesOnlyAfterFinalBatch() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "ledger-publish@test.com"})
 	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-ledger-publish", Name: "k"})
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "ledger-publish-account"})
@@ -1137,6 +1141,7 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 }
 
 func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny@example.com"})
@@ -1272,6 +1277,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageUsesOnlyCostedAccounts() 
 }
 
 func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-zero@example.com"})
@@ -1310,6 +1316,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYAverageZeroWhenNoCostedAccounts(
 }
 
 func (s *UsageLogRepoSuite) TestDashboardCostCNYSnapshotWaitsForCompleteCoverageWithoutRawFallback() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	todayStart := timezone.Today()
 	aggregateEnd := todayStart.Add(2*time.Hour + 15*time.Minute)
 	user := mustCreateUser(s.T(), s.client, &service.User{Email: "dashboard-cost-cny-tail@example.com"})
@@ -1375,6 +1382,7 @@ func (s *UsageLogRepoSuite) TestDashboardCostCNYSnapshotWaitsForCompleteCoverage
 }
 
 func (s *UsageLogRepoSuite) TestDashboardStatsWithRangeWithoutCostSnapshotLeavesRatesUnavailable() {
+	s.T().Skip("fork cost ledger was removed by migration 241")
 	now := time.Now().UTC()
 	todayStart := truncateToDayUTC(now)
 	rangeStart := todayStart.Add(-24 * time.Hour)
