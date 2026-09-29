@@ -1215,7 +1215,7 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 
 - 保留 OAuth 账号的 `total_cost_cny` 手工成本输入；账号页按当前用量窗口和官方标准计费量推导窗口成本。
 - API Key 账号不再读取“每刀成本”或人民币成本账本，账号页显示用户实际扣费、账号实际成本计算出的“利润｜利润率”。
-- Dashboard 在当前查询窗口内汇总 API Key 用户实际扣费、账号实际成本，并返回利润及利润率字段；账号成本统一使用 `COALESCE(account_stats_cost, total_cost) * account_rate_multiplier`。
+- Dashboard 在当前查询窗口内汇总 API Key 用户实际扣费、账号实际成本，并返回利润及利润率字段；账号成本统一使用已解析的 `COALESCE(account_stats_cost, total_cost)`，不再重复乘 `account_rate_multiplier`。`account_rate_multiplier` 仅用于用户扣费、配额和账单口径。
 - 默认 Dashboard 的 API Key 累计利润改由日聚合读取；迁移 `242_add_api_key_dashboard_profit.sql` 重置水位并按原始日志保留期回填。保留期外已清理的旧日志无法重建 API Key 分类利润，迁移前这部分历史值不计入累计利润，直到对应旧日聚合自然过期。
 - 账号页成本列明确区分口径：API Key 显示今日利润及利润率，OAuth 显示累计手工成本；不再用今日估算值缩放累计人民币成本。
 - 删除 API Key 每刀成本字段、累计成本账本、成本增量表、成本快照及调度器成本信号；Dashboard 回到官方的用户实际扣费、账号实际成本和标准计费三类字段。
