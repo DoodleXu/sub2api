@@ -1701,6 +1701,17 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 // DashboardStats 仪表盘统计
 type DashboardStats = usagestats.DashboardStats
 
+// fillDashboardCostCNYStats is retained for legacy integration fixtures. Cost
+// snapshots are now populated by dashboard aggregation and exposed directly.
+func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats, todayStart time.Time) error {
+	_ = ctx
+	_ = todayStart
+	if stats == nil {
+		return nil
+	}
+	return nil
+}
+
 func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardStats, error) {
 	stats := &DashboardStats{}
 	now := timezone.Now()

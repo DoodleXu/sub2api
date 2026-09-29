@@ -59,6 +59,11 @@ type DashboardStats struct {
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
 	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号计费（含账号倍率）
+	TotalCostCNY             float64 `json:"total_cost_cny,omitempty"`
+	TodayRealCostCNY         float64 `json:"today_real_cost_cny,omitempty"`
+	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd,omitempty"`
+	OpenAICostCNYPerUSD      float64 `json:"openai_cost_cny_per_usd,omitempty"`
+	AnthropicCostCNYPerUSD   float64 `json:"anthropic_cost_cny_per_usd,omitempty"`
 	TotalAPIKeyProfit        float64 `json:"total_api_key_profit"`
 	TotalAPIKeyProfitRate    float64 `json:"total_api_key_profit_rate"`
 
@@ -105,8 +110,9 @@ type ModelStat struct {
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalTokens         int64   `json:"total_tokens"`
-	Cost                float64 `json:"cost"`         // 标准计费
-	ActualCost          float64 `json:"actual_cost"`  // 实际扣除
+	Cost                float64 `json:"cost"`        // 标准计费
+	ActualCost          float64 `json:"actual_cost"` // 实际扣除
+	RealCostCNY         float64 `json:"real_cost_cny,omitempty"`
 	AccountCost         float64 `json:"account_cost"` // 账号计费（美元，含账号倍率）
 }
 
@@ -191,6 +197,7 @@ type UserBreakdownItem struct {
 	Cost         float64 `json:"cost"`          // 标准计费
 	ActualCost   float64 `json:"actual_cost"`   // 实际扣除
 	AccountCost  float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
+	RealCostCNY  float64 `json:"real_cost_cny,omitempty"`
 }
 
 // UserBreakdownDimension specifies the dimension to filter for user breakdown.
@@ -316,6 +323,7 @@ type UsageStats struct {
 	TotalCost                float64        `json:"total_cost"`
 	TotalActualCost          float64        `json:"total_actual_cost"`
 	TotalAccountCost         *float64       `json:"total_account_cost,omitempty"`
+	TotalRealCostCNY         *float64       `json:"total_real_cost_cny,omitempty"`
 	AverageDurationMs        float64        `json:"average_duration_ms"`
 	Endpoints                []EndpointStat `json:"endpoints,omitempty"`
 	UpstreamEndpoints        []EndpointStat `json:"upstream_endpoints,omitempty"`

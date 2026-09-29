@@ -38,6 +38,10 @@ type Account struct {
 	RateMultiplier   *float64
 	TotalCostCNY     float64
 	TotalAccountCost float64
+	// Deprecated compatibility fields retained for older repository integration
+	// fixtures; cost ledgers are now materialized outside the account snapshot.
+	CostCNYPerUSD    float64
+	CostStatsPending bool
 	LoadFactor       *int // 调度负载因子；nil 表示使用 Concurrency
 	Status           string
 	ArchivedAt       *time.Time

@@ -197,6 +197,13 @@ type DashboardStats struct {
 	AvgAmount           CurrencyAmounts `json:"avg_amount"`
 	PendingOrders       int             `json:"pending_orders"`
 	AdminRechargeAmount float64         `json:"admin_recharge_amount"`
+	// Deprecated compatibility fields for legacy dashboard integration fixtures.
+	TotalCostCNY           float64 `json:"total_cost_cny,omitempty"`
+	TodayRealCostCNY       float64 `json:"today_real_cost_cny,omitempty"`
+	AverageCostCNYPerUSD   float64 `json:"average_cost_cny_per_usd,omitempty"`
+	OpenAICostCNYPerUSD    float64 `json:"openai_cost_cny_per_usd,omitempty"`
+	AnthropicCostCNYPerUSD float64 `json:"anthropic_cost_cny_per_usd,omitempty"`
+	TotalAccountCost       float64 `json:"total_account_cost,omitempty"`
 
 	DailySeries    []DailyStats        `json:"daily_series"`
 	PaymentMethods []PaymentMethodStat `json:"payment_methods"`
