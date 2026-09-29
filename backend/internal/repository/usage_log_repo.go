@@ -1703,6 +1703,7 @@ type DashboardStats = usagestats.DashboardStats
 
 // fillDashboardCostCNYStats is retained for legacy integration fixtures. Cost
 // snapshots are now populated by dashboard aggregation and exposed directly.
+//nolint:unused // 保留旧集成测试与外部适配代码的兼容入口。
 func (r *usageLogRepository) fillDashboardCostCNYStats(ctx context.Context, stats *DashboardStats, todayStart time.Time) error {
 	_ = ctx
 	_ = todayStart
