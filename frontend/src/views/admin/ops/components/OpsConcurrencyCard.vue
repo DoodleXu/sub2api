@@ -129,7 +129,7 @@ const platformRows = computed((): SummaryRow[] => {
       availability_percentage: totalAccounts > 0 ? Math.round((availableAccounts / totalAccounts) * 100) : 0,
       concurrency_percentage: totalConcurrency > 0 ? Math.round((usedConcurrency / totalConcurrency) * 100) : 0
     }
-  }).sort((a, b) => b.concurrency_percentage - a.concurrency_percentage)
+  }).sort((a, b) => b.used_concurrency - a.used_concurrency)
 })
 
 // 分组维度汇总
@@ -172,7 +172,7 @@ const groupRows = computed((): SummaryRow[] => {
     })
     .filter((row): row is NonNullable<typeof row> => row !== null)
 
-  return rows.sort((a, b) => b.concurrency_percentage - a.concurrency_percentage)
+  return rows.sort((a, b) => b.used_concurrency - a.used_concurrency)
 })
 
 // 账号维度详细
@@ -218,8 +218,8 @@ const accountRows = computed((): AccountRow[] => {
     // 优先显示异常账号
     if (a.has_error !== b.has_error) return a.has_error ? -1 : 1
     if (a.is_rate_limited !== b.is_rate_limited) return a.is_rate_limited ? -1 : 1
-    // 然后按负载排序
-    return b.load_percentage - a.load_percentage
+    // 然后按当前并发绝对值排序
+    return b.current_in_use - a.current_in_use
   })
 })
 
