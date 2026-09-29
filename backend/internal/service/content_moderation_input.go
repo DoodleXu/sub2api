@@ -157,7 +157,10 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 		collectLatestGeminiContent(gjson.GetBytes(body, "contents"), &collector)
 	case ContentModerationProtocolOpenAIImages:
 		collector.source = "openai_images"
-		collector.AddText(gjson.GetBytes(body, "prompt").String())
+		prompt := gjson.GetBytes(body, "prompt").String()
+		if !strings.Contains(prompt, "<system-reminder>") {
+			collector.AddText(prompt)
+		}
 		collectContentValue(gjson.GetBytes(body, "images"), &collector.parts, &collector.images)
 	default:
 		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
@@ -379,7 +382,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 	case !value.Exists():
 		return
 	case value.Type == gjson.String:
-		addModerationText(parts, value.String())
+		addAnthropicModerationText(parts, value.String())
 	case value.IsArray():
 		value.ForEach(func(_, item gjson.Result) bool {
 			collectAnthropicUserContentValue(item, parts, images)
@@ -390,7 +393,7 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 		switch typ {
 		case "", "text", "input_text", "message":
 			if value.Get("text").Exists() {
-				addModerationText(parts, value.Get("text").String())
+				addAnthropicModerationText(parts, value.Get("text").String())
 			}
 			if value.Get("content").Exists() {
 				collectAnthropicUserContentValue(value.Get("content"), parts, images)
@@ -398,6 +401,13 @@ func collectAnthropicUserContentValue(value gjson.Result, parts *[]string, image
 		case "image_url", "input_image", "image":
 			collectContentValue(value, parts, images)
 		}
+	}
+}
+
+func addAnthropicModerationText(parts *[]string, text string) {
+	text = strings.TrimSpace(stripSystemReminderBlocks(text))
+	if text != "" {
+		*parts = append(*parts, text)
 	}
 }
 

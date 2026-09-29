@@ -19,6 +19,18 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var compatibleImageTestPNG = []byte{
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+	0x89, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41,
+	0x54, 0x78, 0x9c, 0x63, 0x60, 0x00, 0x02, 0x00,
+	0x00, 0x05, 0x00, 0x01, 0xa5, 0xf6, 0x45, 0x40,
+	0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+	0xae, 0x42, 0x60, 0x82,
+}
+
 func TestCompatibleImagesGeminiModels(t *testing.T) {
 	for _, model := range []string{"gemini-2.5-flash-image", "gemini-2.5-flash-image-preview", "gemini-3-pro-image", "gemini-3.1-flash-image"} {
 		t.Run(model, func(t *testing.T) {
@@ -78,7 +90,7 @@ func TestCompatibleImagesForwardGemini(t *testing.T) {
 				require.NoError(t, writer.WriteField("custom_field", "preserved"))
 				part, err := writer.CreateFormFile("image", "input.png")
 				require.NoError(t, err)
-				_, err = part.Write([]byte("original-image-bytes"))
+				_, err = part.Write(compatibleImageTestPNG)
 				require.NoError(t, err)
 				require.NoError(t, writer.Close())
 				body, contentType = buf.Bytes(), writer.FormDataContentType()
@@ -117,7 +129,7 @@ func TestCompatibleImagesForwardGemini(t *testing.T) {
 				defer file.Close()
 				data, err := io.ReadAll(file)
 				require.NoError(t, err)
-				require.Equal(t, "original-image-bytes", string(data))
+				require.Equal(t, compatibleImageTestPNG, data)
 			} else {
 				require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
 				require.Equal(t, "preserved", gjson.GetBytes(upstream.lastBody, "custom_field").String())

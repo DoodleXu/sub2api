@@ -50,7 +50,7 @@ func TestContentModerationCheck_ReminderKeywordModes(t *testing.T) {
 					body := reminderTestBody(t, protocol, texts)
 					semantic := ExtractContentModerationInput(protocol, body)
 					wantSemantic := ""
-					if name == "plain" || (name == "separate" && protocol != ContentModerationProtocolOpenAIImages) {
+					if name == "plain" || (protocol == ContentModerationProtocolAnthropicMessages && (name == "prefix" || name == "suffix")) || (name == "separate" && protocol != ContentModerationProtocolOpenAIImages) {
 						wantSemantic = "今晚打老虎"
 					}
 					require.Equal(t, wantSemantic, semantic.Text)

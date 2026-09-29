@@ -492,7 +492,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 			}
 			// 初始上游 data 的 type 只解析一次：原始值用于终止事件精确匹配，规范化值供后续分支复用。
-			if openAIStreamEventIsTerminalWithType(data, eventTypeRaw) {
+			if (eventType != "error" || account == nil || account.Type == AccountTypeAPIKey) && openAIStreamEventIsTerminalWithType(data, eventTypeRaw) {
 				sawTerminalEvent = true
 			}
 			if responseID == "" {
@@ -861,6 +861,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			markEventProcessed(ev)
 			if streamEarlyErr != nil {
 				return resultWithUsage(), streamEarlyErr
+			}
+			if sawTerminalEvent && ev.line == "" {
+				return finalizeStream()
 			}
 
 		case <-intervalCh:

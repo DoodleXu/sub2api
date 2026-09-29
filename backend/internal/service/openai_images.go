@@ -539,7 +539,7 @@ func validateOpenAIImageUpload(data []byte, declaredContentType string) (string,
 	declared := normalizeImageContentType(declaredContentType)
 	detectedType, ok := detectImageContentType(data)
 	if !ok {
-		if declared == "application/octet-stream" {
+		if isSupportedImageContentType(declared) {
 			return declared, 0, 0, nil
 		}
 		return "", 0, 0, fmt.Errorf("image upload is not a supported PNG, JPEG, WebP, or GIF")
