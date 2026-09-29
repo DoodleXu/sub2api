@@ -3628,7 +3628,7 @@ export default {
         priority: '优先级',
         billingRateMultiplier: '账号倍率',
         totalCostCny: '成本',
-        costProfit: '成本/利润',
+        costProfit: '成本/利润率',
         costStatsPendingHint: '正在基于新用量重算，当前显示的是最近一次完整结果。',
         weight: '权重',
         schedulerScore: '调度权值',

@@ -909,7 +909,7 @@ const refreshTodayStatsBatch = async () => {
   // Why this checks both columns:
   // - today_stats column shows dedicated today's metrics.
   // - usage column also embeds today's stats for Key/Bedrock rows.
-  // - cost column shows today's API Key profit or OAuth's cumulative manual cost.
+  // - cost column shows today's API Key cost or OAuth's cumulative manual cost.
   // Skip fetching only when all three columns are hidden.
   if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage') && hiddenColumns.has('total_cost_cny')) {
     todayStatsLoading.value = false
@@ -2045,10 +2045,11 @@ const formatAccountCost = (account: Account): string => {
   const userCharge = Number(stats?.user_cost ?? 0)
   const accountCost = Number(stats?.cost ?? 0)
   if (account.type === 'apikey') {
-    if (!Number.isFinite(userCharge) || userCharge <= 0) return '-'
-    const profit = userCharge - accountCost
-    const rate = profit / userCharge
-    return `今日 $${profit.toFixed(4)} | ${(rate * 100).toFixed(2)}%`
+    if (!Number.isFinite(accountCost) || accountCost < 0) return '-'
+    const rate = Number.isFinite(userCharge) && userCharge > 0
+      ? `${((1 - accountCost / userCharge) * 100).toFixed(2)}%`
+      : '-'
+    return `$${accountCost.toFixed(4)} | ${rate}`
   }
   const totalCny = Number(account.total_cost_cny ?? 0)
   if (!Number.isFinite(totalCny) || totalCny <= 0) return '-'
