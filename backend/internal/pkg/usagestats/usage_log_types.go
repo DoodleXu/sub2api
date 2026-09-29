@@ -58,7 +58,7 @@ type DashboardStats struct {
 	TotalTokens              int64   `json:"total_tokens"`
 	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
 	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
-	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号计费（含账号倍率）
+	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本（已解析成本，缺失时回退标准成本）
 	TotalCostCNY             float64 `json:"total_cost_cny,omitempty"`
 	TodayRealCostCNY         float64 `json:"today_real_cost_cny,omitempty"`
 	AverageCostCNYPerUSD     float64 `json:"average_cost_cny_per_usd,omitempty"`
@@ -113,7 +113,7 @@ type ModelStat struct {
 	Cost                float64 `json:"cost"`        // 标准计费
 	ActualCost          float64 `json:"actual_cost"` // 实际扣除
 	RealCostCNY         float64 `json:"real_cost_cny,omitempty"`
-	AccountCost         float64 `json:"account_cost"` // 账号计费（美元，含账号倍率）
+	AccountCost         float64 `json:"account_cost"` // 账号成本（美元，已解析成本）
 }
 
 // EndpointStat represents usage statistics for a single request endpoint.
@@ -141,7 +141,7 @@ type GroupStat struct {
 	TotalTokens int64   `json:"total_tokens"`
 	Cost        float64 `json:"cost"`         // 标准计费
 	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
-	AccountCost float64 `json:"account_cost"` // 账号计费（美元，含账号倍率）
+	AccountCost float64 `json:"account_cost"` // 账号成本（美元，已解析成本）
 }
 
 // UserUsageTrendPoint represents user usage trend data point
@@ -196,7 +196,7 @@ type UserBreakdownItem struct {
 	TotalTokens  int64   `json:"total_tokens"`  // 输入+输出+缓存 token 累计
 	Cost         float64 `json:"cost"`          // 标准计费
 	ActualCost   float64 `json:"actual_cost"`   // 实际扣除
-	AccountCost  float64 `json:"account_cost"`  // 账号计费（美元，含账号倍率）
+	AccountCost  float64 `json:"account_cost"`  // 账号成本（美元，已解析成本）
 	RealCostCNY  float64 `json:"real_cost_cny,omitempty"`
 }
 
@@ -360,7 +360,7 @@ type AccountUsageHistory struct {
 	Requests   int64   `json:"requests"`
 	Tokens     int64   `json:"tokens"`
 	Cost       float64 `json:"cost"`        // 标准计费（total_cost）
-	ActualCost float64 `json:"actual_cost"` // 账号口径费用（total_cost * account_rate_multiplier）
+	ActualCost float64 `json:"actual_cost"` // 账号口径费用（优先使用已解析成本，历史缺失时回退到标准成本）
 	UserCost   float64 `json:"user_cost"`   // 用户口径费用（actual_cost，受分组倍率影响）
 }
 

@@ -883,9 +883,9 @@ func (r *dashboardAggregationRepository) upsertHourlyAggregates(ctx context.Cont
 				COALESCE(SUM(ul.cache_read_tokens), 0) AS cache_read_tokens,
 				COALESCE(SUM(ul.total_cost), 0) AS total_cost,
 				COALESCE(SUM(ul.actual_cost), 0) AS actual_cost,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS account_cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)), 0) AS account_cost,
 				COALESCE(SUM(ul.actual_cost) FILTER (WHERE a.type = 'apikey' AND COALESCE(ul.succeeded, ul.actual_cost > 0)), 0) AS api_key_actual_cost,
-				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)) FILTER (WHERE a.type = 'apikey' AND COALESCE(ul.succeeded, ul.actual_cost > 0)), 0) AS api_key_account_cost,
+				COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)) FILTER (WHERE a.type = 'apikey' AND COALESCE(ul.succeeded, ul.actual_cost > 0)), 0) AS api_key_account_cost,
 				COALESCE(SUM(COALESCE(ul.duration_ms, 0)), 0) AS total_duration_ms
 			FROM usage_logs ul
 			LEFT JOIN accounts a ON a.id = ul.account_id
@@ -965,7 +965,7 @@ func (r *dashboardAggregationRepository) upsertHourlyModelAggregates(ctx context
 				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
 				COALESCE(SUM(total_cost), 0) AS total_cost,
 				COALESCE(SUM(actual_cost), 0) AS actual_cost,
-				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) AS account_cost
 			FROM usage_logs
 			WHERE created_at >= $1 AND created_at < $2
 			GROUP BY 1, 2
@@ -1314,7 +1314,7 @@ func (r *dashboardAggregationRepository) upsertHourlyUserStats(ctx context.Conte
 				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
 				COALESCE(SUM(total_cost), 0) AS total_cost,
 				COALESCE(SUM(actual_cost), 0) AS actual_cost,
-				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) AS account_cost
 			FROM usage_logs
 			WHERE created_at >= $1 AND created_at < $2
 			GROUP BY 1, user_id

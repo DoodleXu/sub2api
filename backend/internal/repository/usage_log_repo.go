@@ -127,7 +127,9 @@ const usageLogSuccessFilterUL = "COALESCE(ul.succeeded, ul.actual_cost > 0)"
 // 配套要求查询里 LEFT JOIN groups g ON g.id = ul.group_id 与 LEFT JOIN accounts a ON a.id = ul.account_id。
 const usageLogEffectivePlatformExpr = "CASE WHEN g.platform = 'composite' THEN a.platform ELSE COALESCE(NULLIF(g.platform,''), a.platform) END"
 
-const usageAccountCostSumExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)"
+// account_stats_cost is the resolved upstream/account cost when present.
+// Legacy rows without that snapshot use the recorded standard cost directly.
+const usageAccountCostSumExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)), 0)"
 
 // dateFormatWhitelist 将 granularity 参数映射为 PostgreSQL TO_CHAR 格式字符串，防止外部输入直接拼入 SQL
 var dateFormatWhitelist = map[string]string{
@@ -1966,7 +1968,7 @@ func (r *usageLogRepository) fillDashboardUsageStatsFromUsageLogs(ctx context.Co
 				cache_read_tokens,
 				total_cost,
 				actual_cost,
-				COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1) AS account_cost,
+				COALESCE(account_stats_cost, total_cost) AS account_cost,
 				COALESCE(duration_ms, 0) AS duration_ms
 			FROM usage_logs
 			WHERE created_at >= LEAST($1::timestamptz, $3::timestamptz)
@@ -2053,9 +2055,9 @@ func (r *usageLogRepository) fillDashboardAPIKeyProfitFromUsageLogs(ctx context.
 	query := `
 		SELECT
 			COALESCE(SUM(ul.actual_cost) FILTER (WHERE ul.created_at >= $1 AND ul.created_at < $2), 0),
-			COALESCE(SUM((COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1))) FILTER (WHERE ul.created_at >= $1 AND ul.created_at < $2), 0),
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)) FILTER (WHERE ul.created_at >= $1 AND ul.created_at < $2), 0),
 			COALESCE(SUM(ul.actual_cost) FILTER (WHERE ul.created_at >= $3 AND ul.created_at < $4), 0),
-			COALESCE(SUM((COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1))) FILTER (WHERE ul.created_at >= $3 AND ul.created_at < $4), 0)
+			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)) FILTER (WHERE ul.created_at >= $3 AND ul.created_at < $4), 0)
 		FROM usage_logs ul
 		JOIN accounts a ON a.id = ul.account_id AND a.type = 'apikey'
 		WHERE TRUE
@@ -2374,7 +2376,7 @@ func (r *usageLogRepository) GetAccountTodayStats(ctx context.Context, accountID
 		SELECT
 			COUNT(*) as requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) as cost,
 			COALESCE(SUM(total_cost), 0) as standard_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
 		FROM usage_logs
@@ -2405,7 +2407,7 @@ func (r *usageLogRepository) GetAccountWindowStats(ctx context.Context, accountI
 		SELECT
 			COUNT(*) as requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) as cost,
 			COALESCE(SUM(total_cost), 0) as standard_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
 		FROM usage_logs
@@ -2443,7 +2445,7 @@ func (r *usageLogRepository) GetAccountWindowStatsBatch(ctx context.Context, acc
 			account_id,
 			COUNT(*) as requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) as cost,
 			COALESCE(SUM(total_cost), 0) as standard_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
 		FROM usage_logs
@@ -3761,9 +3763,9 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 		return r.getModelStatsFromDashboardAggregates(ctx, startTime, endTime)
 	}
 	actualCostExpr := "COALESCE(SUM(ul.actual_cost), 0) as actual_cost"
-	// 当仅按 account_id 聚合时，实际费用使用账号倍率（total_cost * account_rate_multiplier）。
+	// 当仅按 account_id 聚合时，优先使用已解析的账号成本；历史记录回退到标准成本。
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
-		actualCostExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as actual_cost"
+		actualCostExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)), 0) as actual_cost"
 	}
 	modelExpr := usageLogModelDimensionExpression(source, "ul")
 
@@ -3951,7 +3953,7 @@ func dashboardAggregateCoveredEnd(startTime, endTime, coveredFrom, coveredTo tim
 func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters usagestats.UsageLogFilters, source string) (results []ModelStat, err error) {
 	actualCostExpr := "COALESCE(SUM(ul.actual_cost), 0) as actual_cost"
 	if filters.AccountID > 0 && filters.UserID == 0 && filters.APIKeyID == 0 {
-		actualCostExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as actual_cost"
+		actualCostExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost)), 0) as actual_cost"
 	}
 	modelExpr := usageLogModelDimensionExpression(source, "ul")
 
@@ -4388,7 +4390,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 				ul.cache_read_tokens,
 				ul.total_cost,
 				ul.actual_cost,
-				COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1) AS account_cost,
+				COALESCE(ul.account_stats_cost, ul.total_cost) AS account_cost,
 				ul.duration_ms
 			FROM usage_logs ul
 			%s
@@ -4521,7 +4523,7 @@ type EndpointStat = usagestats.EndpointStat
 func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, upstreamModelMismatch *bool) (results []EndpointStat, err error) {
 	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
-		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
+		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) as actual_cost"
 	}
 
 	query := fmt.Sprintf(`
@@ -4609,7 +4611,7 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 			COUNT(*) as requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
+			COALESCE(SUM(COALESCE(account_stats_cost, total_cost)), 0) as actual_cost,
 			COALESCE(SUM(actual_cost), 0) as user_cost
 		FROM usage_logs
 		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
