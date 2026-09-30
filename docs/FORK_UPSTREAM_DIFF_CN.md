@@ -9,7 +9,7 @@
 - 修复同步上游 `v0.2.10` 后的 API Key 使用配置回归：API Key 模式继续生成 bearer token 配置，不再额外输出 OAuth `auth.json`；补充断言覆盖两种 API Key 路径。
 - 保留 fork 对 Claude Opus 4.6 与 Sonnet 4.6 的模型元数据，同时跟随上游将默认 Claude 模型设为 5.5；修复 Claude Code OAuth 模拟遗漏显式 structured outputs beta、OpenAI Codex 有效未来重置时间被陈旧快照规则误丢弃的问题。
 - 补齐 `cyber_policy_user_allowlist` 设置校验、持久化、回读和更新后即时缓存失效；扩展 API 设置契约快照记录新增字段。版本源更新为 `backend/cmd/server/VERSION=0.2.28`。
-- 已通过：前端 UseKeyModal 定向 Vitest（39 项）、前端生产构建（含 i18n 完整性和 `vue-tsc`）、后端 API 契约与本次回归定向测试、`TZ=UTC go test -tags=unit -count=1 ./...`、发布候选/Tag 校验脚本自测及 `git diff --check`。集成测试中用户趋势排序用例已改为先生成并声明完整日聚合覆盖，适配该查询不再回退扫描原始 usage log 的行为；因本地 Docker 不可用，依赖 exact-SHA CI 重验集成套件。
+- 发版闭环：`v0.2.28` tag 指向 `afb128edf435d3dd641a22f550127b8520254c06`；该 exact SHA 的 `CI`（含 unit/integration）、`Security Scan` 和 `Release` workflow 全部成功。GitHub Release 已发布，`checksums.txt` 和 `sub2api_0.2.28_linux_amd64.tar.gz` 已上传，下载归档按 SHA-256 校验通过（`ed822e4d5f1ae6080ac17c143acdea829160ab66437bbaf1a80a44bcb384dbf7`）。集成测试中用户趋势排序用例改为先生成并声明完整日聚合覆盖，适配该查询不再回退扫描原始 usage log 的行为；本地 Docker 不可用，由 exact-SHA CI integration suite 验证通过。
 
 ## 2026-09-30 合并上游 v0.2.10
 
