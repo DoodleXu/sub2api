@@ -849,12 +849,6 @@ func NotifyOpenAIAutoResetCredit(accountID int64) {
 // openAIAutoResetSchedulerNotifiedAt 记录调度热路径最近一次为某账号发出通知的时间。
 var openAIAutoResetSchedulerNotifiedAt sync.Map // accountID(int64) -> time.Time
 
-// notifyOpenAIAutoResetFromScheduler 供调度候选过滤使用。候选过滤按请求逐账号执行，
-// 每条通知都会让后台读一次账号，不做冷却时无卡或待用卡的账号会持续占满后台协程。
-func notifyOpenAIAutoResetFromScheduler(accountID int64) {
-	notifyOpenAIAutoResetFromSchedulerAt(accountID, time.Now())
-}
-
 func notifyOpenAIAutoResetFromSchedulerAt(accountID int64, now time.Time) bool {
 	if accountID <= 0 {
 		return false
