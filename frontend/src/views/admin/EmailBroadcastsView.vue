@@ -130,11 +130,42 @@
               <input
                 v-model.number="emailBroadcastForm.rpm"
                 type="number"
-                min="1"
+                min="0.01"
                 max="30"
+                step="0.01"
                 class="input"
               />
             </div>
+          </div>
+
+          <div v-if="emailBroadcastForm.scope !== 'custom'" class="flex flex-wrap items-center gap-3">
+            <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <input v-model="emailBroadcastForm.balanceFilterEnabled" type="checkbox" class="h-4 w-4" />
+              {{ t("admin.settings.emailBroadcast.minBalanceEnabled") }}
+            </label>
+            <input
+              v-if="emailBroadcastForm.balanceFilterEnabled"
+              v-model="emailBroadcastForm.minBalanceExclusive"
+              type="number"
+              min="0"
+              step="any"
+              class="input w-40"
+              :aria-label="t('admin.settings.emailBroadcast.minBalanceLabel')"
+              :placeholder="t('admin.settings.emailBroadcast.minBalancePlaceholder')"
+            />
+          </div>
+
+          <div class="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-200">
+            <span v-if="emailBroadcastPreviewLoading">{{ t("admin.settings.emailBroadcast.previewLoading") }}</span>
+            <span v-else-if="emailBroadcastPreview">
+              {{ t("admin.settings.emailBroadcast.previewSummary", {
+                target: emailBroadcastPreview.target_count,
+                valid: emailBroadcastPreview.valid_count - emailBroadcastPreview.unsubscribed_count,
+                unsubscribed: emailBroadcastPreview.unsubscribed_count,
+                invalid: emailBroadcastPreview.invalid_count,
+              }) }}
+            </span>
+            <span v-else>{{ t("admin.settings.emailBroadcast.previewEmpty") }}</span>
           </div>
 
           <div
@@ -482,7 +513,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api/admin";
 import type {
@@ -516,6 +547,8 @@ const emailBroadcastDraftSavedAt = ref("");
 const emailBroadcastOperatingBatch = ref<string | null>(null);
 const emailBroadcastPreflighting = ref(false);
 const emailBroadcastPreflight = ref<EmailBroadcastPreflightResponse | null>(null);
+const emailBroadcastPreviewLoading = ref(false);
+const emailBroadcastPreview = ref<EmailBroadcastPreflightResponse | null>(null);
 const emailBroadcastRecipientDetails = ref<EmailBroadcastRecipientPageResponse | null>(null);
 const emailBroadcastRecipientBatch = ref("");
 const emailBroadcastRecipientLoading = ref(false);
@@ -523,9 +556,13 @@ const emailBroadcastRecipientPagination = reactive({ page: 1, page_size: 100, to
 const emailBroadcastCustomEmailsInput = ref("");
 const emailBroadcastCustomUserIDsInput = ref("");
 let emailBroadcastStatusTimer: number | null = null;
+let emailBroadcastPreviewTimer: number | null = null;
+let emailBroadcastPreviewRequest = 0;
 
 type EmailBroadcastFormState = {
   scope: EmailBroadcastScope;
+  balanceFilterEnabled: boolean;
+  minBalanceExclusive: string | number;
   locale: string;
   message_title: string;
   message_html: string;
@@ -537,6 +574,8 @@ type EmailBroadcastFormState = {
 function createDefaultEmailBroadcastForm(): EmailBroadcastFormState {
   return {
     scope: "active_users",
+    balanceFilterEnabled: false,
+    minBalanceExclusive: "",
     locale: "zh",
     message_title: "",
     message_html: "",
@@ -591,7 +630,7 @@ const emailBroadcastLocaleOptions = computed(() => [
 ]);
 
 const emailBroadcastEstimatedInterval = computed(() => {
-  const rpm = Math.max(1, Number(emailBroadcastForm.rpm) || 6);
+  const rpm = Number(emailBroadcastForm.rpm) || 6;
   return Math.ceil(60 / rpm);
 });
 
@@ -642,6 +681,10 @@ function splitEmailBroadcastUserIDs(value: string): number[] {
 function buildEmailBroadcastPayload(): SendEmailBroadcastRequest {
   return {
     scope: emailBroadcastForm.scope,
+    min_balance_exclusive:
+      emailBroadcastForm.scope !== "custom" && emailBroadcastForm.balanceFilterEnabled
+        ? Number(emailBroadcastForm.minBalanceExclusive)
+        : undefined,
     locale: emailBroadcastForm.locale,
     message_title: emailBroadcastForm.message_title.trim(),
     message_html: emailBroadcastForm.message_html.trim(),
@@ -655,12 +698,27 @@ function buildEmailBroadcastPayload(): SendEmailBroadcastRequest {
       emailBroadcastForm.scope === "custom"
         ? splitNotificationInput(emailBroadcastCustomEmailsInput.value)
         : undefined,
-    rpm: Math.max(1, Math.min(30, Number(emailBroadcastForm.rpm) || 6)),
+    rpm: Number(emailBroadcastForm.rpm) || 6,
   };
+}
+
+function validateEmailBroadcastRPM(): boolean {
+  const rpm = Number(emailBroadcastForm.rpm);
+  if (!isValidEmailBroadcastRPM(rpm)) {
+    appStore.showError(t("admin.settings.emailBroadcast.rpmInvalid"));
+    return false;
+  }
+  return true;
+}
+
+function isValidEmailBroadcastRPM(rpm: number): boolean {
+  return Number.isFinite(rpm) && (rpm === 0 || (rpm >= 0.01 && rpm <= 30));
 }
 
 function applyEmailBroadcastDraft(draft: EmailBroadcastDraftResponse): void {
   emailBroadcastForm.scope = draft.scope;
+  emailBroadcastForm.balanceFilterEnabled = draft.min_balance_exclusive != null && draft.scope !== "custom";
+  emailBroadcastForm.minBalanceExclusive = draft.min_balance_exclusive?.toString() ?? "";
   emailBroadcastForm.locale = draft.locale;
   emailBroadcastForm.message_title = draft.message_title;
   emailBroadcastForm.message_html = draft.message_html;
@@ -687,7 +745,50 @@ function emailBroadcastScopeLabel(scope: EmailBroadcastScope): string {
   return option?.label || scope;
 }
 
+function validateEmailBroadcastBalanceFilter(): boolean {
+  if (emailBroadcastForm.scope === "custom" || !emailBroadcastForm.balanceFilterEnabled) return true;
+  const value = String(emailBroadcastForm.minBalanceExclusive).trim();
+  const amount = Number(value);
+  if (value !== "" && Number.isFinite(amount) && amount >= 0) return true;
+  appStore.showError(t("admin.settings.emailBroadcast.minBalanceInvalid"));
+  return false;
+}
+
+function validateEmailBroadcastBalanceFilterForPreview(): boolean {
+  if (emailBroadcastForm.scope === "custom" || !emailBroadcastForm.balanceFilterEnabled) return true;
+  const value = String(emailBroadcastForm.minBalanceExclusive).trim();
+  const amount = Number(value);
+  return value !== "" && Number.isFinite(amount) && amount >= 0;
+}
+
+async function refreshEmailBroadcastPreview(): Promise<void> {
+  if (!validateEmailBroadcastBalanceFilterForPreview() || !isValidEmailBroadcastRPM(Number(emailBroadcastForm.rpm))) {
+    emailBroadcastPreview.value = null;
+    return;
+  }
+  const requestID = ++emailBroadcastPreviewRequest;
+  emailBroadcastPreviewLoading.value = true;
+  try {
+    const result = await adminAPI.settings.previewEmailBroadcastRecipients(buildEmailBroadcastPayload());
+    if (requestID === emailBroadcastPreviewRequest) emailBroadcastPreview.value = result;
+  } catch {
+    if (requestID === emailBroadcastPreviewRequest) emailBroadcastPreview.value = null;
+  } finally {
+    if (requestID === emailBroadcastPreviewRequest) emailBroadcastPreviewLoading.value = false;
+  }
+}
+
+function scheduleEmailBroadcastPreview(): void {
+  if (emailBroadcastPreviewTimer !== null) window.clearTimeout(emailBroadcastPreviewTimer);
+  emailBroadcastPreviewTimer = window.setTimeout(() => {
+    emailBroadcastPreviewTimer = null;
+    void refreshEmailBroadcastPreview();
+  }, 300);
+}
+
 async function requestEmailBroadcastConfirmation(): Promise<void> {
+  if (!validateEmailBroadcastRPM()) return;
+  if (!validateEmailBroadcastBalanceFilter()) return;
   const payload = buildEmailBroadcastPayload();
   if (!payload.message_title || !payload.message_html) {
     appStore.showError(t("admin.settings.emailBroadcast.required"));
@@ -722,12 +823,15 @@ async function requestEmailBroadcastConfirmation(): Promise<void> {
   emailBroadcastConfirmDialog.message = t("admin.settings.emailBroadcast.confirmMessage");
   emailBroadcastConfirmDialog.summary = t("admin.settings.emailBroadcast.confirmPreflightSummary", {
     scope: emailBroadcastScopeLabel(payload.scope),
+    target: preflight.target_count,
     rpm: payload.rpm,
     valid: preflight.valid_count,
     invalid: preflight.invalid_count,
     unsubscribed: preflight.unsubscribed_count,
     duration: formatEmailBroadcastDuration(preflight.estimated_duration_seconds),
-  });
+  }) + (payload.min_balance_exclusive == null
+    ? ""
+    : ` ${t("admin.settings.emailBroadcast.minBalanceSummary", { amount: payload.min_balance_exclusive })}`);
   emailBroadcastConfirmDialog.show = true;
 }
 
@@ -799,6 +903,7 @@ async function loadEmailBroadcastDraft(showError = false): Promise<void> {
 }
 
 async function saveEmailBroadcastDraft(): Promise<void> {
+  if (!validateEmailBroadcastBalanceFilter()) return;
   emailBroadcastDraftSaving.value = true;
   try {
     const result = await adminAPI.settings.saveEmailBroadcastDraft(buildEmailBroadcastPayload());
@@ -1020,9 +1125,23 @@ function formatEmailBroadcastDuration(seconds: number): string {
 onMounted(() => {
   loadEmailBroadcastTasks();
   loadEmailBroadcastDraft();
+  scheduleEmailBroadcastPreview();
 });
 
 onUnmounted(() => {
   clearEmailBroadcastStatusTimer();
+  if (emailBroadcastPreviewTimer !== null) window.clearTimeout(emailBroadcastPreviewTimer);
 });
+
+watch(
+  [
+    () => emailBroadcastForm.scope,
+    () => emailBroadcastForm.balanceFilterEnabled,
+    () => emailBroadcastForm.minBalanceExclusive,
+    () => emailBroadcastForm.rpm,
+    () => emailBroadcastCustomEmailsInput.value,
+    () => emailBroadcastCustomUserIDsInput.value,
+  ],
+  scheduleEmailBroadcastPreview,
+);
 </script>

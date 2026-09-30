@@ -538,6 +538,9 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 	if filters.Role != "" {
 		q = q.Where(dbuser.RoleEQ(filters.Role))
 	}
+	if filters.MinBalanceExclusive != nil {
+		q = q.Where(dbuser.BalanceGT(*filters.MinBalanceExclusive))
+	}
 	if filters.Search != "" {
 		q = q.Where(
 			dbuser.Or(

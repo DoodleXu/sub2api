@@ -202,7 +202,7 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(err.Error()), true)
 		return
 	}
-	delay := time.Minute / time.Duration(job.RPM)
+	delay := time.Duration(float64(time.Minute) / job.RPM)
 	for index, recipient := range targets {
 		cancel, cancelErr := s.broadcastRepo.CancelRequested(workerCtx, batchID)
 		if cancelErr != nil {
@@ -440,6 +440,20 @@ func (s *NotificationEmailService) PreflightBroadcast(ctx context.Context, input
 	if err != nil {
 		return NotificationEmailBroadcastPreflight{}, err
 	}
+	return s.previewBroadcastRecipients(ctx, normalized)
+}
+
+// PreviewBroadcastRecipients resolves the current audience without requiring
+// message content or an SMTP configuration. It is used by the compose form.
+func (s *NotificationEmailService) PreviewBroadcastRecipients(ctx context.Context, input NotificationEmailBroadcastInput) (NotificationEmailBroadcastPreflight, error) {
+	normalized, err := normalizeNotificationEmailBroadcastDraftInput(input, true)
+	if err != nil {
+		return NotificationEmailBroadcastPreflight{}, err
+	}
+	return s.previewBroadcastRecipients(ctx, normalized)
+}
+
+func (s *NotificationEmailService) previewBroadcastRecipients(ctx context.Context, normalized NotificationEmailBroadcastInput) (NotificationEmailBroadcastPreflight, error) {
 	recipients, err := s.resolveBroadcastRecipients(ctx, normalized)
 	if err != nil {
 		return NotificationEmailBroadcastPreflight{}, err

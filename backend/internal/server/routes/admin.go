@@ -616,6 +616,7 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.POST("/email-templates/:event/:locale/restore-official", h.Admin.Setting.RestoreOfficialEmailTemplate)
 		adminSettings.POST("/email-broadcasts", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.SendEmailBroadcast)
 		adminSettings.POST("/email-broadcasts/preflight", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.PreflightEmailBroadcast)
+		adminSettings.POST("/email-broadcasts/preview", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.PreviewEmailBroadcastRecipients)
 		adminSettings.GET("/email-broadcasts", h.Admin.Setting.ListEmailBroadcasts)
 		adminSettings.GET("/email-broadcasts/draft", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.GetEmailBroadcastDraft)
 		adminSettings.PUT("/email-broadcasts/draft", gin.HandlerFunc(stepUpAuth), h.Admin.Setting.SaveEmailBroadcastDraft)

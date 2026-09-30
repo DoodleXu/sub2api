@@ -5545,6 +5545,26 @@ func (h *SettingHandler) PreflightEmailBroadcast(c *gin.Context) {
 	response.Success(c, dto.EmailBroadcastPreflightResponse(result))
 }
 
+// PreviewEmailBroadcastRecipients returns audience counts for the compose form.
+// POST /api/v1/admin/settings/email-broadcasts/preview
+func (h *SettingHandler) PreviewEmailBroadcastRecipients(c *gin.Context) {
+	if h.notificationEmailService == nil {
+		response.InternalError(c, "notification email service is not configured")
+		return
+	}
+	var req dto.SendEmailBroadcastRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.notificationEmailService.PreviewBroadcastRecipients(c.Request.Context(), service.NotificationEmailBroadcastInput(req))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.EmailBroadcastPreflightResponse(result))
+}
+
 func (h *SettingHandler) ListEmailBroadcastRecipients(c *gin.Context) {
 	if h.notificationEmailService == nil {
 		response.InternalError(c, "notification email service is not configured")

@@ -1019,6 +1019,8 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 差异包括渠道监控全局通知、Bark 通知模板、通知免打扰、风控 hash 白名单、内容审计用户处置、邮件群发和退订。
 
 - 邮件群发已从 settings JSON 任务状态升级为专用任务/收件人表：逐收件人原子状态、稳定 Message-ID、数据库租约恢复、SMTP 上下文取消、有限重试、未知投递隔离、90 天保留清理、发送前预检、服务端分页脱敏收件人明细均为 fork 定制能力；收件人 claim/终态写入失败时任务必须释放租约并保持可恢复，失去租约的 worker 禁止继续标记完成，最终完成写入不得覆盖并发到达的取消请求。同步上游时必须保留迁移 `225_notification_email_broadcast_jobs.sql`、群发仓储和管理页 API/UI。
+- 邮件群发的用户范围可选 `min_balance_exclusive` 门槛，按创建任务时 `users.balance > 门槛` 筛选；预检与正式创建共用收件人解析，续发使用已固定的收件人快照。自定义用户/邮箱范围不支持余额门槛，草稿和管理页保留该筛选配置。
+- 邮件群发管理页提供候选收件人数实时预览；群发 RPM 支持 `0.01` 至 `30` 的小数速率，发送任务表通过迁移 `247_email_broadcast_fractional_rpm.sql` 保存低于 1 的 RPM。
 
 关键代码：
 

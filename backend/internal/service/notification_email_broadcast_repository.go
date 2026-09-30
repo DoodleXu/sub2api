@@ -28,7 +28,7 @@ type NotificationEmailBroadcastJob struct {
 	MessageHTML       string
 	ActionLabel       string
 	ActionURL         string
-	RPM               int
+	RPM               float64
 	ContentHash       string
 	CreatedByUserID   int64
 	CreatedByEmail    string

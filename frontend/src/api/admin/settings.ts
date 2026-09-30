@@ -1570,6 +1570,7 @@ export type EmailBroadcastScope =
 
 export interface SendEmailBroadcastRequest {
   scope: EmailBroadcastScope;
+  min_balance_exclusive?: number;
   locale: string;
   message_title: string;
   message_html: string;
@@ -1742,6 +1743,16 @@ export async function preflightEmailBroadcast(
 ): Promise<EmailBroadcastPreflightResponse> {
   const { data } = await apiClient.post<EmailBroadcastPreflightResponse>(
     "/admin/settings/email-broadcasts/preflight",
+    request,
+  );
+  return data;
+}
+
+export async function previewEmailBroadcastRecipients(
+  request: SendEmailBroadcastRequest,
+): Promise<EmailBroadcastPreflightResponse> {
+  const { data } = await apiClient.post<EmailBroadcastPreflightResponse>(
+    "/admin/settings/email-broadcasts/preview",
     request,
   );
   return data;
@@ -2171,6 +2182,7 @@ export const settingsAPI = {
   testNotificationTransport,
   sendEmailBroadcast,
   preflightEmailBroadcast,
+  previewEmailBroadcastRecipients,
   getEmailBroadcastDraft,
   saveEmailBroadcastDraft,
   deleteEmailBroadcastDraft,

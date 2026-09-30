@@ -13,6 +13,7 @@ const {
   cancelEmailBroadcast,
   resumeEmailBroadcast,
   preflightEmailBroadcast,
+  previewEmailBroadcastRecipients,
   listEmailBroadcastRecipients,
   showError,
   showSuccess,
@@ -25,6 +26,7 @@ const {
   cancelEmailBroadcast: vi.fn(),
   resumeEmailBroadcast: vi.fn(),
   preflightEmailBroadcast: vi.fn(),
+  previewEmailBroadcastRecipients: vi.fn(),
   listEmailBroadcastRecipients: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock("@/api/admin", () => ({
       cancelEmailBroadcast,
       resumeEmailBroadcast,
       preflightEmailBroadcast,
+      previewEmailBroadcastRecipients,
       listEmailBroadcastRecipients,
     },
   },
@@ -72,6 +75,11 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.emailBroadcast.saveDraft": "保存草稿",
     "admin.settings.emailBroadcast.clearDraft": "清空草稿",
     "admin.settings.emailBroadcast.scope": "范围",
+    "admin.settings.emailBroadcast.minBalanceEnabled": "按余额筛选",
+    "admin.settings.emailBroadcast.minBalanceLabel": "余额大于",
+    "admin.settings.emailBroadcast.minBalanceInvalid": "请输入有效的非负余额门槛。",
+    "admin.settings.emailBroadcast.minBalanceSummary": "余额大于 {amount}。",
+    "admin.settings.emailBroadcast.confirmPreflightSummary": "发送范围：{scope}；目标 {target} 人。",
     "admin.settings.emailBroadcast.locale": "语言",
     "admin.settings.emailBroadcast.rpm": "每分钟发送数",
     "admin.settings.emailBroadcast.customUserIds": "用户 ID",
@@ -220,10 +228,19 @@ describe("EmailBroadcastsView", () => {
       estimated_duration_seconds: 10,
       started_at: "2026-06-16T08:01:00Z",
     });
-    saveEmailBroadcastDraft.mockResolvedValue({});
+    saveEmailBroadcastDraft.mockImplementation(async (request) => ({ ...request, saved_at: "2026-06-16T08:00:00Z" }));
     cancelEmailBroadcast.mockResolvedValue({});
     resumeEmailBroadcast.mockResolvedValue({});
     preflightEmailBroadcast.mockResolvedValue({
+      target_count: 1,
+      valid_count: 1,
+      invalid_count: 0,
+      unsubscribed_count: 0,
+      estimated_duration_seconds: 0,
+      sample_emails: [],
+      domains: {},
+    });
+    previewEmailBroadcastRecipients.mockResolvedValue({
       target_count: 1,
       valid_count: 1,
       invalid_count: 0,
@@ -384,5 +401,58 @@ describe("EmailBroadcastsView", () => {
     await wrapper.get('[data-testid="recipient-page-size"]').trigger("click");
     await flushPromises();
     expect(listEmailBroadcastRecipients).toHaveBeenLastCalledWith("batch-many", "", 1, 50);
+  });
+
+  it("sends a zero balance threshold through preflight and saves it in drafts", async () => {
+    getEmailBroadcastDraft.mockResolvedValueOnce(null);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('input[placeholder="邮件标题"]').setValue("Notice");
+    await wrapper.get('textarea[placeholder="邮件正文"]').setValue("<p>Notice</p>");
+    await wrapper.get('input[type="checkbox"]').setValue(true);
+    await wrapper.get('input[aria-label="余额大于"]').setValue("0");
+    const saveButton = wrapper.findAll("button").find((button) => button.text().includes("保存草稿"));
+    await saveButton?.trigger("click");
+    await flushPromises();
+    expect(saveEmailBroadcastDraft).toHaveBeenCalledWith(expect.objectContaining({ min_balance_exclusive: 0 }));
+    const sendButton = wrapper.findAll("button").find((button) => button.text().includes("发送"));
+    await sendButton?.trigger("click");
+    await flushPromises();
+    expect(preflightEmailBroadcast).toHaveBeenCalledWith(expect.objectContaining({ min_balance_exclusive: 0 }));
+    expect(wrapper.get('[data-testid="confirm-dialog"]').text()).toContain("余额大于 0");
+    expect(wrapper.get('[data-testid="confirm-dialog"]').text()).toContain("目标 1 人");
+  });
+
+  it("restores a balance threshold from a draft and omits it for custom recipients", async () => {
+    getEmailBroadcastDraft.mockResolvedValueOnce({
+      scope: "all_users", locale: "zh", message_title: "Notice", message_html: "<p>Notice</p>",
+      rpm: 6, min_balance_exclusive: 5, saved_at: "2026-06-16T08:00:00Z",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    expect((wrapper.get('input[aria-label="余额大于"]').element as HTMLInputElement).value).toBe("5");
+    const clearDraftButton = wrapper.findAll("button").find((button) => button.text().includes("清空草稿"));
+    await clearDraftButton?.trigger("click");
+    await flushPromises();
+    expect(wrapper.find('input[aria-label="余额大于"]').exists()).toBe(false);
+    await wrapper.get('input[type="checkbox"]').setValue(true);
+    await wrapper.get('input[aria-label="余额大于"]').setValue("5");
+    await wrapper.findAll("select")[0].setValue("custom");
+    expect(wrapper.find('input[aria-label="余额大于"]').exists()).toBe(false);
+    await wrapper.get('textarea[placeholder="每行一个邮箱"]').setValue("user@example.com");
+    const saveButton = wrapper.findAll("button").find((button) => button.text().includes("保存草稿"));
+    await saveButton?.trigger("click");
+    expect(saveEmailBroadcastDraft).toHaveBeenCalledWith(expect.objectContaining({ scope: "custom", min_balance_exclusive: undefined }));
+  });
+
+  it("rejects an enabled balance filter without an amount", async () => {
+    getEmailBroadcastDraft.mockResolvedValueOnce(null);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('input[type="checkbox"]').setValue(true);
+    const saveButton = wrapper.findAll("button").find((button) => button.text().includes("保存草稿"));
+    await saveButton?.trigger("click");
+    expect(saveEmailBroadcastDraft).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith("请输入有效的非负余额门槛。");
   });
 });

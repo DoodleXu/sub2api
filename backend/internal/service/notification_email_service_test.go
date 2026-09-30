@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -328,13 +329,21 @@ func TestNotificationEmailBroadcastResolvesRecipientsByScopeAndDeduplicates(t *t
 	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
 	svc.SetUserRepository(&notificationEmailBroadcastUserRepoStub{
 		users: []User{
-			{ID: 1, Email: "User@One.test", Username: "One", Role: RoleUser, Status: StatusActive},
-			{ID: 2, Email: "two@example.test", Username: "Two", Role: RoleUser, Status: StatusDisabled},
-			{ID: 3, Email: "admin@example.test", Username: "Admin", Role: RoleAdmin, Status: StatusActive},
+			{ID: 1, Email: "User@One.test", Username: "One", Role: RoleUser, Status: StatusActive, Balance: 10},
+			{ID: 2, Email: "two@example.test", Username: "Two", Role: RoleUser, Status: StatusDisabled, Balance: 1},
+			{ID: 3, Email: "admin@example.test", Username: "Admin", Role: RoleAdmin, Status: StatusActive, Balance: 10},
 		},
 	})
 
 	recipients, err := svc.resolveBroadcastRecipients(ctx, NotificationEmailBroadcastInput{Scope: "active_users"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"User@One.test"}, notificationEmailBroadcastRecipientEmails(recipients))
+	threshold := 10.0
+	recipients, err = svc.resolveBroadcastRecipients(ctx, NotificationEmailBroadcastInput{Scope: "active_users", MinBalanceExclusive: &threshold})
+	require.NoError(t, err)
+	require.Empty(t, recipients, "balance equal to the threshold must be excluded")
+	threshold = 0
+	recipients, err = svc.resolveBroadcastRecipients(ctx, NotificationEmailBroadcastInput{Scope: "active_users", MinBalanceExclusive: &threshold})
 	require.NoError(t, err)
 	require.Equal(t, []string{"User@One.test"}, notificationEmailBroadcastRecipientEmails(recipients))
 
@@ -345,6 +354,34 @@ func TestNotificationEmailBroadcastResolvesRecipientsByScopeAndDeduplicates(t *t
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"User@One.test", "admin@example.test", "extra@example.test"}, notificationEmailBroadcastRecipientEmails(recipients))
+}
+
+func TestNotificationEmailBroadcastMinimumBalanceValidation(t *testing.T) {
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	for _, value := range []float64{-1, math.NaN(), math.Inf(1)} {
+		_, err := svc.SaveBroadcastDraft(context.Background(), NotificationEmailBroadcastInput{Scope: "active_users", MinBalanceExclusive: &value})
+		require.Error(t, err)
+	}
+	threshold := 1.0
+	_, err := svc.SaveBroadcastDraft(context.Background(), NotificationEmailBroadcastInput{Scope: "custom", MinBalanceExclusive: &threshold})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not supported")
+}
+
+func TestNotificationEmailBroadcastPreflightUsesBalanceFilteredRecipients(t *testing.T) {
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	svc.SetUserRepository(&notificationEmailBroadcastUserRepoStub{users: []User{
+		{ID: 1, Email: "equal@example.test", Role: RoleUser, Status: StatusActive, Balance: 10},
+		{ID: 2, Email: "above@example.test", Role: RoleUser, Status: StatusActive, Balance: 11},
+	}})
+	threshold := 10.0
+	input := NotificationEmailBroadcastInput{Scope: "active_users", MessageTitle: "Notice", MessageHTML: "<p>Notice</p>", MinBalanceExclusive: &threshold}
+	preflight, err := svc.PreflightBroadcast(context.Background(), input)
+	require.NoError(t, err)
+	require.Equal(t, 1, preflight.TargetCount)
+	recipients, err := svc.resolveBroadcastRecipients(context.Background(), input)
+	require.NoError(t, err)
+	require.Equal(t, []string{"above@example.test"}, notificationEmailBroadcastRecipientEmails(recipients))
 }
 
 func TestNotificationEmailBroadcastPreflightsEmailConfig(t *testing.T) {
@@ -387,12 +424,36 @@ func TestNotificationEmailBroadcastDraftPersistsPartialComposeState(t *testing.T
 	require.Equal(t, "Read more", draft.ActionLabel)
 	require.Equal(t, []int64{7, 9}, draft.UserIDs)
 	require.Equal(t, []string{"User@Example.test", "extra@example.test"}, draft.Emails)
-	require.Equal(t, notificationEmailBroadcastMaxRPM, draft.RPM)
+	require.Equal(t, float64(notificationEmailBroadcastMaxRPM), draft.RPM)
 	require.NotEmpty(t, draft.SavedAt)
 
 	loaded, err := svc.GetBroadcastDraft(ctx)
 	require.NoError(t, err)
 	require.Equal(t, draft, loaded)
+}
+
+func TestNotificationEmailBroadcastFractionalRPM(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		rpm  float64
+		want int
+	}{
+		{name: "half", rpm: 0.5, want: 120},
+		{name: "minimum", rpm: 0.01, want: 6000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.rpm
+			require.NoError(t, normalizeNotificationEmailBroadcastRPM(&input))
+			require.Equal(t, test.rpm, input)
+			require.Equal(t, test.want, notificationEmailBroadcastEstimateSeconds(2, input))
+		})
+	}
+
+	tooLow := 0.009
+	require.Error(t, normalizeNotificationEmailBroadcastRPM(&tooLow))
+	defaultRPM := 0.0
+	require.NoError(t, normalizeNotificationEmailBroadcastRPM(&defaultRPM))
+	require.Equal(t, float64(notificationEmailBroadcastDefaultRPM), defaultRPM)
 }
 
 func TestNotificationEmailBroadcastDraftRejectsUnsafeActionURL(t *testing.T) {
@@ -1142,6 +1203,9 @@ func (r *notificationEmailBroadcastUserRepoStub) ListWithFilters(_ context.Conte
 			continue
 		}
 		if filters.Status != "" && user.Status != filters.Status {
+			continue
+		}
+		if filters.MinBalanceExclusive != nil && user.Balance <= *filters.MinBalanceExclusive {
 			continue
 		}
 		matches = append(matches, user)

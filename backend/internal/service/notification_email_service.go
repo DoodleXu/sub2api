@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"math"
 	"net/mail"
 	"net/url"
 	"regexp"
@@ -58,6 +59,7 @@ const (
 	notificationEmailUnsubscribeTTL       = 365 * 24 * time.Hour
 	notificationEmailBroadcastDefaultRPM  = 6
 	notificationEmailBroadcastMaxRPM      = 30
+	notificationEmailBroadcastMinRPM      = 0.01
 	notificationEmailBroadcastPageSize    = 500
 	notificationEmailBroadcastStaleAfter  = 15 * time.Minute
 	notificationEmailBroadcastActiveKey   = notificationEmailBroadcastKeyPrefix + "active"
@@ -153,46 +155,47 @@ type NotificationEmailSendInput struct {
 }
 
 type NotificationEmailBroadcastInput struct {
-	Scope           string   `json:"scope"`
-	Locale          string   `json:"locale"`
-	MessageTitle    string   `json:"message_title"`
-	MessageHTML     string   `json:"message_html"`
-	ActionLabel     string   `json:"action_label,omitempty"`
-	ActionURL       string   `json:"action_url,omitempty"`
-	UserIDs         []int64  `json:"user_ids,omitempty"`
-	Emails          []string `json:"emails,omitempty"`
-	RPM             int      `json:"rpm"`
-	CreatedByUserID int64    `json:"-"`
-	CreatedByEmail  string   `json:"-"`
+	Scope               string   `json:"scope"`
+	Locale              string   `json:"locale"`
+	MessageTitle        string   `json:"message_title"`
+	MessageHTML         string   `json:"message_html"`
+	ActionLabel         string   `json:"action_label,omitempty"`
+	ActionURL           string   `json:"action_url,omitempty"`
+	UserIDs             []int64  `json:"user_ids,omitempty"`
+	Emails              []string `json:"emails,omitempty"`
+	MinBalanceExclusive *float64 `json:"min_balance_exclusive,omitempty"`
+	RPM                 float64  `json:"rpm"`
+	CreatedByUserID     int64    `json:"-"`
+	CreatedByEmail      string   `json:"-"`
 }
 
 type NotificationEmailBroadcastResult struct {
-	BatchID                  string `json:"batch_id"`
-	TargetCount              int    `json:"target_count"`
-	RPM                      int    `json:"rpm"`
-	EstimatedDurationSeconds int    `json:"estimated_duration_seconds"`
-	StartedAt                string `json:"started_at"`
+	BatchID                  string  `json:"batch_id"`
+	TargetCount              int     `json:"target_count"`
+	RPM                      float64 `json:"rpm"`
+	EstimatedDurationSeconds int     `json:"estimated_duration_seconds"`
+	StartedAt                string  `json:"started_at"`
 }
 
 type NotificationEmailBroadcastStatus struct {
-	BatchID           string `json:"batch_id"`
-	Status            string `json:"status"`
-	Scope             string `json:"scope"`
-	Locale            string `json:"locale"`
-	MessageTitle      string `json:"message_title,omitempty"`
-	TargetCount       int    `json:"target_count"`
-	SentCount         int    `json:"sent_count"`
-	SkippedCount      int    `json:"skipped_count"`
-	UnsubscribedCount int    `json:"unsubscribed_count"`
-	FailureCount      int    `json:"failure_count"`
-	UncertainCount    int    `json:"uncertain_count"`
-	CreatedByUserID   int64  `json:"created_by_user_id,omitempty"`
-	CreatedByEmail    string `json:"created_by_email,omitempty"`
-	RPM               int    `json:"rpm"`
-	StartedAt         string `json:"started_at"`
-	UpdatedAt         string `json:"updated_at"`
-	CompletedAt       string `json:"completed_at,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
+	BatchID           string  `json:"batch_id"`
+	Status            string  `json:"status"`
+	Scope             string  `json:"scope"`
+	Locale            string  `json:"locale"`
+	MessageTitle      string  `json:"message_title,omitempty"`
+	TargetCount       int     `json:"target_count"`
+	SentCount         int     `json:"sent_count"`
+	SkippedCount      int     `json:"skipped_count"`
+	UnsubscribedCount int     `json:"unsubscribed_count"`
+	FailureCount      int     `json:"failure_count"`
+	UncertainCount    int     `json:"uncertain_count"`
+	CreatedByUserID   int64   `json:"created_by_user_id,omitempty"`
+	CreatedByEmail    string  `json:"created_by_email,omitempty"`
+	RPM               float64 `json:"rpm"`
+	StartedAt         string  `json:"started_at"`
+	UpdatedAt         string  `json:"updated_at"`
+	CompletedAt       string  `json:"completed_at,omitempty"`
+	LastError         string  `json:"last_error,omitempty"`
 }
 
 type NotificationEmailBroadcastList struct {
@@ -982,21 +985,21 @@ func (s *NotificationEmailService) resolveBroadcastRecipients(ctx context.Contex
 		if s.userRepo == nil {
 			return nil, errors.New("user repository is not configured")
 		}
-		if err := s.collectBroadcastUsers(ctx, UserListFilters{Status: StatusActive, Role: RoleUser}, addRecipient); err != nil {
+		if err := s.collectBroadcastUsers(ctx, UserListFilters{Status: StatusActive, Role: RoleUser, MinBalanceExclusive: input.MinBalanceExclusive}, addRecipient); err != nil {
 			return nil, err
 		}
 	case "all_users":
 		if s.userRepo == nil {
 			return nil, errors.New("user repository is not configured")
 		}
-		if err := s.collectBroadcastUsers(ctx, UserListFilters{Role: RoleUser}, addRecipient); err != nil {
+		if err := s.collectBroadcastUsers(ctx, UserListFilters{Role: RoleUser, MinBalanceExclusive: input.MinBalanceExclusive}, addRecipient); err != nil {
 			return nil, err
 		}
 	case "admins":
 		if s.userRepo == nil {
 			return nil, errors.New("user repository is not configured")
 		}
-		if err := s.collectBroadcastUsers(ctx, UserListFilters{Status: StatusActive, Role: RoleAdmin}, addRecipient); err != nil {
+		if err := s.collectBroadcastUsers(ctx, UserListFilters{Status: StatusActive, Role: RoleAdmin, MinBalanceExclusive: input.MinBalanceExclusive}, addRecipient); err != nil {
 			return nil, err
 		}
 	case "custom":
@@ -1054,7 +1057,7 @@ func (s *NotificationEmailService) collectBroadcastUsers(ctx context.Context, fi
 
 func (s *NotificationEmailService) runBroadcast(ctx context.Context, batchID string, input NotificationEmailBroadcastInput, recipients []notificationEmailBroadcastRecipient, startedAt time.Time) {
 	defer s.releaseBroadcastLockBestEffort(ctx, batchID)
-	delay := time.Minute / time.Duration(input.RPM)
+	delay := time.Duration(float64(time.Minute) / input.RPM)
 	status := NotificationEmailBroadcastStatus{
 		BatchID:      batchID,
 		Status:       "running",
@@ -1344,7 +1347,9 @@ func (s *NotificationEmailService) getBroadcastPayload(ctx context.Context, batc
 	if err := json.Unmarshal([]byte(raw), &input); err != nil {
 		return NotificationEmailBroadcastInput{}, err
 	}
-	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
+	if err := normalizeNotificationEmailBroadcastRPM(&input.RPM); err != nil {
+		return NotificationEmailBroadcastInput{}, err
+	}
 	input.Locale = normalizeNotificationLocale(input.Locale)
 	return input, nil
 }
@@ -1359,6 +1364,15 @@ func normalizeNotificationEmailBroadcastDraftInput(input NotificationEmailBroadc
 	default:
 		return NotificationEmailBroadcastInput{}, fmt.Errorf("unsupported broadcast scope: %s", input.Scope)
 	}
+	if input.MinBalanceExclusive != nil {
+		threshold := *input.MinBalanceExclusive
+		if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 {
+			return NotificationEmailBroadcastInput{}, errors.New("broadcast minimum balance must be a finite non-negative number")
+		}
+		if input.Scope == "custom" {
+			return NotificationEmailBroadcastInput{}, errors.New("broadcast minimum balance is not supported for custom recipients")
+		}
+	}
 	if strings.EqualFold(strings.TrimSpace(input.Locale), "auto") {
 		input.Locale = "auto"
 	} else {
@@ -1368,7 +1382,9 @@ func normalizeNotificationEmailBroadcastDraftInput(input NotificationEmailBroadc
 	input.MessageHTML = strings.TrimSpace(input.MessageHTML)
 	input.ActionLabel = strings.TrimSpace(input.ActionLabel)
 	input.ActionURL = strings.TrimSpace(input.ActionURL)
-	input.RPM = normalizeNotificationEmailBroadcastRPM(input.RPM)
+	if err := normalizeNotificationEmailBroadcastRPM(&input.RPM); err != nil {
+		return NotificationEmailBroadcastInput{}, err
+	}
 	if !allowBlankMessage && input.MessageTitle == "" {
 		return NotificationEmailBroadcastInput{}, errors.New("broadcast message title is required")
 	}
@@ -1612,22 +1628,34 @@ func (s *NotificationEmailService) getBroadcastStatusRaw(ctx context.Context, ba
 	return status, nil
 }
 
-func normalizeNotificationEmailBroadcastRPM(rpm int) int {
-	if rpm <= 0 {
-		return notificationEmailBroadcastDefaultRPM
+func normalizeNotificationEmailBroadcastRPM(rpm *float64) error {
+	if rpm == nil {
+		return errors.New("broadcast rpm is required")
 	}
-	if rpm > notificationEmailBroadcastMaxRPM {
-		return notificationEmailBroadcastMaxRPM
+	if math.IsNaN(*rpm) || math.IsInf(*rpm, 0) {
+		return errors.New("broadcast rpm must be a finite number")
 	}
-	return rpm
+	if *rpm == 0 {
+		*rpm = notificationEmailBroadcastDefaultRPM
+		return nil
+	}
+	if *rpm < notificationEmailBroadcastMinRPM {
+		return fmt.Errorf("broadcast rpm must be at least %.2f", notificationEmailBroadcastMinRPM)
+	}
+	if *rpm > notificationEmailBroadcastMaxRPM {
+		*rpm = notificationEmailBroadcastMaxRPM
+	}
+	return nil
 }
 
-func notificationEmailBroadcastEstimateSeconds(count, rpm int) int {
+func notificationEmailBroadcastEstimateSeconds(count int, rpm float64) int {
 	if count <= 1 {
 		return 0
 	}
-	rpm = normalizeNotificationEmailBroadcastRPM(rpm)
-	return int((time.Minute / time.Duration(rpm) * time.Duration(count-1)).Seconds())
+	if err := normalizeNotificationEmailBroadcastRPM(&rpm); err != nil {
+		return 0
+	}
+	return int((float64(time.Minute) / rpm * float64(count-1) / float64(time.Second)))
 }
 
 func notificationEmailBroadcastInitialRecipientStates(recipients []notificationEmailBroadcastRecipient) []notificationEmailBroadcastRecipientState {

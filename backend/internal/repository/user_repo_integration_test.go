@@ -424,6 +424,24 @@ func (s *UserRepoSuite) TestListWithFilters_CombinedFilters() {
 	s.Require().Equal(target.ID, users[0].ID, "ListWithFilters result mismatch")
 }
 
+func (s *UserRepoSuite) TestListWithFilters_MinBalanceExclusive() {
+	s.mustCreateUser(&service.User{Email: "zero-balance@example.com", Role: service.RoleUser, Status: service.StatusActive, Balance: 0})
+	s.mustCreateUser(&service.User{Email: "equal-balance@example.com", Role: service.RoleUser, Status: service.StatusActive, Balance: 10})
+	above := s.mustCreateUser(&service.User{Email: "above-balance@example.com", Role: service.RoleUser, Status: service.StatusActive, Balance: 10.01})
+	params := pagination.PaginationParams{Page: 1, PageSize: 10}
+	threshold := 10.0
+	users, page, err := s.repo.ListWithFilters(s.ctx, params, service.UserListFilters{Role: service.RoleUser, MinBalanceExclusive: &threshold})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(users, 1)
+	s.Require().Equal(above.ID, users[0].ID)
+	threshold = 0
+	users, page, err = s.repo.ListWithFilters(s.ctx, params, service.UserListFilters{Role: service.RoleUser, MinBalanceExclusive: &threshold})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), page.Total)
+	s.Require().Len(users, 2)
+}
+
 // --- Balance operations ---
 
 func (s *UserRepoSuite) TestUpdateBalance() {
