@@ -972,7 +972,7 @@ func TestUsageLogRepositoryGetUserUsageTrendGroupsCoveredHourlyPrefixByDay(t *te
 		WillReturnRows(sqlmock.NewRows([]string{"date", "user_id", "email", "username", "requests", "tokens", "cost", "actual_cost"}).
 			AddRow("2026-08-01", int64(7), "current@example.com", "current", int64(4), int64(500), 4.0, 3.5))
 
-	got, err := repo.GetUserUsageTrend(context.Background(), start, requestedEnd, "day", 12)
+	got, err := repo.GetUserUsageTrend(context.Background(), start, requestedEnd, "day", 12, "tokens")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, "2026-08-01", got[0].Date)

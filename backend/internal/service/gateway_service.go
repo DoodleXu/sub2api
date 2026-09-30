@@ -102,6 +102,51 @@ type accountWithLoad struct {
 	loadInfo *AccountLoadInfo
 }
 
+// filterSonnet55ToolsetBetaHeader removes the legacy streaming beta when stable
+// computer/browser toolsets are used with Sonnet 5.5.
+func filterSonnet55ToolsetBetaHeader(headers http.Header, body []byte, modelID string) {
+	dropSet := sonnet55ToolsetBetaDropSet(body, modelID)
+	if len(dropSet) == 0 {
+		return
+	}
+	header := getHeaderRaw(headers, "anthropic-beta")
+	filtered := stripBetaTokensWithSet(header, dropSet)
+	deleteHeaderAllForms(headers, "anthropic-beta")
+	if filtered != "" {
+		setHeaderRaw(headers, "anthropic-beta", filtered)
+	}
+}
+
+func sonnet55ToolsetBetaDropSet(body []byte, modelID string) map[string]struct{} {
+	if at := strings.IndexByte(modelID, '@'); at >= 0 {
+		modelID = modelID[:at]
+	}
+	if !claude.IsSonnet55(modelID) {
+		return nil
+	}
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		switch tool.Get("type").String() {
+		case "computer_toolset_20260801", "browser_toolset_20260801":
+			return map[string]struct{}{claude.BetaFineGrainedToolStreaming: {}}
+		}
+	}
+	return nil
+}
+
+func mergeBetaDropSets(base, additional map[string]struct{}) map[string]struct{} {
+	if len(additional) == 0 {
+		return base
+	}
+	merged := make(map[string]struct{}, len(base)+len(additional))
+	for token := range base {
+		merged[token] = struct{}{}
+	}
+	for token := range additional {
+		merged[token] = struct{}{}
+	}
+	return merged
+}
+
 var ForceCacheBillingContextKey = forceCacheBillingKeyType{}
 
 var (
@@ -1562,7 +1607,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	//   applyToolNameRewriteToBody 同步映射为假名
 	// - 其他形态（auto/any/none）原样透传
 	// 如果 body 里完全没有 tools（空数组），tool_choice 没意义时才删除
-	if !claude.IsOpus55(modelID) && (!gjson.GetBytes(out, "tools").IsArray() || len(gjson.GetBytes(out, "tools").Array()) == 0) {
+	if !claude.IsOpus55(modelID) && !claude.IsSonnet55(modelID) && (!gjson.GetBytes(out, "tools").IsArray() || len(gjson.GetBytes(out, "tools").Array()) == 0) {
 		if gjson.GetBytes(out, "tool_choice").Exists() {
 			if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
 				out = next
@@ -5305,7 +5350,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
 			model = account.GetMappedModel(model)
 		}
-		if err := validateClaudeOpus55Request(parsed.Body.Bytes(), model); err != nil {
+		if err := validateClaude55Request(parsed.Body.Bytes(), model); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
 		}
@@ -5337,7 +5382,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				passthroughModel = mappedModel
 			}
 		}
-		if err := validateClaudeOpus55Request(passthroughBody, passthroughModel); err != nil {
+		if err := validateClaude55Request(passthroughBody, passthroughModel); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
 		}
@@ -6421,6 +6466,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	filterSonnet55ToolsetBetaHeader(req.Header, body, gjson.GetBytes(body, "model").String())
 
 	return req, body, nil
 }
@@ -7514,6 +7560,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
 	// 放在所有 header 逻辑之后，确保配置值对同名头拥有最终决定权。
 	account.ApplyHeaderOverrides(req.Header)
+	filterSonnet55ToolsetBetaHeader(req.Header, body, modelID)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
@@ -7609,6 +7656,10 @@ func (s *GatewayService) buildUpstreamRequestAnthropicVertex(
 		return nil, policy.blockErr
 	}
 	finalBeta := filterVertexBetaTokens(clientBeta, mergeDropSets(policy.filterSet))
+	filteredBetaHeader := make(http.Header)
+	setHeaderRaw(filteredBetaHeader, "anthropic-beta", finalBeta)
+	filterSonnet55ToolsetBetaHeader(filteredBetaHeader, vertexBody, modelID)
+	finalBeta = getHeaderRaw(filteredBetaHeader, "anthropic-beta")
 
 	// 能力维度 sanitize：基于最终 beta（而非原始 client 值）决定是否保留 body 中的
 	// context_management，与 Anthropic 直连 / Bedrock 路径对称。
@@ -7816,6 +7867,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	body []byte,
 	effectiveDropSet map[string]struct{},
 ) (string, bool) {
+	effectiveDropSet = mergeBetaDropSets(effectiveDropSet, sonnet55ToolsetBetaDropSet(body, modelID))
 	clientBeta := ""
 	if clientHeaders != nil {
 		clientBeta = getHeaderRaw(clientHeaders, "anthropic-beta")
@@ -7838,7 +7890,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return stripBetaTokensWithSet(beta, effectiveDropSet), true
 			}
 		}
 	}
@@ -7863,6 +7915,7 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	body []byte,
 	effectiveDropSet map[string]struct{},
 ) (string, bool) {
+	effectiveDropSet = mergeBetaDropSets(effectiveDropSet, sonnet55ToolsetBetaDropSet(body, modelID))
 	clientBeta := ""
 	if clientHeaders != nil {
 		clientBeta = getHeaderRaw(clientHeaders, "anthropic-beta")
@@ -7878,7 +7931,7 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
 		}
 		if clientBeta == "" {
-			return claude.CountTokensBetaHeader, true
+			return stripBetaTokensWithSet(claude.CountTokensBetaHeader, effectiveDropSet), true
 		}
 		beta := s.getBetaHeader(modelID, clientBeta)
 		if !strings.Contains(beta, claude.BetaTokenCounting) {
@@ -7894,7 +7947,7 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return stripBetaTokensWithSet(beta, effectiveDropSet), true
 			}
 		}
 	}
@@ -10389,7 +10442,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 				CacheReadTokens:     result.Usage.CacheReadInputTokens,
 				ImageOutputTokens:   result.Usage.ImageOutputTokens,
 			},
-			cost.TotalCost, pricingAt,
+			cost.TotalCost, pricingAt, true,
 		)
 	}
 
@@ -10933,7 +10986,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
 			model = account.GetMappedModel(model)
 		}
-		if err := validateClaudeOpus55Request(parsed.Body.Bytes(), model); err != nil {
+		if err := validateClaude55Request(parsed.Body.Bytes(), model); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return err
 		}
@@ -11486,6 +11539,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+	filterSonnet55ToolsetBetaHeader(req.Header, body, modelID)
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))
@@ -11690,15 +11744,13 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
-		// Passthrough routing accepts models independently of model_mapping. A stale
-		// mapping on any eligible passthrough account therefore cannot define the
-		// public whitelist; return nil so the handler uses its default model set.
+		// Passthrough routing accepts models independently of model_mapping, so a
+		// stale mapping on a passthrough account must not narrow the public list.
+		// Treat it like an unmapped account: skip its mapping here and let
+		// supplementUnmappedOpenAIModels contribute the default set. Mappings on
+		// the ordinary accounts in the same group still count.
 		if platform == PlatformOpenAI && acc.IsOpenAIPassthroughEnabled() {
-			if s.modelsListCache != nil {
-				s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
-				modelsListCacheStoreTotal.Add(1)
-			}
-			return nil
+			continue
 		}
 
 		mapping := acc.GetModelMapping()

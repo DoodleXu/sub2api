@@ -2613,13 +2613,13 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 }
 
 // GetUserUsageTrend returns usage trend data grouped by user and date
-func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
+func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, metric string) (results []UserUsageTrendPoint, err error) {
 	coverageKind, canCheckCoverage := dashboardUserUsageTrendCoverageKind(startTime, endTime, granularity)
 	if canCheckCoverage {
 		if aggregateEnd, canUseAggregates, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, coverageKind); coverageErr != nil {
 			return nil, coverageErr
 		} else if canUseAggregates {
-			if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, coverageKind); aggregatedErr != nil {
+			if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, coverageKind, metric); aggregatedErr != nil {
 				if !isUndefinedTableError(aggregatedErr) {
 					return nil, aggregatedErr
 				}
@@ -2634,7 +2634,7 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 			if aggregateEnd, canUseHourly, coverageErr := r.dashboardUserAggregateCoveredEnd(ctx, startTime, endTime, dashboardUserAggregateCoverageHourly); coverageErr != nil {
 				return nil, coverageErr
 			} else if canUseHourly {
-				if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, dashboardUserAggregateCoverageHourly); aggregatedErr != nil {
+				if aggregated, _, aggregatedErr := r.getUserUsageTrendFromAggregates(ctx, startTime, aggregateEnd, granularity, limit, dashboardUserAggregateCoverageHourly, metric); aggregatedErr != nil {
 					if !isUndefinedTableError(aggregatedErr) {
 						return nil, aggregatedErr
 					}
@@ -2649,12 +2649,16 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 	return []UserUsageTrendPoint{}, nil
 }
 
-func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, sourceKind dashboardUserAggregateCoverageKind) ([]UserUsageTrendPoint, bool, error) {
+func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string, limit int, sourceKind dashboardUserAggregateCoverageKind, metric string) ([]UserUsageTrendPoint, bool, error) {
 	if limit <= 0 {
 		limit = 12
 	}
 
 	dateFormat := safeDateFormat(granularity)
+	rankExpr := "SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens)"
+	if metric == "actual_cost" {
+		rankExpr = "SUM(actual_cost)"
+	}
 	query := ""
 	args := []any{startTime, endTime, limit, startTime, endTime}
 	switch sourceKind {
@@ -2666,7 +2670,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 				FROM usage_dashboard_hourly_user_stats
 				WHERE bucket_start >= $1 AND bucket_start < $2
 				GROUP BY user_id
-				ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+				ORDER BY %s DESC
 				LIMIT $3
 			)
 			SELECT
@@ -2684,7 +2688,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 			  AND s.bucket_start >= $4 AND s.bucket_start < $5
 			GROUP BY date, s.user_id, u.email, u.username
 			ORDER BY date ASC, tokens DESC
-		`, dateFormat)
+		`, rankExpr, dateFormat)
 	case dashboardUserAggregateCoverageDaily:
 		query = fmt.Sprintf(`
 			WITH top_users AS (
@@ -2692,7 +2696,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 				FROM usage_dashboard_daily_user_stats
 				WHERE bucket_date >= $1::date AND bucket_date < $2::date
 				GROUP BY user_id
-				ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
+				ORDER BY %s DESC
 				LIMIT $3
 			)
 			SELECT
@@ -2710,7 +2714,7 @@ func (r *usageLogRepository) getUserUsageTrendFromAggregates(ctx context.Context
 			  AND s.bucket_date >= $4::date AND s.bucket_date < $5::date
 			GROUP BY date, s.user_id, u.email, u.username
 			ORDER BY date ASC, tokens DESC
-		`, dateFormat)
+		`, rankExpr, dateFormat)
 	default:
 		return nil, false, nil
 	}

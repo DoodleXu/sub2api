@@ -1881,6 +1881,14 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if !openAIAccountMatchesLimitContinuationSelection(account, req.limitContinuationMode) {
 		return false, "limit_continuation_tier"
 	}
+	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
+		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
+			return false, "account_model_not_owned"
+		}
+	}
+	if req.RequirePrivacySet && !account.IsPrivacySet() {
+		return false, "privacy_not_set"
+	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlockedWithContext(ctx, account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
@@ -2521,6 +2529,25 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
+				if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
+					publicModel, hasPublicModel := RequestedPublicModelFromContext(ctx)
+					owned := hasPublicModel && explicitModelMappingClaims(*selection.Account, publicModel)
+					if owned && s.accountRepo != nil {
+						if current, lookupErr := s.accountRepo.GetByID(ctx, selection.Account.ID); lookupErr != nil || current == nil || !explicitModelMappingClaims(*current, publicModel) {
+							owned = false
+						}
+					}
+					if !owned {
+						if selection.ReleaseFunc != nil {
+							selection.ReleaseFunc()
+						}
+						if effectiveExcludedIDs == nil {
+							effectiveExcludedIDs = make(map[int64]struct{})
+						}
+						effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+						continue
+					}
+				}
 				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
 					if legacyStickyAccountID > 0 && selection.Account.ID == legacyStickyAccountID {
 						decision.Layer = openAIAccountScheduleLayerSessionSticky
@@ -2560,6 +2587,25 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			}
 			if selection == nil || selection.Account == nil {
 				return selection, decision, nil
+			}
+			if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
+				publicModel, hasPublicModel := RequestedPublicModelFromContext(ctx)
+				owned := hasPublicModel && explicitModelMappingClaims(*selection.Account, publicModel)
+				if owned && s.accountRepo != nil {
+					if current, lookupErr := s.accountRepo.GetByID(ctx, selection.Account.ID); lookupErr != nil || current == nil || !explicitModelMappingClaims(*current, publicModel) {
+						owned = false
+					}
+				}
+				if !owned {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if effectiveExcludedIDs == nil {
+						effectiveExcludedIDs = make(map[int64]struct{})
+					}
+					effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+					continue
+				}
 			}
 			if s.isOpenAIAccountTransportCompatible(selection.Account, requiredTransport) &&
 				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {

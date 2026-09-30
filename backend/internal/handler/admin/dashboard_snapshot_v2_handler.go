@@ -319,7 +319,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 
 	if includeUsersTrend {
 		run("users_trend", 3*time.Second, false, func(sectionCtx context.Context) error {
-			usersTrend, _, err := h.getUserUsageTrendCached(sectionCtx, startTime, endTime, granularity, usersTrendLimit)
+			usersTrend, _, err := h.getUserUsageTrendCached(sectionCtx, startTime, endTime, granularity, usersTrendLimit, "tokens")
 			if err != nil {
 				return errors.New("failed to get user usage trend")
 			}

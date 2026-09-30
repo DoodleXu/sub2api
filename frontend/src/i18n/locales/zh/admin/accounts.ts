@@ -1,7 +1,6 @@
 export default {
     accounts: {
       addCostCny: '添加人民币成本', addCostCnyHint: '记录账号人民币成本', archiveAccount: '归档账号', archiveConfirm: '确认归档此账号？', archiveFailed: '归档失败', archiveSuccess: '账号已归档',
-      autoResetCredit: { title: '自动重置额度', hint: '配置自动重置额度', threshold5h: '5 小时阈值', threshold7d: '7 天阈值', thresholdHint: '阈值百分比', thresholdInvalid: '阈值无效' },
       costStatsPendingHint: '成本统计处理中', failedToResetQuota: '重置额度失败',
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
@@ -947,6 +946,7 @@ export default {
       enterCustomModelName: '输入自定义模型名称',
       addModel: '填入',
       modelExists: '该模型已存在',
+      modelMappingConflict: '该模型已配置映射 {from} → {to}，请在模型映射中修改或删除后再添加白名单模型',
       modelCount: '{count} 个模型',
       poolMode: '池模式',
       poolModeHint: '上游为账号池时启用，错误不标记本地账号状态',
@@ -1042,6 +1042,28 @@ export default {
 	  autoPauseDisabledHint: '开启后该账号永不进入自动暂停（即使全局默认阈值已配置）。',
 	  continueSchedulingAfterLimit: '达到限额后仍尝试调度',
 	  continueSchedulingAfterLimitHint: '开启后，所有请求都会优先尝试该账号；失败会自动回退到其他正常账号，且不会向用户返回本账号的上游错误。仅当后续账号仍失败时，才返回后续账号的错误。',
+	  claudeResetCredits: {
+	    count: '次数',
+	    countTooltipLoad: '点击查询 Claude 剩余重置次数（只读，不会消耗）',
+	    countTooltipRefresh: '点击刷新 Claude 剩余重置次数（只读，不会消耗）',
+	    fetched: '查询时间：{time}',
+	    error: '无法查询重置次数',
+	    ineligible: '此账号当前不可使用重置',
+	    cooldown: '冷却至 {time}',
+	    expiresAt: '到期 {time}',
+	    expiresAtFull: '重置次数到期时间：{time}',
+	    clears: '可清除窗口：{windows}',
+	    notUsableNow: '暂不可用',
+	    requiresLimit: '需达到限额后才能使用'
+	  },
+      autoResetCredit: {
+	    title: '自动使用重置卡',
+	    hint: '仅在实际用量达到阈值时使用最早到期的可用卡；默认关闭。无卡或失败时账号保持暂停。',
+	    threshold5h: '5h 自动用卡阈值(%)',
+	    threshold7d: '7d 自动用卡阈值(%)',
+	    thresholdHint: '两个窗口独立判断，任一达到自身阈值即触发。可填写 0.1–100，默认均为 100。',
+	    thresholdInvalid: '自动使用重置卡阈值必须在 0.1% 到 100% 之间。'
+	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',

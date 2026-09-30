@@ -2,7 +2,15 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-29
+最后更新：2026-09-30
+
+## 2026-09-30 合并上游 v0.2.10
+
+- 同步目标为官方 release `v0.2.10`（`2f3fed2fdb0787141294cec81487a5df30426f7f`），在 fork 当前 HEAD `12b701ad138a122ee444dee9b09475a4acb25fbc` 上合并；`backend/cmd/server/VERSION` 保持 fork 的 `0.2.27`。
+- 冲突按“迁移上游行为、保留 fork 聚合结构”处理：模型路由、网关/WS、计费与定价、调度、风控配置、管理端 API 和 UI 行为接入已有模块；被上游拆分的实现不另行恢复为重复文件。
+- 保留模型 allowlist 与复合路由公开别名语义、账号路由归属校验、Anthropic Sonnet 5.5 工具集 beta 清理、OAuth Responses beta 兼容、OpenCode 按可用模型生成配置，以及 fork 的内容审核白名单行为。临时数据库读取错误时继续保留最后一次成功的风险白名单缓存；测试统一由 `TestMain` 设置 Gin 全局模式。
+- 部署 compose 文件采用上游当前配置。未执行生产迁移、部署、远程推送、tag 或 release。
+- 验证记录：前端 `pnpm run build`（含 i18n 完整性与 `vue-tsc -b`）通过；`go test ./internal/service -count=1` 通过；后端 handler、repository、server 目标包全量测试通过；WebSocket/计费/路由、Sonnet 5.5、OAuth beta 和风险白名单定向测试通过。`git diff --check` 与 `git diff --cached --check` 通过。
 
 ## 2026-09-29 管理端账号成本/利润率展示修复
 
@@ -188,9 +196,9 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `e2d5e2972` | 合并 v0.2.5 前的 fork 基线；版本源保持 fork 版本 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.7` -> `aea725f2ea644d5592d0bbb1d63b607efa7e200a` | 已合入 2026-09-19 发布的官方 release |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.7` -> `aea725f2ea644d5592d0bbb1d63b607efa7e200a` | 当前同步目标 |
+| Fork 同步前 HEAD | `12b701ad138a122ee444dee9b09475a4acb25fbc` | 本次同步前 fork 基线；版本源保持 fork 的 `0.2.27` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.10` -> `2f3fed2fdb0787141294cec81487a5df30426f7f` | 本次同步目标 |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.10` -> `2f3fed2fdb0787141294cec81487a5df30426f7f` | 2026-09-30 同步目标 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录

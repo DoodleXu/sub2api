@@ -2260,7 +2260,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendReturnsEmptyWithoutAggregateCov
 	startTime := base.Add(-1 * time.Hour)
 	endTime := base.Add(48 * time.Hour)
 
-	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10, "tokens")
 	s.Require().NoError(err, "GetUserUsageTrend")
 	s.Require().Empty(trend, "dashboard user trend must stay unavailable until aggregate coverage exists")
 }
@@ -2286,7 +2286,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendUsesDashboardUserAggregates() {
 	_, err := s.tx.ExecContext(s.ctx, "DELETE FROM usage_logs WHERE created_at >= $1 AND created_at < $2", startTime, endTime)
 	s.Require().NoError(err)
 
-	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10, "tokens")
 	s.Require().NoError(err, "GetUserUsageTrend should read aggregate rows after raw logs are removed")
 	s.Require().Len(trend, 3)
 	s.Require().Equal(user1.ID, trend[0].UserID)
@@ -2315,7 +2315,7 @@ func (s *UsageLogRepoSuite) TestGetUserUsageTrendReturnsEmptyWhenDashboardUserAg
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, startTime.Add(24*time.Hour), endTime))
 	s.Require().NoError(aggRepo.UpdateAggregationWatermark(s.ctx, endTime))
 
-	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10)
+	trend, err := s.repo.GetUserUsageTrend(s.ctx, startTime, endTime, "day", 10, "tokens")
 	s.Require().NoError(err)
 	s.Require().Empty(trend, "partial historical coverage must be reported as unavailable without scanning usage_logs")
 }
@@ -2381,6 +2381,27 @@ func (s *UsageLogRepoSuite) TestGetUserSpendingRankingReturnsEmptyWhenDashboardU
 	s.Require().Zero(ranking.TotalTokens)
 	s.Require().False(ranking.DataAvailable)
 	s.Require().False(ranking.AggregationComplete)
+}
+
+func (s *UsageLogRepoSuite) TestGetUserUsageTrend_SelectsTopByMetric() {
+	highTokens := mustCreateUser(s.T(), s.client, &service.User{Email: "tokens@test.com"})
+	highSpend := mustCreateUser(s.T(), s.client, &service.User{Email: "spend@test.com"})
+	tokenKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: highTokens.ID, Key: "sk-trend-tokens", Name: "tokens"})
+	spendKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: highSpend.ID, Key: "sk-trend-spend", Name: "spend"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-trend-metric"})
+	at := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	s.createUsageLog(highTokens, tokenKey, account, 1000, 0, 0.1, at)
+	s.createUsageLog(highSpend, spendKey, account, 10, 0, 5, at)
+	start, end := at.Add(-time.Hour), at.Add(time.Hour)
+	tokens, err := s.repo.GetUserUsageTrend(s.ctx, start, end, "day", 1, "tokens")
+	s.Require().NoError(err)
+	s.Require().Len(tokens, 1)
+	s.Require().Equal(highTokens.ID, tokens[0].UserID)
+	spend, err := s.repo.GetUserUsageTrend(s.ctx, start, end, "day", 1, "actual_cost")
+	s.Require().NoError(err)
+	s.Require().Len(spend, 1)
+	s.Require().Equal(highSpend.ID, spend[0].UserID)
+	s.Require().Equal(5.0, spend[0].ActualCost)
 }
 
 // --- GetAPIKeyUsageTrend ---

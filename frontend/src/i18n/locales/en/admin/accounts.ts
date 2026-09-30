@@ -1,7 +1,6 @@
 export default {
     accounts: {
       addCostCny: 'Add CNY cost', addCostCnyHint: 'Record account cost in CNY', archiveAccount: 'Archive account', archiveConfirm: 'Archive this account?', archiveFailed: 'Archive failed', archiveSuccess: 'Account archived',
-      autoResetCredit: { title: 'Auto reset credit', hint: 'Configure automatic credit reset', threshold5h: '5-hour threshold', threshold7d: '7-day threshold', thresholdHint: 'Threshold percentage', thresholdInvalid: 'Invalid threshold' },
       costStatsPendingHint: 'Cost statistics are pending', failedToResetQuota: 'Failed to reset quota',
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
@@ -880,6 +879,7 @@ export default {
       enterCustomModelName: 'Enter custom model name',
       addModel: 'Add',
       modelExists: 'Model already exists',
+      modelMappingConflict: 'A mapping already exists for {from} → {to}. Modify or remove it under Model Mapping before adding this whitelist model',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
       poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
@@ -979,6 +979,28 @@ export default {
 	  autoPauseDisabledHint: 'When enabled, this account is never auto-paused (even if a global default threshold is configured).',
 	  continueSchedulingAfterLimit: 'Keep Trying After Limits',
 	  continueSchedulingAfterLimitHint: 'When enabled, every request tries this account tier first. Failures fall back to normal accounts without exposing this account\'s upstream error; only a later account failure is returned.',
+	  claudeResetCredits: {
+	    count: 'Resets',
+	    countTooltipLoad: 'Check remaining Claude resets (read-only, never consumes one)',
+	    countTooltipRefresh: 'Refresh remaining Claude resets (read-only, never consumes one)',
+	    fetched: 'Checked at {time}',
+	    error: 'Could not check reset credits',
+	    ineligible: 'This account cannot use resets right now',
+	    cooldown: 'Cooldown until {time}',
+	    expiresAt: 'Expires {time}',
+	    expiresAtFull: 'Reset credit expires at: {time}',
+	    clears: 'Clears windows: {windows}',
+	    notUsableNow: 'Not usable now',
+	    requiresLimit: 'Usable only after hitting a limit'
+	  },
+      autoResetCredit: {
+	    title: 'Automatically use reset credits',
+	    hint: 'Uses the earliest-expiring available credit only when actual usage reaches a threshold. Off by default; the account remains paused if no credit is available or reset fails.',
+	    threshold5h: '5h auto-reset threshold (%)',
+	    threshold7d: '7d auto-reset threshold (%)',
+	    thresholdHint: 'Each window is evaluated independently. Enter 0.1–100; both default to 100.',
+	    thresholdInvalid: 'Automatic reset-credit thresholds must be between 0.1% and 100%.'
+	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: 'Quota Control',
