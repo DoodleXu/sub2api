@@ -7877,7 +7877,11 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 		if mimicClaudeCode {
 			// mimic 路径：原代码跳过白名单透传，incomingBeta 总是空字符串。
 			// 这里传空 string 以严格对齐原行为。
-			return mergeAnthropicBetaDropping(claude.FullClaudeCodeMimicryBetas(), "", effectiveDropSet), true
+			requiredBetas := claude.FullClaudeCodeMimicryBetas()
+			if containsBetaToken(clientBeta, claude.BetaStructuredOutputs) {
+				requiredBetas = append(requiredBetas, claude.BetaStructuredOutputs)
+			}
+			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
 		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true

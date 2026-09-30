@@ -519,15 +519,16 @@ type SettingService struct {
 	claudeCodeVersionCache        atomic.Value // *cachedClaudeCodeClientVersion
 	claudeCodeVersionSF           singleflight.Group
 
-	cyberSessionBlockRuntimeMu    sync.Mutex
-	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
-	cyberSessionBlockRuntimeSF    singleflight.Group
-	sessionBindingCache           atomic.Value // *cachedSessionBinding
-	sessionBindingSF              singleflight.Group
-	sessionBindingGeneration      atomic.Uint64
-	sessionBindingPublicationMu   sync.Mutex
-	grokDefaultBaseURLModeCache   atomic.Value // *cachedGrokDefaultBaseURLMode
-	grokDefaultBaseURLModeSF      singleflight.Group
+	cyberSessionBlockRuntimeMu         sync.Mutex
+	cyberSessionBlockRuntimeGeneration uint64
+	cyberSessionBlockRuntimeCache      atomic.Value // *cachedCyberSessionBlockRuntime
+	cyberSessionBlockRuntimeSF         singleflight.Group
+	sessionBindingCache                atomic.Value // *cachedSessionBinding
+	sessionBindingSF                   singleflight.Group
+	sessionBindingGeneration           atomic.Uint64
+	sessionBindingPublicationMu        sync.Mutex
+	grokDefaultBaseURLModeCache        atomic.Value // *cachedGrokDefaultBaseURLMode
+	grokDefaultBaseURLModeSF           singleflight.Group
 
 	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。
 	// 面板每个认证请求都会读取，禁止在热路径上直接访问 DB。
@@ -1102,6 +1103,9 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 				return cached, nil
 			}
 		}
+		s.cyberSessionBlockRuntimeMu.Lock()
+		generation := s.cyberSessionBlockRuntimeGeneration
+		s.cyberSessionBlockRuntimeMu.Unlock()
 		// 共享刷新脱离首个调用者的取消与 deadline，独立受内部 5s 上限约束；
 		// 每个等待者的返回时限由下方 select 单独控制，短请求不会终止所有调用者
 		// 共用的刷新或把临时超时结果写入缓存。
@@ -1123,7 +1127,7 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 				previous.expiresAt = entry.expiresAt
 				entry = &previous
 			}
-			s.cyberSessionBlockRuntimeCache.Store(entry)
+			s.storeCyberSessionBlockRuntime(entry, generation)
 			return entry, nil
 		}
 		allowlistedUsers := map[int64]struct{}{}
@@ -1140,7 +1144,7 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 				ttl:       time.Hour,
 				expiresAt: time.Now().Add(cyberSessionBlockRuntimeErrorTTL).UnixNano(),
 			}
-			s.cyberSessionBlockRuntimeCache.Store(entry)
+			s.storeCyberSessionBlockRuntime(entry, generation)
 			return entry, nil
 		}
 
@@ -1159,7 +1163,7 @@ func (s *SettingService) GetCyberSessionBlockRuntime(ctx context.Context) (bool,
 			ttl:              ttl,
 			expiresAt:        time.Now().Add(cyberSessionBlockRuntimeCacheTTL).UnixNano(),
 		}
-		s.cyberSessionBlockRuntimeCache.Store(entry)
+		s.storeCyberSessionBlockRuntime(entry, generation)
 		return entry, nil
 	})
 	var result any
@@ -2971,6 +2975,7 @@ func (s *SettingService) setSettingsWithDailyCheckinHistory(ctx context.Context,
 }
 
 func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, settings *SystemSettings, omitted OmittedSettingKeys) {
+	s.invalidateCyberSessionBlockRuntimeCache()
 	if len(omitted) == 0 {
 		s.refreshCachedSettings(settings)
 		return
@@ -2981,6 +2986,25 @@ func (s *SettingService) refreshCachedSettingsAfterWrite(ctx context.Context, se
 		return
 	}
 	s.refreshCachedSettings(stored)
+}
+
+func (s *SettingService) invalidateCyberSessionBlockRuntimeCache() {
+	if s == nil {
+		return
+	}
+	s.cyberSessionBlockRuntimeMu.Lock()
+	defer s.cyberSessionBlockRuntimeMu.Unlock()
+	s.cyberSessionBlockRuntimeGeneration++
+	s.cyberSessionBlockRuntimeSF.Forget("cyber_session_block_runtime")
+	s.cyberSessionBlockRuntimeCache.Store(&cachedCyberSessionBlockRuntime{expiresAt: time.Now().UnixNano()})
+}
+
+func (s *SettingService) storeCyberSessionBlockRuntime(entry *cachedCyberSessionBlockRuntime, generation uint64) {
+	s.cyberSessionBlockRuntimeMu.Lock()
+	if s.cyberSessionBlockRuntimeGeneration == generation {
+		s.cyberSessionBlockRuntimeCache.Store(entry)
+	}
+	s.cyberSessionBlockRuntimeMu.Unlock()
 }
 
 func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, settings *SystemSettings) (map[string]string, error) {
@@ -3365,6 +3389,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// cyber 会话屏蔽开关 + TTL
 	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
+	if _, err := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist); err != nil {
+		return nil, infraerrors.BadRequest("INVALID_CYBER_POLICY_USER_ALLOWLIST", err.Error())
+	}
+	updates[SettingKeyCyberPolicyUserAllowlist] = settings.CyberPolicyUserAllowlist
 	if settings.CyberSessionBlockTTLSeconds > 0 {
 		updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
 	}
@@ -5326,6 +5354,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 
 	// cyber 会话屏蔽（默认关闭，TTL 默认 3600s）
 	result.CyberSessionBlockEnabled = settings[SettingKeyCyberSessionBlockEnabled] == "true"
+	result.CyberPolicyUserAllowlist = settings[SettingKeyCyberPolicyUserAllowlist]
 	if v, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyCyberSessionBlockTTLSeconds])); err == nil && v > 0 {
 		result.CyberSessionBlockTTLSeconds = v
 	} else {

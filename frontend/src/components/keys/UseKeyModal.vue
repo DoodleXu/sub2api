@@ -1932,26 +1932,36 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
           xhigh: { effort: 'xhigh' },
           max: { effort: 'max' }
         }
+      },
+      'claude-opus-4-6': {
+        name: 'Claude Opus 4.6',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image'], output: ['text'] }
+      },
+      'claude-sonnet-4-6': {
+        name: 'Claude Sonnet 4.6',
+        limit: { context: 1000000, output: 64000 },
+        modalities: { input: ['text', 'image'], output: ['text'] }
       }
     }
 
     if (props.supportedModels?.length) {
-    const configuredModels = Array.from(new Set(
-      props.supportedModels
-        .filter((model) => model.platform === 'anthropic')
-        .map((model) => model.name)
-    ))
-    if (configuredModels.length > 0) {
-      const knownModels = provider[platform].models as Record<string, unknown>
-      provider[platform].models = Object.fromEntries(configuredModels.map((modelID) => [
-        modelID,
-        knownModels[modelID] ?? {
-          name: modelID.split(/[-_]/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
-          limit: { context: 1000000, output: 64000 },
-          modalities: { input: ['text'], output: ['text'] }
-        }
-      ]))
-    }
+      const configuredModels = Array.from(new Set(
+        props.supportedModels
+          .filter((model) => model.platform === 'anthropic')
+          .map((model) => model.name)
+      ))
+      if (configuredModels.length > 0) {
+        const knownModels = provider[platform].models as Record<string, unknown>
+        provider[platform].models = Object.fromEntries(configuredModels.map((modelID) => [
+          modelID,
+          knownModels[modelID] ?? {
+            name: modelID.split(/[-_]/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+            limit: { context: 1000000, output: 64000 },
+            modalities: { input: ['text'], output: ['text'] }
+          }
+        ]))
+      }
     }
   } else if (platform === 'antigravity-claude') {
     provider[platform].npm = '@ai-sdk/anthropic'
