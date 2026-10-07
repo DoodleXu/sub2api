@@ -143,6 +143,9 @@ func cloneAccountValuePointer[T any](value *T) *T {
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
+		return nil, errors.New("typesafe accounts only support apikey credentials")
+	}
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
@@ -171,6 +174,15 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	} else {
 		account.AutoPauseOnExpired = true
+	}
+	if input.ProbeEnabled != nil && *input.ProbeEnabled {
+		if !isUpstreamBillingProbeAccount(account) {
+			return nil, ErrUpstreamBillingProbeAccountInvalid
+		}
+		if account.Extra == nil {
+			account.Extra = make(map[string]any)
+		}
+		account.Extra[UpstreamBillingProbeEnabledExtraKey] = true
 	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {

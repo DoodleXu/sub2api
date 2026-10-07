@@ -10078,6 +10078,11 @@ func syncBalanceCacheAfterDeduction(ctx context.Context, p *postUsageBillingPara
 		}
 		return
 	}
+	if deps.billingCacheService.InflightReservationEnabled() {
+		if err := deps.billingCacheService.DeductBalanceCache(ctx, p.User.ID, p.Cost.ActualCost); err == nil {
+			return
+		}
+	}
 	deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
 }
 

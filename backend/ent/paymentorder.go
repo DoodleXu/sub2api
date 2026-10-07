@@ -144,7 +144,7 @@ func (*PaymentOrder) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case paymentorder.FieldUpgradeClaimActive, paymentorder.FieldForceRefund:
 			values[i] = new(sql.NullBool)
-		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldUpgradeCreditAmount, paymentorder.FieldRefundAmount:
+		case paymentorder.FieldAmount, paymentorder.FieldPayAmount, paymentorder.FieldFeeRate, paymentorder.FieldBonusAmount, paymentorder.FieldUpgradeCreditAmount, paymentorder.FieldRefundAmount:
 			values[i] = new(sql.NullFloat64)
 		case paymentorder.FieldID, paymentorder.FieldUserID, paymentorder.FieldPlanID, paymentorder.FieldSubscriptionGroupID, paymentorder.FieldSubscriptionDays, paymentorder.FieldUpgradeFromSubscriptionID, paymentorder.FieldFulfilledSubscriptionID, paymentorder.FieldUpgradeCreditDays:
 			values[i] = new(sql.NullInt64)

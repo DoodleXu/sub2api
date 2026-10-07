@@ -46,6 +46,9 @@ export interface PaymentConfig {
   help_image_url: string
   help_text: string
   stripe_publishable_key: string
+  recharge_bonus_tiers?: RechargeBonusTier[]
+  recharge_bonus_mode?: string
+  recharge_bonus_notice?: string
 }
 
 export interface MethodLimit {
@@ -89,6 +92,9 @@ export interface CheckoutInfoResponse {
   recharge_fee_rate: number
   recharge_gift_enabled: boolean
   recharge_gift_tiers: { threshold: number; percent: number }[]
+  recharge_bonus_tiers?: RechargeBonusTier[]
+  recharge_bonus_mode?: string
+  recharge_bonus_notice?: string
   help_text: string
   help_image_url: string
   stripe_publishable_key: string
@@ -108,6 +114,7 @@ export interface PaymentOrder {
   currency?: string
   fee_rate: number
   fee_amount?: number
+  bonus_amount?: number
   payment_type: string
   out_trade_no: string
   status: OrderStatus

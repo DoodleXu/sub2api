@@ -2,7 +2,15 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-09-30
+最后更新：2026-10-07
+
+## 2026-10-07 合并上游 v0.2.14
+
+- 同步官方 release `v0.2.14`（`0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d`，发布于 2026-10-07）；fork 版本源继续保持 `0.2.30`，未执行生产迁移、部署、推送或重新发布。
+- 充值赠送档位、模式和提示语迁入 fork 既有支付聚合服务、管理设置 DTO、订单落库和公开响应，保留 fork 的手续费、人民币币种、订阅升级抵扣及签名恢复令牌流程；`bonus_amount` 与到账金额继续区分记录。
+- TypeSafe API Key 校验、`jev-latest` 默认模型、Composite 模型清单的 `/v1/models` 与 Codex manifest 分流、System One 内容审核文本收集、GPT-6.1 兼容和 inflight 预留扣款迁入 fork 聚合模块；上游拆分的 `setting_handler_update.go`、`admin_account.go`、`admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_request_body.go` 继续保持删除，避免重复实现。`deploy/APPLE_CONTAINER.md` 继续删除。
+- 支付公开恢复接口继续保留 fork 的签名 resume token 安全契约，因此未接入上游匿名 `/orders/verify` 限流测试路径；上游该测试文件已移除。
+- 验证：后端 `go build ./...`、`TZ=UTC go test -tags=unit -count=1 ./...` 全量通过；前端 `vue-tsc --noEmit`、`pnpm run build`、支付页及赠送计算定向测试通过；`git diff --check` 通过。
 
 ## 2026-09-30 发版 v0.2.28 审核修复
 

@@ -30,6 +30,22 @@ type gatewayCodexModelsResponseForTest struct {
 	Models []json.RawMessage `json:"models"`
 }
 
+type codexModelsResponseForTest struct {
+	Models []struct {
+		Slug                     string                       `json:"slug"`
+		SupportedReasoningLevels []codexReasoningLevelForTest `json:"supported_reasoning_levels"`
+		InputModalities          []string                     `json:"input_modalities"`
+		ModelMessages            map[string]json.RawMessage   `json:"model_messages"`
+		TruncationPolicy         map[string]json.RawMessage   `json:"truncation_policy"`
+		AvailabilityNUX          json.RawMessage              `json:"availability_nux"`
+		Upgrade                  json.RawMessage              `json:"upgrade"`
+	} `json:"models"`
+}
+
+type codexReasoningLevelForTest struct {
+	Effort string `json:"effort"`
+}
+
 type gatewayModelItemForTest struct {
 	ID                      string                                `json:"id"`
 	Object                  string                                `json:"object"`
@@ -1038,11 +1054,27 @@ func TestGatewayModels_CompositeTypeSafeListingScope(t *testing.T) {
 	var manifest codexModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &manifest))
 	slugs := codexModelSlugsForTest(manifest.Models)
-	require.Contains(t, slugs, "claude-opus-4-6")
+	require.Empty(t, slugs)
 	require.NotContains(t, slugs, "jev-latest")
 }
 
 func TestDefaultModelIDsForPlatform_CompositeFallbackExcludesTypeSafe(t *testing.T) {
 	require.NotContains(t, defaultModelIDsForPlatform(service.PlatformComposite), "jev-latest")
 	require.NotContains(t, defaultCodexModelIDsForPlatform(service.PlatformComposite), "jev-latest")
+}
+
+func codexModelSlugsForTest(models []struct {
+	Slug                     string                       `json:"slug"`
+	SupportedReasoningLevels []codexReasoningLevelForTest `json:"supported_reasoning_levels"`
+	InputModalities          []string                     `json:"input_modalities"`
+	ModelMessages            map[string]json.RawMessage   `json:"model_messages"`
+	TruncationPolicy         map[string]json.RawMessage   `json:"truncation_policy"`
+	AvailabilityNUX          json.RawMessage              `json:"availability_nux"`
+	Upgrade                  json.RawMessage              `json:"upgrade"`
+}) []string {
+	slugs := make([]string, 0, len(models))
+	for _, model := range models {
+		slugs = append(slugs, model.Slug)
+	}
+	return slugs
 }

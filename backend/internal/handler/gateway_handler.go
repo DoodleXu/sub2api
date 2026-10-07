@@ -1224,14 +1224,82 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 // with incomplete gateway metadata.
 func (h *GatewayHandler) CodexModels(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
-	if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformOpenAI && h.openAIGatewayService != nil {
-		if apiKey.Group.CodexModelsManifestConfig.Enabled {
-			pinned := &OpenAIGatewayHandler{gatewayService: h.openAIGatewayService, maxAccountSwitches: h.maxAccountSwitches}
-			pinned.CodexModels(c)
-			return
-		}
+	if !ok || apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI {
+		c.JSON(http.StatusOK, gin.H{"models": []any{}})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"models": []any{}})
+
+	forcedPlatform := ""
+	if value, exists := middleware2.GetForcePlatformFromContext(c); exists {
+		forcedPlatform = strings.TrimSpace(value)
+	}
+	modelIDs := h.codexModelIDsForGroup(c.Request.Context(), apiKey.Group, forcedPlatform)
+	modelIDs = service.FilterCodexModelIDsForGroup(modelIDs, apiKey.Group)
+	body, err := h.gatewayService.BuildCodexModelsManifestForGroup(
+		c.Request.Context(),
+		apiKey.Group,
+		forcedPlatform,
+		modelIDs,
+	)
+	if err != nil {
+		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to build Codex models manifest")
+		return
+	}
+	etag := service.CodexModelsManifestETag(body)
+	c.Header("ETag", etag)
+	if service.CodexModelsManifestETagMatches(c.GetHeader("If-None-Match"), etag) {
+		c.Status(http.StatusNotModified)
+		c.Writer.WriteHeaderNow()
+		return
+	}
+	c.Data(http.StatusOK, "application/json", body)
+}
+
+func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *service.Group, platformOverride string) []string {
+	if h == nil || h.gatewayService == nil || group == nil {
+		return nil
+	}
+
+	groupID := &group.ID
+	platform := strings.TrimSpace(platformOverride)
+	if platform == "" {
+		platform = group.Platform
+	}
+	if platform == service.PlatformComposite {
+		availableModels := h.compositeAvailableModels(ctx, groupID, false)
+		fallbackModels := defaultCodexModelIDsForPlatform(service.PlatformComposite)
+		if group.ModelAllowlistEnabled() {
+			source := availableModels
+			if len(source) == 0 {
+				source = fallbackModels
+			}
+			return group.ModelAllowlist.FilterForListing(source)
+		}
+		if len(availableModels) > 0 {
+			return availableModels
+		}
+		return fallbackModels
+	}
+
+	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
+	fallbackModels := defaultCodexModelIDsForPlatform(platform)
+	if group.ModelAllowlistEnabled() {
+		return group.ModelAllowlist.FilterForListing(modelListingSource(platform, availableModels, fallbackModels))
+	}
+	if len(availableModels) > 0 {
+		return availableModels
+	}
+	return fallbackModels
+}
+
+func modelListingSource(platform string, availableModels, fallbackModels []string) []string {
+	if len(availableModels) == 0 {
+		return fallbackModels
+	}
+	if platform == service.PlatformAnthropic {
+		return mergeModelIDs(availableModels, fallbackModels)
+	}
+	return availableModels
 }
 
 // compositeAvailableModels lists the models the composite group can serve.
@@ -1244,7 +1312,7 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
-	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax} {
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo} {
 		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 		if len(platformModels) == 0 {
 			// CN 供应商没有静态默认模型列表（defaultModelIDsForPlatform 的
@@ -1263,6 +1331,21 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 			}
 			seen[model] = struct{}{}
 			models = append(models, model)
+		}
+	}
+	if includeSystemOne {
+		for _, model := range h.gatewayService.GetAvailableModels(ctx, groupID, service.PlatformTypeSafe) {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			if _, ok := seen[model]; !ok {
+				seen[model] = struct{}{}
+				models = append(models, model)
+			}
+		}
+		if _, ok := schedulablePlatforms[service.PlatformTypeSafe]; ok && len(h.gatewayService.GetAvailableModels(ctx, groupID, service.PlatformTypeSafe)) == 0 {
+			models = append(models, "jev-latest")
 		}
 	}
 	return models
@@ -1410,7 +1493,7 @@ func defaultModelIDsForPlatform(platform string) []string {
 	case service.PlatformComposite:
 		ids := make([]string, 0)
 		seen := make(map[string]struct{})
-		for _, concretePlatform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax} {
+		for _, concretePlatform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo} {
 			for _, id := range defaultModelIDsForPlatform(concretePlatform) {
 				if _, ok := seen[id]; ok {
 					continue
@@ -1426,6 +1509,17 @@ func defaultModelIDsForPlatform(platform string) []string {
 			ids = append(ids, model.ID)
 		}
 		return ids
+	}
+}
+
+func defaultCodexModelIDsForPlatform(platform string) []string {
+	switch platform {
+	case service.PlatformDeepseek:
+		return []string{"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash"}
+	case service.PlatformMiniMax:
+		return []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
+	default:
+		return defaultModelIDsForPlatform(platform)
 	}
 }
 

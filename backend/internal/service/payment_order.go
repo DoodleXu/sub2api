@@ -61,6 +61,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		s.notificationEmailService.RememberRecipientLocale(ctx, req.UserID, user.Email, req.Locale)
 	}
 	orderAmount := req.Amount
+	bonusAmount := 0.0
 	limitAmount := req.Amount
 	if plan != nil {
 		orderAmount = plan.Price
@@ -69,9 +70,6 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 			orderAmount = subscriptionUpgradePayableAmount(plan.Price, upgradeCredit.CreditAmount)
 			limitAmount = orderAmount
 		}
-	} else if req.OrderType == payment.OrderTypeBalance {
-		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
-		orderAmount = decimal.NewFromFloat(orderAmount).Add(decimal.NewFromFloat(calculateRechargeGift(req.Amount, cfg.RechargeGiftEnabled, cfg.RechargeGiftTiers))).Round(2).InexactFloat64()
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
@@ -81,8 +79,17 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 			return nil, err
 		}
 	}
+	payBaseAmount := limitAmount
+	if req.OrderType == payment.OrderTypeBalance {
+		quote := quoteRechargeBonus(cfg, req.Amount, methodCurrency)
+		orderAmount, bonusAmount, payBaseAmount = quote.Credited, quote.Bonus, quote.PayBase
+		if len(cfg.RechargeBonusTiers) == 0 {
+			bonusAmount = calculateRechargeGift(req.Amount, cfg.RechargeGiftEnabled, cfg.RechargeGiftTiers)
+			orderAmount = decimal.NewFromFloat(orderAmount).Add(decimal.NewFromFloat(bonusAmount)).Round(2).InexactFloat64()
+		}
+	}
 	payAmountStr, payAmount, feeAmount, err := calculateCreateOrderPayAmountForOrderType(
-		limitAmount,
+		payBaseAmount,
 		paymentFeeConfig{Rate: feeRate},
 		methodCurrency,
 		req.OrderType,
@@ -106,7 +113,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	feeRate = selectedFee.Rate
 	if selectedCurrency != methodCurrency || selectedFee.Min > 0 || selectedFee.Rate != cfg.RechargeFeeRate {
 		payAmountStr, payAmount, feeAmount, err = calculateCreateOrderPayAmountForOrderType(
-			limitAmount,
+			payBaseAmount,
 			selectedFee,
 			selectedCurrency,
 			req.OrderType,
@@ -129,7 +136,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if oauthResp != nil {
 		return oauthResp, nil
 	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, feeAmount, payAmount, sel, upgradeCredit)
+	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, feeAmount, payAmount, bonusAmount, sel, upgradeCredit)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +195,7 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
-func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, feeAmount, payAmount float64, sel *payment.InstanceSelection, upgradeCredit *subscriptionUpgradeCredit) (*dbent.PaymentOrder, error) {
+func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, feeAmount, payAmount, bonusAmount float64, sel *payment.InstanceSelection, upgradeCredit *subscriptionUpgradeCredit) (*dbent.PaymentOrder, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -862,6 +869,7 @@ func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest,
 		Amount:                    order.Amount,
 		PayAmount:                 payAmount,
 		FeeRate:                   order.FeeRate,
+		BonusAmount:               order.BonusAmount,
 		Status:                    OrderStatusPending,
 		ResultType:                resultType,
 		PaymentType:               req.PaymentType,

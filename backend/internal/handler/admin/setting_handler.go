@@ -407,6 +407,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentRechargeFeeRate:                                 paymentCfg.RechargeFeeRate,
 		PaymentRechargeGiftEnabled:                             paymentCfg.RechargeGiftEnabled,
 		PaymentRechargeGiftTiers:                               paymentCfg.RechargeGiftTiers,
+		PaymentRechargeBonusTiers:                              rechargeBonusTiersToDTO(paymentCfg.RechargeBonusTiers),
+		PaymentRechargeBonusMode:                               rechargeBonusModeToDTO(paymentCfg.RechargeBonusMode),
+		PaymentRechargeBonusNotice:                             paymentCfg.RechargeBonusNotice,
 		PaymentLoadBalanceStrat:                                paymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                               paymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                               paymentCfg.ProductNameSuffix,
@@ -1378,6 +1381,9 @@ type UpdateSettingsRequest struct {
 	PaymentRechargeFeeRate           *float64                    `json:"payment_recharge_fee_rate"`
 	PaymentRechargeGiftEnabled       *bool                       `json:"payment_recharge_gift_enabled"`
 	PaymentRechargeGiftTiers         *[]service.RechargeGiftTier `json:"payment_recharge_gift_tiers"`
+	PaymentRechargeBonusTiers        *[]dto.RechargeBonusTier    `json:"payment_recharge_bonus_tiers"`
+	PaymentRechargeBonusMode         *string                     `json:"payment_recharge_bonus_mode"`
+	PaymentRechargeBonusNotice       *string                     `json:"payment_recharge_bonus_notice"`
 	PaymentLoadBalanceStrat          *string                     `json:"payment_load_balance_strategy"`
 	PaymentProductNamePrefix         *string                     `json:"payment_product_name_prefix"`
 	PaymentProductNameSuffix         *string                     `json:"payment_product_name_suffix"`
@@ -3326,6 +3332,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			RechargeFeeRate:               req.PaymentRechargeFeeRate,
 			RechargeGiftEnabled:           req.PaymentRechargeGiftEnabled,
 			RechargeGiftTiers:             req.PaymentRechargeGiftTiers,
+			RechargeBonusTiers:            rechargeBonusTiersFromDTO(req.PaymentRechargeBonusTiers),
+			RechargeBonusMode:             req.PaymentRechargeBonusMode,
+			RechargeBonusNotice:           req.PaymentRechargeBonusNotice,
 			LoadBalanceStrategy:           req.PaymentLoadBalanceStrat,
 			ProductNamePrefix:             req.PaymentProductNamePrefix,
 			ProductNameSuffix:             req.PaymentProductNameSuffix,
@@ -3612,6 +3621,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentRechargeFeeRate:                                 updatedPaymentCfg.RechargeFeeRate,
 		PaymentRechargeGiftEnabled:                             updatedPaymentCfg.RechargeGiftEnabled,
 		PaymentRechargeGiftTiers:                               updatedPaymentCfg.RechargeGiftTiers,
+		PaymentRechargeBonusTiers:                              rechargeBonusTiersToDTO(updatedPaymentCfg.RechargeBonusTiers),
+		PaymentRechargeBonusMode:                               updatedPaymentCfg.RechargeBonusMode,
+		PaymentRechargeBonusNotice:                             updatedPaymentCfg.RechargeBonusNotice,
 		PaymentLoadBalanceStrat:                                updatedPaymentCfg.LoadBalanceStrategy,
 		PaymentProductNamePrefix:                               updatedPaymentCfg.ProductNamePrefix,
 		PaymentProductNameSuffix:                               updatedPaymentCfg.ProductNameSuffix,
@@ -3707,7 +3719,7 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentOrderTimeoutMin != nil || req.PaymentMaxPendingOrders != nil ||
 		req.PaymentEnabledTypes != nil || req.PaymentBalanceDisabled != nil ||
 		req.PaymentBalanceRechargeMultiplier != nil || req.PaymentSubscriptionUSDToCNYRate != nil ||
-		req.PaymentRechargeFeeRate != nil || req.PaymentRechargeGiftEnabled != nil || req.PaymentRechargeGiftTiers != nil ||
+		req.PaymentRechargeFeeRate != nil || req.PaymentRechargeGiftEnabled != nil || req.PaymentRechargeGiftTiers != nil || req.PaymentRechargeBonusTiers != nil || req.PaymentRechargeBonusMode != nil || req.PaymentRechargeBonusNotice != nil ||
 		req.PaymentLoadBalanceStrat != nil || req.PaymentProductNamePrefix != nil ||
 		req.PaymentProductNameSuffix != nil || req.PaymentHelpImageURL != nil ||
 		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||

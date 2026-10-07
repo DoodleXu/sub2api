@@ -8493,15 +8493,13 @@
             </div>
           </div>
 
-          <!-- 充值优惠阶梯（独立卡片，与服务商管理同级） -->
+          <!-- Provider Management -->
           <RechargeBonusTierEditor
             v-if="form.payment_enabled"
             v-model="form.payment_recharge_bonus_tiers"
             v-model:mode="form.payment_recharge_bonus_mode"
             v-model:notice="form.payment_recharge_bonus_notice"
           />
-
-          <!-- Provider Management -->
           <PaymentProviderList
             v-if="form.payment_enabled"
             :providers="providers"
@@ -9469,13 +9467,7 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
-import {
-  normalizeRechargeBonusMode,
-  normalizeRechargeBonusTiers,
-  sanitizeRechargeBonusTiersForSubmit,
-  type RechargeBonusMode,
-  type RechargeBonusTierDraft,
-} from "@/utils/rechargeBonus";
+import { normalizeRechargeBonusMode, normalizeRechargeBonusTiers, sanitizeRechargeBonusTiersForSubmit, type RechargeBonusMode, type RechargeBonusTierDraft } from "@/utils/rechargeBonus";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
@@ -10377,6 +10369,7 @@ type SettingsForm = Omit<
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
   | "openai_oauth_scheduling_rate_multiplier"
+  | "payment_recharge_bonus_tiers"
 > & {
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
@@ -10391,6 +10384,7 @@ type SettingsForm = Omit<
   linuxdo_connect_client_secret: string;
   dingtalk_connect_client_secret: string;
   payment_recharge_gift_tiers: RechargeGiftTierForm[];
+  payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
   payment_recharge_gift_enabled: boolean;
   wechat_connect_app_secret: string;
   wechat_connect_open_app_secret: string;
@@ -10493,6 +10487,9 @@ const form = reactive<SettingsForm>({
   payment_recharge_fee_rate: 0,
   payment_recharge_gift_enabled: false as boolean,
   payment_recharge_gift_tiers: [] as RechargeGiftTierForm[],
+  payment_recharge_bonus_tiers: [] as RechargeBonusTierDraft[],
+  payment_recharge_bonus_mode: "bonus" as RechargeBonusMode,
+  payment_recharge_bonus_notice: "",
   payment_enabled_types: [],
   payment_help_image_url: "",
   payment_help_text: "",
@@ -11906,12 +11903,8 @@ async function loadSettings() {
           }))
         : defaultLoginAgreementDocuments();
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
-    form.payment_recharge_bonus_tiers = normalizeRechargeBonusTiers(
-      settings.payment_recharge_bonus_tiers,
-    );
-    form.payment_recharge_bonus_mode = normalizeRechargeBonusMode(
-      settings.payment_recharge_bonus_mode,
-    );
+    form.payment_recharge_bonus_tiers = normalizeRechargeBonusTiers(settings.payment_recharge_bonus_tiers);
+    form.payment_recharge_bonus_mode = normalizeRechargeBonusMode(settings.payment_recharge_bonus_mode);
     form.payment_recharge_bonus_notice = settings.payment_recharge_bonus_notice || "";
     form.default_platform_quotas = normalizePlatformQuotasMap(settings.default_platform_quotas);
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
@@ -12654,6 +12647,9 @@ async function saveSettings() {
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
       payment_recharge_gift_enabled: form.payment_recharge_gift_enabled,
       payment_recharge_gift_tiers: normalizedRechargeGiftTiers,
+      payment_recharge_bonus_tiers: sanitizeRechargeBonusTiersForSubmit(form.payment_recharge_bonus_tiers),
+      payment_recharge_bonus_mode: form.payment_recharge_bonus_mode,
+      payment_recharge_bonus_notice: form.payment_recharge_bonus_notice,
       payment_enabled_types: enabledPaymentTypes.value,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,

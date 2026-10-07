@@ -30,6 +30,8 @@ func extractContentModerationKeywordText(protocol string, body []byte) string {
 		collectLatestKeywordGeminiContent(gjson.GetBytes(body, "contents"), &collector)
 	case ContentModerationProtocolOpenAIImages:
 		addKeywordModerationText(&collector.parts, gjson.GetBytes(body, "prompt").String())
+	case ContentModerationProtocolTypeSafeSystemOne:
+		collectSystemOneInput(gjson.ParseBytes(body), &collector.parts)
 	default:
 		collectKeywordResponsesInput(gjson.GetBytes(body, "input"), &collector)
 	}
@@ -41,6 +43,9 @@ func collectLatestKeywordRoleMessage(messages gjson.Result, role string, collect
 		return
 	}
 	items := messages.Array()
+	if len(items) == 0 {
+		return
+	}
 	item := items[len(items)-1]
 	if strings.EqualFold(strings.TrimSpace(item.Get("role").String()), role) {
 		collectRawKeywordContent(item.Get("content"), &collector.parts)
@@ -162,6 +167,8 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 			collector.AddText(prompt)
 		}
 		collectContentValue(gjson.GetBytes(body, "images"), &collector.parts, &collector.images)
+	case ContentModerationProtocolTypeSafeSystemOne:
+		collectSystemOneInput(gjson.ParseBytes(body), &collector.parts)
 	default:
 		collectLatestResponsesInput(gjson.GetBytes(body, "input"), &collector)
 		collectLatestRoleMessage(gjson.GetBytes(body, "messages"), "user", "chat_latest_user", &collector)
@@ -177,6 +184,58 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 	}
 	out.Normalize()
 	return out
+}
+
+func collectSystemOneInput(root gjson.Result, parts *[]string) {
+	questions := root.Get("questions")
+	if !questions.IsObject() {
+		collectSystemOneText(questions, parts)
+	}
+	questions.ForEach(func(id, question gjson.Result) bool {
+		addKeywordModerationText(parts, id.String())
+		if !question.IsObject() {
+			collectSystemOneText(question, parts)
+			return true
+		}
+		question.ForEach(func(field, value gjson.Result) bool {
+			if field.String() == "type" {
+				return true
+			}
+			if field.String() != "type" && field.String() != "instructions" && field.String() != "criteria" {
+				addKeywordModerationText(parts, field.String())
+			}
+			collectSystemOneText(value, parts)
+			return true
+		})
+		return true
+	})
+	root.ForEach(func(field, value gjson.Result) bool {
+		switch field.String() {
+		case "model", "stream", "state", "questions":
+			return true
+		}
+		addKeywordModerationText(parts, field.String())
+		collectSystemOneText(value, parts)
+		return true
+	})
+	collectSystemOneText(root.Get("state"), parts)
+}
+
+func collectSystemOneText(value gjson.Result, parts *[]string) {
+	switch {
+	case !value.Exists():
+		return
+	case value.Type == gjson.String:
+		addKeywordModerationText(parts, value.String())
+	case value.IsArray():
+		value.ForEach(func(_, child gjson.Result) bool { collectSystemOneText(child, parts); return true })
+	case value.IsObject():
+		value.ForEach(func(key, child gjson.Result) bool {
+			addKeywordModerationText(parts, key.String())
+			collectSystemOneText(child, parts)
+			return true
+		})
+	}
 }
 
 func collectOpenAIAlphaSearchQueries(queries gjson.Result, collector *contentModerationInputCollector) {
