@@ -194,13 +194,21 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	return base
 }
 
-func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecordTask) service.UsageRecordTask {
+// wrapUsageRecordTaskContext 包装计费任务：复制请求级 context 值，并接管请求的在途余额预留引用。
+// 返回的 abandon 在任务未被执行（被丢弃）时必须调用以归还预留引用；任务执行结束时（含 panic）
+// 自动归还，此时余额缓存已在计费路径中同步扣减。
+func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecordTask) (service.UsageRecordTask, func()) {
 	if task == nil {
-		return nil
+		return nil, func() {}
+	}
+	done := func() {}
+	if parent != nil {
+		done = service.InflightReservationFromContext(parent).Acquire()
 	}
 	return func(ctx context.Context) {
+		defer done()
 		task(usageRecordContext(parent, ctx))
-	}
+	}, done
 }
 
 func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
@@ -3338,7 +3346,7 @@ func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Con
 	if task == nil {
 		return
 	}
-	task = wrapUsageRecordTaskContext(parent, task)
+	task, _ = wrapUsageRecordTaskContext(parent, task)
 	if h.usageRecordWorkerPool != nil {
 		if mode := h.usageRecordWorkerPool.Submit(task); !mode.Dropped() {
 			return

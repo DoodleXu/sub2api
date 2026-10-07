@@ -10,6 +10,7 @@ import type {
   LoginAgreementDocument,
   NotifyEmailEntry,
 } from "@/types";
+import type { RechargeBonusTier } from "@/utils/rechargeBonus";
 
 export interface DefaultSubscriptionSetting {
   group_id: number;
@@ -17,7 +18,7 @@ export interface DefaultSubscriptionSetting {
 }
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok"
+export type PlatformType = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "typesafe"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -30,7 +31,7 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "grok"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "gemini", "antigravity", "grok", "typesafe"]
 
 export type SchedulingThresholdPlatformType =
   | "openai"

@@ -1327,26 +1327,30 @@ func init() {
 	paymentorderDescFeeRate := paymentorderFields[6].Descriptor()
 	// paymentorder.DefaultFeeRate holds the default value on creation for the fee_rate field.
 	paymentorder.DefaultFeeRate = paymentorderDescFeeRate.Default.(float64)
+	// paymentorderDescBonusAmount is the schema descriptor for bonus_amount field.
+	paymentorderDescBonusAmount := paymentorderFields[7].Descriptor()
+	// paymentorder.DefaultBonusAmount holds the default value on creation for the bonus_amount field.
+	paymentorder.DefaultBonusAmount = paymentorderDescBonusAmount.Default.(float64)
 	// paymentorderDescRechargeCode is the schema descriptor for recharge_code field.
-	paymentorderDescRechargeCode := paymentorderFields[7].Descriptor()
+	paymentorderDescRechargeCode := paymentorderFields[8].Descriptor()
 	// paymentorder.RechargeCodeValidator is a validator for the "recharge_code" field. It is called by the builders before save.
 	paymentorder.RechargeCodeValidator = paymentorderDescRechargeCode.Validators[0].(func(string) error)
 	// paymentorderDescOutTradeNo is the schema descriptor for out_trade_no field.
-	paymentorderDescOutTradeNo := paymentorderFields[8].Descriptor()
+	paymentorderDescOutTradeNo := paymentorderFields[9].Descriptor()
 	// paymentorder.DefaultOutTradeNo holds the default value on creation for the out_trade_no field.
 	paymentorder.DefaultOutTradeNo = paymentorderDescOutTradeNo.Default.(string)
 	// paymentorder.OutTradeNoValidator is a validator for the "out_trade_no" field. It is called by the builders before save.
 	paymentorder.OutTradeNoValidator = paymentorderDescOutTradeNo.Validators[0].(func(string) error)
 	// paymentorderDescPaymentType is the schema descriptor for payment_type field.
-	paymentorderDescPaymentType := paymentorderFields[9].Descriptor()
+	paymentorderDescPaymentType := paymentorderFields[10].Descriptor()
 	// paymentorder.PaymentTypeValidator is a validator for the "payment_type" field. It is called by the builders before save.
 	paymentorder.PaymentTypeValidator = paymentorderDescPaymentType.Validators[0].(func(string) error)
 	// paymentorderDescPaymentTradeNo is the schema descriptor for payment_trade_no field.
-	paymentorderDescPaymentTradeNo := paymentorderFields[10].Descriptor()
+	paymentorderDescPaymentTradeNo := paymentorderFields[11].Descriptor()
 	// paymentorder.PaymentTradeNoValidator is a validator for the "payment_trade_no" field. It is called by the builders before save.
 	paymentorder.PaymentTradeNoValidator = paymentorderDescPaymentTradeNo.Validators[0].(func(string) error)
 	// paymentorderDescOrderType is the schema descriptor for order_type field.
-	paymentorderDescOrderType := paymentorderFields[14].Descriptor()
+	paymentorderDescOrderType := paymentorderFields[15].Descriptor()
 	// paymentorder.DefaultOrderType holds the default value on creation for the order_type field.
 	paymentorder.DefaultOrderType = paymentorderDescOrderType.Default.(string)
 	// paymentorder.OrderTypeValidator is a validator for the "order_type" field. It is called by the builders before save.

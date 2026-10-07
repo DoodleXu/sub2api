@@ -26,6 +26,12 @@ export type SubscriptionBillingType = 'standard' | 'subscription' | 'subscriptio
 
 // ==================== Configuration ====================
 
+/** 充值赠送档位：支付金额 ≥ min_amount 时在到账基数上赠送 bonus_percent% */
+export interface RechargeBonusTier {
+  min_amount: number
+  bonus_percent: number
+}
+
 export interface PaymentConfig {
   payment_enabled: boolean
   min_amount: number
@@ -246,6 +252,7 @@ export interface CreateOrderResult {
   payment_env?: string
   pay_amount: number
   fee_rate: number
+  bonus_amount?: number
   expires_at: string
   result_type?: CreateOrderResultType
   payment_type?: string

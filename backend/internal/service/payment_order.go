@@ -224,6 +224,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		SetAmount(orderAmount).
 		SetPayAmount(payAmount).
 		SetFeeRate(feeRate).
+		SetBonusAmount(bonusAmount).
 		SetRechargeCode("").
 		SetOutTradeNo(outTradeNo).
 		SetPaymentType(req.PaymentType).
@@ -552,6 +553,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
 		"paymentAmount":  req.Amount,
 		"creditedAmount": order.Amount,
+		"bonusAmount":    order.BonusAmount,
 		"payAmount":      order.PayAmount,
 		"paymentType":    req.PaymentType,
 		"orderType":      req.OrderType,
