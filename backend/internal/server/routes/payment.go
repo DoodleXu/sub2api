@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-
 // RegisterPaymentRoutes registers all payment-related routes:
 // user-facing endpoints, webhook endpoints, and admin endpoints.
 func RegisterPaymentRoutes(
