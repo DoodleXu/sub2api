@@ -392,6 +392,39 @@ func TestSelectCreateOrderInstanceSkipsStripeInstanceAfterEvaluatedFeeLimit(t *t
 	}
 }
 
+func TestSelectCreateOrderInstanceUsesDiscountedAmountForProviderLimit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	instance, err := client.PaymentProviderInstance.Create().
+		SetProviderKey(payment.TypeStripe).
+		SetName("Stripe discounted recharge").
+		SetConfig(`{"currency":"CNY","feeRate":"0","feeMin":"0"}`).
+		SetSupportedTypes("card,link").
+		SetEnabled(true).
+		SetLimits(`{"stripe":{"singleMax":85}}`).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("create stripe instance: %v", err)
+	}
+
+	svc := &PaymentService{
+		loadBalancer: payment.NewDefaultLoadBalancer(client, nil),
+	}
+	sel, err := svc.selectCreateOrderInstance(ctx, CreateOrderRequest{
+		PaymentType: payment.TypeStripe,
+	}, &PaymentConfig{
+		RechargeFeeRate:     0,
+		LoadBalanceStrategy: string(payment.StrategyRoundRobin),
+	}, 80, 80)
+	if err != nil {
+		t.Fatalf("discounted amount should fit provider limit: %v", err)
+	}
+	if sel == nil || sel.InstanceID != strconv.FormatInt(instance.ID, 10) {
+		t.Fatalf("selected instance = %#v, want %d", sel, instance.ID)
+	}
+}
+
 func TestComputeValidityDaysSupportsSingularAndPluralUnits(t *testing.T) {
 	t.Parallel()
 

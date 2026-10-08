@@ -98,7 +98,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if err != nil {
 		return nil, err
 	}
-	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, limitAmount, payAmount)
+	sel, err := s.selectCreateOrderInstance(ctx, req, cfg, payBaseAmount, payAmount)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +408,7 @@ func (s *PaymentService) checkDailyLimit(ctx context.Context, tx *dbent.Tx, user
 	return nil
 }
 
-func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, limitAmount, fallbackPayAmount float64) (*payment.InstanceSelection, error) {
+func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig, selectionAmount, fallbackPayAmount float64) (*payment.InstanceSelection, error) {
 	selectCtx, err := s.prepareCreateOrderSelectionContext(ctx, req)
 	if err != nil {
 		return nil, err
@@ -417,7 +417,13 @@ func (s *PaymentService) selectCreateOrderInstance(ctx context.Context, req Crea
 		sel, err := aware.SelectInstanceWithAmountEvaluator(selectCtx, "", req.PaymentType, payment.Strategy(cfg.LoadBalanceStrategy), func(sel *payment.InstanceSelection) (float64, error) {
 			selectedCurrency := paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
 			selectedFee := paymentFeeConfigForSelection(cfg.RechargeFeeRate, sel)
-			_, evaluatedPayAmount, _, err := calculateCreateOrderPayAmount(limitAmount, selectedFee, selectedCurrency)
+			_, evaluatedPayAmount, _, err := calculateCreateOrderPayAmountForOrderType(
+				selectionAmount,
+				selectedFee,
+				selectedCurrency,
+				req.OrderType,
+				cfg.SubscriptionUSDToCNYRate,
+			)
 			return evaluatedPayAmount, err
 		})
 		if err != nil {

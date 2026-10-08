@@ -17,6 +17,7 @@ const {
   listEmailBroadcastRecipients,
   showError,
   showSuccess,
+  stepUpRun,
 } = vi.hoisted(() => ({
   getEmailBroadcastDraft: vi.fn(),
   deleteEmailBroadcastDraft: vi.fn(),
@@ -30,6 +31,7 @@ const {
   listEmailBroadcastRecipients: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  stepUpRun: vi.fn((action: () => Promise<unknown>) => action()),
 }));
 
 vi.mock("@/api/admin", () => ({
@@ -58,6 +60,13 @@ vi.mock("@/stores", () => ({
 
 vi.mock("@/utils/apiError", () => ({
   extractApiErrorMessage: (_error: unknown, fallback: string) => fallback,
+}));
+
+vi.mock("@/composables/useStepUp", () => ({
+  useStepUp: () => ({ run: stepUpRun }),
+  isStepUpCancelled: () => false,
+  isStepUpBlocked: () => false,
+  stepUpBlockReason: () => "",
 }));
 
 vi.mock("vue-i18n", async () => {
@@ -199,6 +208,7 @@ function mountView() {
         ConfirmDialog: ConfirmDialogStub,
         Pagination: PaginationStub,
         Icon: true,
+        TotpStepUpDialog: true,
       },
     },
   });
@@ -421,6 +431,28 @@ describe("EmailBroadcastsView", () => {
     expect(preflightEmailBroadcast).toHaveBeenCalledWith(expect.objectContaining({ min_balance_exclusive: 0 }));
     expect(wrapper.get('[data-testid="confirm-dialog"]').text()).toContain("余额大于 0");
     expect(wrapper.get('[data-testid="confirm-dialog"]').text()).toContain("目标 1 人");
+  });
+
+  it("does not require step-up for candidate preview but does for the send flow", async () => {
+    vi.useFakeTimers();
+    getEmailBroadcastDraft.mockResolvedValueOnce(null);
+    const wrapper = mountView();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+
+    expect(previewEmailBroadcastRecipients).toHaveBeenCalled();
+    expect(stepUpRun).not.toHaveBeenCalled();
+
+    await wrapper.get('input[placeholder="邮件标题"]').setValue("Notice");
+    await wrapper.get('textarea[placeholder="邮件正文"]').setValue("<p>Notice</p>");
+    const sendButton = wrapper.findAll("button").find((button) => button.text().includes("发送"));
+    await sendButton?.trigger("click");
+    await flushPromises();
+
+    expect(stepUpRun).toHaveBeenCalledTimes(1);
+    expect(preflightEmailBroadcast).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("restores a balance threshold from a draft and omits it for custom recipients", async () => {

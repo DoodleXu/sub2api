@@ -8,6 +8,7 @@
 
 - 同步官方 release `v0.2.14`（`0363b8cdba8cec3e2ba4b2dbd49c4481143fa55d`，发布于 2026-10-07）；fork 版本源继续保持 `0.2.30`，未执行生产迁移、部署、推送或重新发布。
 - 充值赠送档位、模式和提示语迁入 fork 既有支付聚合服务、管理设置 DTO、订单落库和公开响应，保留 fork 的手续费、人民币币种、订阅升级抵扣及签名恢复令牌流程；`bonus_amount` 与到账金额继续区分记录。
+- 修复支付渠道限额筛选使用折前充值金额的问题；充值赠送折扣和订阅美元转人民币汇率现在统一按最终支付金额评估渠道上限，避免可支付订单被错误拒绝。
 - TypeSafe API Key 校验、`jev-latest` 默认模型、Composite 模型清单的 `/v1/models` 与 Codex manifest 分流、System One 内容审核文本收集、GPT-6.1 兼容和 inflight 预留扣款迁入 fork 聚合模块；上游拆分的 `setting_handler_update.go`、`admin_account.go`、`admin_group.go`、`gateway_usage_billing.go`、`openai_gateway_request_body.go` 继续保持删除，避免重复实现。`deploy/APPLE_CONTAINER.md` 继续删除。
 - 支付公开恢复接口继续保留 fork 的签名 resume token 安全契约，因此未接入上游匿名 `/orders/verify` 限流测试路径；上游该测试文件已移除。
 - 验证：后端 `go build ./...`、`TZ=UTC go test -tags=unit -count=1 ./...` 全量通过；前端 `vue-tsc --noEmit`、`pnpm run build`、支付页及赠送计算定向测试通过；`git diff --check` 通过。
@@ -1028,7 +1029,7 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 
 - 邮件群发已从 settings JSON 任务状态升级为专用任务/收件人表：逐收件人原子状态、稳定 Message-ID、数据库租约恢复、SMTP 上下文取消、有限重试、未知投递隔离、90 天保留清理、发送前预检、服务端分页脱敏收件人明细均为 fork 定制能力；收件人 claim/终态写入失败时任务必须释放租约并保持可恢复，失去租约的 worker 禁止继续标记完成，最终完成写入不得覆盖并发到达的取消请求。同步上游时必须保留迁移 `225_notification_email_broadcast_jobs.sql`、群发仓储和管理页 API/UI。
 - 邮件群发的用户范围可选 `min_balance_exclusive` 门槛，按创建任务时 `users.balance > 门槛` 筛选；预检与正式创建共用收件人解析，续发使用已固定的收件人快照。自定义用户/邮箱范围不支持余额门槛，草稿和管理页保留该筛选配置。
-- 邮件群发管理页提供候选收件人数实时预览；群发 RPM 支持 `0.01` 至 `30` 的小数速率，发送任务表通过迁移 `247_email_broadcast_fractional_rpm.sql` 保存低于 1 的 RPM。
+- 邮件群发管理页提供候选收件人数实时预览；候选预览只做管理员鉴权，不要求敏感操作 step-up，正式发送及发送前预检仍要求二次验证。群发 RPM 支持 `0.01` 至 `30` 的小数速率，发送任务表通过迁移 `247_email_broadcast_fractional_rpm.sql` 保存低于 1 的 RPM。
 
 关键代码：
 

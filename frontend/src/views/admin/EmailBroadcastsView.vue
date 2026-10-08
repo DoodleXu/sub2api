@@ -508,6 +508,7 @@
           </div>
         </div>
       </ConfirmDialog>
+      <TotpStepUpDialog :controller="emailBroadcastStepUp" />
     </div>
   </AppLayout>
 </template>
@@ -530,11 +531,30 @@ import Select from "@/components/common/Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import Pagination from "@/components/common/Pagination.vue";
 import Icon from "@/components/icons/Icon.vue";
+import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
+import {
+  isStepUpBlocked,
+  isStepUpCancelled,
+  stepUpBlockReason,
+  useStepUp,
+} from "@/composables/useStepUp";
 import { useAppStore } from "@/stores";
 import { extractApiErrorMessage } from "@/utils/apiError";
 
 const { t } = useI18n();
 const appStore = useAppStore();
+const emailBroadcastStepUp = useStepUp();
+
+function handleEmailBroadcastStepUpError(error: unknown): boolean {
+  if (isStepUpCancelled(error)) return true;
+  if (!isStepUpBlocked(error)) return false;
+  appStore.showError(
+    stepUpBlockReason(error) === "STEP_UP_ADMIN_API_KEY_FORBIDDEN"
+      ? t("stepUp.adminApiKeyForbidden")
+      : t("stepUp.notEnabled"),
+  );
+  return true;
+}
 
 const emailBroadcastSending = ref(false);
 const emailBroadcastTasksLoading = ref(false);
@@ -806,11 +826,15 @@ async function requestEmailBroadcastConfirmation(): Promise<void> {
   emailBroadcastPreflight.value = null;
   let preflight: EmailBroadcastPreflightResponse;
   try {
-    preflight = await adminAPI.settings.preflightEmailBroadcast(payload);
-  } catch (error: unknown) {
-    appStore.showError(
-      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.preflightFailed")),
+    preflight = await emailBroadcastStepUp.run(() =>
+      adminAPI.settings.preflightEmailBroadcast(payload),
     );
+  } catch (error: unknown) {
+    if (!handleEmailBroadcastStepUpError(error)) {
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.settings.emailBroadcast.preflightFailed")),
+      );
+    }
     emailBroadcastPreflighting.value = false;
     return;
   }
@@ -863,7 +887,9 @@ function cancelEmailBroadcastConfirm(): void {
 async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<void> {
   emailBroadcastSending.value = true;
   try {
-    const result = await adminAPI.settings.sendEmailBroadcast(payload);
+    const result = await emailBroadcastStepUp.run(() =>
+      adminAPI.settings.sendEmailBroadcast(payload),
+    );
     await loadEmailBroadcastTasks();
     await clearEmailBroadcastDraft(false);
     scheduleEmailBroadcastStatusRefresh();
@@ -874,9 +900,11 @@ async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<v
       }),
     );
   } catch (error: unknown) {
-    appStore.showError(
-      extractApiErrorMessage(error, t("admin.settings.emailBroadcast.failed")),
-    );
+    if (!handleEmailBroadcastStepUpError(error)) {
+      appStore.showError(
+        extractApiErrorMessage(error, t("admin.settings.emailBroadcast.failed")),
+      );
+    }
   } finally {
     emailBroadcastSending.value = false;
   }

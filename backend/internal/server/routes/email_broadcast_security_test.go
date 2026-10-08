@@ -30,7 +30,6 @@ func TestEmailBroadcastSensitiveRoutesRequireStepUp(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts"},
 		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts/preflight"},
-		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts/preview"},
 		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts/batch-1/cancel"},
 		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts/batch-1/resume"},
 		{http.MethodGet, "/api/v1/admin/settings/email-broadcasts/batch-1/recipients"},
@@ -47,4 +46,22 @@ func TestEmailBroadcastSensitiveRoutesRequireStepUp(t *testing.T) {
 			require.Equal(t, before+1, stepUpCalls)
 		})
 	}
+}
+
+func TestEmailBroadcastPreviewDoesNotRequireStepUp(t *testing.T) {
+	router := gin.New()
+	stepUpCalls := 0
+	stepUp := servermiddleware.StepUpAuthMiddleware(func(c *gin.Context) {
+		stepUpCalls++
+		c.AbortWithStatus(http.StatusTeapot)
+	})
+	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{Setting: adminhandler.NewSettingHandler(nil, nil, nil, nil, nil, nil, nil)}}
+	registerSettingsRoutes(router.Group("/api/v1/admin"), handlers, stepUp)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/settings/email-broadcasts/preview", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.Zero(t, stepUpCalls)
 }
