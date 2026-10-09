@@ -36,6 +36,9 @@ func TestEmailBroadcastSensitiveRoutesRequireStepUp(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/settings/email-broadcasts/draft"},
 		{http.MethodPut, "/api/v1/admin/settings/email-broadcasts/draft"},
 		{http.MethodDelete, "/api/v1/admin/settings/email-broadcasts/draft"},
+		{http.MethodPost, "/api/v1/admin/settings/email-broadcasts/templates"},
+		{http.MethodPut, "/api/v1/admin/settings/email-broadcasts/templates/template-1"},
+		{http.MethodDelete, "/api/v1/admin/settings/email-broadcasts/templates/template-1"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			before := stepUpCalls

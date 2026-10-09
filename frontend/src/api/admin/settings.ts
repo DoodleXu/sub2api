@@ -1588,6 +1588,43 @@ export interface SendEmailBroadcastRequest {
   rpm: number;
 }
 
+export interface EmailBroadcastContent {
+  locale: string;
+  message_title: string;
+  message_html: string;
+  action_label: string;
+  action_url: string;
+}
+
+export interface EmailBroadcastTemplate extends EmailBroadcastContent {
+  id: string;
+  name: string;
+  updated_at: string;
+}
+
+export async function listEmailBroadcastTemplates(): Promise<EmailBroadcastTemplate[]> {
+  const { data } = await apiClient.get<EmailBroadcastTemplate[]>("/admin/settings/email-broadcasts/templates");
+  return data;
+}
+
+export async function saveEmailBroadcastTemplate(
+  content: EmailBroadcastContent & { name: string }, id?: string,
+): Promise<EmailBroadcastTemplate> {
+  const { data } = id
+    ? await apiClient.put<EmailBroadcastTemplate>(`/admin/settings/email-broadcasts/templates/${encodeURIComponent(id)}`, content)
+    : await apiClient.post<EmailBroadcastTemplate>("/admin/settings/email-broadcasts/templates", content);
+  return data;
+}
+
+export async function deleteEmailBroadcastTemplate(id: string): Promise<void> {
+  await apiClient.delete(`/admin/settings/email-broadcasts/templates/${encodeURIComponent(id)}`);
+}
+
+export async function previewEmailBroadcastContent(content: EmailBroadcastContent): Promise<{ subject: string; html: string }> {
+  const { data } = await apiClient.post<{ subject: string; html: string }>("/admin/settings/email-broadcasts/content-preview", content);
+  return data;
+}
+
 export interface EmailBroadcastPreflightResponse {
   target_count: number;
   valid_count: number;
@@ -2191,6 +2228,10 @@ export const settingsAPI = {
   preflightEmailBroadcast,
   previewEmailBroadcastRecipients,
   getEmailBroadcastDraft,
+  listEmailBroadcastTemplates,
+  saveEmailBroadcastTemplate,
+  deleteEmailBroadcastTemplate,
+  previewEmailBroadcastContent,
   saveEmailBroadcastDraft,
   deleteEmailBroadcastDraft,
   getEmailBroadcastStatus,

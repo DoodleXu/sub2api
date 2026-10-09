@@ -196,6 +196,8 @@
             </div>
           </div>
 
+          <EmailBroadcastTemplatePanel :content="emailBroadcastContent" @apply="applyEmailBroadcastContent" @validity="emailBroadcastContentValid = $event" />
+
           <div>
             <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
               {{ t("admin.settings.emailBroadcast.messageTitle") }}
@@ -527,6 +529,8 @@ import type {
   SendEmailBroadcastRequest,
 } from "@/api/admin/settings";
 import AppLayout from "@/components/layout/AppLayout.vue";
+import EmailBroadcastTemplatePanel from "@/components/admin/EmailBroadcastTemplatePanel.vue";
+import type { EmailBroadcastContent } from "@/api/admin/settings";
 import Select from "@/components/common/Select.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import Pagination from "@/components/common/Pagination.vue";
@@ -606,6 +610,19 @@ function createDefaultEmailBroadcastForm(): EmailBroadcastFormState {
 }
 
 const emailBroadcastForm = reactive<EmailBroadcastFormState>(createDefaultEmailBroadcastForm());
+const emailBroadcastContentValid = ref(true);
+
+const emailBroadcastContent = computed<EmailBroadcastContent>(() => ({
+  locale: emailBroadcastForm.locale,
+  message_title: emailBroadcastForm.message_title,
+  message_html: emailBroadcastForm.message_html,
+  action_label: emailBroadcastForm.action_label,
+  action_url: emailBroadcastForm.action_url,
+}));
+
+function applyEmailBroadcastContent(content: EmailBroadcastContent) {
+  Object.assign(emailBroadcastForm, content);
+}
 
 const emailBroadcastConfirmPhrase = "SEND";
 const emailBroadcastConfirmDialog = reactive<{
@@ -656,6 +673,7 @@ const emailBroadcastEstimatedInterval = computed(() => {
 
 const canSendEmailBroadcast = computed(
   () =>
+    emailBroadcastContentValid.value &&
     emailBroadcastForm.message_title.trim() !== "" &&
     emailBroadcastForm.message_html.trim() !== "" &&
     !emailBroadcastDraftClearing.value &&
@@ -664,6 +682,7 @@ const canSendEmailBroadcast = computed(
 
 const canConfirmEmailBroadcast = computed(
   () =>
+    emailBroadcastContentValid.value &&
     !emailBroadcastPreflighting.value &&
     emailBroadcastPreflight.value !== null &&
     (!emailBroadcastConfirmDialog.requiresPhrase ||
@@ -806,7 +825,14 @@ function scheduleEmailBroadcastPreview(): void {
   }, 300);
 }
 
+function validateEmailBroadcastContent(): boolean {
+  if (emailBroadcastContentValid.value) return true;
+  appStore.showError(t("admin.settings.emailBroadcast.templates.wechatQrInvalid"));
+  return false;
+}
+
 async function requestEmailBroadcastConfirmation(): Promise<void> {
+  if (!validateEmailBroadcastContent()) return;
   if (!validateEmailBroadcastRPM()) return;
   if (!validateEmailBroadcastBalanceFilter()) return;
   const payload = buildEmailBroadcastPayload();
@@ -860,6 +886,7 @@ async function requestEmailBroadcastConfirmation(): Promise<void> {
 }
 
 async function handleEmailBroadcastConfirm(): Promise<void> {
+  if (!validateEmailBroadcastContent()) return;
   if (
     emailBroadcastConfirmDialog.requiresPhrase &&
     emailBroadcastConfirmDialog.phrase.trim() !== emailBroadcastConfirmPhrase
@@ -885,6 +912,7 @@ function cancelEmailBroadcastConfirm(): void {
 }
 
 async function sendEmailBroadcast(payload: SendEmailBroadcastRequest): Promise<void> {
+  if (!validateEmailBroadcastContent()) return;
   emailBroadcastSending.value = true;
   try {
     const result = await emailBroadcastStepUp.run(() =>

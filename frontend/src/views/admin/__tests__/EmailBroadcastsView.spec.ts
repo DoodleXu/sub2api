@@ -209,12 +209,55 @@ function mountView() {
         Pagination: PaginationStub,
         Icon: true,
         TotpStepUpDialog: true,
+        EmailBroadcastTemplatePanel: true,
       },
     },
   });
 }
 
 describe("EmailBroadcastsView", () => {
+  it("blocks preflight and confirmation while the QR input is invalid", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('input[placeholder="邮件标题"]').setValue("Notice");
+    await wrapper.get('textarea[placeholder="邮件正文"]').setValue("<p>Notice</p>");
+    const panel = wrapper.findComponent({ name: "EmailBroadcastTemplatePanel" });
+    const sendButton = wrapper.findAll("button").find(button => button.text() === "发送")!;
+    panel.vm.$emit("validity", false);
+    await flushPromises();
+    expect(sendButton.attributes("disabled")).toBeDefined();
+    await sendButton.trigger("click");
+    expect(preflightEmailBroadcast).not.toHaveBeenCalled();
+    panel.vm.$emit("validity", true);
+    await flushPromises();
+    await sendButton.trigger("click");
+    await flushPromises();
+    expect(preflightEmailBroadcast).toHaveBeenCalledTimes(1);
+    panel.vm.$emit("validity", false);
+    await flushPromises();
+    wrapper.findComponent(ConfirmDialogStub).vm.$emit("confirm");
+    await flushPromises();
+    expect(sendEmailBroadcast).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith("admin.settings.emailBroadcast.templates.wechatQrInvalid");
+    wrapper.unmount();
+  });
+  it("applies template content without changing the recipient scope or delivery rate", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const scope = wrapper.findAll("select")[0]!.element.value;
+    const rate = wrapper.find('input[type="number"]').element as HTMLInputElement;
+    const rpm = rate.value;
+    wrapper.findComponent({ name: "EmailBroadcastTemplatePanel" }).vm.$emit("apply", {
+      locale: "zh", message_title: "模板标题", message_html: "<p>模板内容</p>",
+      action_label: "查看", action_url: "https://example.com",
+    });
+    await flushPromises();
+    expect(wrapper.findAll("select")[0]!.element.value).toBe(scope);
+    expect(rate.value).toBe(rpm);
+    expect(wrapper.find('input[maxlength="200"]').element.value).toBe("模板标题");
+    wrapper.unmount();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     listEmailBroadcasts.mockResolvedValue({ jobs: [] });
