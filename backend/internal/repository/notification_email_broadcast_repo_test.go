@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -23,6 +24,44 @@ func TestNotificationEmailBroadcastCompleteRecipientRejectsInvalidSourceState(t 
 
 	err = repo.CompleteRecipient(context.Background(), "batch-1", "Person@Example.com", service.NotificationEmailBroadcastRecipientSent, "", "", nil)
 	require.ErrorContains(t, err, "invalid email broadcast recipient transition")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNotificationEmailBroadcastCompleteRecipientIncrementsOnlyFinalState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := &notificationEmailBroadcastRepository{db: db}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM notification_email_broadcast_recipients").
+		WithArgs("batch-1", "person@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(service.NotificationEmailBroadcastRecipientSending))
+	mock.ExpectExec("UPDATE notification_email_broadcast_recipients SET status=\\$3").
+		WithArgs("batch-1", "person@example.com", "uncertain", "delivery_uncertain", "SMTP result unknown", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("(?s)UPDATE notification_email_broadcast_jobs SET.*uncertain_count=uncertain_count\\+CASE").
+		WithArgs("batch-1", "uncertain", "delivery_uncertain").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, repo.CompleteRecipient(context.Background(), "batch-1", "person@example.com", "uncertain", "delivery_uncertain", "SMTP result unknown", nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNotificationEmailBroadcastReserveSendSlotUsesPersistedSchedule(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := &notificationEmailBroadcastRepository{db: db}
+	sendAt := time.Now().UTC().Add(10 * time.Second)
+	mock.ExpectQuery("UPDATE notification_email_broadcast_jobs SET next_send_at=GREATEST").
+		WithArgs("batch-1", "worker-1", int64(2_000_000)).
+		WillReturnRows(sqlmock.NewRows([]string{"next_send_at"}).AddRow(sendAt))
+
+	reserved, err := repo.ReserveSendSlot(context.Background(), "batch-1", "worker-1", 2*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, sendAt, reserved)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

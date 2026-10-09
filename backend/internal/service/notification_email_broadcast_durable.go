@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"net/textproto"
 	"regexp"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ const (
 	notificationEmailBroadcastRetention          = 90 * 24 * time.Hour
 	notificationEmailBroadcastMaxAttempts        = 3
 	notificationEmailBroadcastLastErrorMaxLength = 512
+	notificationEmailBroadcastReadBatchSize      = 100
 )
 
 var notificationEmailAddressPattern = regexp.MustCompile(`(?i)\b[a-z0-9.!#$%&'*+/=?^_` + "{" + `|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b`)
@@ -197,35 +199,39 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "canceled", "broadcast canceled by admin", true)
 		return
 	}
-	targets, err := s.broadcastRepo.ListRunnableRecipients(workerCtx, batchID)
-	if err != nil {
-		_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(err.Error()), true)
-		return
-	}
-	delay := time.Duration(float64(time.Minute) / job.RPM)
-	for index, recipient := range targets {
-		cancel, cancelErr := s.broadcastRepo.CancelRequested(workerCtx, batchID)
-		if cancelErr != nil {
-			if workerCtx.Err() == nil {
-				_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(cancelErr.Error()), true)
+	interval := time.Duration(float64(time.Minute) / job.RPM)
+	afterEmail := ""
+	for {
+		targets, err := s.broadcastRepo.ListRunnableRecipients(workerCtx, batchID, afterEmail, notificationEmailBroadcastReadBatchSize)
+		if err != nil {
+			_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(err.Error()), true)
+			return
+		}
+		if len(targets) == 0 {
+			break
+		}
+		for _, recipient := range targets {
+			cancel, cancelErr := s.broadcastRepo.CancelRequested(workerCtx, batchID)
+			if cancelErr != nil {
+				if workerCtx.Err() == nil {
+					_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "interrupted", sanitizeNotificationEmailBroadcastError(cancelErr.Error()), true)
+				}
+				return
 			}
-			return
-		}
-		if cancel {
-			_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "canceled", "broadcast canceled by admin", true)
-			return
-		}
-		if index > 0 && !notificationEmailBroadcastWait(workerCtx, delay) {
-			return
-		}
-		renewed, renewErr := s.broadcastRepo.RenewLease(workerCtx, batchID, ownerID, leaseTTL)
-		if renewErr != nil || !renewed {
-			cancelWorker()
-			return
-		}
-		if err := s.sendDurableBroadcastRecipient(workerCtx, job, recipient); err != nil {
-			slog.Warn("persist durable email broadcast recipient failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
-			return
+			if cancel {
+				_, _ = s.broadcastRepo.SetJobStateIfOwned(ctx, batchID, ownerID, "canceled", "broadcast canceled by admin", true)
+				return
+			}
+			renewed, renewErr := s.broadcastRepo.RenewLease(workerCtx, batchID, ownerID, leaseTTL)
+			if renewErr != nil || !renewed {
+				cancelWorker()
+				return
+			}
+			if err := s.sendDurableBroadcastRecipient(workerCtx, job, recipient, ownerID, interval); err != nil {
+				slog.Warn("persist durable email broadcast recipient failed", "batch_id", batchID, "recipient_hash", notificationEmailHash(recipient.Email), "error", err)
+				return
+			}
+			afterEmail = recipient.NormalizedEmail
 		}
 	}
 	if err := stopAndCheckHeartbeat(); err != nil {
@@ -242,8 +248,19 @@ func (s *NotificationEmailService) runDurableBroadcastWithLeaseTTL(ctx context.C
 	}
 }
 
-func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Context, job NotificationEmailBroadcastJob, recipient NotificationEmailBroadcastRecipientRecord) error {
+func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Context, job NotificationEmailBroadcastJob, recipient NotificationEmailBroadcastRecipientRecord, owner string, interval time.Duration) error {
 	for {
+		unsubscribed, checkErr := s.IsUnsubscribed(ctx, recipient.Email, NotificationEmailEventAdminBroadcast)
+		if checkErr == nil && !unsubscribed {
+			sendAt, slotErr := s.broadcastRepo.ReserveSendSlot(ctx, job.BatchID, owner, interval)
+			if slotErr != nil {
+				return fmt.Errorf("reserve email broadcast send slot: %w", slotErr)
+			}
+			if waitErr := s.waitForBroadcastSendSlot(ctx, job.BatchID, sendAt); waitErr != nil {
+				return waitErr
+			}
+			unsubscribed, checkErr = s.IsUnsubscribed(ctx, recipient.Email, NotificationEmailEventAdminBroadcast)
+		}
 		attempt, claimed, err := s.broadcastRepo.ClaimRecipient(ctx, job.BatchID, recipient.NormalizedEmail)
 		if err != nil {
 			return fmt.Errorf("claim email broadcast recipient: %w", err)
@@ -251,21 +268,28 @@ func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Con
 		if !claimed {
 			return nil
 		}
-		unsubscribed, err := s.IsUnsubscribed(ctx, recipient.Email, NotificationEmailEventAdminBroadcast)
-		if err == nil && unsubscribed {
+		if checkErr == nil && unsubscribed {
 			if err := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "skipped", "unsubscribed", "unsubscribed", nil); err != nil {
 				return fmt.Errorf("persist skipped email broadcast recipient: %w", err)
 			}
 			return nil
 		}
+		err = checkErr
 		if err == nil {
 			err = s.Send(ctx, NotificationEmailSendInput{
 				Event: NotificationEmailEventAdminBroadcast, Locale: recipient.Locale, RecipientEmail: recipient.Email,
 				RecipientName: recipient.Name, UserID: recipient.UserID, SourceType: "admin_broadcast", SourceID: job.BatchID,
-				Variables:        map[string]string{"message_title": job.MessageTitle, "action_label": job.ActionLabel, "action_url": job.ActionURL},
-				RawHTMLVariables: map[string]string{"message_html": job.MessageHTML, "action_html": notificationEmailBroadcastActionHTML(job.ActionLabel, job.ActionURL)},
-				Headers:          map[string]string{"Message-ID": recipient.MessageID, "X-Sub2API-Broadcast-ID": job.BatchID},
+				ReportSuppression: true,
+				Variables:         map[string]string{"message_title": job.MessageTitle, "action_label": job.ActionLabel, "action_url": job.ActionURL},
+				RawHTMLVariables:  map[string]string{"message_html": job.MessageHTML, "action_html": notificationEmailBroadcastActionHTML(job.ActionLabel, job.ActionURL)},
+				Headers:           map[string]string{"Message-ID": recipient.MessageID, "X-Sub2API-Broadcast-ID": job.BatchID},
 			})
+		}
+		if errors.Is(err, errNotificationEmailSuppressed) {
+			if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "skipped", "unsubscribed", "unsubscribed", nil); persistErr != nil {
+				return fmt.Errorf("persist skipped email broadcast recipient: %w", persistErr)
+			}
+			return nil
 		}
 		if err == nil {
 			accepted := s.nowUTC()
@@ -274,7 +298,13 @@ func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Con
 			}
 			return nil
 		}
-		code, transient := notificationEmailBroadcastClassifyError(err)
+		code, transient, uncertain := notificationEmailBroadcastClassifyError(err)
+		if uncertain {
+			if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "uncertain", code, sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email), nil); persistErr != nil {
+				return fmt.Errorf("persist uncertain email broadcast recipient: %w", persistErr)
+			}
+			return nil
+		}
 		if transient && attempt < notificationEmailBroadcastMaxAttempts {
 			if persistErr := s.broadcastRepo.CompleteRecipient(ctx, job.BatchID, recipient.NormalizedEmail, "retry", code, sanitizeNotificationEmailBroadcastError(err.Error(), recipient.Email), nil); persistErr != nil {
 				return fmt.Errorf("persist retryable email broadcast recipient: %w", persistErr)
@@ -288,6 +318,31 @@ func (s *NotificationEmailService) sendDurableBroadcastRecipient(ctx context.Con
 			return fmt.Errorf("persist failed email broadcast recipient: %w", persistErr)
 		}
 		return nil
+	}
+}
+
+func (s *NotificationEmailService) waitForBroadcastSendSlot(ctx context.Context, batchID string, sendAt time.Time) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cancel, err := s.broadcastRepo.CancelRequested(ctx, batchID)
+		if err != nil {
+			return err
+		}
+		if cancel {
+			return errors.New("email broadcast canceled before SMTP send")
+		}
+		remaining := time.Until(sendAt)
+		if remaining <= 0 {
+			return nil
+		}
+		if remaining > 5*time.Second {
+			remaining = 5 * time.Second
+		}
+		if !notificationEmailBroadcastWait(ctx, remaining) {
+			return ctx.Err()
+		}
 	}
 }
 
@@ -305,23 +360,30 @@ func notificationEmailBroadcastWait(ctx context.Context, delay time.Duration) bo
 	}
 }
 
-func notificationEmailBroadcastClassifyError(err error) (string, bool) {
+func notificationEmailBroadcastClassifyError(err error) (string, bool, bool) {
 	if err == nil {
-		return "", false
+		return "", false, false
 	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{" 550 ", " 551 ", " 552 ", " 553 ", " 554 ", "invalid smtp recipient", "mailbox unavailable"} {
-		if strings.Contains(" "+message+" ", marker) {
-			return "permanent_smtp", false
+	var uncertain notificationEmailUncertainDeliveryError
+	if errors.As(err, &uncertain) {
+		return "delivery_uncertain", false, true
+	}
+	var templateErr notificationEmailTemplateError
+	if errors.As(err, &templateErr) {
+		return "message_template", false, false
+	}
+	var configErr notificationEmailConfigError
+	if errors.As(err, &configErr) {
+		return "smtp_configuration", false, false
+	}
+	var smtpErr *textproto.Error
+	if errors.As(err, &smtpErr) {
+		if smtpErr.Code >= 500 {
+			return "permanent_smtp", false, false
 		}
+		return "transient_smtp", true, false
 	}
-	if strings.Contains(message, "unsubscrib") {
-		return "unsubscribe_check", true
-	}
-	if strings.Contains(message, "auth") || strings.Contains(message, "configuration") {
-		return "smtp_configuration", false
-	}
-	return "transient_delivery", true
+	return "transient_delivery", true, false
 }
 
 func notificationEmailBroadcastStableMessageID(batchID, email string) string {

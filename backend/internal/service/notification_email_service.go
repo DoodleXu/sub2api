@@ -141,17 +141,18 @@ type NotificationEmailPreviewInput struct {
 }
 
 type NotificationEmailSendInput struct {
-	Event            string
-	Locale           string
-	RecipientEmail   string
-	RecipientName    string
-	UserID           int64
-	SourceType       string
-	SourceID         string
-	ReminderKey      string
-	Variables        map[string]string
-	RawHTMLVariables map[string]string
-	Headers          map[string]string
+	Event             string
+	Locale            string
+	RecipientEmail    string
+	RecipientName     string
+	UserID            int64
+	SourceType        string
+	SourceID          string
+	ReminderKey       string
+	Variables         map[string]string
+	RawHTMLVariables  map[string]string
+	Headers           map[string]string
+	ReportSuppression bool
 }
 
 type NotificationEmailBroadcastInput struct {
@@ -277,6 +278,16 @@ func (e notificationEmailConfigError) Unwrap() error {
 type notificationEmailDeliveryError struct {
 	Err error
 }
+
+// The SMTP server may have accepted the message; callers must not retry blindly.
+type notificationEmailUncertainDeliveryError struct {
+	Err error
+}
+
+var errNotificationEmailSuppressed = errors.New("notification email suppressed by unsubscribe preference")
+
+func (e notificationEmailUncertainDeliveryError) Error() string { return e.Err.Error() }
+func (e notificationEmailUncertainDeliveryError) Unwrap() error { return e.Err }
 
 func (e notificationEmailDeliveryError) Error() string {
 	return e.Err.Error()
@@ -512,6 +523,9 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		}
 		if unsubscribed {
 			slog.Info("notification email suppressed by unsubscribe preference", "event", normalizedEvent, "recipient_hash", notificationEmailHash(recipient))
+			if input.ReportSuppression {
+				return errNotificationEmailSuppressed
+			}
 			return nil
 		}
 	}
@@ -552,7 +566,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 	}
 	if deliveryKey != "" {
 		if err := s.settingRepo.Set(ctx, deliveryKey, s.nowUTC().Format(time.RFC3339Nano)); err != nil {
-			return err
+			return notificationEmailUncertainDeliveryError{Err: fmt.Errorf("persist accepted email delivery: %w", err)}
 		}
 	}
 	return nil

@@ -1092,6 +1092,41 @@ func TestNotificationEmailSendDeduplicatesSubscriptionExpiryReminder(t *testing.
 	require.Equal(t, int64(1), smtpServer.messageCount())
 }
 
+func TestNotificationEmailSendMarksAcceptedMailUncertainWhenDeliveryRecordFails(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := newNotificationEmailMemorySettingRepo()
+	smtpServer := startNotificationEmailTestSMTPServer(t)
+	require.NoError(t, baseRepo.SetMultiple(ctx, smtpServer.settings()))
+	input := NotificationEmailSendInput{
+		Event: NotificationEmailEventSubscriptionExpiryReminder, RecipientEmail: "user@example.com",
+		SourceType: "user_subscription", SourceID: "1234567890", ReminderKey: "7d",
+		Variables: map[string]string{"subscription_group": "Codex", "expiry_time": "2026-05-27 12:00", "days_remaining": "7"},
+	}
+	repo := &notificationEmailFailingSetRepo{
+		notificationEmailMemorySettingRepo: baseRepo,
+		failKey:                            notificationEmailDeliveryKey(input.Event, input.SourceType, input.SourceID, input.RecipientEmail, input.ReminderKey),
+	}
+	svc := NewNotificationEmailService(repo, NewEmailService(repo, nil))
+
+	err := svc.Send(ctx, input)
+	var uncertain notificationEmailUncertainDeliveryError
+	require.ErrorAs(t, err, &uncertain)
+	require.Equal(t, int64(1), smtpServer.messageCount())
+}
+
+func TestNotificationEmailSendReportsSuppressionForBroadcast(t *testing.T) {
+	ctx := context.Background()
+	repo := newNotificationEmailMemorySettingRepo()
+	email := "user@example.com"
+	require.NoError(t, repo.Set(ctx, notificationEmailPreferenceKey(NotificationEmailEventAdminBroadcast, email), "unsubscribed"))
+	svc := NewNotificationEmailService(repo, nil)
+
+	err := svc.Send(ctx, NotificationEmailSendInput{
+		Event: NotificationEmailEventAdminBroadcast, RecipientEmail: email, ReportSuppression: true,
+	})
+	require.ErrorIs(t, err, errNotificationEmailSuppressed)
+}
+
 func TestNotificationEmailSendOnlyAddsUnsubscribeHeadersToOptionalEvents(t *testing.T) {
 	ctx := context.Background()
 	repo := newNotificationEmailMemorySettingRepo()

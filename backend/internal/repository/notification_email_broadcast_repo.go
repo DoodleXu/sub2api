@@ -47,25 +47,42 @@ func (r *notificationEmailBroadcastRepository) Create(ctx context.Context, job s
 		}
 		return fmt.Errorf("insert email broadcast job: %w", err)
 	}
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO notification_email_broadcast_recipients
-		(batch_id,email,normalized_email,user_id,recipient_name,locale,status,message_id)
-		VALUES ($1,$2,$3,NULLIF($4,0),NULLIF($5,''),$6,$7,$8)
-	`)
+	stmt, err := tx.PrepareContext(ctx, pq.CopyIn("notification_email_broadcast_recipients",
+		"batch_id", "email", "normalized_email", "user_id", "recipient_name", "locale", "status", "message_id"))
 	if err != nil {
 		return fmt.Errorf("prepare email broadcast recipients: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, recipient := range recipients {
-		if _, err := stmt.ExecContext(ctx, job.BatchID, recipient.Email, recipient.NormalizedEmail, recipient.UserID, recipient.Name,
+		if _, err := stmt.ExecContext(ctx, job.BatchID, recipient.Email, recipient.NormalizedEmail, nullableBroadcastUserID(recipient.UserID), nullableBroadcastName(recipient.Name),
 			recipient.Locale, recipient.Status, recipient.MessageID); err != nil {
 			return fmt.Errorf("insert email broadcast recipient: %w", err)
 		}
+	}
+	if _, err := stmt.ExecContext(ctx); err != nil {
+		return fmt.Errorf("flush email broadcast recipients: %w", err)
+	}
+	if err := stmt.Close(); err != nil {
+		return fmt.Errorf("close email broadcast recipient copy: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit email broadcast create: %w", err)
 	}
 	return nil
+}
+
+func nullableBroadcastUserID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
+func nullableBroadcastName(name string) any {
+	if name == "" {
+		return nil
+	}
+	return name
 }
 
 func (r *notificationEmailBroadcastRepository) Get(ctx context.Context, batchID string) (service.NotificationEmailBroadcastJob, error) {
@@ -184,11 +201,14 @@ func (r *notificationEmailBroadcastRepository) ListRecipients(ctx context.Contex
 	return page, rows.Err()
 }
 
-func (r *notificationEmailBroadcastRepository) ListRunnableRecipients(ctx context.Context, batchID string) ([]service.NotificationEmailBroadcastRecipientRecord, error) {
+func (r *notificationEmailBroadcastRepository) ListRunnableRecipients(ctx context.Context, batchID, afterEmail string, limit int) ([]service.NotificationEmailBroadcastRecipientRecord, error) {
 	if err := r.unavailable(); err != nil {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT batch_id,email,normalized_email,COALESCE(user_id,0),COALESCE(recipient_name,''),locale,status,attempt_count,COALESCE(error_code,''),COALESCE(last_error,''),message_id,accepted_at,updated_at FROM notification_email_broadcast_recipients WHERE batch_id=$1 AND status IN ('pending','retry') ORDER BY normalized_email`, batchID)
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT batch_id,email,normalized_email,COALESCE(user_id,0),COALESCE(recipient_name,''),locale,status,attempt_count,COALESCE(error_code,''),COALESCE(last_error,''),message_id,accepted_at,updated_at FROM notification_email_broadcast_recipients WHERE batch_id=$1 AND normalized_email>$2 AND status IN ('pending','retry') ORDER BY normalized_email LIMIT $3`, batchID, afterEmail, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +227,18 @@ func (r *notificationEmailBroadcastRepository) ListRunnableRecipients(ctx contex
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (r *notificationEmailBroadcastRepository) ReserveSendSlot(ctx context.Context, batchID, owner string, interval time.Duration) (time.Time, error) {
+	if err := r.unavailable(); err != nil {
+		return time.Time{}, err
+	}
+	var sendAt time.Time
+	err := r.db.QueryRowContext(ctx, `UPDATE notification_email_broadcast_jobs SET next_send_at=GREATEST(NOW(),COALESCE(next_send_at,NOW()))+($3 * INTERVAL '1 microsecond'),updated_at=NOW() WHERE batch_id=$1 AND lease_owner=$2 AND lease_expires_at>=NOW() AND status='running' AND cancel_requested=FALSE RETURNING next_send_at-($3 * INTERVAL '1 microsecond')`, batchID, owner, interval.Microseconds()).Scan(&sendAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, errors.New("email broadcast send slot unavailable")
+	}
+	return sendAt, err
 }
 
 func (r *notificationEmailBroadcastRepository) AcquireLease(ctx context.Context, batchID, owner string, ttl time.Duration) (bool, error) {
@@ -284,7 +316,8 @@ func (r *notificationEmailBroadcastRepository) CompleteRecipient(ctx context.Con
 	case service.NotificationEmailBroadcastRecipientSent,
 		service.NotificationEmailBroadcastRecipientSkipped,
 		service.NotificationEmailBroadcastRecipientRetry,
-		service.NotificationEmailBroadcastRecipientFailed:
+		service.NotificationEmailBroadcastRecipientFailed,
+		service.NotificationEmailBroadcastRecipientUncertain:
 	default:
 		return fmt.Errorf("invalid email broadcast recipient status %q", status)
 	}
@@ -292,24 +325,13 @@ func (r *notificationEmailBroadcastRepository) CompleteRecipient(ctx context.Con
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE notification_email_broadcast_jobs j SET
-			sent_count = counts.sent_count,
-			skipped_count = counts.skipped_count,
-			unsubscribed_count = counts.unsubscribed_count,
-			failure_count = counts.failure_count,
-			uncertain_count = counts.uncertain_count,
-			updated_at = NOW()
-		FROM (
-			SELECT
-				COUNT(*) FILTER (WHERE status='sent')::INTEGER AS sent_count,
-				COUNT(*) FILTER (WHERE status='skipped')::INTEGER AS skipped_count,
-				COUNT(*) FILTER (WHERE status='skipped' AND error_code='unsubscribed')::INTEGER AS unsubscribed_count,
-				COUNT(*) FILTER (WHERE status='failed')::INTEGER AS failure_count,
-				COUNT(*) FILTER (WHERE status='uncertain')::INTEGER AS uncertain_count
-			FROM notification_email_broadcast_recipients WHERE batch_id=$1
-		) counts WHERE j.batch_id=$1
-	`, batchID)
+	_, err = tx.ExecContext(ctx, `UPDATE notification_email_broadcast_jobs SET
+		sent_count=sent_count+CASE WHEN $2='sent' THEN 1 ELSE 0 END,
+		skipped_count=skipped_count+CASE WHEN $2='skipped' THEN 1 ELSE 0 END,
+		unsubscribed_count=unsubscribed_count+CASE WHEN $2='skipped' AND $3='unsubscribed' THEN 1 ELSE 0 END,
+		failure_count=failure_count+CASE WHEN $2='failed' THEN 1 ELSE 0 END,
+		uncertain_count=uncertain_count+CASE WHEN $2='uncertain' THEN 1 ELSE 0 END,
+		updated_at=NOW() WHERE batch_id=$1`, batchID, status, errorCode)
 	if err != nil {
 		return err
 	}

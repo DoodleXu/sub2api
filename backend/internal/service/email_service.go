@@ -254,10 +254,10 @@ func (s *EmailService) SendEmailWithConfigAndHeadersContext(ctx context.Context,
 		return fmt.Errorf("smtp data: %w", err)
 	}
 	if _, err = w.Write(message.data); err != nil {
-		return fmt.Errorf("write msg: %w", err)
+		return notificationEmailUncertainDeliveryError{Err: fmt.Errorf("write msg: %w", err)}
 	}
 	if err = w.Close(); err != nil {
-		return fmt.Errorf("close writer: %w", err)
+		return notificationEmailUncertainDeliveryError{Err: fmt.Errorf("close writer: %w", err)}
 	}
 	// DATA close 已表示服务器接受邮件；部分服务器的 QUIT 响应不标准，不影响发送结果。
 	_ = client.Quit()

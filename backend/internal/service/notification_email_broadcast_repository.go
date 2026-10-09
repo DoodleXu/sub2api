@@ -73,7 +73,8 @@ type NotificationEmailBroadcastRepository interface {
 	Get(ctx context.Context, batchID string) (NotificationEmailBroadcastJob, error)
 	List(ctx context.Context, limit, offset int) ([]NotificationEmailBroadcastJob, int, error)
 	ListRecipients(ctx context.Context, batchID, status string, limit, offset int) (NotificationEmailBroadcastRecipientPage, error)
-	ListRunnableRecipients(ctx context.Context, batchID string) ([]NotificationEmailBroadcastRecipientRecord, error)
+	ListRunnableRecipients(ctx context.Context, batchID, afterEmail string, limit int) ([]NotificationEmailBroadcastRecipientRecord, error)
+	ReserveSendSlot(ctx context.Context, batchID, owner string, interval time.Duration) (time.Time, error)
 	AcquireLease(ctx context.Context, batchID, owner string, ttl time.Duration) (bool, error)
 	RenewLease(ctx context.Context, batchID, owner string, ttl time.Duration) (bool, error)
 	ReleaseLease(ctx context.Context, batchID, owner string) error

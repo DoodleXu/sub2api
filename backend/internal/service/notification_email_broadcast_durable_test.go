@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/textproto"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ type durableBroadcastRepositoryFailureStub struct {
 	renewCalls     int
 	failRenewAfter int
 	waitForCancel  bool
+	claimCount     int
 }
 
 type durableBroadcastRecipientPageStub struct {
@@ -47,8 +49,15 @@ func (r *durableBroadcastRepositoryFailureStub) Get(context.Context, string) (No
 	return r.job, nil
 }
 
-func (r *durableBroadcastRepositoryFailureStub) ListRunnableRecipients(context.Context, string) ([]NotificationEmailBroadcastRecipientRecord, error) {
+func (r *durableBroadcastRepositoryFailureStub) ListRunnableRecipients(_ context.Context, _ string, afterEmail string, _ int) ([]NotificationEmailBroadcastRecipientRecord, error) {
+	if afterEmail != "" {
+		return nil, nil
+	}
 	return []NotificationEmailBroadcastRecipientRecord{r.recipient}, nil
+}
+
+func (r *durableBroadcastRepositoryFailureStub) ReserveSendSlot(context.Context, string, string, time.Duration) (time.Time, error) {
+	return time.Now(), nil
 }
 
 func (r *durableBroadcastRepositoryFailureStub) CancelRequested(context.Context, string) (bool, error) {
@@ -64,6 +73,7 @@ func (r *durableBroadcastRepositoryFailureStub) RenewLease(context.Context, stri
 }
 
 func (r *durableBroadcastRepositoryFailureStub) ClaimRecipient(context.Context, string, string) (int, bool, error) {
+	r.claimCount++
 	return 1, true, nil
 }
 
@@ -162,4 +172,43 @@ func TestResolveBroadcastRecipientsDeduplicatesMailboxDisplayFormats(t *testing.
 	require.NoError(t, err)
 	require.Len(t, recipients, 1)
 	require.Equal(t, "person@example.test", recipients[0].Email)
+}
+
+func TestBroadcastClassifiesUncertainAndTypedErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		code      string
+		retry     bool
+		uncertain bool
+	}{
+		{"accepted_but_not_recorded", notificationEmailUncertainDeliveryError{Err: errors.New("database unavailable")}, "delivery_uncertain", false, true},
+		{"template", notificationEmailTemplateErr(errors.New("bad template")), "message_template", false, false},
+		{"config", notificationEmailConfigErr(errors.New("missing SMTP")), "smtp_configuration", false, false},
+		{"temporary_smtp", notificationEmailDeliveryErr(&textproto.Error{Code: 421, Msg: "try later"}), "transient_smtp", true, false},
+		{"permanent_smtp", notificationEmailDeliveryErr(&textproto.Error{Code: 550, Msg: "no mailbox"}), "permanent_smtp", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, retry, uncertain := notificationEmailBroadcastClassifyError(tt.err)
+			require.Equal(t, tt.code, code)
+			require.Equal(t, tt.retry, retry)
+			require.Equal(t, tt.uncertain, uncertain)
+		})
+	}
+}
+
+func TestBroadcastDoesNotClaimRecipientBeforeSendSlotIsReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	repo := &durableBroadcastRepositoryFailureStub{}
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	svc.SetBroadcastRepository(repo)
+
+	err := svc.sendDurableBroadcastRecipient(ctx,
+		NotificationEmailBroadcastJob{BatchID: "batch-1"},
+		NotificationEmailBroadcastRecipientRecord{Email: "person@example.com", NormalizedEmail: "person@example.com"},
+		"worker-1", time.Minute)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, repo.claimCount)
 }
