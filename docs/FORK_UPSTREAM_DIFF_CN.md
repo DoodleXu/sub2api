@@ -1258,3 +1258,4 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 ### 2026-10-09 发布安全基线补充
 
 - 为修复发布安全扫描确认的 Go 标准库与 HTTP/2 可达漏洞，构建基线升级到 Go 1.27.2，`golang.org/x/net` 升级到 v0.60.0；CI、Release、安全扫描版本断言与三个 Dockerfile 同步更新。同步上游时必须保留该安全版本下限。
+- Go 1.27.2 导出数据格式需要 `golang.org/x/tools v0.50.0` 和 `golangci-lint v2.14`，保留 Ent schema 加载与 lint 检查，禁止跳过兼容性失败。
