@@ -8,12 +8,34 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
+	"github.com/stretchr/testify/require"
 )
 
 // Minimal UsageLogRepository stub for batch usage tests (HEAD lacks geminiUsageLogRepoStub).
 type usageBatchLogRepoStub struct{}
 
 var _ UsageLogRepository = (*usageBatchLogRepoStub)(nil)
+
+type sub2APIActualCostUsageRepo struct {
+	usageBatchLogRepoStub
+	stats *usagestats.AccountStats
+}
+
+func (r *sub2APIActualCostUsageRepo) GetAccountWindowStats(context.Context, int64, time.Time) (*usagestats.AccountStats, error) {
+	return r.stats, nil
+}
+
+func (r *sub2APIActualCostUsageRepo) GetAccountTodayStats(context.Context, int64) (*usagestats.AccountStats, error) {
+	return r.stats, nil
+}
+
+func (r *sub2APIActualCostUsageRepo) GetAccountWindowStatsBatch(_ context.Context, accountIDs []int64, _ time.Time) (map[int64]*usagestats.AccountStats, error) {
+	result := make(map[int64]*usagestats.AccountStats, len(accountIDs))
+	for _, accountID := range accountIDs {
+		result[accountID] = r.stats
+	}
+	return result, nil
+}
 
 func (r *usageBatchLogRepoStub) Create(context.Context, *UsageLog) (bool, error) {
 	return false, nil
@@ -188,6 +210,39 @@ func TestAccountUsageService_GetUsageBatch_BestEffortByAccount(t *testing.T) {
 	if !strings.Contains(strings.ToLower(errorsByAccount[7003]), "does not support usage query") {
 		t.Fatalf("expected API key account error to be preserved, got %q", errorsByAccount[7003])
 	}
+}
+
+func TestAccountUsageService_TodayStatsUsesSub2APIActualCostDirectly(t *testing.T) {
+	const accountID int64 = 7101
+	account := Account{
+		ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Extra: map[string]any{
+			UpstreamBillingProbeExtraKey: map[string]any{
+				"status": UpstreamBillingProbeStatusOK,
+				"data": map[string]any{
+					"source":      upstreamBillingProbeSub2APIUsageSource,
+					"actual_cost": 0.728340536,
+				},
+			},
+		},
+	}
+	usageRepo := &sub2APIActualCostUsageRepo{stats: &usagestats.AccountStats{
+		Cost: 3.64798, StandardCost: 3.64798, UserCost: 1.25,
+	}}
+	svc := &AccountUsageService{
+		accountRepo:  &stubOpenAIAccountRepo{accounts: []Account{account}},
+		usageLogRepo: usageRepo,
+	}
+
+	single, err := svc.GetTodayStats(context.Background(), accountID)
+	require.NoError(t, err)
+	require.Equal(t, 0.728340536, single.Cost)
+	require.Equal(t, 3.64798, single.StandardCost)
+	require.Equal(t, 1.25, single.UserCost)
+
+	batch, err := svc.GetTodayStatsBatch(context.Background(), []int64{accountID})
+	require.NoError(t, err)
+	require.Equal(t, 0.728340536, batch[accountID].Cost)
 }
 
 // Model ClearError's persisted effect so this regression catches both the write

@@ -1464,13 +1464,19 @@ func (s *AccountUsageService) GetTodayStats(ctx context.Context, accountID int64
 		return nil, fmt.Errorf("get today stats failed: %w", err)
 	}
 
-	return &WindowStats{
+	result := &WindowStats{
 		Requests:     stats.Requests,
 		Tokens:       stats.Tokens,
 		Cost:         stats.Cost,
 		StandardCost: stats.StandardCost,
 		UserCost:     stats.UserCost,
-	}, nil
+	}
+	if s.accountRepo != nil {
+		if account, accountErr := s.accountRepo.GetByID(ctx, accountID); accountErr == nil {
+			applySub2APIUpstreamActualCost(result, account)
+		}
+	}
+	return result, nil
 }
 
 // GetTodayStatsBatch 批量获取账号今日统计，优先走批量 SQL，失败时回退单账号查询。
@@ -1500,6 +1506,7 @@ func (s *AccountUsageService) GetTodayStatsBatch(ctx context.Context, accountIDs
 			for _, accountID := range uniqueIDs {
 				result[accountID] = windowStatsFromAccountStats(statsByAccount[accountID])
 			}
+			s.applySub2APIUpstreamActualCosts(ctx, uniqueIDs, result)
 			return result, nil
 		}
 	}
@@ -1529,7 +1536,37 @@ func (s *AccountUsageService) GetTodayStatsBatch(ctx context.Context, accountIDs
 			result[accountID] = &WindowStats{}
 		}
 	}
+	s.applySub2APIUpstreamActualCosts(ctx, uniqueIDs, result)
 	return result, nil
+}
+
+func (s *AccountUsageService) applySub2APIUpstreamActualCosts(ctx context.Context, accountIDs []int64, stats map[int64]*WindowStats) {
+	if s == nil || s.accountRepo == nil || len(accountIDs) == 0 {
+		return
+	}
+	accounts, err := s.accountRepo.GetByIDs(ctx, accountIDs)
+	if err != nil {
+		return
+	}
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		applySub2APIUpstreamActualCost(stats[account.ID], account)
+	}
+}
+
+func applySub2APIUpstreamActualCost(stats *WindowStats, account *Account) {
+	if stats == nil || account == nil || account.Type != AccountTypeAPIKey {
+		return
+	}
+	snapshot := decodeUpstreamBillingProbeSnapshot(account.Extra)
+	if snapshot == nil {
+		return
+	}
+	if actualCost, ok := upstreamBillingActualCost(snapshot.Data); ok {
+		stats.Cost = actualCost
+	}
 }
 
 func windowStatsFromAccountStats(stats *usagestats.AccountStats) *WindowStats {

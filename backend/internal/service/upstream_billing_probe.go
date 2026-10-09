@@ -99,6 +99,7 @@ const (
 
 const (
 	upstreamBillingProbeNewAPISource           = "newapi_usage_log"
+	upstreamBillingProbeSub2APIUsageSource     = "sub2api_usage"
 	upstreamBillingProbeNewAPIUnobservedReason = "newapi_billing_unobserved"
 	upstreamBillingProbeNewAPIConsumeLogType   = 2
 )
@@ -207,6 +208,14 @@ type upstreamBillingProbeResponse struct {
 	EffectiveRateMultiplier *float64 `json:"effective_rate_multiplier"`
 	Timezone                *string  `json:"timezone"`
 	ObservedAt              string   `json:"observed_at"`
+}
+
+type sub2APIUsageResponse struct {
+	Usage struct {
+		Today struct {
+			ActualCost *float64 `json:"actual_cost"`
+		} `json:"today"`
+	} `json:"usage"`
 }
 
 type newAPIUpstreamBillingLogResponse struct {
@@ -755,6 +764,15 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 	if err != nil {
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, resp.StatusCode, "invalid_response", retryAfter(resp.Header, now))
 	}
+	actualCost, usageStatus, usageErr := s.probeSub2APIUsageActualCost(
+		ctx, account, normalizedBaseURL, apiKey, proxyURL, tlsProfile,
+	)
+	if usageErr != nil {
+		return s.persistProbeFailure(ctx, account, intervalMinutes, now, usageStatus, "invalid_usage_response", 0)
+	}
+	data["source"] = upstreamBillingProbeSub2APIUsageSource
+	data["usage_scope"] = "today"
+	data["actual_cost"] = actualCost
 	snapshot := &UpstreamBillingProbeSnapshot{
 		Status:        UpstreamBillingProbeStatusOK,
 		Data:          data,
@@ -798,6 +816,53 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		)
 	}
 	return snapshot, nil
+}
+
+func (s *UpstreamBillingProbeService) probeSub2APIUsageActualCost(
+	ctx context.Context,
+	account *Account,
+	baseURL string,
+	apiKey string,
+	proxyURL string,
+	tlsProfile *tlsfingerprint.Profile,
+) (float64, int, error) {
+	probeURL := buildOpenAIEndpointURL(baseURL, "/v1/usage")
+	probeCtx, cancel := context.WithTimeout(ctx, upstreamBillingProbeRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, bytes.NewReader(nil))
+	if err != nil {
+		return 0, 0, err
+	}
+	profile := HTTPUpstreamProfileDefault
+	if account.Platform == PlatformOpenAI {
+		profile = HTTPUpstreamProfileOpenAI
+	}
+	reqCtx := WithHTTPUpstreamProfile(req.Context(), profile)
+	req = req.WithContext(WithHTTPUpstreamRedirectsDisabled(reqCtx))
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	account.ApplyHeaderOverrides(req.Header)
+
+	resp, err := s.accountTestService.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+	if err != nil {
+		return 0, 0, err
+	}
+	if resp == nil || resp.Body == nil {
+		return 0, 0, fmt.Errorf("empty usage response")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamBillingProbeMaxBodyBytes+1))
+	if err != nil {
+		return 0, resp.StatusCode, err
+	}
+	if len(body) > upstreamBillingProbeMaxBodyBytes {
+		return 0, resp.StatusCode, fmt.Errorf("usage response too large")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, resp.StatusCode, fmt.Errorf("usage response status %d", resp.StatusCode)
+	}
+	actualCost, err := parseSub2APIUsageActualCost(body)
+	return actualCost, resp.StatusCode, err
 }
 
 func (s *UpstreamBillingProbeService) probeNewAPIUsageLog(
@@ -1055,6 +1120,32 @@ func parseUpstreamBillingProbeResponse(body []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("inconsistent effective billing multiplier")
 	}
 	return data, nil
+}
+
+func parseSub2APIUsageActualCost(body []byte) (float64, error) {
+	var response sub2APIUsageResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return 0, err
+	}
+	if response.Usage.Today.ActualCost == nil {
+		return 0, fmt.Errorf("missing usage.today.actual_cost")
+	}
+	actualCost := *response.Usage.Today.ActualCost
+	if actualCost < 0 || math.IsNaN(actualCost) || math.IsInf(actualCost, 0) {
+		return 0, fmt.Errorf("invalid usage.today.actual_cost")
+	}
+	return actualCost, nil
+}
+
+func upstreamBillingActualCost(data map[string]any) (float64, bool) {
+	if source, _ := data["source"].(string); source != upstreamBillingProbeSub2APIUsageSource {
+		return 0, false
+	}
+	actualCost, ok := resolveAccountExtraNumber(data, "actual_cost")
+	if !ok || actualCost < 0 || math.IsNaN(actualCost) || math.IsInf(actualCost, 0) {
+		return 0, false
+	}
+	return actualCost, true
 }
 
 func parseNewAPIUpstreamBillingLogResponse(body []byte, now time.Time) (map[string]any, time.Time, error) {
