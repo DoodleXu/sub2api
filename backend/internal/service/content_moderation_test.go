@@ -1916,7 +1916,15 @@ func TestContentModerationCheck_UsesCachedForcedWhitelistWhenAdminLookupFails(t 
 		nil,
 		nil)
 
+	// 构造函数启动的 worker 可能已加载首次快照；在刷新锁内设置陈旧缓存并
+	// 清除快照，确保本测试验证查询失败后的缓存回退，而不依赖 goroutine 顺序。
+	svc.runtimeRefreshMu.Lock()
 	svc.setCachedForcedWhitelistUserIDs([]int64{7})
+	svc.forcedWhitelistMu.Lock()
+	svc.forcedWhitelistLoadedAt = time.Now().Add(-2 * contentModerationForcedWhitelistCacheTTL)
+	svc.forcedWhitelistMu.Unlock()
+	svc.runtimeSnapshot.Store(nil)
+	svc.runtimeRefreshMu.Unlock()
 
 	adminDecision, err := svc.Check(context.Background(), ContentModerationCheckInput{
 		UserID:   7,
