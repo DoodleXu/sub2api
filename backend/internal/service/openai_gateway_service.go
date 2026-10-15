@@ -3389,9 +3389,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	startTime := time.Now()
 	canonicalImageIntentBody := body
 	lineageGroupID := getOpenAIGroupIDFromContext(c)
-	lineageSessionHash := s.openAIWSLineageSessionHashFromContext(c, body)
-	if invalid := s.sessionInvalidEncryptedContentDigests(lineageGroupID, lineageSessionHash); len(invalid) > 0 {
-		body, _ = s.stripSessionInvalidEncryptedContentLogged(body, invalid, "http_invalid_encrypted_content_strip", account.ID, 0)
+	lineageEntryBody := body
+	lineageSessionHash := ""
+	// 常规请求没有失效密文记录时，不重复解析并哈希整份会话内容。
+	// 首次恢复时仍从进场报文取键，避免兼容改写后与下一轮请求的键漂移。
+	if store := s.getOpenAIWSStateStore(); store != nil && store.HasAnySessionInvalidEncryptedContent() {
+		lineageSessionHash = s.openAIWSLineageSessionHashFromContext(c, lineageEntryBody)
+		if invalid := store.GetSessionInvalidEncryptedContentDigests(lineageGroupID, lineageSessionHash); len(invalid) > 0 {
+			body, _ = s.stripSessionInvalidEncryptedContentLogged(body, invalid, "http_invalid_encrypted_content_strip", account.ID, 0)
+		}
 	}
 
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
@@ -4407,6 +4413,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				}
 				invalidDigests := collectOpenAIEncryptedContentDigestsRaw(body)
 				if trimOpenAIEncryptedReasoningItems(decoded) {
+					if lineageSessionHash == "" {
+						lineageSessionHash = s.openAIWSLineageSessionHashFromContext(c, lineageEntryBody)
+					}
 					s.markOpenAIWSInvalidEncryptedContentLineage(lineageGroupID, lineageSessionHash, invalidDigests)
 					body, err = marshalOpenAIUpstreamJSON(decoded)
 					if err != nil {

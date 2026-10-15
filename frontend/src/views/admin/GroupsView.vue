@@ -4554,9 +4554,11 @@ import {
   apiIntervalsToForm,
   createDefaultTimePricingForm,
   formIntervalsToAPI,
+  formReasoningEffortMultipliersToAPI,
   mTokToPerToken,
   perTokenToMTok,
   toNullableNumber,
+  validateReasoningEffortMultipliers,
 } from "@/components/admin/channel/types";
 import type { ChannelModelPricing } from "@/api/admin/channels";
 import { VueDraggable } from "vue-draggable-plus";
@@ -4640,6 +4642,7 @@ const emptyGroupPricing = (): PricingFormEntry => ({
   image_input_price: null,
   image_output_price: null,
   per_request_price: null,
+  reasoning_effort_multipliers: null,
   intervals: [],
   time_pricing: createDefaultTimePricingForm(),
 });
@@ -4661,6 +4664,9 @@ const groupPricingFromAPI = (
     image_input_price: perTokenToMTok(entry.image_input_price),
     image_output_price: perTokenToMTok(entry.image_output_price),
     per_request_price: entry.per_request_price,
+    reasoning_effort_multipliers: entry.reasoning_effort_multipliers
+      ? { ...entry.reasoning_effort_multipliers }
+      : null,
     intervals: apiIntervalsToForm(entry.intervals || []),
     time_pricing: createDefaultTimePricingForm(),
   }));
@@ -4683,6 +4689,9 @@ const groupPricingToAPI = (
       image_input_price: mTokToPerToken(entry.image_input_price),
       image_output_price: mTokToPerToken(entry.image_output_price),
       per_request_price: toNullableNumber(entry.per_request_price),
+      reasoning_effort_multipliers: formReasoningEffortMultipliersToAPI(
+        entry.reasoning_effort_multipliers,
+      ),
       intervals:
         entry.billing_mode === "token"
           ? []
@@ -6117,6 +6126,21 @@ const validateProfitControlForm = (form: ProfitControlFormState): boolean => {
   return true;
 };
 
+const validateGroupPricingForm = (entries: PricingFormEntry[]): boolean => {
+  for (const entry of entries) {
+    if (entry.models.length === 0) continue;
+    const error = validateReasoningEffortMultipliers(
+      entry.reasoning_effort_multipliers,
+      t,
+    );
+    if (error) {
+      appStore.showError(error);
+      return false;
+    }
+  }
+  return true;
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
@@ -6130,6 +6154,9 @@ const handleCreateGroup = async () => {
     return;
   }
   if (!validateProfitControlForm(createForm)) {
+    return;
+  }
+  if (!validateGroupPricingForm(createForm.model_pricing)) {
     return;
   }
   submitting.value = true;
@@ -6462,6 +6489,9 @@ const handleUpdateGroup = async () => {
     return;
   }
   if (!validateProfitControlForm(editForm)) {
+    return;
+  }
+  if (!validateGroupPricingForm(editForm.model_pricing)) {
     return;
   }
   // 固定账号 manifest：开启后至少一个账号，前端阻止提交并提示。
