@@ -12,10 +12,19 @@ import (
 // contract used by WS v2. The detailed normalizers remain shared with the
 // existing HTTP path.
 func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account, legacyLite ...bool) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{ResponsesLite: len(legacyLite) > 0 && legacyLite[0]})
+}
+
+type openAIResponsesCompatibilityOptions struct {
+	ResponsesLite bool
+	Compact       bool
+}
+
+func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *Account, opts openAIResponsesCompatibilityOptions) ([]byte, bool, error) {
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
-	isLite := (len(legacyLite) > 0 && legacyLite[0]) || isOpenAIResponsesLiteWebSocketPayload(body)
+	isLite := opts.ResponsesLite || isOpenAIResponsesLiteWebSocketPayload(body)
 	changed := false
 	if isLite {
 		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
@@ -45,6 +54,13 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 			return body, false, err
 		}
 		changed = changed || oauthChanged
+		if !opts.Compact {
+			next, webSearchChanged, err := ensureOpenAIOAuthWebSearchToolForHistoryBody(normalized, isLite)
+			if err != nil {
+				return body, false, err
+			}
+			normalized, changed = next, changed || webSearchChanged
+		}
 	}
 	if account.IsOpenAIOAuthLike() {
 		if next, c, err := normalizeOpenAIResponsesReasoningMode(normalized); err != nil {

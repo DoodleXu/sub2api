@@ -2,7 +2,24 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-10-07
+最后更新：2026-10-15
+
+## 2026-10-15 合并上游 v0.2.16
+
+- 同步官方 release `v0.2.16`（`01842576b3d5c1e2545b5a99ad555d36e28ed306`，发布于 2026-10-13），先将本地主线快进到 fork 远端 `e7bff2a2b`，再从已合入的 `v0.2.14` 基线合并 release 增量；没有越过 release 合并上游 main。版本源保持 fork 的 `0.2.35`。
+- 合入 Gemini 显式上下文缓存及存储费用预留、Vertex API Key/模型同步、Haiku 5.5、分组多语言、模型级临时冷却、Cline/Command Code 平台与统一协议路由，以及 Responses 结构化输入安全回退、WS 图片输入计费、Grok 空终态 failover 和界面异步请求修复。
+- 预检与实际合并共 44 个冲突路径：28 个内容冲突、1 个 add/add、15 个 modify/delete。已删除的上游 service 拆分文件继续保持删除；账号/分组、Anthropic/OpenAI 网关增量迁入 fork 聚合实现，显式缓存费用公共逻辑独立放入 `gateway_cache_storage_billing.go`，Ent 与 Wire 重新生成。
+- 保留签到、运营中心、人民币成本与账号利润、账号归档、Web 创作台、生图历史/管理、持久化邮件群发、支付签名恢复与订阅升级、Responses Lite、Agent Identity 凭据脱敏、超频继续调度和 `linux/amd64 + GHCR` 发布约束。复合分组共享目录解析新增精确公开别名及有效 Responses 路由过滤，`/v1/models` 暴露可用别名；fork 的非 OpenAI 分组（含复合分组）远程 Codex manifest 继续返回空列表，让客户端保留内置指令，不启用上游合成 manifest 的覆盖行为。
+- 合并适配修复：计费预估允许省略 fork 的长上下文选项，缓存纯存储费用不计一次模型请求；GPT-6.1 Sol 订阅长上下文豁免贯通基础、标准与响应模型重定价以及账号统计成本。保留 OpenAI pool/超频和模型级 401 规则边界，WS relay 保留 fork 逐轮计费并补齐图片输入 token 累计。
+- 全量回归补齐 Lite 搜索声明的请求头识别、HTTP 思考签名恢复与会话失效密文剥离，以及响应模型重定价之后再应用免费 Fast 标准档扣款的顺序。国产/OpenCode Claude 缺价继续返回可追溯的 `pricing_pending`，不会恢复上游静默零价落账；新增 service 测试不单独调用 `gin.SetMode`，统一由包级 `TestMain` 初始化。Lite 的严格参数校验在兼容规范化前执行，非法工具/推理结构和非布尔并行参数仍返回原有结构化 HTTP 400。
+- 升级包含 `242_drop_platform_check_constraints.sql`、`242_group_i18n.sql` 与 `243`–`245` Gemini 缓存迁移；沿用仓库按完整文件名识别迁移的机制，同序号不同文件不改写历史迁移。未执行生产迁移、部署、推送、tag 或 release。
+
+### v0.2.16 合并验证
+
+- 前端类型检查、ESLint、i18n 完整性与生产构建通过；部署/运行时/网关环境、Caddy 缓存、release tag/candidate 和 simple mode 共 7 个 shell 检查通过。
+- 前端最终全量 Vitest：397 个文件，3032 项通过、8 项既有失败。合并前基线独立复测确认已有 9 项失败：备份页归档 UI 6 项、分组推理倍率 2 项、用量 CSV 缺省占位符预期 1 项。本次修正 CSV 测试预期，并让新归档筛选测试兼容 fork 的 `archived` 项；其余 8 项既有失败保留记录，没有通过删除测试或覆盖 fork 页面掩盖。
+- 定向网关、Gemini 缓存计费/恢复、GPT-6.1 Sol 长上下文豁免/重定价、Lite 搜索与严格参数校验、HTTP 思考签名恢复和 Gin 状态隔离回归通过；最终后端 `TZ=UTC go test -tags=unit -count=1 ./...` 全量通过，`golangci-lint v2.14.0` 为 `0 issues`，`TZ=UTC go vet -tags=unit ./...` 与 `go build ./...` 通过。
+- 本地 Docker daemon 不可用，未运行 PostgreSQL/Redis 容器集成测试；数据库迁移仅通过源码及迁移执行器契约检查，实际升级仍需 CI/部署环境验证。
 
 ## 2026-10-07 合并上游 v0.2.14
 
@@ -212,9 +229,9 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| Fork 同步前 HEAD | `12b701ad138a122ee444dee9b09475a4acb25fbc` | 本次同步前 fork 基线；版本源保持 fork 的 `0.2.27` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.10` -> `2f3fed2fdb0787141294cec81487a5df30426f7f` | 本次同步目标 |
-| 上游最新 release 基线 | `refs/tags/upstream/v0.2.10` -> `2f3fed2fdb0787141294cec81487a5df30426f7f` | 2026-09-30 同步目标 |
+| Fork 同步前 HEAD | `e7bff2a2b` | fork 远端最新主线；版本源保持 fork 的 `0.2.35` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.16` -> `01842576b3d5c1e2545b5a99ad555d36e28ed306` | 2026-10-15 同步目标 |
+| 上游最新 release 基线 | `refs/tags/upstream/v0.2.16` -> `01842576b3d5c1e2545b5a99ad555d36e28ed306` | 2026-10-13 发布 |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 本次按能力模块迁移模型白名单、计费、账号归档、运营中心、Web 创作台、生图管理等 fork 行为；拆分文件保持删除，聚合模块保留 fork 结构与行为。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
@@ -228,9 +245,9 @@
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.1.183:refs/tags/upstream/v0.1.183 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.1.183^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
+git fetch upstream refs/tags/v0.2.16:refs/tags/upstream/v0.2.16 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.2.16^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.2.16^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
@@ -1086,7 +1103,7 @@ git diff --name-status refs/tags/upstream/v0.1.183^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.1.166`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.2.16`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
 ## v0.1.229 发布验证
 

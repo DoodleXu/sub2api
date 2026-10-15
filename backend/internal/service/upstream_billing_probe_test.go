@@ -775,9 +775,72 @@ func TestUpstreamBillingProbeFailurePreservesLastSuccessAndRetryAfter(t *testing
 	require.NotContains(t, snapshot.LastError, "do not persist")
 }
 
-func TestUpstreamBillingProbeRetryAfterIsNotShortened(t *testing.T) {
+func TestUpstreamBillingProbeRetryAfterIsCappedAtMaxDelay(t *testing.T) {
 	delay := nextProbeDelay(30, 48*time.Hour)
-	require.Equal(t, 48*time.Hour, delay)
+	require.Equal(t, upstreamBillingProbeMaxDelay, delay)
+}
+
+// unsupported 的重探间隔明显长于普通失败，但始终有上界：上游后来接入 sub2api
+// 时最迟一天内会被重新发现，且上游超长 Retry-After 亦受 24h 封顶保护。
+func TestUpstreamBillingProbeUnsupportedDelayIsStretchedAndBounded(t *testing.T) {
+	// 默认 30 分钟 interval：普通失败 24~36 分钟，unsupported 为其 8 倍。
+	stretched := unsupportedProbeDelay(30, 0)
+	require.Greater(t, stretched, 36*time.Minute)
+	require.GreaterOrEqual(t, stretched, 192*time.Minute)
+	require.LessOrEqual(t, stretched, 288*time.Minute)
+
+	// 永不超过封顶值，因此 unsupported 账号不会被永久排除在重探之外。
+	require.LessOrEqual(t, unsupportedProbeDelay(upstreamBillingProbeMaxIntervalMinutes, 0), upstreamBillingProbeMaxDelay)
+	require.Positive(t, unsupportedProbeDelay(upstreamBillingProbeMinIntervalMinutes, 0))
+
+	// Retry-After 更长时受封顶保护，不超过 upstreamBillingProbeMaxDelay；更短时至少不早于该指令。
+	require.Equal(t, upstreamBillingProbeMaxDelay, unsupportedProbeDelay(30, 48*time.Hour))
+	require.GreaterOrEqual(t, unsupportedProbeDelay(30, time.Hour), time.Hour)
+}
+
+// 加长退避只把 unsupported 账号移出周期性热队列，手动探测不受影响。
+func TestUpstreamBillingProbeUnsupportedBackoffDefersRunnerButNotManualProbe(t *testing.T) {
+	// Ollama Cloud 形态：官方域，不发请求直接落 unsupported。
+	account := &Account{
+		ID:          31,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-ollama", "base_url": "https://ollama.com/v1"},
+		Extra:       map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
+	}
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	upstream := &upstreamBillingProbeHTTPStub{}
+	settingsRepo := &upstreamBillingProbeSettingRepo{values: map[string]string{
+		SettingKeyUpstreamBillingProbeSettings: `{"enabled":true,"interval_minutes":30}`,
+	}}
+	svc := newUpstreamBillingProbeTestService(repo, upstream, settingsRepo)
+	start := time.Date(2026, time.July, 26, 2, 0, 0, 0, time.UTC)
+	now := start
+	svc.now = func() time.Time { return now }
+
+	require.NoError(t, svc.RunDue(context.Background()))
+	first := decodeUpstreamBillingProbeSnapshot(account.Extra)
+	require.NotNil(t, first)
+	require.Equal(t, UpstreamBillingProbeStatusUnsupported, first.Status)
+	require.Equal(t, start, first.LastAttemptAt)
+	require.False(t, first.NextProbeAt.Before(start.Add(192*time.Minute)))
+	require.Zero(t, upstream.calls.Load())
+
+	// 一个普通失败早就该重探的时间点（远超 36 分钟），runner 仍跳过该账号。
+	now = start.Add(90 * time.Minute)
+	require.NoError(t, svc.RunDue(context.Background()))
+	deferred := decodeUpstreamBillingProbeSnapshot(account.Extra)
+	require.NotNil(t, deferred)
+	require.Equal(t, first.LastAttemptAt, deferred.LastAttemptAt)
+
+	// 手动探测无视退避窗口，管理员随时可以重试。
+	manual, err := svc.ProbeAccount(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Equal(t, UpstreamBillingProbeStatusUnsupported, manual.Status)
+	require.Equal(t, now, manual.LastAttemptAt)
+	require.Equal(t, 2, manual.FailureCount)
 }
 
 func TestUpstreamBillingProbeEmptyResponseIsPersistedAsFailure(t *testing.T) {
