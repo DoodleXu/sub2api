@@ -6,9 +6,11 @@
 
 ## 2026-10-15 发版 v0.2.36
 
-- 发布候选包含上游 `v0.2.16` 合并与审核修复 `9ff41ec23`，版本源更新为 `backend/cmd/server/VERSION=0.2.36`；发布继续限定 `linux/amd64` 二进制和 GHCR 镜像。
+- 发布包含上游 `v0.2.16` 合并与审核修复 `9ff41ec23`，版本源更新为 `backend/cmd/server/VERSION=0.2.36`；发布继续限定 `linux/amd64` 二进制和 GHCR 镜像。
 - 合并后后端全量 unit、lint/vet/构建通过；审核修复后的 HTTP 恢复定向回归、lint/vet/构建和前端类型检查/生产构建通过。前端全量 3034 项通过、6 项旧备份归档页失败已记录；这 6 项不在既有发布 CI 的关键测试集合中，不删除或跳过现有门禁。
-- 候选提交先推送默认分支，只有该提交的 `CI`（含 unit/integration）与 `Security Scan` 成功后才创建 annotated tag；实际工作流、发布资产与校验结果待发布后补充。
+- 发布闭环：annotated tag `v0.2.36` 指向已推送默认分支的 `fbe50d4f3e373125f71aab42eff8cfc770726e73`；该精确提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/38677424967)（含 unit/integration、前端门禁与 lint）、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/38677424964) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/38679277635) 全部成功。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.36) 于北京时间 2026-10-15 12:06 发布，正式版本且非草稿；已上传 `checksums.txt` 与 `sub2api_0.2.36_linux_amd64.tar.gz`。下载归档 SHA-256 校验通过（`e19dd27507ceca79457598d05f4273110622509ba6c5a963d4ffd704ad350cf5`），并确认内含 Linux/amd64 ELF 二进制。
+- GHCR 已验证 `:0.2.36`、`:0.2.36-amd64`、`:latest` 三标签指向同一单架构镜像 `sha256:cc0600bd28d83771b1ba050da7935ec0aa1d8618715cb86fd334d5318610580f`，镜像配置中的 `linux/amd64`、版本 `0.2.36` 和提交号与发布标签一致。
 
 ## 2026-10-15 上游同步审核修复
 
