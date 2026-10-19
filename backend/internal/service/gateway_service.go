@@ -615,9 +615,6 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
-	if account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
-		return !account.IsSchedulableIgnoringRateLimit()
-	}
 	if !account.IsSchedulable() {
 		return true
 	}
@@ -773,7 +770,6 @@ type UpstreamFailoverError struct {
 	NextAccountAction        NextAccountAction
 	ClientStatusCode         int
 	ClientMessage            string
-	SuppressClientError      bool // 限额后继续调度账号的错误不得直接返回用户侧
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -2154,7 +2150,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 		if len(routingCandidates) > 0 {
 			// 1.5. 在路由账号范围内检查粘性会话
-			if sessionHash != "" && stickyAccountID > 0 {
+			if sessionHash != "" && stickyAccountID > 0 && !s.rateLimitService.QualitySchedulingEnabled(ctx) {
 				slog.Debug("sticky.layer1_5_checking",
 					"sticky_account_id", stickyAccountID,
 					"in_routing_list", containsInt64(routingAccountIDs, stickyAccountID),
@@ -2290,6 +2286,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					}
 				})
 				shuffleWithinSortGroups(routingAvailable)
+				routingAvailable = s.rateLimitService.RankQualityLoads(ctx, requestedModel, routingAvailable, stickyAccountID)
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
@@ -2334,7 +2331,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 1.5: 粘性会话（仅在无模型路由配置时生效） ============
-	if len(routingAccountIDs) == 0 && sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) {
+	if !s.rateLimitService.QualitySchedulingEnabled(ctx) && len(routingAccountIDs) == 0 && sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) {
 		accountID := stickyAccountID
 		if accountID > 0 && !isExcluded(accountID) {
 			account, ok := accountByID[accountID]
@@ -2552,6 +2549,13 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			candidates = filterByMinLoadRate(candidates)
 			// 4. LRU 选择最久未用的账号
 			selected := selectByLRU(candidates, preferOAuth)
+			if s.rateLimitService.QualitySchedulingEnabled(ctx) {
+				ranked := s.rateLimitService.RankQualityLoads(ctx, requestedModel, available, stickyAccountID)
+				selected = nil
+				if len(ranked) > 0 {
+					selected = &ranked[0]
+				}
+			}
 			if selected == nil {
 				break
 			}
@@ -2583,6 +2587,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	// ============ Layer 3: 兜底排队 ============
 	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
+	candidates = s.rateLimitService.RankQualityAccounts(ctx, requestedModel, candidates, stickyAccountID)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -2601,6 +2606,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
 	ordered := append([]*Account(nil), candidates...)
 	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
+	ordered = s.rateLimitService.RankQualityAccounts(ctx, qualityRequest(ctx, "").Model, ordered, 0)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -3664,7 +3670,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 				derefGroupID(groupID), requestedModel, platform, shortSessionHash(sessionHash), routingAccountIDs)
 		}
 		// 1) Sticky session only applies if the bound account is within the routing set.
-		if sessionHash != "" && s.cache != nil {
+		if sessionHash != "" && s.cache != nil && !s.rateLimitService.QualitySchedulingEnabled(ctx) {
 			accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
 				if _, excluded := excludedIDs[accountID]; !excluded {
@@ -3710,6 +3716,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		}
 
 		var selected *Account
+		var qualityEligible []*Account
 		for i := range accounts {
 			acc := &accounts[i]
 			if _, ok := routingSet[acc.ID]; !ok {
@@ -3745,6 +3752,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 				continue
 			}
+			qualityEligible = append(qualityEligible, acc)
 			if selected == nil {
 				selected = acc
 				continue
@@ -3769,6 +3777,13 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			}
 		}
 
+		if s.rateLimitService.QualitySchedulingEnabled(ctx) {
+			ranked := s.rateLimitService.RankQualityAccounts(ctx, requestedModel, qualityEligible, 0)
+			selected = nil
+			if len(ranked) > 0 {
+				selected = ranked[0]
+			}
+		}
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
 				if err := s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, selected.ID); err != nil {
@@ -3784,7 +3799,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	}
 
 	// 1. 查询粘性会话
-	if sessionHash != "" && s.cache != nil {
+	if sessionHash != "" && s.cache != nil && !s.rateLimitService.QualitySchedulingEnabled(ctx) {
 		accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 		if err == nil && accountID > 0 {
 			if _, excluded := excludedIDs[accountID]; !excluded {
@@ -3829,6 +3844,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	// 因为粘性会话优先保持连接一致性，且 upstream 计费基准极少使用。
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 	var selected *Account
+	var qualityEligible []*Account
 	for i := range accounts {
 		acc := &accounts[i]
 		if _, excluded := excludedIDs[acc.ID]; excluded {
@@ -3864,6 +3880,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 			continue
 		}
+		qualityEligible = append(qualityEligible, acc)
 		if selected == nil {
 			selected = acc
 			continue
@@ -3888,6 +3905,13 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		}
 	}
 
+	if s.rateLimitService.QualitySchedulingEnabled(ctx) {
+		ranked := s.rateLimitService.RankQualityAccounts(ctx, requestedModel, qualityEligible, 0)
+		selected = nil
+		if len(ranked) > 0 {
+			selected = ranked[0]
+		}
+	}
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, platform, accounts, excludedIDs, false)
 		if requestedModel != "" {
@@ -3927,7 +3951,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 				derefGroupID(groupID), requestedModel, nativePlatform, shortSessionHash(sessionHash), routingAccountIDs)
 		}
 		// 1) Sticky session only applies if the bound account is within the routing set.
-		if sessionHash != "" && s.cache != nil {
+		if sessionHash != "" && s.cache != nil && !s.rateLimitService.QualitySchedulingEnabled(ctx) {
 			accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
 				if _, excluded := excludedIDs[accountID]; !excluded {
@@ -3971,6 +3995,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		}
 
 		var selected *Account
+		var qualityEligible []*Account
 		for i := range accounts {
 			acc := &accounts[i]
 			if _, ok := routingSet[acc.ID]; !ok {
@@ -4010,6 +4035,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 				continue
 			}
+			qualityEligible = append(qualityEligible, acc)
 			if selected == nil {
 				selected = acc
 				continue
@@ -4034,6 +4060,13 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			}
 		}
 
+		if s.rateLimitService.QualitySchedulingEnabled(ctx) {
+			ranked := s.rateLimitService.RankQualityAccounts(ctx, requestedModel, qualityEligible, 0)
+			selected = nil
+			if len(ranked) > 0 {
+				selected = ranked[0]
+			}
+		}
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
 				if err := s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, selected.ID); err != nil {
@@ -4049,7 +4082,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	}
 
 	// 1. 查询粘性会话
-	if sessionHash != "" && s.cache != nil {
+	if sessionHash != "" && s.cache != nil && !s.rateLimitService.QualitySchedulingEnabled(ctx) {
 		accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 		if err == nil && accountID > 0 {
 			if _, excluded := excludedIDs[accountID]; !excluded {
@@ -4087,6 +4120,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	// needsUpstreamCheck 仅在主选择循环中使用；粘性会话命中时跳过此检查。
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
 	var selected *Account
+	var qualityEligible []*Account
 	for i := range accounts {
 		acc := &accounts[i]
 		if _, excluded := excludedIDs[acc.ID]; excluded {
@@ -4126,6 +4160,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
 			continue
 		}
+		qualityEligible = append(qualityEligible, acc)
 		if selected == nil {
 			selected = acc
 			continue
@@ -4150,6 +4185,13 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		}
 	}
 
+	if s.rateLimitService.QualitySchedulingEnabled(ctx) {
+		ranked := s.rateLimitService.RankQualityAccounts(ctx, requestedModel, qualityEligible, 0)
+		selected = nil
+		if len(ranked) > 0 {
+			selected = ranked[0]
+		}
+	}
 	if selected == nil {
 		stats := s.logDetailedSelectionFailure(ctx, groupID, sessionHash, requestedModel, nativePlatform, accounts, excludedIDs, true)
 		if requestedModel != "" {
@@ -4473,13 +4515,7 @@ const (
 )
 
 func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode int) bool {
-	// OAuth/Setup Token 账号：仅 403 重试
-	if account.IsOAuth() {
-		return statusCode == 403
-	}
-
-	// API Key 账号：未配置的错误码重试
-	return !account.ShouldHandleErrorCode(statusCode)
+	return false // fail over; credential/protocol repairs have their own bounded paths.
 }
 
 // shouldFailoverUpstreamError determines whether an upstream error should trigger account failover.
@@ -5391,7 +5427,7 @@ func systemHasBillingAttributionBlock(body []byte) bool {
 }
 
 // Forward 转发请求到Claude API
-func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
+func (s *GatewayService) forwardQualityCore(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
 	startTime := time.Now()
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
@@ -5713,10 +5749,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 优先检测thinking block签名错误（400）并重试一次
 		if resp.StatusCode == 400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			if readErr == nil {
 				_ = resp.Body.Close()
 
-				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
+				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) && AllowAccountProtocolRepair(ctx) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						Platform:           account.Platform,
 						AccountID:          account.ID,
@@ -5795,7 +5834,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									}(),
 								})
 								msg2 := extractUpstreamErrorMessage(retryRespBody)
-								if looksLikeToolSignatureError(msg2) && time.Since(retryStart) < maxRetryElapsed {
+								if looksLikeToolSignatureError(msg2) && time.Since(retryStart) < maxRetryElapsed && AllowAccountProtocolRepair(ctx) {
 									logger.LegacyPrintf("service.gateway", "Account %d: signature retry still failing and looks tool-related, retrying with tool blocks downgraded", account.ID)
 									filteredBody2 := FilterSignatureSensitiveBlocksForRetry(body, reqModel)
 									retryCtx2, releaseRetryCtx2 := detachStreamUpstreamContext(ctx, reqStream)
@@ -5875,7 +5914,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					})
 
 					rectifiedBody, applied := RectifyThinkingBudget(body)
-					if applied && time.Since(retryStart) < maxRetryElapsed {
+					if applied && time.Since(retryStart) < maxRetryElapsed && AllowAccountProtocolRepair(ctx) {
 						logger.LegacyPrintf("service.gateway", "Account %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", account.ID, BudgetRectifyBudgetTokens, BudgetRectifyMaxTokens)
 						budgetRetryCtx, releaseBudgetRetryCtx := detachStreamUpstreamContext(ctx, reqStream)
 						budgetRetryReq, budgetWireBody, buildErr := s.buildUpstreamRequest(budgetRetryCtx, c, account, rectifiedBody, token, tokenType, reqModel, reqStream, shouldMimicClaudeCode)
@@ -5926,6 +5965,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}
 
 				respBody, _ := s.readUpstreamErrorBody(resp)
+				if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+					return nil, failure
+				}
 				_ = resp.Body.Close()
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
@@ -5973,6 +6015,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			respBody, _ := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -6008,6 +6053,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// 处理可切换账号的错误
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
 		respBody, _ := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -6040,6 +6088,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
 		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.Gateway.FailoverOn400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			if readErr != nil {
 				// ReadAll failed, fall back to normal error handling without consuming the stream
 				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
@@ -6305,6 +6356,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 				}
 
 				respBody, _ := s.readUpstreamErrorBody(resp)
+				if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+					return nil, failure
+				}
 				_ = resp.Body.Close()
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
@@ -6343,6 +6397,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	if resp.StatusCode >= 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			respBody, _ := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -6377,6 +6434,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
 		respBody, _ := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -7264,6 +7324,9 @@ func (s *GatewayService) executeBedrockUpstream(
 				}
 
 				respBody, _ := s.readUpstreamErrorBody(resp)
+				if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+					return nil, failure
+				}
 				_ = resp.Body.Close()
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           account.Platform,
@@ -7311,6 +7374,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 	if s.shouldRetryUpstreamError(account, resp.StatusCode) {
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			respBody, _ := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -7338,6 +7404,9 @@ func (s *GatewayService) handleBedrockUpstreamErrors(
 	// non-retryable failover
 	if s.shouldFailoverUpstreamError(resp.StatusCode) {
 		respBody, _ := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -8589,6 +8658,9 @@ func (s *GatewayService) readUpstreamErrorBody(resp *http.Response) ([]byte, err
 func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	body, _ := s.readUpstreamErrorBody(resp)
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, body); failure != nil {
+		return nil, failure
+	}
 
 	// 调试日志：打印上游错误响应
 	logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (non-retryable): Account=%d(%s) Status=%d RequestID=%s Body=%s",
@@ -8746,6 +8818,9 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 // 临时不可调度规则据此按模型隔离。
 func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) {
 	body, _ := s.readUpstreamErrorBody(resp)
+	if s.rateLimitService.HandleAccountBalanceError(ctx, account, resp.StatusCode, body) {
+		return
+	}
 	statusCode := resp.StatusCode
 
 	// OAuth/Setup Token 账号的 403：标记账号异常
@@ -8764,6 +8839,9 @@ func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, re
 
 func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) {
 	body, _ := s.readUpstreamErrorBody(resp)
+	if s.rateLimitService.HandleAccountBalanceError(ctx, account, resp.StatusCode, body) {
+		return
+	}
 	if len(requestedModel) > 0 {
 		s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel[0])
 		return
@@ -8778,6 +8856,9 @@ func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *ht
 	MarkResponseCommitted(c)
 	// Capture upstream error body before side-effects consume the stream.
 	respBody, _ := s.readUpstreamErrorBody(resp)
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+		return nil, failure
+	}
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -11036,7 +11117,21 @@ func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, 
 
 // ForwardCountTokens 转发 count_tokens 请求到上游 API
 // 特点：不记录使用量、仅支持非流式响应
-func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) error {
+func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (returnErr error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	defer func() { returnErr = attempt.Finish(nil, returnErr) }()
+
+	if err := s.rateLimitService.ValidateAccountDispatch(ctx, account); err != nil {
+		return err
+	}
+
 	if parsed == nil {
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
@@ -11684,7 +11779,19 @@ func (s *GatewayService) validateUpstreamBaseURL(raw string) (string, error) {
 // DoGrokNativeResponsesJSON POSTs a non-streaming Responses body to the account's
 // Grok upstream and returns the raw JSON body. Used by /v1/web_search.
 // Gin-free: UA is always the pinned Grok CLI identity (resolveGrokUpstreamUserAgent ignores inbound).
-func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account *Account, body []byte) ([]byte, error) {
+func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account *Account, body []byte) (result []byte, returnErr error) {
+	if AccountQualityRequestID(ctx) != "" {
+		request := qualityRequest(ctx, strings.TrimSpace(gjson.GetBytes(body, "model").String()))
+		request.Capability, request.Stream = "search", false
+		ctx = WithAccountQualityRequest(ctx, request)
+		nextCtx, attempt, err := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		ctx = nextCtx
+		defer attempt.Abort()
+		defer func() { returnErr = attempt.Finish(nil, returnErr) }()
+	}
 	if s == nil || s.httpUpstream == nil {
 		return nil, errors.New("http upstream not configured")
 	}
@@ -11739,6 +11846,10 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 			Reason:     GatewayFailureReason("grok_search_read"),
 		}
 	}
+	if s.rateLimitService.HandleAccountBalanceError(ctx, account, resp.StatusCode, respBytes) {
+		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBytes, Reason: "insufficient_account_balance"}
+	}
+
 	if resp.StatusCode >= 400 {
 		msg := string(respBytes)
 		if len(msg) > 200 {
@@ -12116,4 +12227,18 @@ func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header
 
 	// 写入文件（调试用，并发写入可能交错但不影响可读性）
 	_, _ = f.WriteString(buf.String())
+}
+
+func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) (result *ForwardResult, err error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardQualityCore(ctx, c, account, parsed)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

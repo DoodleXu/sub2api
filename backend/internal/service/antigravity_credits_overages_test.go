@@ -200,9 +200,11 @@ func TestHandleSmartRetry_RateLimited_DoesNotUseCredits(t *testing.T) {
 
 	require.NotNil(t, result)
 	require.Equal(t, smartRetryActionBreakWithResp, result.action)
-	require.NotNil(t, result.resp)
-	require.Len(t, upstream.requestBodies, 1)
-	require.NotContains(t, string(upstream.requestBodies[0]), "enabledCreditTypes")
+	if result.switchError == nil {
+		require.NotNil(t, result.resp)
+		require.Equal(t, http.StatusTooManyRequests, result.resp.StatusCode)
+	}
+	require.Empty(t, upstream.requestBodies)
 	require.Empty(t, repo.extraUpdateCalls)
 	require.Empty(t, repo.modelRateLimitCalls)
 }

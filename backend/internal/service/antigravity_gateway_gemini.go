@@ -41,7 +41,7 @@ func WithForwardGeminiSession(groupID int64, sessionHash string) ForwardGeminiOp
 	}
 }
 
-func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) forwardGeminiQualityCore(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
 	startTime := time.Now()
 	forwardOpts := forwardGeminiOptions{}
@@ -176,6 +176,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			return nil, &UpstreamFailoverError{
 				StatusCode:        http.StatusServiceUnavailable,
 				ForceCacheBilling: switchErr.IsStickySession,
+				Scope:             GatewayFailureScopeRequest, Reason: "model_rate_limit",
 			}
 		}
 		// 区分客户端取消和真正的上游失败，返回更准确的错误消息
@@ -194,6 +195,9 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	// 处理错误响应
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		// 尽早关闭原始响应体，释放连接；后续逻辑仍可能需要读取 body，因此用内存副本重新包装。
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -316,6 +320,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						return nil, &UpstreamFailoverError{
 							StatusCode:        http.StatusServiceUnavailable,
 							ForceCacheBilling: switchErr.IsStickySession,
+							Scope:             GatewayFailureScopeRequest, Reason: "model_rate_limit",
 						}
 					}
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -573,4 +578,18 @@ func filterEmptyPartsFromGeminiRequest(body []byte) ([]byte, error) {
 
 	payload["contents"] = filtered
 	return json.Marshal(payload)
+}
+
+func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardGeminiQualityCore(ctx, c, account, originalModel, action, stream, body, isStickySession, options...)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

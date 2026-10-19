@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (s *OpenAIGatewayService) ForwardEmbeddings(
+func (s *OpenAIGatewayService) forwardEmbeddingsQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -105,6 +105,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -235,4 +238,24 @@ func firstPositiveGJSONInt(values ...gjson.Result) int {
 
 func buildOpenAIEmbeddingsURL(base string) string {
 	return buildOpenAIEndpointURL(base, "/v1/embeddings")
+}
+
+func (s *OpenAIGatewayService) ForwardEmbeddings(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	defaultMappedModel string,
+) (*OpenAIForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardEmbeddingsQualityCore(ctx, c, account, body, defaultMappedModel)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

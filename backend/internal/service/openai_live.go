@@ -279,18 +279,10 @@ func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(args ...any) bool {
 }
 
 func (s *OpenAIGatewayService) prepareLiveCreateFailover(account *Account, err error) (bool, error) {
-	shouldFailover := s.shouldFailoverLiveCreateError(err)
-	var upstreamErr *UpstreamFailoverError
-	if errors.As(err, &upstreamErr) && PrepareOpenAILimitContinuationFailover(account, upstreamErr) {
-		return true, ErrLiveUnavailable
-	}
-	if shouldFailover && account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
-		return true, ErrLiveUnavailable
-	}
-	return shouldFailover, err
+	return s.shouldFailoverLiveCreateError(err), err
 }
 
-func (s *OpenAIGatewayService) createUpstreamLiveCall(
+func (s *OpenAIGatewayService) createUpstreamLiveCallQualityCore(
 	ctx context.Context,
 	account *Account,
 	request *LiveCallRequest,
@@ -973,4 +965,19 @@ func (s *OpenAIGatewayService) writeLiveUsageLog(record *LiveCallRecord) {
 		UpstreamEndpoint: &upstreamEndpoint,
 		CreatedAt:        record.CreatedAt,
 	}, "service.openai_live")
+}
+
+func (s *OpenAIGatewayService) createUpstreamLiveCall(ctx context.Context, account *Account, request *LiveCallRequest, attestation string) (*LiveCallCreated, error) {
+	q := qualityRequest(ctx, "")
+	q.Capability = "live"
+	q.Stream = false
+	ctx = WithAccountQualityRequest(ctx, q)
+	ctx, attempt, err := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	defer attempt.Abort()
+	result, err := s.createUpstreamLiveCallQualityCore(ctx, account, request, attestation)
+	err = attempt.Finish(result, err)
+	return result, err
 }

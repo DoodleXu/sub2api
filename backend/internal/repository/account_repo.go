@@ -1177,7 +1177,6 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 			q = q.Where(
 				dbaccount.StatusEQ(service.StatusActive),
 				dbaccount.RateLimitResetAtGT(time.Now()),
-				dbaccount.Not(openAIContinueAfterLimitPredicate()),
 				tempUnschedulablePredicate(),
 			)
 		case "temp_unschedulable":
@@ -2215,7 +2214,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		return rows, nil
 	}
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
 			ag.group_id,
 			a.id AS account_id,
@@ -2243,24 +2242,15 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND (
 				a.temp_unschedulable_until IS NULL
 				OR a.temp_unschedulable_until <= $3
-				OR (
-					a.platform = 'openai'
-					AND a.extra @> '{"%s": true}'::jsonb
-					AND a.temp_unschedulable_reason LIKE '%%"status_code":429%%'
-				)
 			)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (
 				a.rate_limit_reset_at IS NULL
 				OR a.rate_limit_reset_at <= $3
-				OR (
-					a.platform = 'openai'
-					AND a.extra @> '{"%s": true}'::jsonb
-				)
 			)
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, service.OpenAIContinueSchedulingAfterLimitExtraKey, service.OpenAIContinueSchedulingAfterLimitExtraKey)
+	`
 	rows, err := r.sql.QueryContext(ctx, query, pq.Array(groupIDs), service.StatusActive, time.Now())
 	if err != nil {
 		return nil, err
@@ -2840,19 +2830,16 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetSchedulable(schedulable).
-		Save(ctx)
+	_, err := r.sql.ExecContext(ctx, `UPDATE accounts SET schedulable=$2,
+ extra=CASE WHEN $2 THEN jsonb_set(COALESCE(extra,'{}'::jsonb),'{scheduler_manual_resume}','true'::jsonb) ELSE extra END,
+ updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, id, schedulable)
 	if err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue schedulable change failed: account=%d err=%v", id, err)
 	}
-	if !schedulable {
-		r.syncSchedulerAccountSnapshot(ctx, id)
-	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
 }
 
@@ -3240,6 +3227,12 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		} else {
 			setClauses = append(setClauses, "archived_at = NULL")
 		}
+	}
+	if updates.Schedulable != nil && *updates.Schedulable {
+		if updates.Extra == nil {
+			updates.Extra = make(map[string]any)
+		}
+		updates.Extra["scheduler_manual_resume"] = true
 	}
 	if updates.Schedulable != nil {
 		setClauses = append(setClauses, "schedulable = $"+itoa(idx))
@@ -3647,32 +3640,9 @@ func (r *accountRepository) loadParentArchiveStates(ctx context.Context, parentI
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {
-	notBlocked := dbpredicate.Account(func(s *entsql.Selector) {
-		col := s.C("temp_unschedulable_until")
-		s.Where(entsql.Or(
-			entsql.IsNull(col),
-			entsql.LTE(col, entsql.Expr("NOW()")),
-		))
-	})
-	return dbaccount.Or(
-		notBlocked,
-		dbaccount.And(
-			openAIContinueAfterLimitPredicate(),
-			dbaccount.TempUnschedulableReasonContains(`"status_code":429`),
-		),
-	)
-}
-
-func openAIContinueAfterLimitPredicate() dbpredicate.Account {
 	return dbpredicate.Account(func(s *entsql.Selector) {
-		s.Where(entsql.And(
-			entsql.EQ(s.C(dbaccount.FieldPlatform), service.PlatformOpenAI),
-			sqljson.ValueEQ(
-				dbaccount.FieldExtra,
-				true,
-				sqljson.Path(service.OpenAIContinueSchedulingAfterLimitExtraKey),
-			),
-		))
+		col := s.C("temp_unschedulable_until")
+		s.Where(entsql.Or(entsql.IsNull(col), entsql.LTE(col, entsql.Expr("NOW()"))))
 	})
 }
 
@@ -3680,7 +3650,6 @@ func rateLimitSchedulablePredicate(now time.Time) dbpredicate.Account {
 	return dbaccount.Or(
 		dbaccount.RateLimitResetAtIsNil(),
 		dbaccount.RateLimitResetAtLTE(now),
-		openAIContinueAfterLimitPredicate(),
 	)
 }
 

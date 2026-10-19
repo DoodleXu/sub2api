@@ -5115,6 +5115,16 @@
                 </div>
               </div>
 
+              <div class="rounded-lg border border-primary-200 p-4 dark:border-primary-800">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="text-sm font-medium">{{ t('admin.accounts.quality.enabled') }}</label>
+                    <p class="mt-1 text-xs text-gray-500">{{ t('admin.accounts.quality.description') }}</p>
+                  </div>
+                  <Toggle v-model="form.account_quality_scheduling_enabled" data-testid="account-quality-scheduling-toggle" />
+                </div>
+                <p class="mt-2 text-xs text-gray-500">{{ t(form.account_quality_scheduling_enabled ? 'admin.accounts.quality.healthFirstHint' : 'admin.accounts.quality.legacyHint') }}</p>
+              </div>
               <div class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700">
                 <div>
                   <label
@@ -5131,6 +5141,7 @@
                 <Toggle
                   v-model="form.openai_advanced_scheduler_enabled"
                   data-testid="openai-advanced-scheduler-toggle"
+                  :disabled="form.account_quality_scheduling_enabled"
                 />
               </div>
 
@@ -10401,6 +10412,7 @@ type SettingsForm = Omit<
   openai_low_upstream_rate_priority_enabled: boolean;
   openai_oauth_scheduling_rate_multiplier: number | string | null;
   openai_scheduling_usd_to_cny_rate: number;
+  account_quality_scheduling_enabled: boolean;
   openai_advanced_scheduler_enabled: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
@@ -10667,6 +10679,7 @@ const form = reactive<SettingsForm>({
   openai_low_upstream_rate_priority_enabled: false,
   openai_oauth_scheduling_rate_multiplier: null,
   openai_scheduling_usd_to_cny_rate: 7.2,
+  account_quality_scheduling_enabled: true,
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
@@ -12685,6 +12698,7 @@ async function saveSettings() {
       ) as unknown as number | undefined),
       openai_scheduling_usd_to_cny_rate:
         form.openai_scheduling_usd_to_cny_rate,
+      account_quality_scheduling_enabled: form.account_quality_scheduling_enabled,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
       openai_advanced_scheduler_sticky_weighted_enabled:
         form.openai_advanced_scheduler_sticky_weighted_enabled,

@@ -72,7 +72,7 @@ func buildSeedanceURL(base string, endpoint GrokMediaEndpoint, taskID string) (s
 
 // ForwardSeedance preserves the Ark protocol, including multimodal content and
 // future fields. Only model is rewritten using the account's configured mapping.
-func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, taskID string, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) forwardSeedanceQualityCore(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, taskID string, body []byte) (*OpenAIForwardResult, error) {
 	if !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilitySeedance) || !endpoint.IsSeedance() {
 		return nil, fmt.Errorf("seedance requires an OpenAI API key account with a custom base URL")
 	}
@@ -157,4 +157,22 @@ func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Conte
 		writeGrokMediaResponse(c, resp, responseBody, s.responseHeaderFilter)
 	}
 	return result, nil
+}
+
+func (s *OpenAIGatewayService) ForwardSeedance(ctx context.Context, c *gin.Context, account *Account, endpoint GrokMediaEndpoint, taskID string, body []byte) (*OpenAIForwardResult, error) {
+	if endpoint.IsVideoLookupRequest() {
+		return s.forwardSeedanceQualityCore(ctx, c, account, endpoint, taskID, body)
+	}
+
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardSeedanceQualityCore(ctx, c, account, endpoint, taskID, body)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

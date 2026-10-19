@@ -3773,7 +3773,6 @@ export default {
         paused: '暂停',
         limited: '限流',
         rateLimited: '限流中',
-        overclocking: '超频中',
         overloaded: '过载中',
         tempUnschedulable: '临时不可调度',
         quotaExceeded: '配额超限',
@@ -4210,8 +4209,6 @@ export default {
 	  autoPause5hDisabled: '禁用 5h 自动暂停',
 	  autoPause7dDisabled: '禁用 7d 自动暂停',
 	  autoPauseDisabledHint: '开启后该账号永不进入自动暂停（即使全局默认阈值已配置）。',
-	  continueSchedulingAfterLimit: '达到限额后仍尝试调度',
-	  continueSchedulingAfterLimitHint: '开启后，所有请求都会优先尝试该账号；失败会自动回退到其他正常账号，且不会向用户返回本账号的上游错误。仅当后续账号仍失败时，才返回后续账号的错误。',
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
         title: '配额控制',

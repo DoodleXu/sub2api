@@ -1235,7 +1235,31 @@ export interface OpenCodeGoUsageSettings {
   debounce_minutes: number
 }
 
+export interface AccountQualitySummary {
+  model: string
+  capability: string
+  transport: string
+  effort?: string
+  stream: boolean
+  state: 'healthy' | 'unknown' | 'degraded' | 'poor' | 'open' | 'half_open'
+  samples: number
+  error_rate?: number
+  latency_samples: number
+  p50_ms?: number
+  p95_ms?: number
+  updated_at: number
+  open_until?: number
+  window: '15m' | '24h'
+}
+
+export interface AccountQualityScheduling {
+  strategy: 'legacy' | 'health_first'
+  auto_pause?: { reason: string; message: string; request_id?: string; at: string }
+  models?: AccountQualitySummary[]
+}
+
 export interface Account {
+  quality_scheduling?: AccountQualityScheduling
   id: number
   name: string
   notes?: string | null

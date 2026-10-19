@@ -340,11 +340,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 		// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-		if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), apiKey.GroupID) {
-			ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-			c.Request = c.Request.WithContext(ctx)
-		}
-
 		for {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
@@ -374,8 +369,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				action := fs.HandleSelectionExhausted(c.Request.Context())
 				switch action {
 				case FailoverContinue:
-					ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-					c.Request = c.Request.WithContext(ctx)
+
 					continue
 				case FailoverCanceled:
 					return
@@ -637,11 +631,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-	if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), currentAPIKey.GroupID) {
-		ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-		c.Request = c.Request.WithContext(ctx)
-	}
-
 	// 会话槽失败释放：failover 链上每个选中的 Anthropic OAuth 账号都注册过同一会话
 	// （checkAndRegisterSession）。若请求最终失败（转发失败/客户端中断/换号耗尽），
 	// 须立即释放本次会话注册——上游从未真正服务该会话，继续占槽会让 max_sessions
@@ -659,8 +648,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		}
 	}()
 
+	fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
 	for {
-		fs := NewFailoverState(h.maxAccountSwitches, hasBoundSession)
 		retryWithFallback := false
 
 		for {
@@ -706,8 +695,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				action := fs.HandleSelectionExhausted(c.Request.Context())
 				switch action {
 				case FailoverContinue:
-					ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-					c.Request = c.Request.WithContext(ctx)
+
 					continue
 				case FailoverCanceled:
 					return
@@ -1038,6 +1026,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						currentAPIKey = fallbackAPIKey
 						currentSubscription = nil
 						fallbackUsed = true
+						fs.FailedAccountIDs[account.ID] = struct{}{}
+						fs.SwitchCount++
 						retryWithFallback = true
 						// 原分组账号已确定性失败（prompt too long），先释放其会话注册再走兜底分组
 						for _, acc := range sessionSlotAccounts {

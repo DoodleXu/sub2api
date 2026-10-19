@@ -534,11 +534,6 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 
 	// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
 	// 避免单账号分组收到 503 (MODEL_CAPACITY_EXHAUSTED) 时设 29s 限流，导致后续请求连续快速失败。
-	if h.gatewayService.IsSingleAntigravityAccountGroup(c.Request.Context(), apiKey.GroupID) {
-		ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-		c.Request = c.Request.WithContext(ctx)
-	}
-
 	for {
 		excludedAccountIDs := fs.FailedAccountIDs
 		if cachedContentExclusions != nil {
@@ -581,8 +576,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			action := fs.HandleSelectionExhausted(c.Request.Context())
 			switch action {
 			case FailoverContinue:
-				ctx := service.WithSingleAccountRetry(c.Request.Context(), true, h.metadataBridgeEnabled())
-				c.Request = c.Request.WithContext(ctx)
+
 				continue
 			case FailoverCanceled:
 				failoverClientGone(c)

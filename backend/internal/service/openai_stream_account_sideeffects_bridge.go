@@ -47,6 +47,21 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if c != nil {
+		if active, ok := c.Get(accountQualityGinContextKey); ok {
+			if activeCtx, ok := active.(context.Context); ok {
+				ctx = activeCtx
+			}
+		}
+	}
+	if s.rateLimitService.HandleAccountBalanceError(ctx, account, http.StatusOK, payload) {
+		return http.StatusPaymentRequired, true
+	}
+
 	// cyber_policy is a request-scoped content-safety rejection. It must be
 	// surfaced to the caller and recorded for ops, but it is not evidence that
 	// the upstream credential or account is unhealthy. Keep it out of all

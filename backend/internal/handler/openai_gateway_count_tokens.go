@@ -333,7 +333,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			}
 			return
 		}
-		prepareOpenAICountTokensFailover(account, failoverErr)
+
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
 		if !failoverErr.ShouldRetryNextAccount() || switchCount >= maxAccountSwitches {
@@ -353,20 +353,8 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	}
 }
 
-func prepareOpenAICountTokensFailover(account *service.Account, failoverErr *service.UpstreamFailoverError) {
-	if account == nil || failoverErr == nil {
-		return
-	}
-	if !account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
-		// count_tokens historically used only one account. Preserve that behavior
-		// unless this account explicitly opted into best-effort continuation.
-		failoverErr.NextAccountAction = service.NextAccountStop
-	}
-	service.PrepareOpenAILimitContinuationFailover(account, failoverErr)
-}
-
 func (h *OpenAIGatewayHandler) handleCountTokensFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError) {
-	if failoverErr != nil && !failoverErr.SuppressClientError && failoverErr.ClientStatusCode > 0 && failoverErr.ClientMessage != "" {
+	if failoverErr != nil && failoverErr.ClientStatusCode > 0 && failoverErr.ClientMessage != "" {
 		errType := "api_error"
 		if failoverErr.ClientStatusCode == http.StatusNotFound {
 			errType = "not_found_error"

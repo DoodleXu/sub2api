@@ -1,10 +1,10 @@
 <template>
   <div class="flex items-center gap-2">
-    <!-- Opted-in OpenAI accounts remain schedulable while the raw limit window is active. -->
-    <span v-if="isOverclocking" class="badge badge-primary text-xs">
-      {{ t('admin.accounts.status.overclocking') }}
-    </span>
-
+    <span
+      v-if="balancePaused"
+      class="badge badge-danger text-xs"
+      :title="account.quality_scheduling?.auto_pause?.message || t('admin.accounts.quality.manualResume')"
+    >{{ t('admin.accounts.quality.paused') }}</span>
     <!-- Rate Limit Display (429) - Two-line layout -->
     <div v-else-if="isRateLimited" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
@@ -87,7 +87,7 @@
 
     <!-- Model Status Indicators (普通限流 / 超量请求中) -->
     <div
-      v-if="!isOverclocking && activeModelStatuses.length > 0"
+      v-if="activeModelStatuses.length > 0"
       :class="[
         activeModelStatuses.length <= 4
           ? 'flex flex-col gap-1'
@@ -181,21 +181,9 @@ const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void
 }>()
 
+const balancePaused = computed(() => !isAccountArchived(props.account) && Boolean(props.account.quality_scheduling?.auto_pause || props.account.extra?.scheduler_balance_pause))
+
 const limitSchedulingState = computed(() => getAccountLimitSchedulingState(props.account))
-const isExpired = computed(() => {
-  return props.account.auto_pause_on_expired &&
-    typeof props.account.expires_at === 'number' &&
-    props.account.expires_at > 0 &&
-    props.account.expires_at * 1000 <= Date.now()
-})
-const isOverclocking = computed(() => {
-  return limitSchedulingState.value.overclocking &&
-    props.account.status === 'active' &&
-	!isAccountArchived(props.account) &&
-    props.account.schedulable &&
-    !isExpired.value &&
-    !isOverloaded.value
-})
 const isRateLimited = computed(() => limitSchedulingState.value.rateLimited)
 
 type AccountModelStatusItem = {

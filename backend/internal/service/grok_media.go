@@ -863,7 +863,7 @@ func ExtractGrokVideoBillingFromStatusBody(statusBody []byte, pending *GrokVideo
 	}
 }
 
-func (s *OpenAIGatewayService) ForwardGrokMedia(
+func (s *OpenAIGatewayService) forwardGrokMediaQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -1521,6 +1521,9 @@ func (s *OpenAIGatewayService) handleGrokMediaErrorResponse(
 	requestedModel string,
 ) (*OpenAIForwardResult, error) {
 	body := s.readUpstreamErrorBody(resp)
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, body); failure != nil {
+		return nil, failure
+	}
 	// Reconcile readiness before configurable passthrough branches can return;
 	// otherwise a Grok 429 can remain schedulable.
 	s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
@@ -1804,4 +1807,30 @@ func grokMediaContentProxyURL(c *gin.Context, requestID string) string {
 		pathPrefix = "/v1"
 	}
 	return pathPrefix + "/videos/" + url.PathEscape(strings.Trim(requestID, "/")) + "/content"
+}
+
+func (s *OpenAIGatewayService) ForwardGrokMedia(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	endpoint GrokMediaEndpoint,
+	requestID string,
+	body []byte,
+	contentType string,
+) (*OpenAIForwardResult, error) {
+	if endpoint.IsVideoLookupRequest() {
+		return s.forwardGrokMediaQualityCore(ctx, c, account, endpoint, requestID, body, contentType)
+	}
+
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardGrokMediaQualityCore(ctx, c, account, endpoint, requestID, body, contentType)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

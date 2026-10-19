@@ -332,9 +332,9 @@ func TestOpenAIGatewayHandlerAlphaSearch_PoolModeRetriesSameAccount(t *testing.T
 
 	h.AlphaSearch(c)
 
-	require.Equal(t, []int64{accountID, accountID}, upstream.calls())
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"output":"search result"}`, rec.Body.String())
+	require.Equal(t, []int64{accountID}, upstream.calls())
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.NotContains(t, rec.Body.String(), "search result")
 }
 
 func TestOpenAIGatewayHandlerAlphaSearch_CyberHitBlocksSameSearchID(t *testing.T) {

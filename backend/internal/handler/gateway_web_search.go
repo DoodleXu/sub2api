@@ -55,6 +55,8 @@ func (h *GatewayHandler) WebSearch(c *gin.Context) {
 	}
 	maxResults = normalizeGrokWebSearchMaxResults(maxResults)
 	searchModel := resolveGrokStandaloneSearchModel()
+	setOpsRequestContext(c, searchModel, false)
+	c.Request = c.Request.WithContext(service.WithAccountQualityCapability(c.Request.Context(), "search"))
 	searchLabel := "web_search"
 	if isXSearch {
 		searchLabel = "x_search"

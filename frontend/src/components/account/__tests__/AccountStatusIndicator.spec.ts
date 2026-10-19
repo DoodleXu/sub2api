@@ -52,6 +52,15 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('欠费停调优先于活动状态，须管理员恢复', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: { account: makeAccount({ schedulable: false, quality_scheduling: { strategy: 'health_first', auto_pause: { reason: 'insufficient_account_balance', message: 'Insufficient account balance', at: '2026-10-19T08:00:00Z' } } }) },
+      global: { stubs: { Icon: true } }
+    })
+    expect(wrapper.text()).toContain('admin.accounts.quality.paused')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.active')
+  })
+
   it('归档账号显示归档状态而不覆盖原始 status 数据', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
@@ -140,7 +149,7 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('admin.accounts.status.tempUnschedulable')
   })
 
-  it('开启限额后继续调度的 OpenAI 账号只显示超频中', () => {
+  it('旧版限额绕过标记不能隐藏正常限流状态', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
@@ -161,13 +170,11 @@ describe('AccountStatusIndicator', () => {
       }
     })
 
-    expect(wrapper.text()).toContain('admin.accounts.status.overclocking')
-    expect(wrapper.text()).not.toContain('admin.accounts.status.rateLimited')
-    expect(wrapper.text()).not.toContain('admin.accounts.status.tempUnschedulable')
-    expect(wrapper.text()).not.toContain('429')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.overclocking')
+    expect(wrapper.text()).toContain('admin.accounts.status.rateLimited')
   })
 
-  it('开启开关且尚未限流的 OpenAI 账号也显示超频中', () => {
+  it('旧版限额绕过标记不再产生超频状态', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
@@ -184,8 +191,8 @@ describe('AccountStatusIndicator', () => {
       }
     })
 
-    expect(wrapper.text()).toContain('admin.accounts.status.overclocking')
-    expect(wrapper.text()).not.toContain('admin.accounts.status.normal')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.overclocking')
+    expect(wrapper.text()).toContain('admin.accounts.status.active')
   })
 
   it('已到期且配置自动暂停的 OpenAI 账号不显示超频中', () => {

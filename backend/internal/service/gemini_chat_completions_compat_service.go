@@ -22,7 +22,7 @@ import (
 // ForwardAsChatCompletions serves OpenAI Chat Completions clients through
 // Gemini accounts. It keeps the client-facing response in Chat Completions
 // format while routing the upstream call through Gemini native endpoints.
-func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
+func (s *GeminiMessagesCompatService) forwardAsChatCompletionsQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -136,6 +136,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
 			respBody := s.readUpstreamErrorBody(resp)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+				return nil, failure
+			}
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusForbidden && isGeminiInsufficientScope(resp.Header, respBody) {
 				resp = &http.Response{
@@ -194,6 +197,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		policy := ErrorPolicyNone
 		if s.rateLimitService != nil {
 			policy = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, mappedModel)
@@ -891,4 +897,23 @@ func (s *GeminiMessagesCompatService) writeChatCompletionsError(c *gin.Context, 
 		},
 	})
 	return fmt.Errorf("%s", message)
+}
+
+func (s *GeminiMessagesCompatService) ForwardAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+) (*ForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAsChatCompletionsQualityCore(ctx, c, account, body)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

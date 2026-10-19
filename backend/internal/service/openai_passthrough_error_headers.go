@@ -112,6 +112,9 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthroughV158(
 	requestBody []byte,
 	responseBody []byte,
 ) error {
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, responseBody); failure != nil {
+		return failure
+	}
 	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
 	upstreamDetail := ""
@@ -145,6 +148,9 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthroughV158(
 	requestBody []byte,
 	responseBody []byte,
 ) error {
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, responseBody); failure != nil {
+		return failure
+	}
 	MarkResponseCommitted(c)
 	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 	cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body)

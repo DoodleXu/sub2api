@@ -446,6 +446,12 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool) {
 	c.Set(opsStreamKey, stream)
 	if c.Request != nil && model != "" {
 		ctx := context.WithValue(c.Request.Context(), ctxkey.Model, model)
+		transport := "http"
+		if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
+			transport = "websocket"
+		}
+		requestID, _ := ctx.Value(ctxkey.RequestID).(string)
+		ctx = service.WithAccountQualityRequest(ctx, service.AccountQualityRequest{ID: requestID, Model: model, Capability: service.AccountQualityCapability(c.Request.URL.Path), Transport: transport, Stream: stream})
 		c.Request = c.Request.WithContext(ctx)
 	}
 }

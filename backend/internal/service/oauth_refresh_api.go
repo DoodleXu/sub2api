@@ -374,6 +374,17 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		}
 	}
 
+	if _, tracked := ctx.Value(accountQualityCredentialsKey{}).(*accountQualityCredentials); tracked && newCredentials != nil {
+		durable, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
+		if readErr != nil {
+			return nil, fmt.Errorf("read refreshed account scheduling state: %w", readErr)
+		}
+		if err := authorizeAccountQualityCredentialRefresh(ctx, attemptedAccount, durable, newCredentials); err != nil {
+			return nil, err
+		}
+		freshAccount = durable
+	}
+
 	return &OAuthRefreshResult{
 		Refreshed:      true,
 		NewCredentials: newCredentials,

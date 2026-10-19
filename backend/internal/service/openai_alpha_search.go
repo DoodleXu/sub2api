@@ -26,7 +26,7 @@ const (
 // 返回值约定：2xx 返回非 nil 的 *OpenAIForwardResult（WebSearchCalls=1，供按次计费）；
 // 3xx 原样透传并返回 (nil, nil)；非 failover 4xx/5xx 在写入响应后返回 (nil, error)；
 // 可切换账号的错误返回 *UpstreamFailoverError。所有非 2xx 响应均不产生计费。
-func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+func (s *OpenAIGatewayService) forwardAlphaSearchQualityCore(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	if s == nil || c == nil || account == nil {
 		return nil, fmt.Errorf("service, context, and account are required")
 	}
@@ -696,4 +696,18 @@ func (s *OpenAIGatewayService) openAIAlphaSearchURL(account *Account) (string, e
 	default:
 		return "", fmt.Errorf("unsupported OpenAI account type: %s", account.Type)
 	}
+}
+
+func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAlphaSearchQualityCore(ctx, c, account, body)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

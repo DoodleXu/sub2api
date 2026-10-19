@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -122,6 +123,30 @@ func newOpenAIWSCurrentTurnFailoverError(cause error, retryPayload []byte) error
 	}
 }
 
+// A rejection before dispatch still belongs to the current turn. Returning a
+// bare failover here would make the handler replay the connection's first turn.
+func openAIWSDispatchFailureForTurn(cause error, turn int, payload []byte, model string, previousInput []json.RawMessage, previousExists bool, previousResponseID string) error {
+	var failure *UpstreamFailoverError
+	if turn <= 1 || !errors.As(cause, &failure) {
+		return cause
+	}
+	prev := strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id"))
+	coverage := AnalyzeToolCallOutputContextCoverageBytes(payload)
+	needsHistory := prev != "" || (coverage.HasFunctionCallOutput && !coverage.ContextCoversAllCallIDs)
+	if needsHistory && (!previousExists || (prev != "" && prev != previousResponseID)) {
+		return newOpenAIWSCurrentTurnFailoverError(cause, nil)
+	}
+	input, exists, err := buildOpenAIWSReplayInputSequence(previousInput, previousExists, payload, needsHistory)
+	if err != nil {
+		return newOpenAIWSCurrentTurnFailoverError(cause, nil)
+	}
+	retry, safe, err := buildOpenAIWSCurrentTurnRetryPayload(payload, input, exists, model)
+	if err != nil || !safe {
+		retry = nil
+	}
+	return newOpenAIWSCurrentTurnFailoverError(cause, retry)
+}
+
 // OpenAIWSCurrentTurnRetryPayload returns an isolated copy of the payload that
 // may be retried on a replacement account without replaying the first turn.
 func OpenAIWSCurrentTurnRetryPayload(err error) ([]byte, bool) {
@@ -158,36 +183,6 @@ func wrapOpenAIWSIngressTurnError(stage string, cause error, wroteDownstream boo
 		cause:           cause,
 		wroteDownstream: wroteDownstream,
 	}
-}
-
-func isOpenAIWSIngressTurnRetryable(err error) bool {
-	var turnErr *openAIWSIngressTurnError
-	if !errors.As(err, &turnErr) || turnErr == nil {
-		return false
-	}
-	if errors.Is(turnErr.cause, context.Canceled) || errors.Is(turnErr.cause, context.DeadlineExceeded) {
-		return false
-	}
-	if turnErr.wroteDownstream {
-		return false
-	}
-	switch turnErr.stage {
-	case "write_upstream", "read_upstream":
-		return true
-	default:
-		return false
-	}
-}
-
-func openAIWSIngressTurnRetryReason(err error) string {
-	var turnErr *openAIWSIngressTurnError
-	if !errors.As(err, &turnErr) || turnErr == nil {
-		return "unknown"
-	}
-	if turnErr.stage == "" {
-		return "unknown"
-	}
-	return turnErr.stage
 }
 
 func isOpenAIWSIngressPreviousResponseNotFound(err error) bool {

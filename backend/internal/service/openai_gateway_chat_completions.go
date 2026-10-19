@@ -53,7 +53,7 @@ var cursorResponsesUnsupportedFields = []string{
 //     直转原生 CC，anthropic 走原生 Anthropic，responses 走 Responses
 //   - 其他 APIKey 账号仍按覆盖模式/探测标记分流（详见
 //     openai_compat.ShouldUseResponsesAPI）
-func (s *OpenAIGatewayService) ForwardAsChatCompletions(
+func (s *OpenAIGatewayService) forwardAsChatCompletionsQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -388,6 +388,9 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(ctx, account, resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && identityMetadata.isAgentIdentity && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			if err := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); err != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
@@ -1400,4 +1403,25 @@ func buildChatStreamErrorSSE(code, message string) string {
 		return "data: {\"error\":{\"type\":\"invalid_request_error\",\"code\":\"" + code + "\",\"message\":\"upstream error\"}}\n\n"
 	}
 	return "data: " + string(payload) + "\n\n"
+}
+
+func (s *OpenAIGatewayService) ForwardAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	promptCacheKey string,
+	defaultMappedModel string,
+) (*OpenAIForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAsChatCompletionsQualityCore(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

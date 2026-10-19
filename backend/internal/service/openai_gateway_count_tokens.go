@@ -49,7 +49,21 @@ func (s *OpenAIGatewayService) ForwardResponsesInputTokens(
 	c *gin.Context,
 	account *Account,
 	body []byte,
-) error {
+) (returnErr error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	defer func() { returnErr = attempt.Finish(nil, returnErr) }()
+
+	if err := s.rateLimitService.ValidateAccountDispatch(ctx, account); err != nil {
+		return err
+	}
+
 	if account == nil {
 		writeOpenAIResponsesInputTokensError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI accounts")
 		return fmt.Errorf("responses input_tokens: missing account")
@@ -258,7 +272,21 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
-) error {
+) (returnErr error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	defer func() { returnErr = attempt.Finish(nil, returnErr) }()
+
+	if err := s.rateLimitService.ValidateAccountDispatch(ctx, account); err != nil {
+		return err
+	}
+
 	if account == nil {
 		return &UpstreamFailoverError{
 			StatusCode:       http.StatusServiceUnavailable,

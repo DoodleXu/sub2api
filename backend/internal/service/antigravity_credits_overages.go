@@ -168,6 +168,8 @@ type creditsOveragesRetryResult struct {
 	resp    *http.Response
 }
 
+type accountQualityCreditsTransitionKey struct{}
+
 // attemptCreditsOveragesRetry 在确认免费配额耗尽后，尝试注入 AI Credits 继续请求。
 func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 	p antigravityRetryLoopParams,
@@ -185,7 +187,10 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 	logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 credit_overages_retry model=%s account=%d (injecting enabledCreditTypes)",
 		p.prefix, modelKey, p.account.ID)
 
-	creditsReq, err := antigravity.NewAPIRequestWithURL(p.ctx, baseURL, p.action, p.accessToken, creditsBody)
+	// This permission belongs only to this explicitly enabled wallet transition,
+	// never to a generic retry or the rest of the request context.
+	creditsCtx := context.WithValue(p.ctx, accountQualityCreditsTransitionKey{}, true)
+	creditsReq, err := antigravity.NewAPIRequestWithURL(creditsCtx, baseURL, p.action, p.accessToken, creditsBody)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s credit_overages_failed model=%s account=%d build_request_err=%v",
 			p.prefix, modelKey, p.account.ID, err)

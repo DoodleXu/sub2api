@@ -229,7 +229,7 @@ func TestLiveCreateFailoverSuppressesOverclockingAccountError(t *testing.T) {
 	overclocking := &Account{
 		Platform: PlatformOpenAI,
 		Extra: map[string]any{
-			OpenAIContinueSchedulingAfterLimitExtraKey: true,
+			"openai_continue_scheduling_after_limit": true,
 		},
 	}
 
@@ -239,9 +239,8 @@ func TestLiveCreateFailoverSuppressesOverclockingAccountError(t *testing.T) {
 	}
 	shouldFailover, clientErr := service.prepareLiveCreateFailover(overclocking, upstreamErr)
 	require.True(t, shouldFailover)
-	require.ErrorIs(t, clientErr, ErrLiveUnavailable)
-	require.True(t, upstreamErr.SuppressClientError)
-	require.Equal(t, NextAccountRetry, upstreamErr.NextAccountAction)
+	require.Same(t, upstreamErr, clientErr)
+	require.Equal(t, NextAccountStop, upstreamErr.NextAccountAction)
 
 	normalErr := &UpstreamFailoverError{StatusCode: http.StatusBadGateway}
 	shouldFailover, clientErr = service.prepareLiveCreateFailover(&Account{Platform: PlatformOpenAI}, normalErr)

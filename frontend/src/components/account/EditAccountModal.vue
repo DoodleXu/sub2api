@@ -26,6 +26,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <AccountQualityPanel v-if="account.quality_scheduling" :quality="account.quality_scheduling" />
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -471,6 +473,7 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
             <input
               v-model.number="poolModeRetryCount"
+              disabled
               type="number"
               min="0"
               :max="MAX_POOL_MODE_RETRY_COUNT"
@@ -490,6 +493,7 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryStatusCodes') }}</label>
             <input
               v-model="poolModeRetryStatusCodesInput"
+              disabled
               type="text"
               class="input"
               :placeholder="DEFAULT_POOL_MODE_RETRY_STATUS_CODES.join(', ')"
@@ -1368,6 +1372,7 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
             <input
               v-model.number="poolModeRetryCount"
+              disabled
               type="number"
               min="0"
               :max="MAX_POOL_MODE_RETRY_COUNT"
@@ -1387,6 +1392,7 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryStatusCodes') }}</label>
             <input
               v-model="poolModeRetryStatusCodesInput"
+              disabled
               type="text"
               class="input"
               :placeholder="DEFAULT_POOL_MODE_RETRY_STATUS_CODES.join(', ')"
@@ -2597,32 +2603,6 @@
         v-if="account?.platform === 'openai'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
-        <div
-          class="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/20"
-        >
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <label class="input-label mb-0">{{ t('admin.accounts.continueSchedulingAfterLimit') }}</label>
-              <p class="input-hint mt-1">{{ t('admin.accounts.continueSchedulingAfterLimitHint') }}</p>
-            </div>
-            <button
-              type="button"
-              @click="continueSchedulingAfterLimit = !continueSchedulingAfterLimit"
-              :class="[
-                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-                continueSchedulingAfterLimit ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-              data-testid="continue-scheduling-after-limit"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  continueSchedulingAfterLimit ? 'translate-x-5' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-        </div>
         <div class="space-y-2">
           <div class="flex items-center justify-between">
             <label class="input-label mb-0">{{ t('admin.accounts.autoPause5hDisabled') }}</label>
@@ -3265,6 +3245,7 @@
 </template>
 
 <script setup lang="ts">
+import AccountQualityPanel from './AccountQualityPanel.vue'
 import { ref, reactive, computed, watch, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -3817,7 +3798,6 @@ const autoPause7dDisabled = ref(false)
 const autoResetCreditEnabled = ref(false)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
-const continueSchedulingAfterLimit = ref(false)
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
@@ -4377,7 +4357,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 		typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
 	autoResetCredit7dThreshold.value =
 		typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
-	continueSchedulingAfterLimit.value = extra?.openai_continue_scheduling_after_limit === true
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -5994,12 +5973,9 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (continueSchedulingAfterLimit.value) {
-			newExtra.openai_continue_scheduling_after_limit = true
-		} else {
-			delete newExtra.openai_continue_scheduling_after_limit
-		}
 
+
+		delete newExtra.openai_continue_scheduling_after_limit
 		delete newExtra.codex_image_generation_bridge_enabled
       switch (codexImageToolMode.value) {
         case 'enabled':

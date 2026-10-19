@@ -121,7 +121,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	scheduleCtx := c.Request.Context()
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
-	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	switchCount := 0
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -215,51 +214,13 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			reqLog.Warn("openai_alpha_search.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			return
 		}
-		service.PrepareOpenAILimitContinuationFailover(account, failoverErr)
 
 		h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestedModel, false, result), false, nil, err)
 		if c.Writer.Size() != writerSizeBeforeForward {
 			h.handleFailoverExhausted(c, failoverErr, true)
 			return
 		}
-		if failoverErr.RetryableOnSameAccount {
-			retryLimit := account.GetPoolModeRetryCount()
-			if sameAccountRetryCount[account.ID] < retryLimit {
-				sameAccountRetryCount[account.ID]++
-				reqLog.Warn("openai_alpha_search.pool_mode_same_account_retry",
-					zap.Int64("account_id", account.ID),
-					zap.Int("upstream_status", failoverErr.StatusCode),
-					zap.Int("retry_limit", retryLimit),
-					zap.Int("retry_count", sameAccountRetryCount[account.ID]),
-				)
-				select {
-				case <-c.Request.Context().Done():
-					return
-				case <-time.After(sameAccountRetryDelay):
-				}
-				continue
-			}
-		}
-		if failoverErr.RetryableOnSameAccount {
-			retryLimit := account.GetPoolModeRetryCount()
-			if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
-				sameAccountRetryCount[account.ID]++
-				retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
-				reqLog.Warn("openai_alpha_search.same_account_retry",
-					zap.Int64("account_id", account.ID),
-					zap.Int("upstream_status", failoverErr.StatusCode),
-					zap.Int("retry_limit", retryLimit),
-					zap.Int("retry_count", sameAccountRetryCount[account.ID]),
-					zap.Duration("retry_delay", retryDelay),
-				)
-				select {
-				case <-c.Request.Context().Done():
-					return
-				case <-time.After(retryDelay):
-				}
-				continue
-			}
-		}
+
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr

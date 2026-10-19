@@ -699,6 +699,7 @@ export interface SystemSettings {
   openai_low_upstream_rate_priority_enabled?: boolean;
   openai_oauth_scheduling_rate_multiplier?: number;
   openai_scheduling_usd_to_cny_rate?: number;
+  account_quality_scheduling_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
@@ -1294,6 +1295,7 @@ export interface UpdateSettingsRequest {
   openai_low_upstream_rate_priority_enabled?: boolean;
   openai_oauth_scheduling_rate_multiplier?: number;
   openai_scheduling_usd_to_cny_rate?: number;
+  account_quality_scheduling_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;

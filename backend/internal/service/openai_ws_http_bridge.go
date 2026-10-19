@@ -444,7 +444,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if readErr != nil {
 			return nil, fmt.Errorf("read upstream http bridge error response: %w", redactAgentIdentitySensitiveErrorBoundary(redactSensitiveBody, readErr))
 		}
-		if identityMetadata.isAgentIdentity && !agentTaskRecoveryTried && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, rawRespBody) {
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, rawRespBody); failure != nil {
+			return nil, failure
+		}
+		if identityMetadata.isAgentIdentity && !agentTaskRecoveryTried && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, rawRespBody) && AllowAccountProtocolRepair(ctx) {
 			agentTaskRecoveryTried = true
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, identityMetadata.taskIDUsed); recoveryErr != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
@@ -460,7 +463,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if _, alreadyRetried := ctx.Value(openAIWSHTTPBridgeRejectedFieldRetryContextKey{}).(bool); !alreadyRetried {
 			if retryBody, _, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, rawRespBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize rejected responses field for http bridge retry: %w", retryErr)
-			} else if changed && len(retryBody) > 0 {
+			} else if changed && len(retryBody) > 0 && AllowAccountProtocolRepair(ctx) {
 				// The first response is a request-shape rejection, so no client-visible
 				// error or failover side effect should be emitted before the bounded retry.
 				retryCtx := context.WithValue(ctx, openAIWSHTTPBridgeRejectedFieldRetryContextKey{}, true)
@@ -700,6 +703,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		suppressClientMessage := officialOpenAIResponses && bareErrorPending && eventType != "response.failed"
 		if eventType == "error" || eventType == "response.failed" {
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, http.StatusOK, upstreamMessage); failure != nil {
+				if wroteDownstream {
+					failure.NextAccountAction = NextAccountStop
+				}
+				return nil, failure
+			}
 			errMessage := extractOpenAISSEErrorMessage(upstreamMessage)
 			if errMessage == "" {
 				errMessage = "upstream error event"

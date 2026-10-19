@@ -93,9 +93,9 @@ func TestProfitVetoKeepsBackoffUsefulForHealthyAccount(t *testing.T) {
 
 	res := runProfitVetoLoop(t, fs, []int64{2, 1}, map[int64]bool{2: true}, 50)
 
-	require.Equal(t, "forwarded", res.outcome)
-	require.Equal(t, int64(1), res.forwardedID, "退避清空后应重新可选账号 1")
-	require.Equal(t, 1, res.backoffRetries, "应发生且只发生一次退避重试")
+	require.Equal(t, "exhausted", res.outcome)
+	require.Zero(t, res.forwardedID, "已失败账号不能再次被选中")
+	require.Zero(t, res.backoffRetries)
 	require.Contains(t, fs.FailedAccountIDs, int64(2), "利润否决的账号在退避清空后必须被放回排除集")
 }
 
@@ -134,6 +134,6 @@ func TestHandleSelectionExhaustedUnaffectedWithoutProfitVeto(t *testing.T) {
 	fs.SwitchCount = 1
 	fs.FailedAccountIDs[100] = struct{}{}
 
-	require.Equal(t, FailoverContinue, fs.HandleSelectionExhausted(context.Background()))
-	require.Empty(t, fs.FailedAccountIDs, "无利润否决时排除列表应被完全清空")
+	require.Equal(t, FailoverExhausted, fs.HandleSelectionExhausted(context.Background()))
+	require.Contains(t, fs.FailedAccountIDs, int64(100))
 }

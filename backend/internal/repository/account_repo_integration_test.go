@@ -631,7 +631,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
-			name: "filter_by_status_active_includes_openai_limit_continuation",
+			name: "filter_by_status_active_ignores_retired_limit_flag",
 			setup: func(client *dbent.Client) {
 				resetAt := time.Now().Add(10 * time.Minute)
 				mustCreateAccount(s.T(), client, &service.Account{
@@ -641,16 +641,12 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 					Schedulable:      true,
 					RateLimitResetAt: &resetAt,
 					Extra: map[string]any{
-						service.OpenAIContinueSchedulingAfterLimitExtraKey: true,
+						"openai_continue_scheduling_after_limit": true,
 					},
 				})
 			},
 			status:    service.StatusActive,
-			wantCount: 1,
-			validate: func(accounts []service.Account) {
-				s.Require().Equal("active-openai-overclocking", accounts[0].Name)
-				s.Require().True(accounts[0].IsSchedulable())
-			},
+			wantCount: 0,
 		},
 		{
 			name: "filter_by_status_unschedulable_excludes_rate_limited_and_temp_unschedulable",
@@ -702,7 +698,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			},
 		},
 		{
-			name: "filter_by_status_rate_limited_excludes_openai_limit_continuation",
+			name: "filter_by_status_rate_limited_includes_retired_limit_flag",
 			setup: func(client *dbent.Client) {
 				resetAt := time.Now().Add(10 * time.Minute)
 				mustCreateAccount(s.T(), client, &service.Account{
@@ -712,12 +708,12 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 					Schedulable:      true,
 					RateLimitResetAt: &resetAt,
 					Extra: map[string]any{
-						service.OpenAIContinueSchedulingAfterLimitExtraKey: true,
+						"openai_continue_scheduling_after_limit": true,
 					},
 				})
 			},
 			status:    "rate_limited",
-			wantCount: 0,
+			wantCount: 1,
 		},
 		{
 			name: "filter_by_status_temp_unschedulable_excludes_manually_unschedulable",

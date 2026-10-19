@@ -163,7 +163,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PreflightPingTol
 
 // 场景：池内两条空闲连接同批陈旧（首读即失败）。首轮拿到其一失败后重试，
 // 重试必须新建连接，而不是再从池里拿另一条同样陈旧的连接。
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_TurnRetryForcesFreshConn(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ReadFailureDoesNotReplayAccount(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -276,6 +276,16 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_TurnRetryForcesF
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		msgType, event, readErr := clientConn.Read(readCtx)
 		cancelRead()
+		if expectedResponseID == "" {
+			require.Error(t, readErr)
+			select {
+			case serverErr := <-serverErrCh:
+				require.Error(t, serverErr)
+			case <-time.After(5 * time.Second):
+				t.Fatal("等待故障回退信号超时")
+			}
+			return
+		}
 		require.NoError(t, readErr)
 		require.Equal(t, coderws.MessageText, msgType)
 		require.Equal(t, expectedResponseID, gjson.GetBytes(event, "response.id").String())
@@ -308,11 +318,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_TurnRetryForcesF
 	ap.mu.Unlock()
 	require.Equal(t, 2, idleConns, "第二会话开始前池内应有两条空闲连接")
 
-	runSingleTurnSession("resp_retry_fresh")
+	runSingleTurnSession("")
 
-	require.Equal(t, 2, dialer.DialCount(), "首读失败后的重试应新建连接")
+	require.Equal(t, 1, dialer.DialCount(), "首读失败应退出当前账号，不在同账号新建连接重放")
 	fresh.mu.Lock()
 	freshWrites := len(fresh.writes)
 	fresh.mu.Unlock()
-	require.Equal(t, 1, freshWrites)
+	require.Zero(t, freshWrites)
 }

@@ -910,6 +910,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
 	body := s.readUpstreamErrorBody(resp)
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, body); failure != nil {
+		return nil, failure
+	}
 
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
 	upstreamDetail := ""
@@ -1895,6 +1898,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	}
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		respBody = identityMetadata.redactor(respBody)
 		// 直连端点不可用时回退到 Responses 图片工具；其余状态码保持原有 failover 语义。

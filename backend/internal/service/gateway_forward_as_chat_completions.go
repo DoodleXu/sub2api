@@ -26,7 +26,7 @@ import (
 // forwards to the Anthropic upstream, and converts the response back to Chat
 // Completions format. This enables Chat Completions clients to access Anthropic
 // models through Anthropic platform groups.
-func (s *GatewayService) ForwardAsChatCompletions(
+func (s *GatewayService) forwardAsChatCompletionsQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -149,6 +149,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 12. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, _ := s.readUpstreamErrorBody(resp)
+		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+			return nil, failure
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
@@ -546,4 +549,24 @@ func anthropicChatStreamHasUsage(event *apicompat.AnthropicStreamEvent, payload 
 	default:
 		return false
 	}
+}
+
+func (s *GatewayService) ForwardAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	parsed *ParsedRequest,
+) (*ForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAsChatCompletionsQualityCore(ctx, c, account, body, parsed)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

@@ -723,6 +723,14 @@ readLoop:
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
+			if failure := s.rateLimitService.BalanceFailover(ctx, c, account, http.StatusOK, message); failure != nil {
+				lease.MarkBroken()
+				if wroteDownstream {
+					return nil, fmt.Errorf("upstream financial failure after output: %w", failure)
+				}
+				return nil, failure
+			}
+
 		}
 
 		if eventType == "error" {

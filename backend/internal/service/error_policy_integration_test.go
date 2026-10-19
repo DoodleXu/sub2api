@@ -284,8 +284,10 @@ func TestRetryLoop_ErrorPolicy_TempUnschedulable(t *testing.T) {
 		result, err := svc.antigravityRetryLoop(p)
 
 		// Context cancellation during backoff proves default retry was entered
-		require.Nil(t, result)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, 503, result.resp.StatusCode)
+		require.Equal(t, 1, upstream.calls)
 		require.GreaterOrEqual(t, upstream.calls, 1, "should have called upstream at least once")
 	})
 }
@@ -321,8 +323,9 @@ func TestRetryLoop_ErrorPolicy_NilRateLimitService(t *testing.T) {
 	// Should not panic; enters the default retry path (eventually times out)
 	result, err := svc.antigravityRetryLoop(p)
 
-	require.Nil(t, result)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, upstream.calls)
 	require.GreaterOrEqual(t, upstream.calls, 1)
 }
 

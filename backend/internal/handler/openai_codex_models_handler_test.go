@@ -515,50 +515,14 @@ func TestCodexModelsDoesNotFailOverFromPermanentUpstreamStatus(t *testing.T) {
 	}
 }
 
-func TestCodexModelsOptedInAccountFailsOverFromPermanentUpstreamStatus(t *testing.T) {
+func TestRetiredOverclockFlagCannotChangeManifestErrorPolicy(t *testing.T) {
 	handler, upstream, groupID := newCodexModelsFailoverTestHandlerWithOptions(http.StatusBadRequest, 2, 3, true)
 	recorder := performCodexModelsRequest(t, handler, groupID)
-
-	if got, want := upstream.calls(), []int64{1, 2}; !equalInt64Slices(got, want) {
-		t.Fatalf("upstream account calls: got %v, want %v", got, want)
-	}
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
-}
-
-func TestCodexModelsOptedInAccountSuppressesExhaustedError(t *testing.T) {
-	handler, _, groupID := newCodexModelsFailoverTestHandlerWithOptions(http.StatusBadRequest, 1, 3, true)
-	recorder := performCodexModelsRequest(t, handler, groupID)
-
-	if recorder.Code != http.StatusBadGateway {
-		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
-	}
-	if body := recorder.Body.String(); strings.Contains(body, "No available OpenAI accounts") || strings.Contains(body, "upstream error 400") {
-		t.Fatalf("body exposes opted-in account error: %s", body)
-	}
-}
-
-func TestCodexModelsOptedInAccountReturnsLaterNormalAccountError(t *testing.T) {
-	handler, upstream, groupID := newCodexModelsFailoverTestHandlerWithOptions(http.StatusBadRequest, 2, 3, true)
-	upstream.statuses = map[int64]int{
-		1: http.StatusBadRequest,
-		2: http.StatusGatewayTimeout,
-	}
-	recorder := performCodexModelsRequest(t, handler, groupID)
-
-	if got, want := upstream.calls(), []int64{1, 2}; !equalInt64Slices(got, want) {
-		t.Fatalf("upstream account calls: got %v, want %v", got, want)
+	if got := upstream.calls(); !equalInt64Slices(got, []int64{1}) {
+		t.Fatalf("retired flag changed routing: %v", got)
 	}
 	if recorder.Code != http.StatusBadGateway {
-		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
-	}
-	body := recorder.Body.String()
-	if !strings.Contains(body, "upstream error 504") {
-		t.Fatalf("body does not preserve the later normal account error: %s", body)
-	}
-	if strings.Contains(body, "upstream error 400") {
-		t.Fatalf("body exposes the opted-in account error: %s", body)
+		t.Fatalf("status=%d", recorder.Code)
 	}
 }
 
@@ -644,7 +608,7 @@ func newCodexModelsFailoverTestHandlerWithOptions(firstStatus, accountCount, max
 		})
 	}
 	if firstAccountOptedIn && len(accounts) > 0 {
-		accounts[0].Extra = map[string]any{service.OpenAIContinueSchedulingAfterLimitExtraKey: true}
+		accounts[0].Extra = map[string]any{"openai_continue_scheduling_after_limit": true}
 	}
 	upstream := &codexModelsFailoverHTTPUpstream{firstStatus: firstStatus}
 	cfg := &config.Config{RunMode: config.RunModeSimple}

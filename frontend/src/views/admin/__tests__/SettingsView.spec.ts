@@ -526,7 +526,8 @@ const baseSettingsResponse = {
   openai_low_upstream_rate_priority_enabled: false,
   openai_oauth_scheduling_rate_multiplier: 1,
   openai_scheduling_usd_to_cny_rate: 7.2,
-  openai_advanced_scheduler_enabled: false,
+  account_quality_scheduling_enabled: false,
+    openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
   openai_advanced_scheduler_lb_top_k: "",
@@ -1745,6 +1746,16 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
       openai_oauth_scheduling_rate_multiplier: null,
     }));
+  });
+
+  it("enables health-first scheduling and disables inactive legacy controls", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('[data-testid="account-quality-scheduling-toggle"]').setValue(true);
+    expect(wrapper.get('[data-testid="openai-advanced-scheduler-toggle"]').attributes('disabled')).toBeDefined();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ account_quality_scheduling_enabled: true }));
   });
 
   it("places and explains rate controls for both scheduling modes", async () => {

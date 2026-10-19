@@ -16,12 +16,13 @@ const teamLinkedDeactivatedBody = `{"detail":{"code":"deactivated_workspace","me
 
 type teamLinkedAccountRepoStub struct {
 	mockAccountRepoForGemini
-	teamAccounts []Account
-	listErr      error
-	listCalls    int
-	setErrorIDs  []int64
-	setErrorMsgs map[int64]string
-	failSetError map[int64]error
+	teamAccounts    []Account
+	listErr         error
+	listCalls       int
+	balancePauseIDs []int64
+	setErrorIDs     []int64
+	setErrorMsgs    map[int64]string
+	failSetError    map[int64]error
 }
 
 // ListByPlatform 镜像真实仓库语义：仅返回该平台的 active 账户。
@@ -49,6 +50,11 @@ func (r *teamLinkedAccountRepoStub) SetError(ctx context.Context, id int64, erro
 	}
 	r.setErrorMsgs[id] = errorMsg
 	return nil
+}
+
+func (r *teamLinkedAccountRepoStub) PauseAccountForInsufficientBalance(_ context.Context, a *Account, _ AccountBalancePause) (bool, error) {
+	r.balancePauseIDs = append(r.balancePauseIDs, a.ID)
+	return true, nil
 }
 
 func newTeamLinkedAccount(id int64, teamID string) Account {
@@ -121,8 +127,8 @@ func TestTeamLinkedError_GenericPaymentErrorDoesNotFanout(t *testing.T) {
 
 	rl.HandleUpstreamError(context.Background(), &trigger, http.StatusPaymentRequired, http.Header{}, []byte(`{"error":{"message":"insufficient balance"}}`))
 
-	require.Equal(t, []int64{1}, repo.setErrorIDs)
-	require.Contains(t, repo.setErrorMsgs[1], "Payment required (402)")
+	require.Empty(t, repo.setErrorIDs)
+	require.Equal(t, []int64{1}, repo.balancePauseIDs)
 	require.Zero(t, repo.listCalls)
 }
 

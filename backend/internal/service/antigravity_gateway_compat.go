@@ -52,7 +52,7 @@ type antigravityCompatUpstreamCall struct {
 }
 
 // ForwardAsChatCompletions 使用 Antigravity 原生 OAuth 账号转发 Chat Completions 请求。
-func (s *AntigravityGatewayService) ForwardAsChatCompletions(
+func (s *AntigravityGatewayService) forwardAsChatCompletionsQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -99,7 +99,7 @@ func (s *AntigravityGatewayService) ForwardAsChatCompletions(
 }
 
 // ForwardAsResponses 使用 Antigravity 原生 OAuth 账号转发 Responses 请求。
-func (s *AntigravityGatewayService) ForwardAsResponses(
+func (s *AntigravityGatewayService) forwardAsResponsesQualityCore(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -371,6 +371,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin
 		return &UpstreamFailoverError{
 			StatusCode:        http.StatusServiceUnavailable,
 			ForceCacheBilling: switchErr.IsStickySession,
+			Scope:             GatewayFailureScopeRequest, Reason: "model_rate_limit",
 		}
 	}
 	if c.Request.Context().Err() != nil {
@@ -610,4 +611,44 @@ func (s *AntigravityGatewayService) mapAntigravityCompatCollectionError(c *gin.C
 		return s.writeAntigravityCompatError(c, http.StatusBadGateway, "response_too_large", "Upstream response line too long")
 	}
 	return s.writeAntigravityCompatError(c, http.StatusBadGateway, "upstream_error", "Failed to parse upstream response")
+}
+
+func (s *AntigravityGatewayService) ForwardAsChatCompletions(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	_ *ParsedRequest,
+) (*ForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAsChatCompletionsQualityCore(ctx, c, account, body, nil)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
+}
+
+func (s *AntigravityGatewayService) ForwardAsResponses(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	_ *ParsedRequest,
+) (*ForwardResult, error) {
+	ctx, attempt, qualityErr := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if qualityErr != nil {
+		return nil, qualityErr
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	qualityResult, qualityErr := s.forwardAsResponsesQualityCore(ctx, c, account, body, nil)
+	qualityErr = attempt.Finish(qualityResult, qualityErr)
+	return qualityResult, qualityErr
 }

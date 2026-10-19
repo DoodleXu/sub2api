@@ -1472,20 +1472,18 @@ describe('EditAccountModal', () => {
 	  expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.auto_pause_7d_disabled).toBeUndefined()
 	})
 
-  it('submits OpenAI continue-scheduling-after-limit flag in extra', async () => {
+  it('strips retired overclock configuration while saving other settings', async () => {
     const account = buildAccount()
+    account.extra = { ...account.extra, openai_continue_scheduling_after_limit: true }
     updateAccountMock.mockReset()
     checkMixedChannelRiskMock.mockReset()
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
-
     const wrapper = mountModal(account)
-
-    await wrapper.get('[data-testid="continue-scheduling-after-limit"]').trigger('click')
+    expect(wrapper.find('[data-testid="continue-scheduling-after-limit"]').exists()).toBe(false)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
-    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_continue_scheduling_after_limit).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_continue_scheduling_after_limit).toBeUndefined()
   })
 
   it('keeps at least one OpenAI APIKey endpoint capability selected', async () => {

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -21,7 +20,7 @@ import (
 
 const (
 	antigravityStickySessionTTL = time.Hour
-	antigravityMaxRetries       = 3
+	antigravityMaxRetries       = 1
 	antigravityRetryBaseDelay   = 1 * time.Second
 	antigravityRetryMaxDelay    = 16 * time.Second
 
@@ -47,22 +46,6 @@ const (
 	googleRPCTypeErrorInfo                = "type.googleapis.com/google.rpc.ErrorInfo"
 	googleRPCReasonModelCapacityExhausted = "MODEL_CAPACITY_EXHAUSTED"
 	googleRPCReasonRateLimitExceeded      = "RATE_LIMIT_EXCEEDED"
-
-	// 单账号 503 退避重试：Service 层原地重试的最大次数
-	// 在 handleSmartRetry 中，对于 shouldRateLimitModel（长延迟 ≥ 7s）的情况，
-	// 多账号模式下会设限流+切换账号；但单账号模式下改为原地等待+重试。
-	antigravitySingleAccountSmartRetryMaxAttempts = 3
-
-	// 单账号 503 退避重试：原地重试时单次最大等待时间
-	// 防止上游返回过长的 retryDelay 导致请求卡住太久
-	antigravitySingleAccountSmartRetryMaxWait = 15 * time.Second
-
-	// 单账号 503 退避重试：原地重试的总累计等待时间上限
-	// 超过此上限将不再重试，直接返回 503
-	antigravitySingleAccountSmartRetryTotalMaxWait = 30 * time.Second
-
-	// MODEL_CAPACITY_EXHAUSTED 全局去重：重试全部失败后的 cooldown 时间
-	antigravityModelCapacityCooldown = 10 * time.Second
 )
 
 // antigravityPassthroughErrorMessages 透传给客户端的错误消息白名单（小写）
@@ -70,12 +53,6 @@ const (
 var antigravityPassthroughErrorMessages = []string{
 	"prompt is too long",
 }
-
-// MODEL_CAPACITY_EXHAUSTED 全局去重：避免多个并发请求同时对同一模型进行容量耗尽重试
-var (
-	modelCapacityExhaustedMu    sync.RWMutex
-	modelCapacityExhaustedUntil = make(map[string]time.Time) // modelName -> cooldown until
-)
 
 const (
 	antigravityForwardBaseURLEnv  = "GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL"

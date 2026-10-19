@@ -159,7 +159,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// model before entering the generic account error path. This keeps the
 	// account available to other models and avoids the account runtime blocker.
 	if s.rateLimitService != nil &&
-		(statusCode != http.StatusTooManyRequests || !account.IsOpenAIContinueSchedulingAfterLimitEnabled()) && len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
+		len(canonicalModel) > 0 && strings.TrimSpace(canonicalModel[0]) != "" &&
 		tempUnschedRulesApply(account, statusCode, responseBody, canonicalModel[0]) &&
 		s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, responseBody, canonicalModel[0]) {
 		return true
@@ -588,9 +588,6 @@ func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlockedWithContext(c
 	if s == nil || account == nil {
 		return false
 	}
-	if openAIAccountLimitContinuationAllowed(ctx, account) && s.isOpenAIAccountLimitRuntimeBlocked(account) {
-		return s.isOpenAIAccountModelRuntimeBlocked(account, requestedModel)
-	}
 	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)
 }
 
@@ -638,18 +635,6 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeHardBlocked(accountID int64
 	return false
 }
 
-func (s *OpenAIGatewayService) isOpenAIAccountLimitRuntimeBlocked(account *Account) bool {
-	if s == nil || account == nil || !s.isOpenAIAccountRuntimeBlocked(account) {
-		return false
-	}
-	if s.isOpenAIAccountRuntimeHardBlocked(account.ID) {
-		return false
-	}
-	reason, _ := s.openaiAccountRuntimeBlockReason.Load(account.ID)
-	reasonText, _ := reason.(string)
-	return isOpenAILimitRuntimeBlockReason(reasonText)
-}
-
 func (s *OpenAIGatewayService) recordOpenAIOAuth429() {
 	if s == nil {
 		return
@@ -666,9 +651,6 @@ func (s *OpenAIGatewayService) recordOpenAIOAuth429() {
 }
 
 func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account, statusCode int, failedSwitches int, state *OpenAIOAuth429FailoverState) bool {
-	if account != nil && account.IsOpenAIContinueSchedulingAfterLimitEnabled() {
-		return false
-	}
 	if failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}

@@ -90,6 +90,8 @@ var openAIAdvancedSchedulerSettingCache atomic.Value // retained for compatibili
 var openAIAdvancedSchedulerSettingCaches sync.Map    // repo key -> *cachedOpenAIAdvancedSchedulerSetting
 var openAIAdvancedSchedulerSettingSF singleflight.Group
 
+type openAIAccountSelectionPool struct{ accounts []Account }
+
 type OpenAIAccountScheduleRequest struct {
 	GroupID                 *int64
 	Platform                string
@@ -113,10 +115,10 @@ type OpenAIAccountScheduleRequest struct {
 	RequiredImageCapability OpenAIImagesCapability
 	// RequireCompact only filters the legacy /responses/compact capability.
 	// Native remote compaction v2 uses the ordinary Responses capability.
-	RequireCompact        bool
-	ExcludedIDs           map[int64]struct{}
-	limitContinuationMode openAILimitContinuationSelectionMode
-	preloadedPool         *openAIAccountSelectionPool
+	RequireCompact bool
+	ExcludedIDs    map[int64]struct{}
+
+	preloadedPool *openAIAccountSelectionPool
 }
 
 type OpenAIAccountScheduleDecision struct {
@@ -418,43 +420,9 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		s.metrics.recordSelect(decision)
 	}()
 
-	if req.limitContinuationMode == openAILimitContinuationSelectionNormal && len(req.ExcludedIDs) == 0 &&
-		normalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI {
-		accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID, req.Platform)
-		if err != nil {
-			return nil, decision, err
-		}
-		priorityAccounts, normalAccounts := partitionOpenAILimitContinuationAccounts(accounts)
-		if len(priorityAccounts) > 0 {
-			priorityReq := req
-			priorityReq.limitContinuationMode = openAILimitContinuationSelectionOnly
-			priorityReq.preloadedPool = &openAIAccountSelectionPool{accounts: priorityAccounts}
-			selection, candidateCount, topK, loadSkew, selectErr := s.selectByLoadBalance(ctx, priorityReq)
-			if selectErr == nil && selection != nil && selection.Account != nil {
-				decision.Layer = openAIAccountScheduleLayerLoadBalance
-				decision.CandidateCount = candidateCount
-				decision.TopK = topK
-				decision.LoadSkew = loadSkew
-				decision.SelectedAccountID = selection.Account.ID
-				decision.SelectedAccountType = selection.Account.Type
-				return selection, decision, nil
-			}
-			if selectErr != nil && !errors.Is(selectErr, ErrNoAvailableAccounts) && !errors.Is(selectErr, ErrNoAvailableCompactAccounts) {
-				return nil, decision, selectErr
-			}
-			req.limitContinuationMode = openAILimitContinuationSelectionExclude
-			req.preloadedPool = &openAIAccountSelectionPool{accounts: normalAccounts}
-		} else {
-			req.preloadedPool = &openAIAccountSelectionPool{accounts: accounts}
-		}
-	}
-	if req.limitContinuationMode == openAILimitContinuationSelectionNormal && len(req.ExcludedIDs) > 0 {
-		req.limitContinuationMode = openAILimitContinuationSelectionExclude
-	}
-
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if previousResponseID != "" && NormalizeOpenAICompatiblePlatform(req.Platform) == PlatformOpenAI &&
-		(!req.StickyWeighted || !req.PreviousResponseCanMove) {
+		((!req.StickyWeighted && !s.service.rateLimitService.QualitySchedulingEnabled(ctx)) || !req.PreviousResponseCanMove) {
 		selection, err := s.service.selectAccountByPreviousResponseIDForCapability(
 			ctx,
 			req.GroupID,
@@ -477,14 +445,6 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 		if selection != nil && selection.Account != nil {
 			if s.service.openAIGroupRequiresPrivacySet(ctx, req.GroupID) && !selection.Account.IsPrivacySet() {
-				if selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
-				}
-				selection = nil
-			}
-		}
-		if selection != nil && selection.Account != nil {
-			if !openAIAccountMatchesLimitContinuationSelection(selection.Account, req.limitContinuationMode) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -534,7 +494,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 	}
 
-	if !req.StickyWeighted {
+	if !req.StickyWeighted && (!s.service.rateLimitService.QualitySchedulingEnabled(ctx) || req.DisableStickyEscape) {
 		selection, escapedSticky, err := s.selectBySessionHash(ctx, req)
 		if err != nil {
 			return nil, decision, err
@@ -990,7 +950,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		candidateCount:            len(candidates),
 	}
 	if len(candidates) == 0 {
-		plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
+		plan.selectionOrder = s.buildOpenAISelectionOrder(ctx, req, plan)
 		return plan
 	}
 
@@ -1139,14 +1099,18 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		plan.topK = 1
 	}
 
-	plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
+	plan.selectionOrder = s.buildOpenAISelectionOrder(ctx, req, plan)
 	return plan
 }
 
 func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
+	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
 	plan openAIAccountLoadPlan,
 ) []openAIAccountCandidateScore {
+	if s.service != nil && s.service.rateLimitService.QualitySchedulingEnabled(ctx) {
+		return s.qualitySelectionOrder(ctx, req, plan)
+	}
 	buildSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
 		if len(pool) == 0 || plan.topK <= 0 {
 			return nil
@@ -1547,10 +1511,6 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				continue
 			}
 		}
-		if !openAIAccountMatchesLimitContinuationSelection(account, req.limitContinuationMode) {
-			filterStats.exclude("limit_continuation_tier")
-			continue
-		}
 		if !account.IsSchedulable() {
 			filterStats.exclude("not_schedulable")
 			continue
@@ -1595,7 +1555,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}
 	}
 
-	if req.SubscriptionPriority {
+	if req.SubscriptionPriority && !s.service.rateLimitService.QualitySchedulingEnabled(ctx) {
 		subscriptionAccounts, regularAccounts := partitionOpenAIChatGPTSubscriptionAccounts(filtered)
 		if len(subscriptionAccounts) > 0 {
 			attempt := s.trySelectByLoadBalancePool(ctx, req, subscriptionAccounts, loadMap, budget)
@@ -1878,9 +1838,6 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
-	if !openAIAccountMatchesLimitContinuationSelection(account, req.limitContinuationMode) {
-		return false, "limit_continuation_tier"
-	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
@@ -2123,6 +2080,9 @@ func openAIAdvancedSchedulerSettingCacheMatches(cached *cachedOpenAIAdvancedSche
 }
 
 func (s *OpenAIGatewayService) isOpenAIAdvancedSchedulerEnabled(ctx context.Context) bool {
+	if s != nil && s.rateLimitService.QualitySchedulingEnabled(ctx) {
+		return true
+	}
 	repo := s.openAIAdvancedSchedulerSettingRepo()
 	if repo == nil {
 		return false

@@ -30,7 +30,7 @@ func (e *SystemOneUpstreamError) Error() string {
 	return fmt.Sprintf("typesafe upstream rejected request with status %d", e.StatusCode)
 }
 
-func (s *GatewayService) ForwardSystemOne(ctx context.Context, c *gin.Context, account *Account, body []byte) (*SystemOneForwardResult, error) {
+func (s *GatewayService) forwardSystemOneQualityCore(ctx context.Context, c *gin.Context, account *Account, body []byte) (*SystemOneForwardResult, error) {
 	started := time.Now()
 	if account == nil || !account.IsTypeSafe() || account.Type != AccountTypeAPIKey {
 		return nil, errors.New("invalid typesafe account")
@@ -120,6 +120,9 @@ func IsSystemOneRequestErrorStatus(status int) bool {
 // or the policy took the account out of rotation.
 func (s *GatewayService) handleSystemOneErrorResponse(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, upstreamURL string) error {
 	respBody, _ := s.readUpstreamErrorBody(resp)
+	if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
+		return failure
+	}
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, "")
 	event := OpsUpstreamErrorEvent{
@@ -179,4 +182,18 @@ func systemOneResponseContentType(raw string) string {
 		return strings.TrimSpace(raw)
 	}
 	return "application/json"
+}
+
+func (s *GatewayService) ForwardSystemOne(ctx context.Context, c *gin.Context, account *Account, body []byte) (*SystemOneForwardResult, error) {
+	ctx, attempt, err := s.rateLimitService.BeginAccountQualityAttempt(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	defer attempt.Abort()
+	if attempt != nil {
+		bindAccountQualityAttemptContext(c, ctx)
+	}
+	result, err := s.forwardSystemOneQualityCore(ctx, c, account, body)
+	err = attempt.Finish(result, err)
+	return result, err
 }

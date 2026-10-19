@@ -363,6 +363,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAILowUpstreamRatePriorityEnabled:                   settings.OpenAILowUpstreamRatePriorityEnabled,
 		OpenAIOAuthSchedulingRateMultiplier:                    settings.OpenAIOAuthSchedulingRateMultiplier,
 		OpenAISchedulingUSDToCNYRate:                           settings.OpenAISchedulingUSDToCNYRate,
+		AccountQualitySchedulingEnabled:                        settings.AccountQualitySchedulingEnabled,
 		OpenAIAdvancedSchedulerEnabled:                         settings.OpenAIAdvancedSchedulerEnabled,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
@@ -1344,6 +1345,7 @@ type UpdateSettingsRequest struct {
 	OpenAIOAuthSchedulingRateMultiplier                *float64 `json:"openai_oauth_scheduling_rate_multiplier"`
 	openAIOAuthSchedulingRateMultiplierSet             bool
 	OpenAISchedulingUSDToCNYRate                       *float64 `json:"openai_scheduling_usd_to_cny_rate"`
+	AccountQualitySchedulingEnabled                    *bool    `json:"account_quality_scheduling_enabled"`
 	OpenAIAdvancedSchedulerEnabled                     *bool    `json:"openai_advanced_scheduler_enabled"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool    `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled *bool    `json:"openai_advanced_scheduler_subscription_priority_enabled"`
@@ -2941,6 +2943,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAISchedulingUSDToCNYRate
 		}(),
+		AccountQualitySchedulingEnabled: func() bool {
+			if req.AccountQualitySchedulingEnabled != nil {
+				return *req.AccountQualitySchedulingEnabled
+			}
+			return previousSettings.AccountQualitySchedulingEnabled
+		}(),
 		OpenAIAdvancedSchedulerEnabled: func() bool {
 			if req.OpenAIAdvancedSchedulerEnabled != nil {
 				return *req.OpenAIAdvancedSchedulerEnabled
@@ -3577,6 +3585,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAILowUpstreamRatePriorityEnabled:                   updatedSettings.OpenAILowUpstreamRatePriorityEnabled,
 		OpenAIOAuthSchedulingRateMultiplier:                    updatedSettings.OpenAIOAuthSchedulingRateMultiplier,
 		OpenAISchedulingUSDToCNYRate:                           updatedSettings.OpenAISchedulingUSDToCNYRate,
+		AccountQualitySchedulingEnabled:                        updatedSettings.AccountQualitySchedulingEnabled,
 		OpenAIAdvancedSchedulerEnabled:                         updatedSettings.OpenAIAdvancedSchedulerEnabled,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           updatedSettings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     updatedSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
@@ -4214,6 +4223,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.PaymentVisibleMethodWxpayEnabled != after.PaymentVisibleMethodWxpayEnabled {
 		changed = append(changed, "payment_visible_method_wxpay_enabled")
+	}
+	if before.AccountQualitySchedulingEnabled != after.AccountQualitySchedulingEnabled {
+		changed = append(changed, "account_quality_scheduling_enabled")
 	}
 	if before.OpenAIAdvancedSchedulerEnabled != after.OpenAIAdvancedSchedulerEnabled {
 		changed = append(changed, "openai_advanced_scheduler_enabled")
