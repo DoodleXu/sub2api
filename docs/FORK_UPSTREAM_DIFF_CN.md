@@ -1,6 +1,16 @@
 # Fork 与上游功能差异维护台账
 
-## 2026-10-19：准备发布 v0.2.37（全平台健康调度与欠费保护）
+## 2026-10-19 发版 v0.2.37
+
+- annotated tag `v0.2.37` 指向已推送主线的 `73326128ba135c5d8918cf866bf13c26eb4cd3f1`，版本源为 `0.2.37`，包含下方健康调度、欠费保护、审核修复及发布预检清理。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/39231392518)（全量 unit、真实 PostgreSQL/Redis integration、前端门禁、lint 与 shell 检查）、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/39231392243) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/39232806647) 全部成功。候选核验脚本通过后才创建并推送标签。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.37) 于北京时间 2026-10-19 17:54 发布，为正式版、非草稿；附件为 `checksums.txt` 与 `sub2api_0.2.37_linux_amd64.tar.gz`。下载包 SHA-256 校验通过：`455894c4b88bc29195bbf43ccc80d7d4a72b5c58f5be439779d998c467594bf1`；二进制确认为 Linux/amd64 ELF64，包含预期提交、迁移249与新健康面板资源。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.37`、`:0.2.37-amd64`、`:latest` 已核对为同一 digest：`sha256:a3b873ec3b295ca72e086a2c449cf678fe60ddc3a3205cb0a2c97438159be76d`；平台、版本及 revision 标签均与发布提交一致。
+- 本机后端全量 unit、`golangci-lint`（`0 issues`）、前端代码规范/类型检查、32个 Vitest 文件607项用例、前后端生产构建及7项 shell 检查通过。本机 Docker 在集成预检期间停止响应，未把该次本地失败或跳过计作通过；真实集成验收以发布提交的 CI 成功结果为准。
+- 本轮完成 GitHub/GHCR 发版，未执行生产服务器更新。生产迁移、回滚及小流量验收仍按 `docs/ACCOUNT_QUALITY_SCHEDULING_CN.md` 执行。
+
+## 2026-10-19：全平台健康调度与欠费保护
+
 
 - 完整移除 OpenAI“达到限额后仍尝试调度”：开关、超频状态、优先层、限额绕过和专用回退均退出运行链路。旧章节仅记录历史；迁移249与输入清理剥离旧 extra 键，旧客户端仍可修改其他字段。
 - 默认启用 `account_quality_scheduling_enabled`：原资格过滤后按健康等级、速度、负载、可信倍率及普通粘性/静态优先级排序。原高级权重只在关闭新排序时生效；关闭排序不撤销欠费保护或恢复失败重试。
