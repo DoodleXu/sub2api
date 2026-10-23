@@ -1,11 +1,14 @@
 # Fork 与上游功能差异维护台账
 
-## 2026-10-23 准备发布 v0.2.38
+## 2026-10-23 发版 v0.2.38
 
-- 版本源更新为 `0.2.38`，包含下方充值优惠统一与配置保护修复；无新增数据库迁移，继续发布 Linux/amd64 二进制与 GHCR 镜像。
-- 本地后端全量 unit、golangci-lint v2.14.0、嵌入前端的 Go 构建、前端 lint/typecheck 与发布关键 Vitest（30 个文件、600 项）、本轮专项回归及 7 项 shell 检查通过。精确候选提交的 CI、安全扫描和发布结果在发布后补充；本机旧版 Python/Bash 不满足 release-helper 测试工具要求，该检查由 Ubuntu CI 执行。
-- 首轮候选 `3d444b8ae` 的 CI 全部通过，安全扫描发现已有依赖新披露的漏洞：Go `GO-2026-6809`、DOMPurify 与 follow-redirects。将 Go/CI/Docker 构建版本同步到 `1.27.3`，DOMPurify 更新为 `3.4.17`，follow-redirects 更新为 `1.16.1`；安全例外清单保持为空。补丁后本地后端全量 unit、静态检查与 govulncheck 通过，前端 lint/typecheck、32 个文件 628 项 Vitest 与生产构建通过，生产依赖 audit 的 high/critical 均为 0；锁文件仅更新上述两个 npm 包，以新候选重新验证远端门禁。
-- 升级后旧自定义满赠不再生效；需继续开展优惠时，请先在官方“充值优惠阶梯”中配置。空阶梯无优惠，历史订单按原金额快照履约与退款。
+- annotated tag `v0.2.38` 指向已推送主线的 `5754adef8a5f4b8eec2cffebe6f1a80763606f4f`，版本源为 `0.2.38`，包含充值优惠统一、配置保护修复与依赖安全补丁；无新增数据库迁移。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/39946797248)（全量 unit、PostgreSQL/Redis integration、前端门禁、lint、shell 与 release-helper 检查）、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/39946797251) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/39948843082) 全部成功。候选核验通过后才创建并推送标签。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.38) 于北京时间 2026-10-23 19:55:27 正式发布，非草稿、非预发布。下载包 `sub2api_0.2.38_linux_amd64.tar.gz` 的 SHA-256 与 `checksums.txt` 及 GitHub asset digest 一致：`35b4e5ddee814ecc813373b98e2bb43e9808f73f5f71263b79585820871fa01a`；包内二进制确认为 Linux/amd64 ELF，使用 Go 1.27.3 构建，提交号匹配发布标签。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.38`、`:0.2.38-amd64`、`:latest` 均核对为 `sha256:29f1d98cce42fd7c9d4899be2e635f532c167ab1263880dc640b7a7459498aaa`，平台为 `linux/amd64`，镜像版本与 revision 标签匹配发布提交。
+- 首轮候选 `3d444b8ae` 的 CI 通过，但安全扫描发现已有依赖新披露的漏洞。已将 Go/CI/三个 Docker 构建镜像同步到 `1.27.3` 修复 `GO-2026-6809`，将 DOMPurify 更新到 `3.4.17`、follow-redirects 更新到 `1.16.1`；锁文件仅更新这两个 npm 包，安全例外清单保持为空。
+- 补丁后本地后端全量 unit、golangci-lint v2.14.0（0 issues）、govulncheck 与嵌入前端的 Go 构建通过；前端 lint/typecheck、32 个文件 628 项 Vitest、生产构建通过，生产依赖 audit 的 high/critical 均为 0。7 项本地 shell 检查通过；本机旧 Python/Bash 不满足的 release-helper 测试已在 Ubuntu CI 通过。
+- 升级后旧自定义满赠不再生效，旧档位不自动迁移；需要继续优惠时，请在官方“充值优惠阶梯”中配置。空阶梯无优惠，历史订单按原金额快照履约与退款。本轮完成 GitHub/GHCR 发版，未更新生产服务器。
 
 ## 2026-10-23 充值优惠统一使用官方阶梯
 
