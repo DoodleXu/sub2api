@@ -83,10 +83,6 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if req.OrderType == payment.OrderTypeBalance {
 		quote := quoteRechargeBonus(cfg, req.Amount, methodCurrency)
 		orderAmount, bonusAmount, payBaseAmount = quote.Credited, quote.Bonus, quote.PayBase
-		if len(cfg.RechargeBonusTiers) == 0 {
-			bonusAmount = calculateRechargeGift(req.Amount, cfg.RechargeGiftEnabled, cfg.RechargeGiftTiers)
-			orderAmount = decimal.NewFromFloat(orderAmount).Add(decimal.NewFromFloat(bonusAmount)).Round(2).InexactFloat64()
-		}
 	}
 	payAmountStr, payAmount, feeAmount, err := calculateCreateOrderPayAmountForOrderType(
 		payBaseAmount,

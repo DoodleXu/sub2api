@@ -8176,77 +8176,6 @@
                     </p>
                   </div>
                 </div>
-                <!-- Recharge gift tiers: one dedicated visual configuration row -->
-                <div
-                  data-testid="recharge-gift-config"
-                  class="border-t border-gray-100 pt-4 dark:border-dark-700"
-                >
-                  <div class="flex items-start justify-between gap-4">
-                    <div>
-                      <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                        {{ t("admin.settings.payment.rechargeGift") }}
-                      </label>
-                      <p class="mt-0.5 text-xs text-gray-400">
-                        {{ t("admin.settings.payment.rechargeGiftHint") }}
-                      </p>
-                    </div>
-                    <Toggle v-model="form.payment_recharge_gift_enabled" />
-                  </div>
-                  <div v-if="form.payment_recharge_gift_enabled" class="mt-4 space-y-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                        {{ t("admin.settings.payment.rechargeGiftTiers") }}
-                      </span>
-                      <button
-                        data-testid="recharge-gift-add-tier"
-                        type="button"
-                        class="btn btn-secondary btn-sm"
-                        @click="addRechargeGiftTier"
-                      >
-                        {{ t("admin.settings.payment.rechargeGiftAddTier") }}
-                      </button>
-                    </div>
-                    <div
-                      v-for="(tier, index) in form.payment_recharge_gift_tiers"
-                      :key="index"
-                      :data-testid="`recharge-gift-tier-${index}`"
-                      class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
-                    >
-                      <label class="space-y-1">
-                        <span class="input-label">{{ t("admin.settings.payment.rechargeGiftThreshold") }}</span>
-                        <input
-                          v-model.number="tier.threshold"
-                          class="input"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          :placeholder="t('admin.settings.payment.rechargeGiftThreshold')"
-                        />
-                      </label>
-                      <label class="space-y-1">
-                        <span class="input-label">{{ t("admin.settings.payment.rechargeGiftPercent") }}</span>
-                        <div class="relative">
-                          <input
-                            v-model.number="tier.percent"
-                            class="input pr-8"
-                            type="number"
-                            min="0.01"
-                            max="100"
-                            step="0.01"
-                            :placeholder="t('admin.settings.payment.rechargeGiftPercent')"
-                          />
-                          <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400">%</span>
-                        </div>
-                      </label>
-                      <button type="button" class="btn btn-secondary self-end" @click="removeRechargeGiftTier(index)">
-                        {{ t("admin.settings.payment.rechargeGiftDelete") }}
-                      </button>
-                    </div>
-                    <p v-if="form.payment_recharge_gift_tiers.length === 0" class="text-xs text-gray-400">
-                      {{ t("admin.settings.payment.rechargeGiftEmpty") }}
-                    </p>
-                  </div>
-                </div>
                 <!-- Row 4: Pending orders + load balance + cancel rate limit (all in one row) -->
                 <div class="flex flex-wrap items-end gap-4">
                   <div class="w-28">
@@ -9479,7 +9408,7 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
-import { normalizeRechargeBonusMode, normalizeRechargeBonusTiers, sanitizeRechargeBonusTiersForSubmit, type RechargeBonusMode, type RechargeBonusTierDraft } from "@/utils/rechargeBonus";
+import { areRechargeBonusTierDraftsValid, normalizeRechargeBonusMode, normalizeRechargeBonusTiers, sanitizeRechargeBonusTiersForSubmit, type RechargeBonusMode, type RechargeBonusTierDraft } from "@/utils/rechargeBonus";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
@@ -10395,9 +10324,7 @@ type SettingsForm = Omit<
   aliyun_captcha_access_key_secret: string;
   linuxdo_connect_client_secret: string;
   dingtalk_connect_client_secret: string;
-  payment_recharge_gift_tiers: RechargeGiftTierForm[];
   payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
-  payment_recharge_gift_enabled: boolean;
   wechat_connect_app_secret: string;
   wechat_connect_open_app_secret: string;
   wechat_connect_mp_app_secret: string;
@@ -10434,11 +10361,6 @@ type SettingsForm = Omit<
   default_platform_quotas: DefaultPlatformQuotasMap;
   account_scheduling_thresholds: ReturnType<typeof normalizeAccountSchedulingThresholdsMap>;
 };
-
-interface RechargeGiftTierForm {
-  threshold: number;
-  percent: number;
-}
 
 const schedulingThresholdPlatforms = SCHEDULING_THRESHOLD_PLATFORMS;
 
@@ -10506,8 +10428,6 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
-  payment_recharge_gift_enabled: false as boolean,
-  payment_recharge_gift_tiers: [] as RechargeGiftTierForm[],
   payment_recharge_bonus_tiers: [] as RechargeBonusTierDraft[],
   payment_recharge_bonus_mode: "bonus" as RechargeBonusMode,
   payment_recharge_bonus_notice: "",
@@ -11800,41 +11720,6 @@ function serializeCodexRowsToJSON(rows: CodexClientRow[]): string {
   return entries.length > 0 ? JSON.stringify(entries) : "";
 }
 
-function normalizeRechargeGiftTiers(
-  tiers: Array<Partial<RechargeGiftTierForm>> | null | undefined,
-): RechargeGiftTierForm[] | null {
-  if (!Array.isArray(tiers)) return null;
-  const normalized: RechargeGiftTierForm[] = [];
-  for (const item of tiers) {
-    const tier = {
-      threshold: Number(item?.threshold),
-      percent: Number(item?.percent),
-    };
-    if (
-      !Number.isFinite(tier.threshold) ||
-      tier.threshold <= 0 ||
-      !Number.isFinite(tier.percent) ||
-      tier.percent <= 0 ||
-      tier.percent > 100
-    ) {
-      return null;
-    }
-    normalized.push({
-      threshold: Math.round(tier.threshold * 100) / 100,
-      percent: Math.round(tier.percent * 100) / 100,
-    });
-  }
-  return normalized;
-}
-
-function addRechargeGiftTier(): void {
-  form.payment_recharge_gift_tiers.push({ threshold: 30, percent: 2 });
-}
-
-function removeRechargeGiftTier(index: number): void {
-  form.payment_recharge_gift_tiers.splice(index, 1);
-}
-
 function addCodexBlacklistRow(): void {
   codexBlacklistRows.value.push({ originator: "", uaContains: "" });
 }
@@ -11878,9 +11763,6 @@ async function loadSettings() {
       form.openai_oauth_scheduling_rate_multiplier =
         settings.openai_oauth_scheduling_rate_multiplier ?? null;
     }
-    form.payment_recharge_gift_tiers = (settings.payment_recharge_gift_tiers || []).map(
-      (tier) => ({ threshold: Number(tier.threshold), percent: Number(tier.percent) }),
-    )
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -12244,6 +12126,10 @@ async function saveSettings() {
     );
     return;
   }
+  if (!areRechargeBonusTierDraftsValid(form.payment_recharge_bonus_tiers, form.payment_recharge_bonus_mode)) {
+    appStore.showError(t("admin.settings.payment.rechargeBonus.invalidTiers"));
+    return;
+  }
   saving.value = true;
   try {
     form.clarity_project_id = form.clarity_project_id.trim();
@@ -12297,19 +12183,6 @@ async function saveSettings() {
       form.openai_oauth_scheduling_rate_multiplier = normalizedOauthRate;
     } else {
       form.openai_oauth_scheduling_rate_multiplier = null;
-    }
-
-    const normalizedRechargeGiftTiers = normalizeRechargeGiftTiers(
-      form.payment_recharge_gift_tiers,
-    );
-    if (normalizedRechargeGiftTiers === null) {
-      appStore.showError(
-        localText(
-          "充值满赠档位必须填写有效的充值金额和赠送比例。",
-          "Recharge gift tiers must use valid thresholds and percentages.",
-        ),
-      );
-      return;
     }
 
     const normalizedLoginAgreementDocuments =
@@ -12667,8 +12540,6 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
-      payment_recharge_gift_enabled: form.payment_recharge_gift_enabled,
-      payment_recharge_gift_tiers: normalizedRechargeGiftTiers,
       payment_recharge_bonus_tiers: sanitizeRechargeBonusTiersForSubmit(form.payment_recharge_bonus_tiers),
       payment_recharge_bonus_mode: form.payment_recharge_bonus_mode,
       payment_recharge_bonus_notice: form.payment_recharge_bonus_notice,

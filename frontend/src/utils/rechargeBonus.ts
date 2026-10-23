@@ -127,6 +127,15 @@ export function isDuplicateRechargeBonusMinAmount(tiers: RechargeBonusTierDraft[
   return tiers.some((tier, i) => i !== index && isRechargeBonusMinAmountValid(tier.min_amount) && minAmountKey(tier.min_amount) === key)
 }
 
+// 保存前校验全部编辑行；保留未完成行可丢弃的约定，禁止静默丢弃错误或重复档位。
+export function areRechargeBonusTierDraftsValid(tiers: RechargeBonusTierDraft[], mode: RechargeBonusMode): boolean {
+  return tiers.length <= MAX_RECHARGE_BONUS_TIERS && tiers.every((tier, index) =>
+    (tier.min_amount === null || isRechargeBonusMinAmountValid(tier.min_amount)) &&
+    (tier.bonus_percent === null || isRechargeBonusPercentValidForMode(tier.bonus_percent, mode)) &&
+    !isDuplicateRechargeBonusMinAmount(tiers, index),
+  )
+}
+
 // 命中规则：取不超过支付金额的最大阈值档位；与后端 matchRechargeBonusTier 一致。
 export function matchRechargeBonusTier(tiers: RechargeBonusTier[], paymentAmount: number): RechargeBonusTier | null {
   if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) return null

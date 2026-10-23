@@ -286,6 +286,39 @@ async function mountSubscriptionPlanList(planCount: number) {
   return wrapper
 }
 
+describe('PaymentView official recharge tiers', () => {
+  it.each([
+    { mode: 'bonus', tiers: [], credited: '$14.00', bonus: '', discount: false },
+    { mode: 'bonus', tiers: [{ min_amount: 100, bonus_percent: 20 }], credited: '$16.80', bonus: '+$2.80', discount: false },
+    { mode: 'discount', tiers: [{ min_amount: 100, bonus_percent: 20 }], credited: '$14.00', bonus: '', discount: true },
+  ])('uses only official tiers in $mode mode with $credited credited', async ({ mode, tiers, credited, bonus, discount }) => {
+    vi.useRealTimers()
+    routeState.path = '/purchase'
+    routeState.query = {}
+    window.localStorage.clear()
+    getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture({
+      balance_recharge_multiplier: 0.14,
+      recharge_gift_enabled: true,
+      recharge_gift_tiers: [{ threshold: 30, percent: 90 }],
+      recharge_bonus_tiers: tiers,
+      recharge_bonus_mode: mode,
+    }))
+    const wrapper = shallowMount(PaymentView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' }, Teleport: true } },
+    })
+    await flushPromises()
+    wrapper.findComponent({ name: 'AmountInput' }).vm.$emit('update:modelValue', 100)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="recharge-credited-row"]').text()).toContain(credited)
+    const bonusRow = wrapper.find('[data-testid="recharge-bonus-row"]')
+    expect(bonusRow.exists()).toBe(Boolean(bonus))
+    if (bonus) expect(bonusRow.text()).toContain(bonus)
+    expect(wrapper.find('[data-testid="recharge-discount-row"]').exists()).toBe(discount)
+    wrapper.unmount()
+  })
+})
+
 describe('PaymentView help text', () => {
   beforeEach(() => {
     vi.useRealTimers()

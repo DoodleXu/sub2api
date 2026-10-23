@@ -834,64 +834,28 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
-  it("renders recharge gifts as editable tiers and saves the array contract", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      payment_recharge_gift_enabled: true,
-      payment_recharge_gift_tiers: [
-        { threshold: 30, percent: 2 },
-        { threshold: 500, percent: 12 },
-      ],
-    });
-
-    const wrapper = mountView();
-    await flushPromises();
-    await openPaymentTab(wrapper);
-
-    const giftConfig = wrapper.get('[data-testid="recharge-gift-config"]');
-    expect(giftConfig.find("textarea").exists()).toBe(false);
-    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(2);
-
-    await giftConfig.get('[data-testid="recharge-gift-add-tier"]').trigger("click");
-    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(3);
-    await giftConfig.get('[data-testid="recharge-gift-tier-2"] button').trigger("click");
-    expect(giftConfig.findAll('[data-testid^="recharge-gift-tier-"]')).toHaveLength(2);
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payment_recharge_gift_enabled: true,
-        payment_recharge_gift_tiers: [
-          { threshold: 30, percent: 2 },
-          { threshold: 500, percent: 12 },
-        ],
-      }),
-    );
-    wrapper.unmount();
-  });
-
-  it("blocks saving recharge gifts with invalid tier values", async () => {
+  it("ignores legacy recharge gifts and saves only official recharge tiers", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       payment_recharge_gift_enabled: true,
       payment_recharge_gift_tiers: [{ threshold: 30, percent: 2 }],
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
     });
-
     const wrapper = mountView();
     await flushPromises();
     await openPaymentTab(wrapper);
 
-    await wrapper.get('[data-testid="recharge-gift-tier-0"] input').setValue("0");
-    showError.mockClear();
-    updateSettings.mockClear();
+    expect(wrapper.find('[data-testid="recharge-gift-config"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="recharge-bonus-tier-editor"]').exists()).toBe(true);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
 
-    expect(showError).toHaveBeenCalledWith(
-      "充值满赠档位必须填写有效的充值金额和赠送比例。",
-    );
-    expect(updateSettings).not.toHaveBeenCalled();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
+    }));
+    const payload = updateSettings.mock.calls.at(-1)?.[0];
+    expect(payload).not.toHaveProperty("payment_recharge_gift_enabled");
+    expect(payload).not.toHaveProperty("payment_recharge_gift_tiers");
     wrapper.unmount();
   });
 
@@ -1297,6 +1261,34 @@ describe("admin SettingsView payment visible method controls", () => {
         payment_recharge_bonus_notice: "**新活动**",
       }),
     );
+  });
+
+  it.each([
+    { name: "duplicate thresholds", min: "100", percent: "25", mode: "bonus" },
+    { name: "negative threshold", min: "-1", percent: "25", mode: "bonus" },
+    { name: "excessive bonus", min: "200", percent: "1001", mode: "bonus" },
+    { name: "100 percent discount", min: "200", percent: "100", mode: "discount" },
+  ])("blocks saving invalid recharge tiers: $name", async ({ min, percent, mode }) => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_bonus_tiers: [{ min_amount: 100, bonus_percent: 20 }],
+      payment_recharge_bonus_mode: mode,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.get('[data-testid="recharge-bonus-tier-add"]').trigger("click");
+    const row = wrapper.findAll('[data-testid="recharge-bonus-tier-row"]')[1]!;
+    await row.get('[data-testid="recharge-bonus-tier-min-input"]').setValue(min);
+    await row.get('[data-testid="recharge-bonus-tier-percent-input"]').setValue(percent);
+    updateSettings.mockClear();
+    showError.mockClear();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalled();
+    wrapper.unmount();
   });
 
   it("drops incomplete recharge bonus rows and submits an empty list when cleared", async () => {

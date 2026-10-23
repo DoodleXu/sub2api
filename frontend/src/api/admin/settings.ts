@@ -13,6 +13,7 @@ import type {
   NotifyEmailEntry,
 } from "@/types";
 import type { RechargeBonusTier } from "@/types/payment";
+import { isRechargeBonusMinAmountValid, isRechargeBonusPercentValid } from "@/utils/rechargeBonus";
 
 export interface DefaultSubscriptionSetting {
   group_id: number;
@@ -809,6 +810,7 @@ const SYSTEM_SETTINGS_RECORD_ARRAY_KEYS = [
   "custom_menu_items",
   "account_quota_notify_emails",
   "payment_recharge_gift_tiers",
+  "payment_recharge_bonus_tiers",
   "daily_checkin_reward_tiers",
   "daily_checkin_streak_multipliers",
 ] as const satisfies readonly (keyof SystemSettings)[];
@@ -964,6 +966,10 @@ const SYSTEM_SETTINGS_RECORD_ARRAY_SCHEMAS = [
   ["account_quota_notify_emails", isNotifyEmailEntry],
   ["payment_recharge_gift_tiers", (value: unknown) =>
     hasFiniteNumberFields(value, ["threshold", "percent"])],
+  ["payment_recharge_bonus_tiers", (value: unknown) =>
+    isSettingsRecord(value) &&
+    isRechargeBonusMinAmountValid(value.min_amount) &&
+    isRechargeBonusPercentValid(value.bonus_percent)],
   ["daily_checkin_reward_tiers", isDailyCheckinRewardTier],
   ["daily_checkin_streak_multipliers", isDailyCheckinStreakMultiplier],
 ] as const satisfies readonly (

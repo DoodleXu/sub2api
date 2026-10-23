@@ -347,3 +347,72 @@ func TestUpdatePaymentConfigRechargeBonusMode(t *testing.T) {
 		require.NoError(t, svc.UpdatePaymentConfig(ctx, UpdatePaymentConfigRequest{RechargeBonusTiers: &tiers}))
 	})
 }
+
+func TestRetiredRechargeGiftConfigIsIgnored(t *testing.T) {
+	repo := &paymentConfigSettingRepoStub{values: map[string]string{
+		SettingRechargeGiftEnabled: "true",
+		SettingRechargeGiftTiers:   `[{"threshold":30,"percent":90}]`,
+		SettingRechargeBonusTiers:  `[{"min_amount":100,"bonus_percent":20}]`,
+	}}
+	svc := &PaymentConfigService{settingRepo: repo}
+	cfg, err := svc.GetPaymentConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, cfg.RechargeGiftEnabled)
+	require.Empty(t, cfg.RechargeGiftTiers)
+	require.Equal(t, 16.8, quoteRechargeBonus(&PaymentConfig{BalanceRechargeMultiplier: 0.14, RechargeBonusTiers: cfg.RechargeBonusTiers}, 100, "CNY").Credited)
+
+	// 旧客户端仍可保存其他设置；旧满赠字段即使包含无效值也不会生效或阻止保存。
+	enabled, fee := true, 1.5
+	legacy := []RechargeGiftTier{{Threshold: -1, Percent: 200}}
+	empty := []RechargeBonusTier{}
+	require.NoError(t, svc.UpdatePaymentConfig(context.Background(), UpdatePaymentConfigRequest{
+		RechargeGiftEnabled: &enabled, RechargeGiftTiers: &legacy, RechargeFeeRate: &fee, RechargeBonusTiers: &empty,
+	}))
+	require.NotContains(t, repo.updates, SettingRechargeGiftEnabled)
+	require.NotContains(t, repo.updates, SettingRechargeGiftTiers)
+	cfg, err = svc.GetPaymentConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1.5, cfg.RechargeFeeRate)
+	require.False(t, cfg.RechargeGiftEnabled)
+	require.Empty(t, cfg.RechargeGiftTiers)
+	require.Equal(t, rechargeBonusQuote{PayBase: 100, Credited: 100}, quoteRechargeBonus(cfg, 100, "USD"))
+}
+
+func TestCreateBalanceOrderUsesOnlyOfficialRechargeTiers(t *testing.T) {
+	for _, tc := range []struct {
+		name, tiers, mode    string
+		credited, bonus, pay float64
+	}{
+		{"empty official tiers", "", "bonus", 14, 0, 100},
+		{"official threshold wins over highest percent", `[{"min_amount":30,"bonus_percent":50},{"min_amount":100,"bonus_percent":20}]`, "bonus", 16.8, 2.8, 100},
+		{"official discount", `[{"min_amount":100,"bonus_percent":20}]`, "discount", 14, 2.8, 80},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			client := newPaymentConfigServiceTestClient(t)
+			user, err := client.User.Create().SetEmail("recharge@example.com").SetPasswordHash("hash").SetUsername("recharge-user").Save(ctx)
+			require.NoError(t, err)
+			_, err = client.PaymentProviderInstance.Create().SetName("easypay").SetProviderKey(payment.TypeEasyPay).
+				SetConfig(`{"apiBase":"https://pay.example.com","notifyUrl":"https://api.example.com/notify","returnUrl":"https://api.example.com/return","pid":"1000","pkey":"secret","paymentMode":"popup"}`).
+				SetSupportedTypes(payment.TypeEasyPay).SetEnabled(true).Save(ctx)
+			require.NoError(t, err)
+			cfgSvc := NewPaymentConfigService(client, &paymentConfigSettingRepoStub{values: map[string]string{
+				SettingPaymentEnabled:      "true",
+				SettingBalanceRechargeMult: "0.14",
+				SettingRechargeGiftEnabled: "true",
+				SettingRechargeGiftTiers:   `[{"threshold":30,"percent":90}]`,
+				SettingRechargeBonusTiers:  tc.tiers,
+				SettingRechargeBonusMode:   tc.mode,
+			}}, nil)
+			svc := NewPaymentService(client, payment.NewRegistry(), payment.NewDefaultLoadBalancer(client, nil), nil, nil, cfgSvc,
+				paymentUpgradeUserRepoStub{user: &User{ID: user.ID, Email: user.Email, Username: user.Username, Status: StatusActive}}, nil, nil)
+			resp, err := svc.CreateOrder(ctx, CreateOrderRequest{UserID: user.ID, Amount: 100, PaymentType: payment.TypeEasyPay, OrderType: payment.OrderTypeBalance, ClientIP: "127.0.0.1", SrcHost: "api.example.com"})
+			require.NoError(t, err)
+			order, err := client.PaymentOrder.Get(ctx, resp.OrderID)
+			require.NoError(t, err)
+			require.Equal(t, tc.credited, order.Amount)
+			require.Equal(t, tc.bonus, order.BonusAmount)
+			require.Equal(t, tc.pay, order.PayAmount)
+		})
+	}
+}

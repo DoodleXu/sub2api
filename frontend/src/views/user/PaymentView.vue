@@ -95,7 +95,7 @@
                 </div>
                 <div v-if="showBonusRow" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': !showActualPay }" data-testid="recharge-bonus-row">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeBonus.amountLabelWithPercent', { percent: formatRechargeBonusNumber(bonusQuote.percent) }) }}</span>
-                  <span class="font-medium text-red-600 dark:text-red-400">+${{ (rechargeBonusTiers.length > 0 ? bonusQuote.bonus : creditedGift).toFixed(2) }}</span>
+                  <span class="font-medium text-red-600 dark:text-red-400">+${{ bonusQuote.bonus.toFixed(2) }}</span>
                 </div>
                 <p v-if="balanceRechargeMultiplier !== 1" class="border-t border-gray-200 pt-2 text-xs text-gray-500 dark:border-dark-600 dark:text-gray-400">
                   {{ t('payment.rechargeRatePreview', { currency: selectedCurrency, usd: balanceRechargeMultiplier.toFixed(2) }) }}
@@ -642,17 +642,12 @@ const subscriptionUsdToCnyRate = computed(() => {
   const rate = checkout.value.subscription_usd_to_cny_rate
   return Number.isFinite(rate) && rate > 0 ? rate : 0
 })
-const creditedGift = computed(() => {
-  if (rechargeBonusTiers.value.length > 0 || !checkout.value.recharge_gift_enabled) return 0
-  const percent = (checkout.value.recharge_gift_tiers || []).filter(tier => validAmount.value >= tier.threshold).reduce((max, tier) => Math.max(max, tier.percent), 0)
-  return Math.round(validAmount.value * percent) / 100
-})
 const bonusQuote = computed(() => quoteRechargeBonus(rechargeBonusTiers.value, validAmount.value, {
   mode: rechargeBonusMode.value,
   multiplier: balanceRechargeMultiplier.value,
   currencyDigits: paymentCurrencyFractionDigits(selectedCurrency.value),
 }))
-const creditedAmount = computed(() => rechargeBonusTiers.value.length > 0 ? bonusQuote.value.credited : Math.round((validAmount.value * balanceRechargeMultiplier.value + creditedGift.value) * 100) / 100)
+const creditedAmount = computed(() => bonusQuote.value.credited)
 
 // Adaptive grid: center single card, 2-col for 2 plans, 3-col for 3+
 const planGridClass = computed(() => {
@@ -824,12 +819,10 @@ const feeLabel = computed(() => {
   if (rate > 0) return `${t('payment.fee')} (${rate}%)`
   return t('payment.fee')
 })
-const payBaseAmount = computed(() => rechargeBonusTiers.value.length > 0 ? bonusQuote.value.payBase : validAmount.value)
+const payBaseAmount = computed(() => bonusQuote.value.payBase)
 const discountAmount = computed(() => roundToCurrencyMinorUnit(validAmount.value - payBaseAmount.value, selectedCurrency.value))
-const showBonusRow = computed(() => rechargeBonusTiers.value.length > 0
-  ? rechargeBonusMode.value !== 'discount' && bonusQuote.value.bonus > 0
-  : creditedGift.value > 0)
-const showCreditedBalance = computed(() => creditedGift.value > 0 || balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
+const showBonusRow = computed(() => rechargeBonusMode.value !== 'discount' && bonusQuote.value.bonus > 0)
+const showCreditedBalance = computed(() => balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
 const feeAmount = computed(() => selectFeePreviewForAmount(payBaseAmount.value).amount)
 const totalAmount = computed(() =>
   feeAmount.value > 0 && payBaseAmount.value > 0

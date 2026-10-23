@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -52,6 +51,7 @@ const (
 )
 
 // PaymentConfig holds the payment system configuration.
+// RechargeGift* 字段仅保留旧客户端响应契约，固定停用；充值优惠统一使用 RechargeBonusTiers.
 type PaymentConfig struct {
 	Enabled                   bool     `json:"enabled"`
 	MinAmount                 float64  `json:"min_amount"`
@@ -96,6 +96,7 @@ type RechargeGiftTier struct {
 }
 
 // UpdatePaymentConfigRequest contains fields to update payment configuration.
+// RechargeGift* 字段仅为兼容旧客户端而接收，忽略写入，不再启用旧满赠。
 type UpdatePaymentConfigRequest struct {
 	Enabled                   *bool                `json:"enabled"`
 	MinAmount                 *float64             `json:"min_amount"`
@@ -245,7 +246,7 @@ func (s *PaymentConfigService) GetPaymentConfig(ctx context.Context) (*PaymentCo
 	keys := []string{
 		SettingPaymentEnabled, SettingMinRechargeAmount, SettingMaxRechargeAmount,
 		SettingDailyRechargeLimit, SettingOrderTimeoutMinutes, SettingMaxPendingOrders,
-		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingRechargeGiftEnabled, SettingRechargeGiftTiers, SettingRechargeBonusTiers, SettingRechargeBonusMode, SettingRechargeBonusNotice, SettingLoadBalanceStrategy,
+		SettingEnabledPaymentTypes, SettingBalancePayDisabled, SettingBalanceRechargeMult, SettingSubscriptionUSDToCNYRate, SettingRechargeFeeRate, SettingRechargeBonusTiers, SettingRechargeBonusMode, SettingRechargeBonusNotice, SettingLoadBalanceStrategy,
 		SettingProductNamePrefix, SettingProductNameSuffix,
 		SettingHelpImageURL, SettingHelpText,
 		SettingCancelRateLimitOn, SettingCancelRateLimitMax,
@@ -279,7 +280,6 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 		RechargeBonusTiers:        parseRechargeBonusTiers(vals[SettingRechargeBonusTiers]),
 		RechargeBonusMode:         func() string { v, _ := NormalizeRechargeBonusMode(vals[SettingRechargeBonusMode]); return v }(),
 		RechargeBonusNotice:       vals[SettingRechargeBonusNotice],
-		RechargeGiftEnabled:       vals[SettingRechargeGiftEnabled] == "true",
 		LoadBalanceStrategy:       vals[SettingLoadBalanceStrategy],
 		ProductNamePrefix:         vals[SettingProductNamePrefix],
 		ProductNameSuffix:         vals[SettingProductNameSuffix],
@@ -294,16 +294,6 @@ func (s *PaymentConfigService) parsePaymentConfig(vals map[string]string) *Payme
 
 		AlipayForceQRCode:             vals[SettingAlipayForceQRCode] == "true",
 		AlipayMobilePrecreateDeepLink: vals[SettingAlipayMobilePrecreateDeepLink] == "true",
-	}
-	if raw := vals[SettingRechargeGiftTiers]; raw != "" {
-		var tiers []RechargeGiftTier
-		if json.Unmarshal([]byte(raw), &tiers) == nil {
-			for _, tier := range tiers {
-				if tier.Threshold > 0 && tier.Percent > 0 && tier.Percent <= 100 {
-					cfg.RechargeGiftTiers = append(cfg.RechargeGiftTiers, tier)
-				}
-			}
-		}
 	}
 	cfg.AlipayMobilePrecreateDeepLink = pcEnvBoolOverride(
 		SettingAlipayMobilePrecreateDeepLink,
@@ -383,13 +373,6 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 			return infraerrors.BadRequest("INVALID_RECHARGE_FEE_RATE", "recharge fee rate allows at most 2 decimal places")
 		}
 	}
-	if req.RechargeGiftTiers != nil {
-		for _, tier := range *req.RechargeGiftTiers {
-			if math.IsNaN(tier.Threshold) || math.IsInf(tier.Threshold, 0) || tier.Threshold <= 0 || math.IsNaN(tier.Percent) || math.IsInf(tier.Percent, 0) || tier.Percent <= 0 || tier.Percent > 100 {
-				return infraerrors.BadRequest("INVALID_RECHARGE_GIFT_TIERS", "recharge gift tiers must use positive thresholds and percentages between 0 and 100")
-			}
-		}
-	}
 	if req.RechargeBonusNotice != nil {
 		if err := validateRechargeBonusNotice(*req.RechargeBonusNotice); err != nil {
 			return infraerrors.BadRequest("INVALID_RECHARGE_BONUS_NOTICE", err.Error())
@@ -432,13 +415,6 @@ func (s *PaymentConfigService) UpdatePaymentConfig(ctx context.Context, req Upda
 	}
 	if req.RechargeFeeRate != nil {
 		m[SettingRechargeFeeRate] = formatNonNegativeFloat(req.RechargeFeeRate)
-	}
-	if req.RechargeGiftEnabled != nil {
-		m[SettingRechargeGiftEnabled] = formatBoolOrEmpty(req.RechargeGiftEnabled)
-	}
-	if req.RechargeGiftTiers != nil {
-		b, _ := json.Marshal(*req.RechargeGiftTiers)
-		m[SettingRechargeGiftTiers] = string(b)
 	}
 	if req.RechargeBonusTiers != nil {
 		m[SettingRechargeBonusTiers] = bonusTiersValue

@@ -42,6 +42,7 @@ describe("admin settings response normalization", () => {
     expect(settings.passkey_rp_origins).toEqual([]);
     expect(settings.table_page_size_options).toEqual([10, 50]);
     expect(settings.login_agreement_documents).toEqual([]);
+    expect(settings.payment_recharge_bonus_tiers).toEqual([]);
   });
 
   it("preserves valid custom endpoint records", () => {
@@ -80,6 +81,11 @@ describe("admin settings response normalization", () => {
     ["custom_endpoints", [{ endpoint: "https://api.example.com" }]],
     ["account_quota_notify_emails", [{}]],
     ["payment_recharge_gift_tiers", [{ threshold: 10, percent: "5" }]],
+    ["payment_recharge_bonus_tiers", { min_amount: 100, bonus_percent: 20 }],
+    ["payment_recharge_bonus_tiers", [{ min_amount: 100, bonus_percent: "20" }]],
+    ["payment_recharge_bonus_tiers", [{ min_amount: 100 }]],
+    ["payment_recharge_bonus_tiers", [{ min_amount: -1, bonus_percent: 20 }]],
+    ["payment_recharge_bonus_tiers", [{ min_amount: 100, bonus_percent: 1001 }]],
   ])("rejects malformed %s values instead of making them writable", (field, malformed) => {
     expect(() =>
       normalizeSystemSettingsResponse(validSettingsPayload({ [field]: malformed })),
