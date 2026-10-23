@@ -4,6 +4,7 @@
 
 - 版本源更新为 `0.2.38`，包含下方充值优惠统一与配置保护修复；无新增数据库迁移，继续发布 Linux/amd64 二进制与 GHCR 镜像。
 - 本地后端全量 unit、golangci-lint v2.14.0、嵌入前端的 Go 构建、前端 lint/typecheck 与发布关键 Vitest（30 个文件、600 项）、本轮专项回归及 7 项 shell 检查通过。精确候选提交的 CI、安全扫描和发布结果在发布后补充；本机旧版 Python/Bash 不满足 release-helper 测试工具要求，该检查由 Ubuntu CI 执行。
+- 首轮候选 `3d444b8ae` 的 CI 全部通过，安全扫描发现已有依赖新披露的漏洞：Go `GO-2026-6809`、DOMPurify 与 follow-redirects。将 Go/CI/Docker 构建版本同步到 `1.27.3`，DOMPurify 更新为 `3.4.17`，follow-redirects 更新为 `1.16.1`；安全例外清单保持为空。补丁后本地后端全量 unit、静态检查与 govulncheck 通过，前端 lint/typecheck、32 个文件 628 项 Vitest 与生产构建通过，生产依赖 audit 的 high/critical 均为 0；锁文件仅更新上述两个 npm 包，以新候选重新验证远端门禁。
 - 升级后旧自定义满赠不再生效；需继续开展优惠时，请先在官方“充值优惠阶梯”中配置。空阶梯无优惠，历史订单按原金额快照履约与退款。
 
 ## 2026-10-23 充值优惠统一使用官方阶梯
