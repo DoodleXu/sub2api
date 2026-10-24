@@ -92,6 +92,9 @@ func (s *AntigravityGatewayService) forwardUpstreamQualityCore(ctx context.Conte
 		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
 			return nil, failure
 		}
+		if failure := antigravityCapacityFailover(account, resp.StatusCode, resp.Header, respBody); failure != nil {
+			return nil, failure
+		}
 
 		// 429 错误时标记账号限流
 		if resp.StatusCode == http.StatusTooManyRequests {

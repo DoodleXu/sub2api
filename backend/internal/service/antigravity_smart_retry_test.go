@@ -114,3 +114,16 @@ func TestAntigravityUpstreamFailureDoesNotReplay(t *testing.T) {
 		}
 	}
 }
+
+func TestAntigravityCapacityUsesBoundedProviderRetry(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformAntigravity, Type: AccountTypeOAuth}
+	body := []byte(`{"error":{"code":503,"status":"UNAVAILABLE","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"MODEL_CAPACITY_EXHAUSTED","metadata":{"model":"gemini-3-pro-high"}}]}}`)
+	failure := antigravityCapacityFailover(account, 503, nil, body)
+	require.NotNil(t, failure)
+	require.True(t, failure.RetryableOnSameAccount)
+	require.True(t, failure.RequestScopedTransient)
+	require.Equal(t, 3, failure.SameAccountRetryMax)
+	require.Equal(t, GatewayFailureScopeProvider, failure.Scope)
+	require.Nil(t, antigravityCapacityFailover(account, 429, nil, body), "quota errors must use their existing quota policy")
+	require.Nil(t, antigravityCapacityFailover(account, 503, nil, []byte(`{"error":{"message":"Insufficient account balance"}}`)))
+}

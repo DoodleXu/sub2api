@@ -1056,3 +1056,16 @@ func TestSettingService_StalePasskeyTrueWithoutConfigReportsDisabled(t *testing.
 	require.NoError(t, err)
 	require.False(t, settings.PasskeyEnabled)
 }
+
+func TestRetiredQualityOverrideCannotReplaceUpstreamScheduler(t *testing.T) {
+	ctx := context.Background()
+	reader := NewSettingService(&settingGetAllRepoStub{values: map[string]string{AccountQualitySchedulingSetting: "true"}}, &config.Config{})
+	current, err := reader.GetAllSettings(ctx)
+	require.NoError(t, err)
+	require.False(t, current.AccountQualitySchedulingEnabled, "stored legacy true must not re-enable the retired ranking")
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+	require.NoError(t, svc.UpdateSettings(ctx, &SystemSettings{AccountQualitySchedulingEnabled: true, CompactHomeEnabled: true}))
+	require.Equal(t, "false", repo.updates[AccountQualitySchedulingSetting])
+	require.Equal(t, "true", repo.updates[SettingKeyCompactHomeEnabled], "old clients can still save other settings")
+}

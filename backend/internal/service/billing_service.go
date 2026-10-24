@@ -2005,37 +2005,6 @@ func (s *BillingService) CalculateCostWithConfig(model string, tokens UsageToken
 	return s.CalculateCost(model, tokens, multiplier)
 }
 
-// CalculateCostWithLongContext 保留 Gemini 旧长上下文边际计费兼容。
-func (s *BillingService) CalculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
-	if threshold <= 0 || extraMultiplier <= 1 {
-		return s.CalculateCost(model, tokens, rateMultiplier)
-	}
-	total := tokens.CacheReadTokens + tokens.InputTokens
-	if total <= threshold {
-		return s.CalculateCost(model, tokens, rateMultiplier)
-	}
-	inRangeCache, inRangeInput := tokens.CacheReadTokens, tokens.InputTokens
-	outRangeCache, outRangeInput := 0, 0
-	if inRangeCache >= threshold {
-		inRangeCache, outRangeCache = threshold, inRangeCache-threshold
-	} else {
-		inRangeInput = threshold - inRangeCache
-		if inRangeInput > tokens.InputTokens {
-			inRangeInput = tokens.InputTokens
-		}
-		outRangeInput = tokens.InputTokens - inRangeInput
-	}
-	inCost, err := s.CalculateCost(model, UsageTokens{InputTokens: inRangeInput, OutputTokens: tokens.OutputTokens, CacheCreationTokens: tokens.CacheCreationTokens, CacheReadTokens: inRangeCache, CacheCreation5mTokens: tokens.CacheCreation5mTokens, CacheCreation1hTokens: tokens.CacheCreation1hTokens, ImageOutputTokens: tokens.ImageOutputTokens}, rateMultiplier)
-	if err != nil {
-		return nil, err
-	}
-	outCost, err := s.CalculateCost(model, UsageTokens{InputTokens: outRangeInput, CacheReadTokens: outRangeCache}, rateMultiplier*extraMultiplier)
-	if err != nil {
-		return inCost, fmt.Errorf("out-range cost: %w", err)
-	}
-	return &CostBreakdown{InputCost: inCost.InputCost + outCost.InputCost, ImageInputCost: inCost.ImageInputCost + outCost.ImageInputCost, OutputCost: inCost.OutputCost, ImageOutputCost: inCost.ImageOutputCost, CacheCreationCost: inCost.CacheCreationCost, CacheReadCost: inCost.CacheReadCost + outCost.CacheReadCost, TotalCost: inCost.TotalCost + outCost.TotalCost, ActualCost: inCost.ActualCost + outCost.ActualCost, LongContextBillingApplied: outCost.ActualCost > 0}, nil
-}
-
 // ListSupportedModels 列出所有支持的模型（现在总是返回true，因为有模糊匹配）
 func (s *BillingService) ListSupportedModels() []string {
 	models := make([]string, 0)

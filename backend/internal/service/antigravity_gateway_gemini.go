@@ -198,6 +198,10 @@ func (s *AntigravityGatewayService) forwardGeminiQualityCore(ctx context.Context
 		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
 			return nil, failure
 		}
+		if failure := antigravityCapacityFailover(account, resp.StatusCode, resp.Header, respBody); failure != nil {
+			return nil, failure
+		}
+
 		// 尽早关闭原始响应体，释放连接；后续逻辑仍可能需要读取 body，因此用内存副本重新包装。
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))

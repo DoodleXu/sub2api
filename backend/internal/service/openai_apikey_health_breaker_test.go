@@ -109,7 +109,6 @@ func TestOpenAIAPIKeyHealthBreakerTripsPersistedAndRuntimeState(t *testing.T) {
 	repo := &openAIAPIKeyHealthAccountRepo{}
 	blocker := &openAIAPIKeyHealthRuntimeBlocker{}
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, cache)
-	svc.quality = nil // Exercise compatibility fallback without the shared collector.
 	svc.SetSettingService(settings)
 	svc.SetOpenAIAPIKeyHealthCache(cache)
 	svc.SetAccountRuntimeBlocker(blocker)

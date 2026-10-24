@@ -44,18 +44,15 @@ const profitVetoExhaustedMessage = "No available accounts: all candidates reject
 
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
-	SwitchCount       int
-	MaxSwitches       int
-	FailedAccountIDs  map[int64]struct{}
-	LastFailoverErr   *service.UpstreamFailoverError
-	ForceCacheBilling bool
-	hasBoundSession   bool
+	SwitchCount           int
+	MaxSwitches           int
+	FailedAccountIDs      map[int64]struct{}
+	LastFailoverErr       *service.UpstreamFailoverError
+	SameAccountRetryCount map[int64]int
+	ForceCacheBilling     bool
+	hasBoundSession       bool
 
-	// profitVetoedAccountIDs 记录被分组利润门终检否决的账号，是 FailedAccountIDs
-	// 的子集。之所以单独维护：HandleSelectionExhausted 的 503 退避分支会清空
-	// FailedAccountIDs，而利润否决在同一请求内的判定不会改变（下游倍率 D 已在
-	// 请求开始冻结），被清空的账号会被立即重选并再次否决，形成没有任何上游请求、
-	// SwitchCount 也不前进的活锁。清空后必须把它们放回排除集。
+	// Profit-vetoed and exhausted accounts remain excluded for this logical request.
 	profitVetoedAccountIDs map[int64]struct{}
 	// profitVetoCount 本次请求累计的利润否决次数，用于 maxProfitVetoAttempts 上限。
 	profitVetoCount int
@@ -65,6 +62,7 @@ type FailoverState struct {
 func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
 	return &FailoverState{
 		MaxSwitches:            maxSwitches,
+		SameAccountRetryCount:  make(map[int64]int),
 		FailedAccountIDs:       make(map[int64]struct{}),
 		hasBoundSession:        hasBoundSession,
 		profitVetoedAccountIDs: make(map[int64]struct{}),
@@ -113,8 +111,23 @@ func (s *FailoverState) HandleFailoverError(
 		return FailoverExhausted
 	}
 
-	if needForceCacheBilling(s.hasBoundSession, failoverErr, false) {
+	retryCount := s.SameAccountRetryCount[accountID]
+	sameAccountRetry := sameAccountRetryAllowed(failoverErr, retryCount, retryLimit)
+	if _, excluded := s.FailedAccountIDs[accountID]; excluded {
+		sameAccountRetry = false
+	}
+	if needForceCacheBilling(s.hasBoundSession, failoverErr, sameAccountRetry) {
 		s.ForceCacheBilling = true
+	}
+	if sameAccountRetry {
+		s.SameAccountRetryCount[accountID]++
+		if !sleepWithContext(ctx, sameAccountRetryDelayFor(failoverErr, retryCount+1)) {
+			return FailoverCanceled
+		}
+		return FailoverContinue
+	}
+	if gatewayService != nil && failoverErr.RetryableOnSameAccount && failoverErr.ShouldReportAccountScheduleFailure() {
+		gatewayService.TempUnscheduleRetryableError(ctx, accountID, failoverErr)
 	}
 	// 加入失败列表
 	s.FailedAccountIDs[accountID] = struct{}{}

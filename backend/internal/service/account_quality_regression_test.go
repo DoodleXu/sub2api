@@ -182,7 +182,7 @@ func TestQualityCreditsTransitionKeepsOneDedicatedPermit(t *testing.T) {
 	require.NoError(t, err)
 	defer attempt.Abort()
 	ObserveAccountQualityHTTPResult(ctx, &http.Response{StatusCode: 429}, nil)
-	require.Error(t, ValidateAccountQualityDispatch(ctx), "ordinary 429 retries stay forbidden")
+	require.NoError(t, ValidateAccountQualityDispatch(ctx), "provider adapters now own bounded 429 retry decisions")
 	upstream := &qualityGuardedUpstream{}
 	params := antigravityRetryLoopParams{ctx: ctx, account: a, accessToken: "test", action: "generateContent", body: []byte(`{"model":"model","request":{}}`), httpUpstream: upstream}
 	svc := &AntigravityGatewayService{}
@@ -227,12 +227,12 @@ func TestQualityObservationPreservesClassifiedFailureScope(t *testing.T) {
 					failure = newOpenAIUpstreamFailoverError(503, nil, body, "Our servers are currently overloaded. Please try again later.", false)
 					require.True(t, failure.RequestScopedTransient)
 				}
-				require.Error(t, attempt.Finish(nil, failure))
+				require.Same(t, failure, attempt.Finish(nil, failure), "the safety extension must preserve the adapter retry scope")
 			}
-			state := rl.quality.states[AccountQualityBucket(a, qualityRequest(ctx, ""))].state
-			require.Empty(t, state.Samples)
-			require.Zero(t, state.Trips)
-			require.Empty(t, rl.quality.states[accountQualityAccountBucket(a)].state.Samples)
+			next, attempt, err := rl.BeginAccountQualityAttempt(ctx, a)
+			require.NoError(t, err, "request/provider errors must not add a second global breaker")
+			defer attempt.Abort()
+			require.NoError(t, ValidateAccountQualityDispatch(next))
 		})
 	}
 }
@@ -281,23 +281,6 @@ func TestQualityForwardV158DebtStopsBeforePassthroughResponse(t *testing.T) {
 	require.NotNil(t, upstream.lastReq, "exercise the real forwarder entry")
 	require.False(t, c.Writer.Written())
 	require.Equal(t, 1, repo.pauses)
-}
-
-func TestQualityOAuthRefreshRecordsOutcomeInIssuedGeneration(t *testing.T) {
-	repo := newQualityRefreshRepo()
-	rl := NewRateLimitService(repo, nil, nil, nil, nil)
-	a, err := repo.GetByID(context.Background(), 501)
-	require.NoError(t, err)
-	ctx, attempt, err := rl.BeginAccountQualityAttempt(WithAccountQualityRequest(context.Background(), AccountQualityRequest{Model: "model"}), a)
-	require.NoError(t, err)
-	defer attempt.Abort()
-	refreshed, err := NewOAuthRefreshAPI(repo, nil).RefreshIfNeeded(ctx, a, qualityRefreshExecutor{}, time.Minute)
-	require.NoError(t, err)
-	require.NoError(t, attempt.Finish(&OpenAIForwardResult{UpstreamModel: "model"}, nil))
-	key := AccountQualityBucket(refreshed.Account, qualityRequest(ctx, ""))
-	require.Len(t, rl.quality.states[key].state.Samples, 1)
-	require.Empty(t, rl.quality.states[AccountQualityBucket(a, qualityRequest(ctx, ""))].state.Samples)
-	require.Empty(t, rl.quality.leases)
 }
 
 func TestQualityWSDispatchFailurePreservesSecondTurn(t *testing.T) {

@@ -473,7 +473,6 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
             <input
               v-model.number="poolModeRetryCount"
-              disabled
               type="number"
               min="0"
               :max="MAX_POOL_MODE_RETRY_COUNT"
@@ -493,7 +492,6 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryStatusCodes') }}</label>
             <input
               v-model="poolModeRetryStatusCodesInput"
-              disabled
               type="text"
               class="input"
               :placeholder="DEFAULT_POOL_MODE_RETRY_STATUS_CODES.join(', ')"
@@ -1372,7 +1370,6 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
             <input
               v-model.number="poolModeRetryCount"
-              disabled
               type="number"
               min="0"
               :max="MAX_POOL_MODE_RETRY_COUNT"
@@ -1392,7 +1389,6 @@
             <label class="input-label">{{ t('admin.accounts.poolModeRetryStatusCodes') }}</label>
             <input
               v-model="poolModeRetryStatusCodesInput"
-              disabled
               type="text"
               class="input"
               :placeholder="DEFAULT_POOL_MODE_RETRY_STATUS_CODES.join(', ')"

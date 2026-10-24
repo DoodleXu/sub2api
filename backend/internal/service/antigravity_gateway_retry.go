@@ -937,3 +937,21 @@ func (s *AntigravityGatewayService) resolveResetTime(resetAt *int64, defaultDur 
 	}
 	return time.Now().Add(defaultDur)
 }
+
+// Let the common bounded retry budget handle shared capacity, without reviving
+// a second nested retry loop or marking a healthy account as quota-exhausted.
+func antigravityCapacityFailover(account *Account, status int, headers http.Header, body []byte) *UpstreamFailoverError {
+	if status != http.StatusServiceUnavailable {
+		return nil
+	}
+	_, _, delay, _, capacity := shouldTriggerAntigravitySmartRetry(account, body)
+	if !capacity {
+		return nil
+	}
+	return &UpstreamFailoverError{
+		StatusCode: status, ResponseHeaders: headers.Clone(), ResponseBody: body,
+		RetryableOnSameAccount: true, RequestScopedTransient: true,
+		Scope: GatewayFailureScopeProvider, Reason: "model_capacity_exhausted",
+		SameAccountRetryDelay: delay, SameAccountRetryMax: 3,
+	}
+}

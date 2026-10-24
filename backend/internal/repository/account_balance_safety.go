@@ -4,8 +4,26 @@ import (
 	"context"
 	"encoding/json"
 
+	dbaccount "github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
+
+// GetAccountDispatchState reads only the fields needed by the financial safety
+// boundary. Do not hydrate groups or proxies, or use this projection for edits.
+func (r *accountRepository) GetAccountDispatchState(ctx context.Context, id int64) (*service.Account, error) {
+	m, err := clientFromContext(ctx, r.client).Account.Query().Where(dbaccount.IDEQ(id)).Select(
+		dbaccount.FieldID, dbaccount.FieldPlatform, dbaccount.FieldType,
+		dbaccount.FieldStatus, dbaccount.FieldSchedulable, dbaccount.FieldArchivedAt,
+		dbaccount.FieldExpiresAt, dbaccount.FieldAutoPauseOnExpired,
+		dbaccount.FieldRateLimitResetAt, dbaccount.FieldOverloadUntil,
+		dbaccount.FieldTempUnschedulableUntil, dbaccount.FieldExtra,
+		dbaccount.FieldCredentials, dbaccount.FieldProxyID, dbaccount.FieldParentAccountID,
+	).Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrAccountNotFound, nil)
+	}
+	return accountEntityToService(m), nil
+}
 
 func (r *accountRepository) PauseAccountForInsufficientBalance(ctx context.Context, a *service.Account, pause service.AccountBalancePause) (bool, error) {
 	payload, err := json.Marshal(pause)

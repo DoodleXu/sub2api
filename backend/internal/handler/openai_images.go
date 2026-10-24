@@ -162,6 +162,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	stopJSONKeepalive := func() {}
@@ -320,6 +321,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 						return
 					}
 
+					if retry, canceled := retrySafeAccount(requestCtx, sameAccountRetryCount, account, failoverErr); canceled {
+						return
+					} else if retry {
+						continue
+					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

@@ -173,9 +173,7 @@ type BackupService struct {
 	storeMu sync.Mutex // 保护 store/s3Cfg 缓存
 	store   BackupObjectStore
 	s3Cfg   *BackupS3Config
-	// onS3ConfigUpdate is invoked after a persisted S3 config update so
-	// dependent services (for example image storage reusing backup S3) can
-	// invalidate their own runtime clients without creating a package cycle.
+	// Notify the image storage extension after persisted S3 configuration changes.
 	onS3ConfigUpdate func()
 
 	recordsMu sync.Mutex // 保护 records 的 load/save 操作
@@ -235,6 +233,8 @@ func (s *BackupService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
 // Start 启动定时备份调度器并清理孤立记录
 func (s *BackupService) Start() {
 	s.cronSched = cron.New()
+	// A recently interrupted job may still belong to a live peer. Revisit it
+	// after the maximum execution window rather than deleting it at startup.
 	_, _ = s.cronSched.AddFunc("@every 5m", s.recoverStaleRecords)
 	s.cronSched.Start()
 
@@ -256,7 +256,8 @@ func (s *BackupService) Start() {
 	}
 }
 
-// recoverStaleRecords 启动时将孤立的 running 记录标记为 failed，并清理已上传对象。
+// recoverStaleRecords expires interrupted operations only after their maximum
+// runtime. Re-read, status persistence and object deletion share the writer lock.
 func (s *BackupService) recoverStaleRecords() {
 	ctx, cancel := context.WithTimeout(s.bgCtx, 5*time.Minute)
 	defer cancel()
@@ -283,21 +284,18 @@ func (s *BackupService) recoverStaleRecords() {
 		}
 		if records[i].RestoreStatus == "running" {
 			if records[i].RestoreStartedAt == "" {
-				// Older archive records did not persist a separate restore start time.
-				// Ordinary backup restores can use their backup age; archive restores
-				// must retain protection because their restore may predate migration.
-				if records[i].MonthlyArchive != nil {
-					records[i].RestoreStartedAt = now.Format(time.RFC3339)
-				} else {
-					records[i].RestoreStartedAt = records[i].StartedAt
-				}
+				// Legacy restores have no operation timestamp. Give them a full
+				// grace period; the backup's creation date says nothing about it.
+				records[i].RestoreStartedAt = now.Format(time.RFC3339)
 				changed = true
+				continue
 			}
-			if backupOperationExpired(records[i].RestoreStartedAt, now) {
-				records[i].RestoreStatus = "failed"
-				records[i].RestoreError = "interrupted by server restart"
-				changed = true
+			if !backupOperationExpired(records[i].RestoreStartedAt, now) {
+				continue
 			}
+			records[i].RestoreStatus = "failed"
+			records[i].RestoreError = "interrupted by server restart"
+			changed = true
 		}
 	}
 	if !changed {
@@ -305,7 +303,7 @@ func (s *BackupService) recoverStaleRecords() {
 	}
 	if err := s.saveRecordsLocked(ctx, records); err != nil {
 		logger.LegacyPrintf("service.backup", "[Backup] 保存中断记录失败: %v", err)
-		return
+		return // Never delete objects if the state transition did not commit.
 	}
 	for _, i := range stale {
 		if cleanupErr := s.cleanupStaleBackupObjects(ctx, &records[i]); cleanupErr != nil {
@@ -338,15 +336,19 @@ func (s *BackupService) cleanupStaleBackupObjects(ctx context.Context, record *B
 func (s *BackupService) Stop() {
 	s.shuttingDown.Store(true)
 
+	var cronStopped context.Context
 	s.cronMu.Lock()
 	if s.cronSched != nil {
-		s.cronSched.Stop()
+		cronStopped = s.cronSched.Stop()
 	}
 	s.cronMu.Unlock()
 
 	// 等待活跃备份/恢复完成（最多 5 分钟）
 	done := make(chan struct{})
 	go func() {
+		if cronStopped != nil {
+			<-cronStopped.Done()
+		}
 		s.wg.Wait()
 		close(done)
 	}()
@@ -414,7 +416,10 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 		if old != nil {
 			cfg.SecretAccessKey = old.SecretAccessKey
 		}
-	} else {
+	}
+
+	// Inherited secrets are decrypted by loadS3Config and must be encrypted again.
+	if cfg.SecretAccessKey != "" {
 		// 拒绝用自动生成的临时密钥加密：该密钥每次重启都会变化，落库的密文在
 		// 重启/升级后无法解密（#4524）。与支付、TOTP 的处理保持一致。
 		if !s.encryptionKeyConfigured {
@@ -477,18 +482,15 @@ func (s *BackupService) TestS3Connection(ctx context.Context, cfg BackupS3Config
 
 func (s *BackupService) GetSchedule(ctx context.Context) (*BackupScheduleConfig, error) {
 	raw, err := s.settingRepo.GetValue(ctx, settingKeyBackupSchedule)
-	if err != nil {
-		if errors.Is(err, ErrSettingNotFound) {
-			return &BackupScheduleConfig{}, nil
-		}
+	if err != nil && !errors.Is(err, ErrSettingNotFound) {
 		return nil, fmt.Errorf("load backup schedule: %w", err)
 	}
-	if strings.TrimSpace(raw) == "" {
-		return &BackupScheduleConfig{}, nil
+	if raw == "" {
+		return &BackupScheduleConfig{RetainDays: 14, RetainCount: 10}, nil
 	}
 	var cfg BackupScheduleConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return nil, fmt.Errorf("parse backup schedule: %w", err)
+		return nil, infraerrors.InternalServer("BACKUP_SCHEDULE_CORRUPT", "backup schedule data is corrupted")
 	}
 	return &cfg, nil
 }
@@ -583,7 +585,7 @@ func (s *BackupService) runScheduledBackup() {
 	// 读取定时备份配置中的过期天数
 	schedule, err := s.GetSchedule(ctx)
 	if err != nil {
-		logger.LegacyPrintf("service.backup", "[Backup] 读取定时备份配置失败，跳过本次任务: %v", err)
+		logger.LegacyPrintf("service.backup", "[Backup] 加载备份配置失败: %v", err)
 		return
 	}
 	expireDays := 14 // 默认14天过期
@@ -592,7 +594,7 @@ func (s *BackupService) runScheduledBackup() {
 	}
 
 	logger.LegacyPrintf("service.backup", "[Backup] 开始执行定时备份, 过期天数: %d", expireDays)
-	record, err := s.CreateBackup(ctx, "scheduled", expireDays)
+	record, err := s.createBackup(ctx, "scheduled", expireDays, schedule)
 	if err != nil {
 		if errors.Is(err, ErrBackupInProgress) {
 			logger.LegacyPrintf("service.backup", "[Backup] 定时备份跳过: 已有备份正在进行中")
@@ -617,6 +619,10 @@ func (s *BackupService) runScheduledBackup() {
 // CreateBackup 创建全量数据库备份并上传到 S3。
 // expireDays: 备份过期天数，0=永不过期，默认14天
 func (s *BackupService) CreateBackup(ctx context.Context, triggeredBy string, expireDays int) (*BackupRecord, error) {
+	return s.createBackup(ctx, triggeredBy, expireDays, nil)
+}
+
+func (s *BackupService) createBackup(ctx context.Context, triggeredBy string, expireDays int, schedule *BackupScheduleConfig) (*BackupRecord, error) {
 	if s.shuttingDown.Load() {
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
 	}
@@ -649,7 +655,7 @@ func (s *BackupService) CreateBackup(ctx context.Context, triggeredBy string, ex
 
 	now := time.Now()
 	backupID := uuid.New().String()[:8]
-	fileName := fmt.Sprintf("%s_%s.sql.gz", s.dbCfg.DBName, now.Format("20060102_150405"))
+	fileName := fmt.Sprintf("%s_%s_%s.sql.gz", s.dbCfg.DBName, now.Format("20060102_150405"), backupID)
 	s3Key := s.buildS3Key(s3Cfg, fileName)
 
 	var expiresAt string
@@ -691,9 +697,8 @@ func (s *BackupService) CreateBackup(ctx context.Context, triggeredBy string, ex
 
 	record.Status = "completed"
 	record.FinishedAt = time.Now().Format(time.RFC3339)
-	schedule, _ := s.GetSchedule(ctx)
 	if err := s.saveRecordWithArchive(ctx, record, schedule); err != nil {
-		logger.LegacyPrintf("service.backup", "[Backup] 保存备份记录失败: %v", err)
+		return record, fmt.Errorf("save completed backup: %w", err)
 	}
 
 	return record, nil
@@ -739,7 +744,7 @@ func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, exp
 
 	now := time.Now()
 	backupID := uuid.New().String()[:8]
-	fileName := fmt.Sprintf("%s_%s.sql.gz", s.dbCfg.DBName, now.Format("20060102_150405"))
+	fileName := fmt.Sprintf("%s_%s_%s.sql.gz", s.dbCfg.DBName, now.Format("20060102_150405"), backupID)
 	s3Key := s.buildS3Key(s3Cfg, fileName)
 
 	var expiresAt string
@@ -1038,6 +1043,8 @@ func (s *BackupService) StartRestore(ctx context.Context, backupID string) (*Bac
 		return nil, fmt.Errorf("init object store: %w", err)
 	}
 
+	// Re-read and reserve under the same lock used by cleanup/deletion. A prior
+	// read above may have become stale while S3 configuration was being loaded.
 	record, err = s.beginBackupRestore(ctx, backupID)
 	if err != nil {
 		return nil, err
@@ -1085,7 +1092,7 @@ func (s *BackupService) executeRestore(record *BackupRecord, objectStore BackupO
 		if err := s.restoreArchive(ctx, archivePath); err != nil {
 			record.RestoreStatus = "failed"
 			record.RestoreError = fmt.Sprintf("pg restore: %v", err)
-			_ = s.saveRecord(context.Background(), record)
+			_ = s.saveRestoreRecord(context.Background(), record)
 			return
 		}
 		record.RestoreStatus = "completed"
@@ -1123,7 +1130,7 @@ func (s *BackupService) executeRestore(record *BackupRecord, objectStore BackupO
 
 	record.RestoreStatus = "completed"
 	record.RestoredAt = time.Now().Format(time.RFC3339)
-	if err := s.saveRecord(context.Background(), record); err != nil {
+	if err := s.saveRestoreRecord(context.Background(), record); err != nil {
 		logger.LegacyPrintf("service.backup", "[Backup] 保存恢复记录失败: %v", err)
 	}
 }
@@ -1210,7 +1217,7 @@ func (s *BackupService) ListBackups(ctx context.Context) ([]BackupRecord, error)
 	}
 	// 倒序返回（最新在前）
 	sort.Slice(records, func(i, j int) bool {
-		return records[i].StartedAt > records[j].StartedAt
+		return backupStartedAfter(records[i], records[j])
 	})
 	return records, nil
 }
@@ -1232,13 +1239,17 @@ func (s *BackupService) DeleteBackup(ctx context.Context, backupID string) error
 	return s.deleteBackup(ctx, backupID, false)
 }
 
+// DeleteArchivedBackup requires the caller to explicitly confirm archive removal.
 func (s *BackupService) DeleteArchivedBackup(ctx context.Context, backupID string) error {
 	return s.deleteBackup(ctx, backupID, true)
 }
 
 func (s *BackupService) deleteBackup(ctx context.Context, backupID string, deleteArchived bool) error {
-	s.recordsMu.Lock()
-	defer s.recordsMu.Unlock()
+	ctx, release, err := s.lockBackupRecordUpdates(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	records, err := s.loadRecordsLocked(ctx)
 	if err != nil {
@@ -1431,14 +1442,16 @@ func (s *BackupService) saveRecordWithArchive(ctx context.Context, record *Backu
 		return err
 	}
 	defer release()
+
 	records, err := s.loadRecordsLocked(ctx)
 	if err != nil {
 		return err
 	}
-
 	snapshot := *record
 	for _, existing := range records {
 		if existing.ID == record.ID && existing.MonthlyArchive != nil {
+			// Preserve durable protection when a progress/restore writer or retry
+			// holds an older record snapshot.
 			snapshot.MonthlyArchive = existing.MonthlyArchive
 			snapshot.ExpiresAt = ""
 			break
@@ -1448,6 +1461,7 @@ func (s *BackupService) saveRecordWithArchive(ctx context.Context, record *Backu
 	if err != nil {
 		return err
 	}
+
 	// 更新已有记录或追加
 	found := false
 	for i := range records {
@@ -1461,18 +1475,24 @@ func (s *BackupService) saveRecordWithArchive(ctx context.Context, record *Backu
 		records = append(records, snapshot)
 	}
 
-	// 限制记录数量
+	// Never discard metadata for retained objects, including permanent archives.
+	// The checkpoint and completed record must commit together so retries cannot
+	// consume a date without an archive, or archive the same date repeatedly.
 	if checkpoint != "" {
 		data, err := json.Marshal(records)
 		if err != nil {
 			return err
 		}
-		if err := s.settingRepo.SetMultiple(ctx, map[string]string{settingKeyBackupRecords: string(data), settingKeyBackupArchiveCheckpoint: checkpoint}); err != nil {
+		if err := s.settingRepo.SetMultiple(ctx, map[string]string{
+			settingKeyBackupRecords:           string(data),
+			settingKeyBackupArchiveCheckpoint: checkpoint,
+		}); err != nil {
 			return err
 		}
 		*record = snapshot
 		return nil
 	}
+
 	return s.saveRecordsLocked(ctx, records)
 }
 
@@ -1486,13 +1506,16 @@ func (s *BackupService) cleanupOldBackups(ctx context.Context, schedule *BackupS
 		return err
 	}
 	defer release()
+
 	records, err := s.loadRecordsLocked(ctx)
 	if err != nil {
 		return err
 	}
 
 	// 按时间倒序
-	sort.Slice(records, func(i, j int) bool { return backupStartedAfter(records[i], records[j]) })
+	sort.Slice(records, func(i, j int) bool {
+		return backupStartedAfter(records[i], records[j])
+	})
 
 	var toDelete []BackupRecord
 	var toKeep []BackupRecord
@@ -1508,6 +1531,10 @@ func (s *BackupService) cleanupOldBackups(ctx context.Context, schedule *BackupS
 		if r.MonthlyArchive != nil {
 			if r.MonthlyArchive.RetainCount > 0 {
 				archiveCount++
+				// A new finite limit applies to the finite archive pool only while the
+				// rule is enabled; a disabled rule leaves every archive on its persisted
+				// policy. Permanent archives remain protected even after the
+				// configuration changes.
 				if cfg := schedule.MonthlyArchive; cfg != nil && cfg.Enabled && cfg.RetainCount > 0 && cfg.RetainCount != r.MonthlyArchive.RetainCount {
 					r.MonthlyArchive.RetainCount = cfg.RetainCount
 					metadataChanged = true
@@ -1516,15 +1543,21 @@ func (s *BackupService) cleanupOldBackups(ctx context.Context, schedule *BackupS
 			}
 		} else {
 			ordinaryCount++
+
+			// 按保留份数清理
 			if schedule.RetainCount > 0 && ordinaryCount > schedule.RetainCount {
 				shouldDelete = true
 			}
+
+			// 按保留天数清理
 			if schedule.RetainDays > 0 && r.StartedAt != "" {
-				if startedAt, parseErr := time.Parse(time.RFC3339, r.StartedAt); parseErr == nil && time.Now().After(startedAt.AddDate(0, 0, schedule.RetainDays)) {
+				startedAt, err := time.Parse(time.RFC3339, r.StartedAt)
+				if err == nil && time.Now().After(startedAt.AddDate(0, 0, schedule.RetainDays)) {
 					shouldDelete = true
 				}
 			}
 		}
+
 		if shouldDelete && r.RestoreStatus != "running" {
 			toDelete = append(toDelete, r)
 		} else {

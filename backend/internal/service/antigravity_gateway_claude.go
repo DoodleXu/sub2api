@@ -144,6 +144,9 @@ func (s *AntigravityGatewayService) forwardQualityCore(ctx context.Context, c *g
 		if failure := s.rateLimitService.BalanceFailover(ctx, c, account, resp.StatusCode, respBody); failure != nil {
 			return nil, failure
 		}
+		if failure := antigravityCapacityFailover(account, resp.StatusCode, resp.Header, respBody); failure != nil {
+			return nil, failure
+		}
 
 		// 优先检测 thinking block 的 signature 相关错误（400）并重试一次：
 		// Antigravity /v1internal 链路在部分场景会对 thought/thinking signature 做严格校验，

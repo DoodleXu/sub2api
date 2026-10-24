@@ -3442,7 +3442,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAILowUpstreamRatePriorityEnabled] = strconv.FormatBool(settings.OpenAILowUpstreamRatePriorityEnabled)
 	updates[SettingKeyOpenAIOAuthSchedulingRateMultiplier] = strconv.FormatFloat(settings.OpenAIOAuthSchedulingRateMultiplier, 'f', -1, 64)
 	updates[SettingKeyOpenAISchedulingUSDToCNYRate] = strconv.FormatFloat(settings.OpenAISchedulingUSDToCNYRate, 'f', -1, 64)
-	updates[AccountQualitySchedulingSetting] = strconv.FormatBool(settings.AccountQualitySchedulingEnabled)
+	updates[AccountQualitySchedulingSetting] = "false" // retired override; accept old clients without re-enabling it
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
@@ -3569,7 +3569,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
 	}
-	previousOpenAISchedulerSettings, _ := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting)
+	schedulerRepoKey := openAIAdvancedSchedulerSettingRepoKey(s.settingRepo)
 
 	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
 	versionBoundsSF.Forget("version_bounds")
@@ -3630,8 +3630,10 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	s.InvalidateOpenAICodexClientVersionCache()
 	s.InvalidateClaudeCodeClientVersionCache()
-	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
-	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
+	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey + ":" + schedulerRepoKey)
+	previousSchedulerValue, _ := openAIAdvancedSchedulerSettingCaches.Swap(schedulerRepoKey, &cachedOpenAIAdvancedSchedulerSetting{
+		repoKey:                        schedulerRepoKey,
+		repoRef:                        s.settingRepo,
 		lowUpstreamRatePriorityEnabled: settings.OpenAILowUpstreamRatePriorityEnabled,
 		oauthSchedulingRateMultiplier:  float64Ptr(settings.OpenAIOAuthSchedulingRateMultiplier),
 		schedulingUSDToCNYRate:         normalizeOpenAISchedulingUSDToCNYRate(settings.OpenAISchedulingUSDToCNYRate),
@@ -3653,6 +3655,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		}),
 		expiresAt: time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
 	})
+	previousOpenAISchedulerSettings, _ := previousSchedulerValue.(*cachedOpenAIAdvancedSchedulerSetting)
 	if openAICostSchedulerPolicyChanged(previousOpenAISchedulerSettings, settings) && s.onOpenAISchedulerPolicyUpdate != nil {
 		s.onOpenAISchedulerPolicyUpdate()
 	}
@@ -5438,7 +5441,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAILowUpstreamRatePriorityEnabled = settings[SettingKeyOpenAILowUpstreamRatePriorityEnabled] == "true"
 	result.OpenAIOAuthSchedulingRateMultiplier = parseOpenAIOAuthSchedulingRateMultiplier(settings[SettingKeyOpenAIOAuthSchedulingRateMultiplier])
 	result.OpenAISchedulingUSDToCNYRate = parseOpenAISchedulingUSDToCNYRate(settings[SettingKeyOpenAISchedulingUSDToCNYRate])
-	result.AccountQualitySchedulingEnabled = settings[AccountQualitySchedulingSetting] != "false"
+	result.AccountQualitySchedulingEnabled = false
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"

@@ -115,3 +115,25 @@ func TestListSchedulableCapacityNeverBypassesLimits(t *testing.T) {
 	require.NotContains(t, normalized, "temp_unschedulable_reason")
 	require.NotContains(t, normalized, `status_code":429`)
 }
+
+func TestGetAccountDispatchStateDoesNotHydrateRelations(t *testing.T) {
+	var capturedSQL string
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(captureEntQueryMatcher{actual: &capturedSQL}))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+	mock.ExpectQuery("dispatch state projection").WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "type", "status", "schedulable", "extra"}).AddRow(42, service.PlatformOpenAI, service.AccountTypeAPIKey, service.StatusActive, true, `{"scheduler_generation":7}`))
+	account, err := repo.GetAccountDispatchState(context.Background(), 42)
+	require.NoError(t, err)
+	require.EqualValues(t, 7, service.AccountSchedulingGeneration(account))
+	require.True(t, account.IsSchedulable())
+	require.NoError(t, mock.ExpectationsWereMet(), "one safety check must execute only one account query")
+	sql := normalizeSQLWhitespace(capturedSQL)
+	require.NotContains(t, sql, "account_groups")
+	require.NotContains(t, sql, "proxies")
+	require.NotContains(t, sql, `"name"`)
+	require.Contains(t, sql, "archived_at")
+	require.Contains(t, sql, "deleted_at")
+}

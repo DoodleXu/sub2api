@@ -371,13 +371,13 @@ func TestFailoverClientGone(t *testing.T) {
 	})
 }
 
-func TestFailoverNeverRevisitsFailedAccountAcrossPlatforms(t *testing.T) {
+func TestFailoverNeverRevisitsExhaustedAccountAcrossPlatforms(t *testing.T) {
 	for _, platform := range []string{"openai", "anthropic", "gemini", "antigravity", "deepseek", "grok"} {
 		for _, status := range []int{401, 403, 429, 500, 502, 503, 529} {
 			t.Run(fmt.Sprintf("%s/%d", platform, status), func(t *testing.T) {
 				fs := NewFailoverState(2, true)
 				for i, id := range []int64{11, 22, 33} {
-					action := fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, id, platform, 10, newTestFailoverErr(status, true, false))
+					action := fs.HandleFailoverError(context.Background(), &mockTempUnscheduler{}, id, platform, 0, newTestFailoverErr(status, true, false))
 					if i < 2 {
 						require.Equal(t, FailoverContinue, action)
 					} else {

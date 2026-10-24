@@ -598,6 +598,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	firstOutputTimeoutSwitchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -898,6 +899,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						return
 					}
 
+					if retry, canceled := retrySafeAccount(c.Request.Context(), sameAccountRetryCount, account, failoverErr); canceled {
+						return
+					} else if retry {
+						continue
+					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -1227,6 +1233,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	effectiveMappedModel := preferredMappedModel
@@ -1430,6 +1437,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						return
 					}
 
+					if retry, canceled := retrySafeAccount(c.Request.Context(), sameAccountRetryCount, account, failoverErr); canceled {
+						return
+					} else if retry {
+						continue
+					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
@@ -2649,6 +2661,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -2658,6 +2671,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	handleWSFailover := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
 		if completedWSTurn.Swap(false) {
 			failedAccountIDs = make(map[int64]struct{})
+			sameAccountRetryCount = make(map[int64]int)
 			switchCount = 0
 			profitVetoCount = 0
 			lastFailoverErr = nil
@@ -2679,6 +2693,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		if ctx.Err() != nil {
 			return false
+		}
+		if retry, canceled := retrySafeAccount(ctx, sameAccountRetryCount, account, failoverErr); canceled {
+			return false
+		} else if retry {
+			return true
 		}
 		h.gatewayService.RecordOpenAIAccountSwitch()
 		failedAccountIDs[account.ID] = struct{}{}

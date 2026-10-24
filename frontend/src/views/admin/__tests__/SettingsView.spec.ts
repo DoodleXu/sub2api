@@ -1740,14 +1740,15 @@ describe("admin SettingsView payment visible method controls", () => {
     }));
   });
 
-  it("enables health-first scheduling and disables inactive legacy controls", async () => {
+  it("uses upstream scheduling without retired quality and currency controls", async () => {
     const wrapper = mountView();
     await flushPromises();
-    await wrapper.get('[data-testid="account-quality-scheduling-toggle"]').setValue(true);
-    expect(wrapper.get('[data-testid="openai-advanced-scheduler-toggle"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[data-testid="account-quality-scheduling-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="openai-scheduling-usd-to-cny-rate"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="openai-advanced-scheduler-toggle"]').attributes('disabled')).toBeUndefined();
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ account_quality_scheduling_enabled: true }));
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ account_quality_scheduling_enabled: false }));
   });
 
   it("places and explains rate controls for both scheduling modes", async () => {

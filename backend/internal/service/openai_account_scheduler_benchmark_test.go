@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sort"
 	"testing"
 )
@@ -76,6 +77,29 @@ func BenchmarkOpenAIAccountSchedulerSelectTopK(b *testing.B) {
 				result := selectTopKOpenAICandidatesBySortBenchmark(candidates, tc.topK)
 				if len(result) == 0 {
 					b.Fatal("unexpected empty result")
+				}
+			}
+		})
+	}
+}
+
+// Covers the actual selection stage retained from upstream. Candidate scores
+// are prepared before timing, matching the previous fork audit benchmark.
+func BenchmarkOpenAIAccountSchedulerSelectionPhase(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		size int
+	}{{"n_64", 64}, {"n_256", 256}} {
+		b.Run(tc.name, func(b *testing.B) {
+			s := &defaultOpenAIAccountScheduler{service: &OpenAIGatewayService{}}
+			candidates := buildOpenAISchedulerBenchmarkCandidates(tc.size)
+			plan := openAIAccountLoadPlan{candidates: candidates, allCandidates: candidates, topK: 3}
+			req := OpenAIAccountScheduleRequest{RequestedModel: "model"}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if len(s.buildOpenAISelectionOrder(context.Background(), req, plan)) == 0 {
+					b.Fatal("no candidates")
 				}
 			}
 		})

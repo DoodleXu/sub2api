@@ -154,6 +154,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	switchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var failoverAttempts []openAIFailoverAttemptLog
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -358,6 +359,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					}
 					// Pool mode: retry on the same account
 
+					if retry, canceled := retrySafeAccount(c.Request.Context(), sameAccountRetryCount, account, failoverErr); canceled {
+						return
+					} else if retry {
+						continue
+					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

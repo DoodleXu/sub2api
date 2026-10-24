@@ -21,7 +21,6 @@ import (
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
 	balancePausePending   sync.Map
-	quality               *accountQualityService
 	accountRepo           AccountRepository
 	usageRepo             UsageLogRepository
 	cfg                   *config.Config
@@ -102,7 +101,6 @@ const (
 func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogRepository, cfg *config.Config, geminiQuotaService *GeminiQuotaService, tempUnschedCache TempUnschedCache) *RateLimitService {
 	return &RateLimitService{
 		accountRepo:        accountRepo,
-		quality:            newAccountQualityService(tempUnschedCache),
 		usageRepo:          usageRepo,
 		cfg:                cfg,
 		geminiQuotaService: geminiQuotaService,

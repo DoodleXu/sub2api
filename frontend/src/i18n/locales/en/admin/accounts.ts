@@ -910,16 +910,16 @@ export default {
       poolMode: 'Pool Mode',
       poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
       quality: {
-        'title': 'Scheduling health',
+        'title': 'Scheduling and balance protection',
         'healthFirst': 'Health first',
-        'legacy': 'Legacy order',
+        'legacy': 'Upstream scheduling',
         'enabled': 'Health-first scheduling for all platforms',
         'description': 'Prioritize reliability, then speed. Use load, price and session affinity when quality is similar.',
         'healthFirstHint': 'Active: health first. Legacy sorting weights below do not affect selection.',
         'legacyHint': 'Active: legacy order. Balance protection and per-request failed-account exclusion remain enabled.',
         'paused': 'Insufficient balance · Paused',
         'manualResume': 'An administrator must resume scheduling after replenishing the balance.',
-        'empty': 'No valid samples yet; account quality is unknown.',
+        'empty': 'Uses priority, load and session affinity. Confirmed account debt pauses scheduling.',
         'model': 'Model / capability',
         'state': 'Health',
         'samples': 'Valid samples',
@@ -938,13 +938,13 @@ export default {
         'half_open': 'Recovery probe',
       },
       poolModeInfo:
-        'Pool mode retains account state policies. Upstream faults switch accounts immediately. Insufficient account balance pauses scheduling until an administrator resumes it.',
-      poolModeRetryCount: 'Legacy same-account retry count (inactive)',
+        'Pool mode retains upstream account policies. Confirmed debt pauses scheduling. Replayable transient failures retry within budget before failover.',
+      poolModeRetryCount: 'Same-account transient retries',
       poolModeRetryCountHint:
-        'Retained for import/export compatibility. Same-account fault retries are disabled.',
-      poolModeRetryStatusCodes: 'Legacy same-account retry status codes (inactive)',
+        'Only replayable transient failures can retry. Zero disables retries; debt and invalid credentials never retry in place.',
+      poolModeRetryStatusCodes: 'Transient retry status codes',
       poolModeRetryStatusCodesHint:
-        'This list no longer controls fault handling. Failed attempts immediately move to another eligible account.',
+        'No-output checks and retry budgets still apply. Debt and authentication failures cannot be allowed by this list.',
       explicitCacheUpstream: 'Upstream Supports Explicit Caching',
       explicitCacheUpstreamHint: 'Enable only when the upstream is this system with explicit caching support',
       explicitCacheUpstreamInfo:
