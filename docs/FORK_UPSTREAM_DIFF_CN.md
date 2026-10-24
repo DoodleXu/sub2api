@@ -1,11 +1,14 @@
 # Fork 与上游功能差异维护台账
 
-## 2026-10-24 准备发布 v0.2.39
+## 2026-10-24 发版 v0.2.39
 
-- 版本源更新为 `0.2.39`，包含下方调度收敛、官方修复定向回迁、备份修复及终审补修；完整上游基线仍为 v0.2.16，不代表整仓同步官方 v0.2.18。
-- 没有新增数据库迁移、删除列或业务 API 路径；旧健康排序开关保持输入兼容但读出固定停用，独立欠费停调和迁移249保护继续保留。
-- 继续仅发布 Linux amd64 安装包与 GHCR 镜像。按发布流程等待精确候选提交的 CI/Security Scan 成功，再核验并创建带中文发布说明的 annotated tag；发布完成后补记产物和镜像校验结果。
-- 本轮授权为 GitHub/GHCR 发版，不包含生产服务器更新；上线仍按 `docs/ACCOUNT_QUALITY_SCHEDULING_CN.md` 验证迁移回滚、小流量性能与安全边界。
+- annotated tag `v0.2.39` 指向已推送主线的 `828a7ef49878c5160c4db47afe865a282d0b64a8`，版本源为 `0.2.39`，包含下方调度收敛、官方修复定向回迁、备份修复及终审补修；完整上游基线仍为 v0.2.16，并非整仓同步官方 v0.2.18。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/40103073627)（后端全量 unit、真实 PostgreSQL/Redis integration、前端全量3054项测试及类型/lint、Shell 与发布辅助检查）、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/40103073640) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/40103913854) 全部成功。候选核验脚本通过后才创建并推送带中文发布说明的 annotated tag。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.39) 于北京时间 2026-10-24 22:50:32 正式发布，非草稿、非预发布。附件为 `checksums.txt` 与 `sub2api_0.2.39_linux_amd64.tar.gz`；安装包 SHA-256 与校验文件及 GitHub asset digest 一致：`f20318cef424a048e0781e8cdab379de2bcef6fd73756ee189a8093c2baa6b53`。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.39`、`:0.2.39-amd64`、`:latest` 均核对为 `sha256:d47990c8a556fe85b347e312ef5b63293117b62b7147b840b7aa89da5711a0b3`；平台为 Linux amd64，镜像版本与 revision 标签匹配发布提交。
+- 下载包中的 Linux/amd64 ELF 二进制使用 Go 1.27.3 构建，构建信息包含正确提交；其 SHA-256 与实际拉取镜像的 `/app/sub2api` 一致：`527b71d55bf64a20f71ea10c6520459fa443a48b7ee719d98b3ef26965621c48`。隔离网络运行镜像的 `-version` 报告正确版本和提交，`pg_dump --version` / `psql --version` 均正常（PostgreSQL 18.6）。
+- 本地7项 Shell/发布核验测试及嵌入前端的构建通过。无新增数据库迁移、列删除或业务 API 路径删除；旧健康排序开关保持输入兼容但读出固定停用，独立欠费停调和迁移249保护继续保留。
+- 本轮完成 GitHub/GHCR 发版，未更新生产服务器；上线仍按 `docs/ACCOUNT_QUALITY_SCHEDULING_CN.md` 验证迁移回滚、小流量性能与安全边界。
 
 ## 2026-10-24：调度收敛、官方修复回迁与扩展边界
 
