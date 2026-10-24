@@ -894,10 +894,12 @@ describe('WebConsoleView', () => {
       open: vi.fn().mockResolvedValue({
         match: vi.fn(async (cacheKey: string) => {
           if (cacheKey.includes('/reference/')) {
-            return new Response('source-image', { headers: { 'Content-Type': 'image/png' } })
+            // Node 20 Response.blob() produces a Node Blob, which jsdom FileReader
+            // rejects. Cache storage in a browser returns a Blob from the same realm.
+            return { blob: async () => new Blob(['source-image'], { type: 'image/png' }) }
           }
           if (cacheKey.includes('/mask/')) {
-            return new Response('mask-image', { headers: { 'Content-Type': 'image/png' } })
+            return { blob: async () => new Blob(['mask-image'], { type: 'image/png' }) }
           }
           return null
         }),
@@ -965,7 +967,7 @@ describe('WebConsoleView', () => {
     await flushPromises()
 
     await vi.waitFor(() => {
-      expect(createImageTaskMock).toHaveBeenCalledWith(expect.objectContaining({
+      expect(createImageTaskMock, wrapper.text()).toHaveBeenCalledWith(expect.objectContaining({
         mode: 'edit',
         prompt: '把背景换成海边',
         reference_images: [expect.objectContaining({
