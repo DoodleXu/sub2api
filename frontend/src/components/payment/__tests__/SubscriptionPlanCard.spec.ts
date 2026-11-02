@@ -107,7 +107,7 @@ describe('SubscriptionPlanCard', () => {
       monthly_limit_usd: 300,
     }).text()
 
-    expect(text).toContain('/ 1payment.week')
+    expect(text).toContain('/ 1week')
     expect(text).toContain('$100')
     expect(text).not.toContain('$300')
   })
@@ -173,11 +173,11 @@ describe('SubscriptionPlanCard', () => {
       'items-center',
       'justify-end',
     ]))
-    expect(badge?.element.parentElement?.textContent).toContain('/ 30payment.days')
+    expect(badge?.element.parentElement?.textContent).toContain('/ 30days')
     expect(badge?.element.parentElement?.parentElement?.classList).toContain('shrink-0')
     expect(price?.element.parentElement?.parentElement?.classList).toContain('shrink-0')
     expect(wrapper.get('p').text()).toBe('Includes advanced models and priority support.')
-    expect(wrapper.get('button').text()).toBe('payment.subscribeNow')
+    expect(wrapper.get('button').text()).toBe('Subscribe now')
   })
 
   it('keeps short plan titles compact and aligned', () => {
@@ -193,6 +193,6 @@ describe('SubscriptionPlanCard', () => {
       'items-center',
       'justify-end',
     ]))
-    expect(badge?.element.parentElement?.textContent).toContain('/ 30payment.days')
+    expect(badge?.element.parentElement?.textContent).toContain('/ 30days')
   })
 })

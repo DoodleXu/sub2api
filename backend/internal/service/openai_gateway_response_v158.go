@@ -306,9 +306,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 	synthesizeBareError := func() {
-		if !bareErrorPending || clientDisconnected {
+		if !bareErrorPending {
 			return
 		}
+		bareErrorPending = false
 		msg := extractOpenAISSEErrorMessage(bareErrorPayload)
 		if msg == "" {
 			msg = "Upstream request failed"
@@ -318,6 +319,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		sawTerminalEvent = true
 		sawFailedEvent = true
 		s.parseSSEUsageBytes(bareErrorPayload, usage)
+		markOpenAICyberPolicyEvent(c, bareErrorPayload, http.StatusOK, usage)
+		status, _ := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, bareErrorPayload, msg, resp.Header, mappedModel)
+		s.recordOpenAIStreamUpstreamErrorWithStatus(c, account, false, upstreamRequestID, "stream_failed", bareErrorPayload, msg, status)
+		if clientDisconnected {
+			return
+		}
 		if _, err := writePendingString(failedSSE); err != nil {
 			clientDisconnected = true
 			return
@@ -327,7 +334,6 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			return
 		}
 		clientOutputStarted = true
-		bareErrorPending = false
 	}
 
 	needModelReplace := originalModel != mappedModel
@@ -517,8 +523,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			if eventType == "error" && !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 				errorMessage := extractOpenAISSEErrorMessage(dataBytes)
-				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
-					MarkOpsCyberPolicy(c, CyberPolicyMark{Code: code, Message: msg, Body: truncateString(string(dataBytes), 4096), UpstreamStatus: http.StatusOK})
+				s.parseSSEUsageBytes(dataBytes, usage)
+				if hit, _, msg := detectOpenAICyberPolicy(dataBytes); hit {
+					markOpenAICyberPolicyEvent(c, dataBytes, http.StatusOK, usage)
 					c.Data(http.StatusBadRequest, "application/json", dataBytes)
 					streamEarlyErr = fmt.Errorf("openai cyber_policy: %s", msg)
 					return

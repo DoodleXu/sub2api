@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 
 import EmailBroadcastsView from "../EmailBroadcastsView.vue";
+
+enableAutoUnmount(afterEach);
 
 const {
   getEmailBroadcastDraft,

@@ -119,6 +119,28 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			imageOutputSizes:   imageCounter.Sizes(),
 		}
 	}
+	synthesizeBareError := func() {
+		if !bareErrorPending {
+			return
+		}
+		bareErrorPending = false
+		sawFailedEvent, sawTerminalEvent = true, true
+		failedMessage = extractOpenAISSEErrorMessage(bareErrorPayload)
+		s.parseSSEUsageBytes(bareErrorPayload, usage)
+		markOpenAICyberPolicyEvent(c, bareErrorPayload, http.StatusOK, usage)
+		status, _ := s.handleOpenAIStreamTerminalAccountSideEffects(c, account, bareErrorPayload, failedMessage, resp.Header, mappedModel)
+		s.recordOpenAIStreamUpstreamErrorWithStatus(c, account, true, upstreamRequestID, "stream_failed", bareErrorPayload, failedMessage, status)
+		if clientDisconnected || !writePendingLines() {
+			return
+		}
+		if _, err := fmt.Fprint(w, buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), bareErrorPayload, failedMessage)); err != nil {
+			clientDisconnected = true
+			return
+		}
+		clientOutputStarted = true
+		flushPending = true
+		flushPendingOutput()
+	}
 
 	for documentScanner.Scan() {
 		line := documentScanner.Text()
@@ -131,8 +153,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			continue
 		}
 		if sawFailedEvent && strings.TrimSpace(line) == "data: [DONE]" {
-			suppressBareErrorBoundary = true
-			continue
+			break
 		}
 		if line == "event: error" && openAIStreamClientOutputStarted(c, clientOutputStarted) {
 			continue
@@ -176,16 +197,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 			eventType = strings.TrimSpace(gjson.Get(trimmedData, "type").String())
 			if trimmedData == "[DONE]" && bareErrorPending {
-				msg := failedMessage
-				if msg == "" {
-					msg = "Upstream response failed"
-				}
-				failedSSE := buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), bareErrorPayload, msg)
-				dataBytes = []byte(strings.TrimSpace(strings.TrimPrefix(strings.SplitN(failedSSE, "data: ", 2)[1], "data: ")))
-				trimmedData = string(dataBytes)
-				line = "data: " + trimmedData
-				eventType = "response.failed"
-				bareErrorPending = false
+				synthesizeBareError()
+				break
 			}
 			if isOpenAIErrorBearingEventType(eventType) {
 				dataBytes = redactSensitiveBody(dataBytes)
@@ -202,8 +215,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			if eventType == "error" && !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 				errorMessage := extractOpenAISSEErrorMessage(dataBytes)
 				s.parseSSEUsageBytesWithType(dataBytes, eventType, usage)
-				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
-					MarkOpsCyberPolicy(c, CyberPolicyMark{Code: code, Message: msg, Body: truncateString(string(dataBytes), 4096), UpstreamStatus: http.StatusOK})
+				if hit, _, msg := detectOpenAICyberPolicy(dataBytes); hit {
+					markOpenAICyberPolicyEvent(c, dataBytes, http.StatusOK, usage)
 					c.Data(http.StatusBadRequest, "application/json", dataBytes)
 					return resultWithUsage(), fmt.Errorf("openai cyber_policy: %s", msg)
 				}
@@ -227,6 +240,16 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					suppressBareErrorBoundary = true
 					continue
 				}
+			}
+			if eventType == "error" && account != nil && account.IsOpenAI() && account.Type != AccountTypeAPIKey {
+				bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
+				bareErrorPending = true
+				suppressBareErrorBoundary = true
+				s.parseSSEUsageBytes(dataBytes, usage)
+				continue
+			}
+			if eventType == "response.completed" || eventType == "response.done" {
+				bareErrorPending = false
 			}
 			if eventType == "response.failed" {
 				outputAlreadyStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
@@ -344,6 +367,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 		}
 	}
+	synthesizeBareError()
 	if err := documentScanner.Err(); err != nil {
 		safeErr := redactAgentIdentitySensitiveError(redactSensitiveBody, err)
 		if (sawDone || sawTerminalEvent) && !sawFailedEvent {
