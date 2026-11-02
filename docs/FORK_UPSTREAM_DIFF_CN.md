@@ -1,13 +1,23 @@
 # Fork 与上游功能差异维护台账
 
+## 2026-11-02 发版 v0.2.40
+
+- annotated tag `v0.2.40` 指向已推送默认分支的 `e3d5f1a191196c0661c46737a04e09c182351031`，包含官方 v0.2.19 同步及下方审核修复；版本源为 `0.2.40`。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/41436932448)、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/41436932226) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/41438611001) 全部成功。默认分支祖先关系、已提交版本号和两项成功检查核验通过后才创建并推送 annotated tag，发布流程再次核对标签未移动。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.40) 于北京时间 2026-11-02 19:45:09 正式发布，非草稿、非预发布。附件为 `checksums.txt` 和 `sub2api_0.2.40_linux_amd64.tar.gz`；安装包 SHA-256 与校验文件、GitHub asset digest 一致：`8d1ffcebcf8e9ef5a72aed55fe9bf9b3e5f1a4ed8a3a33cd14eb041e9a7cde5d`。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.40`、`:0.2.40-amd64`、`:latest` 均核对为 `sha256:990a71d435caf5c80b12e847ac231e1041b93ae4b28e71f1eb374330bc560127`；实际镜像为 Linux/amd64，version/revision 标签匹配发布版本与提交。
+- 下载包内二进制确认为 Go 1.27.3 构建的 Linux/amd64 ELF，SHA-256 与镜像 `/app/sub2api` 一致：`600eeff5aadd93c336e0ffba4d5a5ba9699f2e8471cca75e2770bc7df9c62cab`。隔离网络中经正常 entrypoint 运行 `-version` 报告 0.2.40 和正确提交；`pg_dump --version` / `psql --version` 均正常，为 PostgreSQL 18.6。
+- 审核修复后的本地后端全量 unit/integration、vet、构建、golangci-lint（0 issues），前端 402 个文件 3201 项测试、类型检查、ESLint、生产构建，以及 7 项 Shell / 10 项发布辅助检查通过。govulncheck 无可达漏洞；前端生产依赖 high/critical 均为 0，仍有既有 KaTeX low 告警，安全豁免清单保持为空。
+- 发布说明明确迁移 246 会开启历史 Gemini/Antigravity 分组生图权限，升级后需按业务要求复核；图片按张计费默认关闭。主工作区原有 38 个已跟踪文件改动、21 个未跟踪文件全部恢复并逐文件核对；独立成本核算 250/251 未纳入发布。恢复后的前后端构建、类型检查和成本展示 68 项测试通过。本轮未更新生产服务器。
+
 ## 2026-11-02：v0.2.40 发布审核
 
 - 发布范围为上游 v0.2.19 同步提交 `8cbe94b68` 和本节修复；独立成本核算 250/251 及主工作区其他未提交改动继续单独保留，不纳入发布。
-- P1 流式终态：OAuth 透传在已输出内容后收到裸 `error`，若随后只有 `[DONE]`、EOF 或读错误，原实现可能返回成功并漏掉失败终态。审核建议让原生和透传共用失败帧格式，统一保留真实用量、账号侧处理及审计。现已修复为单个 `response.failed`，已输出内容不重放；若后续收到正式 `response.completed` / `response.failed`，仍以正式终态及其用量为准。已收到失败终态和 `[DONE]` 时不再等待上游关闭连接。
+- P1 流式终态：OpenAI OAuth 透传在已输出内容后收到裸 `error`，若随后只有 `[DONE]`、EOF 或读错误，原实现可能返回成功并漏掉失败终态。审核建议让原生和透传共用失败帧格式，统一保留真实用量、账号侧处理及审计。现已修复为单个 `response.failed`，已输出内容不重放；若后续收到正式 `response.completed` / `response.failed`，仍以正式终态及其用量为准。已收到失败终态和 `[DONE]` 时不再等待上游关闭连接。
 - P1 欠费与风控：补齐裸错误最终失败时的明确欠费停调，并让原生/透传的裸 `cyber_policy` 保留上游已消耗 token；风控拒绝继续不触发账号欠费停调。覆盖了输出前后、EOF、异常读取、正式终态恢复和连接延迟关闭的回归。
 - 安全依赖：生产依赖审计确认 Vue I18n 9.14.5 的 `srcdoc` XSS 无受支持补丁，升级 Vue I18n / message compiler 至 11.4.17；同时更新 follow-redirects 至 1.16.2、decode-uri-component 至 0.5.1。CI、Security Scan、Release 的 Node 版本统一为 22，开发文档与前端 engines 同步；Docker 构建继续使用满足要求的 Node 24。套餐卡测试改为断言实际翻译文案，不再依赖旧运行时缺少编译器时的 key 回退。
-- 本轮没有删除业务 API 或旧客户端字段；保留既有管理员密钥兼容、付款/退款、归档、签到、运营中心和生图管理边界。版本源准备为 `0.2.40`，发布继续限定 Linux/amd64 二进制和 GHCR 镜像。
-- 验证与精确发布提交的 CI/Security Scan 结果在发布完成后补齐；必须先通过默认分支的精确 SHA 检查，再创建 annotated tag。本轮不部署生产服务器。
+- 本轮没有删除业务 API 或旧客户端字段；保留既有管理员密钥兼容、付款/退款、归档、签到、运营中心和生图管理边界。版本源更新为 `0.2.40`，发布继续限定 Linux/amd64 二进制和 GHCR 镜像。
+- 本地检查、精确 SHA 的 CI/Security Scan、发布流程及产物核验均已通过，证据见上方发布记录。本轮不部署生产服务器。
 
 ## 2026-11-02 合并上游 v0.2.19
 
