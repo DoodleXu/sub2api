@@ -703,11 +703,12 @@ func paginateAPIKeys(keys []APIKey, params pagination.PaginationParams) []APIKey
 	if len(keys) == 0 {
 		return []APIKey{}
 	}
+	limit := params.Limit()
 	offset := params.Offset()
 	if offset >= len(keys) {
 		return []APIKey{}
 	}
-	end := offset + params.Limit()
+	end := offset + limit
 	if end > len(keys) {
 		end = len(keys)
 	}

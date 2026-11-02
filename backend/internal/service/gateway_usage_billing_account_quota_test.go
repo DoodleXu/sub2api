@@ -33,14 +33,16 @@ func TestBuildUsageBillingCommand_AccountQuotaPeriodHints(t *testing.T) {
 			wantQuota: true,
 		},
 		{
-			name:        "service_account_not_enabled",
+			name:        "service_account_total_only",
 			accountType: AccountTypeServiceAccount,
 			extra:       map[string]any{"quota_limit": 10.0},
+			wantQuota:   true,
 		},
 		{
-			name:        "service_account_daily_not_enabled",
+			name:        "service_account_daily",
 			accountType: AccountTypeServiceAccount,
 			extra:       map[string]any{"quota_limit": 10.0, "quota_daily_limit": 5.0},
+			wantQuota:   true, wantDaily: true,
 		},
 	}
 

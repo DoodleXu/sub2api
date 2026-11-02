@@ -163,7 +163,7 @@ func TestApplyUsageBillingEffects_DeletedAccountStillBillsBalance(t *testing.T) 
 	err = (&usageBillingRepository{}).applyUsageBillingEffects(ctx, tx, &service.UsageBillingCommand{
 		UserID:           42,
 		AccountID:        9,
-		AccountType:      service.AccountTypeAPIKey,
+		AccountType:      service.AccountTypeServiceAccount,
 		BalanceCost:      10,
 		AccountQuotaCost: 4,
 	}, result)

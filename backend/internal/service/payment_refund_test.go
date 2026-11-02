@@ -563,7 +563,7 @@ func TestBuildRefundPreviewUsesSubscriptionCreatedByOrder(t *testing.T) {
 	require.Equal(t, 16.66, preview.SuggestedRefundAmount)
 }
 
-func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T) {
+func TestFinishRefundPendingMarksOrderPendingAndKeepsDeduction(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)
 
@@ -622,8 +622,8 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 	require.NotNil(t, result)
 	require.False(t, result.Success)
 	require.Contains(t, result.Warning, "pending confirmation")
-	require.Equal(t, 40.0, rolledBack)
-	require.Zero(t, plan.BalanceToDeduct)
+	require.Zero(t, rolledBack)
+	require.Equal(t, 40.0, plan.BalanceToDeduct)
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
@@ -1389,10 +1389,16 @@ func TestFailedRefundRetryUsesFreshLineageForRollbackRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pending)
 	require.False(t, pending.Success)
-	require.Equal(t, 1, rollbackCalls)
+	require.Zero(t, rollbackCalls)
 
 	provider.refundResponse = &payment.RefundResponse{RefundID: "re_fresh_retry", Status: payment.ProviderStatusFailed}
 	result, err := svc.QueryAndFinalizeRefund(ctx, order.ID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Success)
+	require.Contains(t, result.Warning, "rollback is still pending")
+	require.Equal(t, 1, rollbackCalls)
+	result, err = svc.QueryAndFinalizeRefund(ctx, order.ID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.False(t, result.Success)
@@ -1665,7 +1671,7 @@ func TestQueryAndFinalizeRefundKeepsCumulativeAmountForPartialPending(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, pendingResult)
 	require.False(t, pendingResult.Success)
-	require.Equal(t, 20.0, rolledBack)
+	require.Zero(t, rolledBack)
 	pendingOrder, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
 	require.Equal(t, OrderStatusRefundPending, pendingOrder.Status)
@@ -1681,7 +1687,8 @@ func TestQueryAndFinalizeRefundKeepsCumulativeAmountForPartialPending(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.Success)
-	require.Equal(t, 20.0, deducted)
+	require.Zero(t, deducted, "the held deduction must not be applied twice")
+	require.Equal(t, 20.0, result.BalanceDeducted)
 	require.Len(t, provider.requests, 1)
 	require.Equal(t, formatGatewayRefundAmount(20, pendingOrder), provider.requests[0].Amount)
 

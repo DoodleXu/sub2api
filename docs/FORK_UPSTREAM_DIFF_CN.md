@@ -1,5 +1,19 @@
 # Fork 与上游功能差异维护台账
 
+## 2026-11-02 合并上游 v0.2.19
+
+- 从 fork `be37caca31f17ae8d288010dc131864573809cb7`（v0.2.39 发布记录）合并官方最新正式 release `v0.2.19`，提交为 `dece26153621959ccd7635814f4b2d08304e681a`，GitHub 发布于北京时间 2026-10-28 18:16。完整上游基线从 v0.2.16 升至 v0.2.19；未合入 release 之后的 upstream/main。版本源继续保持 fork 的 `0.2.39`。
+- 新增按动作、分组、平台和账号类型授权的管理员 API Key（摘要存储、到期/IP 限制、撤销审计）、OpenAI/Composite 专用图片端点按实际出图张数计费（默认关闭），以及 GPT-6.1 Terra、Grok 模型目录诊断、Gemini 显式缓存绑定重试和共享容量/工具签名恢复等官方增量。
+- 保留签到、运营中心、OAuth 人民币成本和 API Key 利润、归档及影子账号生命周期、Web 创作台、生图历史/批处理、邮件群发、支付订阅升级、Agent Identity 脱敏、Responses Lite、欠费停调、调度利润门和同号重试预算。非 OpenAI 分组的 Codex manifest 继续返回合法空目录，避免覆盖客户端内置模型元数据；新目录回归按此 fork 契约适配。
+- Antigravity 保持公共有界同号重试与独立付费积分许可，不重新启用上游单账号原地长重试、限流绕过或其专属延迟探针；非 Antigravity 请求不额外扫描 Antigravity 账号桶的回归继续保留。
+- 68 个冲突路径逐项处理；上游已拆分而 fork 仍聚合的模块按实际函数归属接入增量，通用/OpenAI 调度沿用官方文件布局。保留 Go 1.27.3、安全依赖版本下限及 `linux/amd64 + GHCR` 发布链路，补入上游更新的 Go 依赖和前端安全覆盖；账号筛选折叠与对应中英文文案继续保留。
+- 图片按张开关只影响专用图片端点，混合 Responses/Chat/WS 请求仍保留 token 计费。multipart 图片单文件上限跟随官方放宽至 50 MiB，继续拒绝超限而不截断，并保留 fork 的真实图片校验、尺寸/像素、8 张参考图与 80 MiB 总量限制。图片下载继续使用 fork 的 HTTPS、公网 IP 固定、防重定向泄密和文件魔数校验，不恢复环境代理绕过这些限制的路径。
+- 支付继续使用 fork 的退款尝试标识、扣减谱系、原子审计/补偿和未知提交保护；合入官方 pending 退款保留扣减的修复，确认成功不二次扣减、失败按原金额原子补偿，补偿不可用时保留 pending 禁止再次发起退款。补入余额缓存失效、支付宝终态查询及按持久化尝试恢复，EasyPay 通知继续经供应商订单查询确认。
+- API 兼容：保留原有业务路径与 fork 字段；OpenAI `/v1/models` 在旧目录字段基础上补全标准 `object/created/owned_by`。既存全权管理员 key 继续使用和轮换，密钥管理仅接受 JWT；按上游安全设计停止首次创建旧版全权 key，新建使用受限 key。受限 key 对未登记的 fork 路由默认拒绝；JWT 管理员和既存 key 的其他权限语义保留。
+- 新增迁移 `246_enable_gemini_image_generation_groups.sql`、`247_scoped_admin_api_keys.sql`、`248_group_image_count_billing.sql`；与 fork 既有 246/247/248 同号不同名，执行器继续按完整文件名识别，历史文件不改名、不改校验。原主工作区尚未提交的独立成本核算 250/251 及其他改动不纳入本次同步提交。
+- 验证通过：后端全量 unit（含独立 PostgreSQL 的受限密钥生命周期、并发轮换、范围分页、导入身份与归档/影子父账号过滤），全量 integration（真实 PostgreSQL 18.1 / Redis 8.4，执行全部迁移），unit-tag vet、普通构建、Linux/amd64 嵌入前端构建及隔离容器 `-version` 启动；golangci-lint v2.14.0 为 0 issues。前端 402 个文件、3201 项测试，类型检查、ESLint、生产构建和 7 项部署/发布 Shell 检查均通过。既有进程级内存断言曾出现一次波动，原 8 MiB 阈值未改动，独立连续 3 次与最终全量复跑通过。本轮仅同步源码，不执行版本发布或生产部署。
+
+
 ## 2026-10-24 发版 v0.2.39
 
 - annotated tag `v0.2.39` 指向已推送主线的 `828a7ef49878c5160c4db47afe865a282d0b64a8`，版本源为 `0.2.39`，包含下方调度收敛、官方修复定向回迁、备份修复及终审补修；完整上游基线仍为 v0.2.16，并非整仓同步官方 v0.2.18。
@@ -73,7 +87,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-10-24
+最后更新：2026-11-02
 
 ## 2026-10-15 发版 v0.2.36
 
@@ -315,9 +329,9 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| 本轮开发基线 | `ba248cced` | fork v0.2.38 主线；收敛改动位于 `codex/fork-convergence` 工作区 |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.16` -> `01842576b3d5c1e2545b5a99ad555d36e28ed306` | 2026-10-15 同步目标 |
-| 已核对的上游最新 release | `refs/tags/upstream/v0.2.18^{}` -> `ac1b8f1271be0d674fa6f074403c1410f30a3a81` | 2026-10-23 发布；本轮仅定向回迁上述补丁 |
+| 本轮开发基线 | `be37caca3` | fork v0.2.39 发布记录；同步分支 `codex/sync-upstream-v0.2.19` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.19` -> `dece26153621959ccd7635814f4b2d08304e681a` | 2026-11-02 完整同步目标 |
+| 已核对的上游最新 release | `refs/tags/upstream/v0.2.19^{}` -> `dece26153621959ccd7635814f4b2d08304e681a` | 2026-10-28 发布；2026-11-02 核对 GitHub Releases latest |
 | fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 业务差异继续按能力模块保留；通用/OpenAI 调度已回到官方拆分文件布局，其他模块在必要维护时逐步对齐。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
@@ -331,9 +345,9 @@
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.2.16:refs/tags/upstream/v0.2.16 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.2.16^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.2.16^{}..HEAD
+git fetch upstream refs/tags/v0.2.19:refs/tags/upstream/v0.2.19 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.2.19^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.2.19^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。
@@ -1189,7 +1203,7 @@ git diff --name-status refs/tags/upstream/v0.2.16^{}..HEAD
 
 ## 待关注上游 main 变更
 
-当前 fork 已包含官方 release `v0.2.16`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
+当前 fork 已包含官方 release `v0.2.19`。后续同步时仍应重新读取 GitHub Releases 元数据，并重点复核聚合分组计费、入口鉴权安全、Prompt Audit、Agent Identity、Grok OAuth/media 路由、Responses/WS 协议、异步图片任务与账号归档过滤，不能沿用旧 release 的提交清单推断最新状态。
 
 ## v0.1.229 发布验证
 

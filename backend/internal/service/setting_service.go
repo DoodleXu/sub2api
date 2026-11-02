@@ -392,8 +392,8 @@ const antigravityUserAgentVersionCacheTTL = 60 * time.Second
 const antigravityUserAgentVersionErrorTTL = 5 * time.Second
 const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
-// DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）。
-// 默认身份和 codexCLIVersion 保持同源，避免陈旧版本被上游优先降载。
+// DefaultOpenAICodexUserAgent 是 OpenAI Codex 默认 User-Agent，用于规避浏览器 UA 的质询。
+// 默认采用 codex_cli_rs 身份，避免历史 codex-tui 出口触发 sub2api 的身份风控指纹。
 const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
@@ -500,6 +500,7 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
+	scopedAdminKeyRepo            ScopedAdminKeyRepository
 	settingRepo                   SettingRepository
 	defaultSubGroupReader         DefaultSubscriptionGroupReader
 	proxyRepo                     ProxyRepository // for resolving websearch provider proxy URLs
@@ -1873,7 +1874,9 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 }
 
 // GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
-// 优先级：管理员覆写版本 -> 自动同步版本 -> 内置版本。
+// 优先级：管理员在面板覆写的版本 → 自动同步到的官方最新稳定版 → 内置常量。
+// 上游会按客户端身份进行风控分层，陈旧版本可能被优先丢弃，故该值需保持跟随官方发布；
+// 自动同步让运维不必为了跟版本而发新版本。
 func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
 	fallback := codexCLIVersion
 	if s == nil || s.settingRepo == nil {
@@ -1995,7 +1998,12 @@ func (s *SettingService) InvalidateClaudeCodeClientVersionCache() {
 }
 
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
-// 面板 UA 只提供客户端与环境指纹，版本段统一重建为当前生效版本。
+// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex CLI UA。
+//
+// 面板 UA 只贡献客户端名与 OS / 架构 / 终端指纹，版本段一律用生效版本重建：该输入框是
+// 唯一能改 UA 后缀的地方，但它填写于某个历史版本，逐字沿用会把出站身份永久钉死在陈旧
+// 版本上并绕过自动同步——而陈旧身份正是上游风控更严格的那一侧。
+// 需要固定版本请填「Codex 客户端版本号」并关闭自动同步。
 func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) string {
 	if s == nil {
 		return codexCLIUserAgent
@@ -6222,7 +6230,7 @@ func (s *SettingService) GetIdentityPatchPrompt(ctx context.Context) string {
 	return value
 }
 
-// GenerateAdminAPIKey 生成新的管理员 API Key
+// GenerateAdminAPIKey 轮换已存在的旧版管理员 API Key，不允许新建。
 func (s *SettingService) GenerateAdminAPIKey(ctx context.Context) (string, error) {
 	// 生成 32 字节随机数 = 64 位十六进制字符
 	bytes := make([]byte, 32)
@@ -6232,9 +6240,19 @@ func (s *SettingService) GenerateAdminAPIKey(ctx context.Context) (string, error
 
 	key := AdminAPIKeyPrefix + hex.EncodeToString(bytes)
 
-	// 存储到 settings 表
-	if err := s.settingRepo.Set(ctx, SettingKeyAdminAPIKey, key); err != nil {
+	// 旧版密钥只能轮换已有记录。使用条件 UPDATE，避免删除与轮换并发时被 upsert 重新创建。
+	repo, ok := s.settingRepo.(interface {
+		ReplaceExistingAdminAPIKey(context.Context, string) (bool, error)
+	})
+	if !ok {
+		return "", infraerrors.InternalServer("ADMIN_API_KEY_REPOSITORY_UNSUPPORTED", "旧版管理员密钥存储不支持原子轮换")
+	}
+	exists, err := repo.ReplaceExistingAdminAPIKey(ctx, key)
+	if err != nil {
 		return "", fmt.Errorf("save admin api key: %w", err)
+	}
+	if !exists {
+		return "", infraerrors.Forbidden("ADMIN_API_KEY_NOT_FOUND", "旧版密钥已停止新建，请创建权限管理密钥")
 	}
 
 	return key, nil

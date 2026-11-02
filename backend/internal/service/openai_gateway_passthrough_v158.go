@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +68,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	responsesSemanticOutputSeen := false
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
+	var createdAtTracker responsesCreatedAtStamper
+	var bareErrorPayload []byte
 	bareErrorPending := false
 	suppressBareErrorBoundary := false
 	clientOutputStarted := false
@@ -143,6 +144,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
 			eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+			createdAtTracker.Observe(dataBytes, eventType)
 			observer.ObserveOpenAI(dataBytes, eventType)
 			if needModelReplace {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
@@ -178,7 +180,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				if msg == "" {
 					msg = "Upstream response failed"
 				}
-				dataBytes = []byte(`{"type":"response.failed","response":{"status":"failed","error":{"type":"upstream_error","message":` + strconv.Quote(msg) + `}}}`)
+				failedSSE := buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtTracker.Value(), bareErrorPayload, msg)
+				dataBytes = []byte(strings.TrimSpace(strings.TrimPrefix(strings.SplitN(failedSSE, "data: ", 2)[1], "data: ")))
 				trimmedData = string(dataBytes)
 				line = "data: " + trimmedData
 				eventType = "response.failed"
@@ -218,6 +221,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, errorMessage, resp.Header)
 				}
 				if account != nil && account.Type != AccountTypeAPIKey {
+					bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
 					bareErrorPending = true
 					failedMessage = errorMessage
 					suppressBareErrorBoundary = true

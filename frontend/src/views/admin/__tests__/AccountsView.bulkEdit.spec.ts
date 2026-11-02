@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, shallowMount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount, shallowMount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
+
+enableAutoUnmount(afterEach)
 
 const {
   listAccounts,

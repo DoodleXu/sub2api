@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -16,6 +17,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 }
 
 type openAIResponsesCompatibilityOptions struct {
+	Config        *config.Config
 	ResponsesLite bool
 	Compact       bool
 }
@@ -43,7 +45,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 	if account.IsOpenAIOAuthLike() {
 		var err error
 		var legacyChanged bool
-		normalized, legacyChanged, err = normalizeOpenAIResponsesLegacyIngress(normalized)
+		normalized, legacyChanged, err = normalizeOpenAIResponsesLegacyIngressWithConfig(opts.Config, normalized)
 		if err != nil {
 			return body, false, err
 		}

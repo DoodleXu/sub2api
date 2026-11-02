@@ -220,6 +220,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	responsesSemanticOutputSeen := false
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
+	var createdAtStamper responsesCreatedAtStamper
 	bareErrorPending := false
 	bareErrorPayload := []byte(nil)
 	bareErrorJustResolved := false
@@ -313,11 +314,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			msg = "Upstream request failed"
 		}
 		failedMessage = msg
-		payload := []byte(`{"type":"response.failed","status":"failed","response":{"status":"failed","error":{"type":"upstream_error","message":` + strconv.Quote(msg) + `}}}`)
+		failedSSE := buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, msg)
 		sawTerminalEvent = true
 		sawFailedEvent = true
 		s.parseSSEUsageBytes(bareErrorPayload, usage)
-		if _, err := writePendingString("data: " + string(payload) + "\n\n"); err != nil {
+		if _, err := writePendingString(failedSSE); err != nil {
 			clientDisconnected = true
 			return
 		}
@@ -360,6 +361,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		lastDownstreamWriteAt = time.Now()
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
+		if bareErrorPending {
+			synthesizeBareError()
+		}
 		if stageFirstOutput && eventInProgress {
 			// EOF dispatches the final SSE event even without a trailing blank line.
 			completeGuardedEvent(true)
@@ -483,6 +487,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			dataBytes := []byte(data)
 			eventTypeRaw := gjson.GetBytes(dataBytes, "type").String()
 			eventType := strings.TrimSpace(eventTypeRaw)
+			if stamped, changed := createdAtStamper.Stamp(dataBytes, eventType); changed {
+				dataBytes = stamped
+				data = string(stamped)
+				line = "data: " + data
+			}
 			observer.ObserveOpenAI(dataBytes, eventTypeRaw)
 			if isOpenAIErrorBearingEventType(eventType) {
 				if redacted := redactSensitiveBody(dataBytes); !bytes.Equal(redacted, dataBytes) {
@@ -544,6 +553,12 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					streamEarlyErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, errorMessage, resp.Header)
 					return
 				}
+			}
+			if eventType == "error" && account != nil && account.Platform == PlatformOpenAI && account.Type != AccountTypeAPIKey {
+				bareErrorPending = true
+				bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
+				suppressNextSSEBoundary = true
+				return
 			}
 			if eventType == "response.failed" {
 				outputAlreadyStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)

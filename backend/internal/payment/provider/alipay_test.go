@@ -8,9 +8,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/smartwalle/alipay/v3"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsTradeNotExist(t *testing.T) {
@@ -443,4 +445,161 @@ func TestParseAlipayAmount(t *testing.T) {
 	if _, err := parseAlipayAmount("", "not-a-number"); err == nil {
 		t.Fatal("expected error when no valid amount field exists")
 	}
+}
+
+func TestAlipayRefundRecordsOutRequestNoAsRefundID(t *testing.T) {
+	origRefund := alipayTradeRefund
+	t.Cleanup(func() { alipayTradeRefund = origRefund })
+
+	for _, tc := range []struct {
+		fundChange string
+		wantStatus string
+	}{
+		{fundChange: alipayFundChangeYes, wantStatus: payment.ProviderStatusSuccess},
+		{fundChange: "N", wantStatus: payment.ProviderStatusPending},
+	} {
+		var gotOutRequestNo string
+		alipayTradeRefund = func(_ context.Context, _ *alipay.Client, param alipay.TradeRefund) (*alipay.TradeRefundRsp, error) {
+			if param.OutTradeNo != "sub2_7" || param.RefundAmount != "12.50" {
+				t.Fatalf("unexpected refund param: %+v", param)
+			}
+			gotOutRequestNo = param.OutRequestNo
+			return &alipay.TradeRefundRsp{TradeNo: "2026101522001", FundChange: tc.fundChange}, nil
+		}
+
+		provider := &Alipay{client: &alipay.Client{}}
+		resp, err := provider.Refund(context.Background(), payment.RefundRequest{OrderID: "sub2_7", Amount: "12.50", Reason: "r"})
+		if err != nil {
+			t.Fatalf("Refund() error = %v", err)
+		}
+		if resp.Status != tc.wantStatus {
+			t.Fatalf("fund_change=%s status = %q, want %q", tc.fundChange, resp.Status, tc.wantStatus)
+		}
+		if !strings.HasPrefix(gotOutRequestNo, "sub2_7-refund-") || resp.RefundID != gotOutRequestNo {
+			t.Fatalf("RefundID = %q, out_request_no = %q", resp.RefundID, gotOutRequestNo)
+		}
+	}
+}
+
+func TestAlipayQueryRefundMapsStatus(t *testing.T) {
+	origQuery := alipayTradeFastPayRefundQuery
+	t.Cleanup(func() { alipayTradeFastPayRefundQuery = origQuery })
+
+	const outRequestNo = "sub2_7-refund-1760500000000000000"
+	ok := alipay.Error{Code: alipay.CodeSuccess, Msg: "Success"}
+	settled := time.Now().Add(-alipayRefundQueryNotFoundGrace - time.Minute)
+	for _, tc := range []struct {
+		name        string
+		rsp         *alipay.TradeFastPayRefundQueryRsp
+		requestedAt time.Time
+		wantStatus  string
+	}{
+		{name: "success", rsp: &alipay.TradeFastPayRefundQueryRsp{Error: ok, OutRequestNo: outRequestNo, RefundAmount: "12.50", RefundStatus: alipayRefundStatusSucc}, requestedAt: settled, wantStatus: payment.ProviderStatusSuccess},
+		{name: "record without final status", rsp: &alipay.TradeFastPayRefundQueryRsp{Error: ok, OutRequestNo: outRequestNo, RefundAmount: "12.50"}, requestedAt: settled, wantStatus: payment.ProviderStatusPending},
+		{name: "no refund record after grace", rsp: &alipay.TradeFastPayRefundQueryRsp{Error: ok}, requestedAt: settled, wantStatus: payment.ProviderStatusFailed},
+		{name: "no refund record within grace", rsp: &alipay.TradeFastPayRefundQueryRsp{Error: ok}, requestedAt: time.Now().Add(-time.Minute), wantStatus: payment.ProviderStatusPending},
+		{name: "no refund record with unknown request time", rsp: &alipay.TradeFastPayRefundQueryRsp{Error: ok}, wantStatus: payment.ProviderStatusPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			alipayTradeFastPayRefundQuery = func(_ context.Context, _ *alipay.Client, param alipay.TradeFastPayRefundQuery) (*alipay.TradeFastPayRefundQueryRsp, error) {
+				if param.OutTradeNo != "sub2_7" || param.OutRequestNo != outRequestNo {
+					t.Fatalf("unexpected query param: %+v", param)
+				}
+				return tc.rsp, nil
+			}
+			provider := &Alipay{client: &alipay.Client{}}
+			resp, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{OrderID: "sub2_7", RefundID: outRequestNo, RequestedAt: tc.requestedAt})
+			if err != nil {
+				t.Fatalf("QueryRefund() error = %v", err)
+			}
+			if resp.Status != tc.wantStatus || resp.RefundID != outRequestNo {
+				t.Fatalf("QueryRefund() = %+v, want status %q", resp, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// SDK 对带签名的业务失败响应返回 err == nil，错误码只在响应体里。
+func TestAlipayQueryRefundBusinessFailureKeepsRefundPending(t *testing.T) {
+	origQuery := alipayTradeFastPayRefundQuery
+	t.Cleanup(func() { alipayTradeFastPayRefundQuery = origQuery })
+
+	for _, rspErr := range []alipay.Error{
+		{Code: "40004", Msg: "Business Failed", SubCode: "ACQ.SYSTEM_ERROR", SubMsg: "系统错误"},
+		{Code: "20000", Msg: "Service Currently Unavailable", SubCode: "isp.unknow-error"},
+		{},
+	} {
+		alipayTradeFastPayRefundQuery = func(context.Context, *alipay.Client, alipay.TradeFastPayRefundQuery) (*alipay.TradeFastPayRefundQueryRsp, error) {
+			return &alipay.TradeFastPayRefundQueryRsp{Error: rspErr}, nil
+		}
+		provider := &Alipay{client: &alipay.Client{}}
+		resp, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{
+			OrderID:     "sub2_7",
+			RefundID:    "sub2_7-refund-1",
+			RequestedAt: time.Now().Add(-24 * time.Hour),
+		})
+		if err == nil {
+			t.Fatalf("code %q: QueryRefund() = %+v, want error", rspErr.Code, resp)
+		}
+		if rspErr.SubCode != "" && !strings.Contains(err.Error(), string(rspErr.Code)) {
+			t.Fatalf("code %q: error %q should carry the gateway code", rspErr.Code, err)
+		}
+	}
+}
+
+func TestAlipayQueryRefundErrorsKeepRefundPending(t *testing.T) {
+	origQuery := alipayTradeFastPayRefundQuery
+	t.Cleanup(func() { alipayTradeFastPayRefundQuery = origQuery })
+
+	calls := 0
+	alipayTradeFastPayRefundQuery = func(context.Context, *alipay.Client, alipay.TradeFastPayRefundQuery) (*alipay.TradeFastPayRefundQueryRsp, error) {
+		calls++
+		return nil, errors.New("ACQ.SYSTEM_ERROR")
+	}
+	provider := &Alipay{client: &alipay.Client{}}
+
+	// 旧版本记录的是支付宝交易号，无法查询退款请求，需人工核实，且不能调用网关。
+	for _, legacyID := range []string{"", "2026101522001", "sub2_7-refund", "sub2_70-refund-1"} {
+		if _, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{OrderID: "sub2_7", RefundID: legacyID}); err == nil || !strings.Contains(err.Error(), "verify manually") {
+			t.Fatalf("legacy refund id %q: err = %v", legacyID, err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("legacy refund ids must not reach the gateway, calls = %d", calls)
+	}
+
+	if _, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{OrderID: "sub2_7", RefundID: "sub2_7-refund-1"}); err == nil {
+		t.Fatal("gateway error must be returned so the refund stays pending")
+	}
+}
+
+func TestAlipayRefundAttemptIsStableAndOwnerBound(t *testing.T) {
+	originalRefund, originalQuery := alipayTradeRefund, alipayTradeFastPayRefundQuery
+	t.Cleanup(func() { alipayTradeRefund, alipayTradeFastPayRefundQuery = originalRefund, originalQuery })
+	const attempt = "rf_0123456789abcdef01234567"
+	provider := &Alipay{client: &alipay.Client{}}
+	alipayTradeRefund = func(_ context.Context, _ *alipay.Client, req alipay.TradeRefund) (*alipay.TradeRefundRsp, error) {
+		require.Equal(t, "sub2_owned", req.OutTradeNo)
+		require.Equal(t, attempt, req.OutRequestNo)
+		return &alipay.TradeRefundRsp{FundChange: "N"}, nil
+	}
+	for range 2 {
+		result, err := provider.Refund(context.Background(), payment.RefundRequest{OrderID: "sub2_owned", RefundID: attempt, Amount: "10.00"})
+		require.NoError(t, err)
+		require.Equal(t, attempt, result.RefundID)
+	}
+	calls := 0
+	alipayTradeFastPayRefundQuery = func(_ context.Context, _ *alipay.Client, req alipay.TradeFastPayRefundQuery) (*alipay.TradeFastPayRefundQueryRsp, error) {
+		calls++
+		require.Equal(t, "sub2_owned", req.OutTradeNo)
+		require.Equal(t, attempt, req.OutRequestNo)
+		return &alipay.TradeFastPayRefundQueryRsp{Error: alipay.Error{Code: "10000"}, OutRequestNo: attempt, RefundStatus: alipayRefundStatusSucc}, nil
+	}
+	_, err := provider.QueryRefund(context.Background(), payment.RefundQueryRequest{OrderID: "sub2_owned", RefundID: attempt})
+	require.Error(t, err)
+	require.Zero(t, calls)
+	result, err := provider.QueryRefundByOrder(context.Background(), payment.RefundQueryRequest{OrderID: "sub2_owned", AttemptID: attempt})
+	require.NoError(t, err)
+	require.Equal(t, payment.ProviderStatusSuccess, result.Status)
+	require.Equal(t, 1, calls)
 }

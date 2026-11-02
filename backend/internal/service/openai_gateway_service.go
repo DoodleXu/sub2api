@@ -295,12 +295,14 @@ type OpenAIForwardResult struct {
 	// ImageResponseBody is populated only for successful non-streaming image
 	// responses so the gateway handler can archive the original JSON without
 	// changing the client-visible payload.
-	ImageResponseBody  []byte
+	ImageResponseBody []byte
+	// ImageEndpoint limits per-image billing to dedicated image endpoints.
+	ImageEndpoint      bool
 	ImageSizeSource    string
 	ImageSizeBreakdown map[string]int
 	VideoCount         int
 	VideoResolution    string
-	// VideoDurationSeconds is the requested generated video duration normalized to 1-15 seconds.
+	// VideoDurationSeconds 是提交时请求的生成时长（xAI 按输出秒数计费），已归一化到 1-15 秒。
 	VideoDurationSeconds int
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
 	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
@@ -1824,7 +1826,7 @@ func (s *OpenAIGatewayService) forwardQualityCore(ctx context.Context, c *gin.Co
 		if replayChanged {
 			body = replayedBody
 		}
-		compatBody, compatChanged, compatErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{ResponsesLite: isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body), Compact: isOpenAIResponsesCompactPath(c)})
+		compatBody, compatChanged, compatErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{Config: s.cfg, ResponsesLite: isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body), Compact: isOpenAIResponsesCompactPath(c)})
 		if compatErr != nil {
 			return nil, fmt.Errorf("normalize OpenAI Responses compatibility body: %w", compatErr)
 		}
@@ -5467,6 +5469,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
+	body = restoreCodexToolNamesFromContext(c, body)
+	body = ensureOpenAIResponseObjectCreatedAt(body)
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	s.relayOpenAICodexTurnState(c, account, resp.Header)
 
@@ -5534,7 +5538,8 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if restoreErr != nil {
 			return nil, fmt.Errorf("restore OpenAI namespace response: %w", restoreErr)
 		}
-		body = restoredBody
+		restoredBody = restoreCodexToolNamesFromContext(c, restoredBody)
+		body = ensureOpenAIResponseObjectCreatedAt(restoredBody)
 	} else {
 		// terminal event was handled above
 		if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
@@ -5870,6 +5875,13 @@ func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
 	return buildOpenAIResponsesURL(base)
 }
 
+// normalizeDeepSeekResponsesRequestBody 适配无状态 CN Responses 端点：
+// 强制 store=false 并清除 previous_response_id（DeepSeek / Kimi 官方
+// Responses 均不支持服务端状态存储，携带这些字段会被拒绝）。
+//
+// DeepSeek 另需把兼容格式的图片输入归一化为官方 image_url 字段；openai
+// 平台但 base_url 指向 api.deepseek.com 的映射账号同样走这条出站改写。
+// 非 CN / 非 DeepSeek 上游原样返回。
 func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte {
 	if account != nil && account.Platform == PlatformKimi && account.UsesNativeCNResponses() {
 		normalized, err := sjson.SetBytes(body, "store", false)
@@ -5948,7 +5960,7 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 			}
 			part["type"] = "input_image"
 			part["image_url"] = imageURL
-			part["url"] = imageURL
+			delete(part, "url")
 			delete(part, "source")
 			changed = true
 		}
@@ -7140,7 +7152,11 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 		}
 	}
 	if result != nil && result.ImageCount > 0 {
-		// 渠道定价为 token 计费时走 token 路径，否则走图片计费
+		// 分组显式开启按张计费且来自图片端点时强制走图片计费；否则渠道 token 定价优先。
+		// 混合的 Responses/Chat/WS 请求即使产出了图片，也不能因开关丢失文本 token 费用。
+		if imageCountBillingApplies(apiKey, result.ImageEndpoint) {
+			return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
+		}
 		if resolved := s.resolveOpenAIChannelPricing(ctx, billingModel, apiKey); resolved == nil || resolved.Mode != BillingModeToken {
 			return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
 		}
@@ -8778,6 +8794,14 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
+	if openai.IsGPT61TerraModelSpelling(model) {
+		effort := strings.ToLower(strings.TrimSpace(raw))
+		switch effort {
+		case "none", "low", "medium", "high", "xhigh", "max":
+			return effort
+		}
+	}
+
 	if strings.EqualFold(strings.TrimSpace(raw), "max") {
 		normalizedModel := strings.ToLower(strings.TrimSpace(model))
 		if isOpenAIGPT56Model(model) || isOpenAIGPT6Model(model) || isOpenAIGPT6AstraModel(model) || strings.Contains(normalizedModel, "astra") || strings.Contains(normalizedModel, "deepseek") || strings.Contains(normalizedModel, "kimi") || strings.Contains(normalizedModel, "glm") {
@@ -8799,4 +8823,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	qualityResult, qualityErr := s.forwardQualityCore(ctx, c, account, body)
 	qualityErr = attempt.Finish(qualityResult, qualityErr)
 	return qualityResult, qualityErr
+}
+
+func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg *config.Config, body []byte, account *Account, responsesLite bool) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{Config: cfg, ResponsesLite: responsesLite})
 }
