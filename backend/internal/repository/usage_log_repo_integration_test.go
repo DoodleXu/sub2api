@@ -255,6 +255,91 @@ func TestUsageLogRepositoryFlushCreateBatch_DeduplicatesSameKeyInMemory(t *testi
 	require.Equal(t, 1, count)
 }
 
+// TestUsageLogMultiRowBatchInsertQueries_ExecuteWithoutFallback 直接执行多行批量 SQL，
+// 不经过 flush* 的逐条退回逻辑，确保 SQL 本身能被 Postgres 接受并写入 upstream_request_id /
+// session_id；否则批量失败会被逐条退回掩盖，只表现为日志噪音和双倍写库。
+func TestUsageLogMultiRowBatchInsertQueries_ExecuteWithoutFallback(t *testing.T) {
+	ctx := context.Background()
+	client := testEntClient(t)
+	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+
+	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-multirow-%d@example.com", time.Now().UnixNano())})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-multirow-" + uuid.NewString(), Name: "k"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "acc-usage-multirow-" + uuid.NewString()})
+
+	newPrepared := func(tag string, i int) (usageLogInsertPrepared, string) {
+		requestID := fmt.Sprintf("%s-%d-%s", tag, i, uuid.NewString())
+		upstreamRequestID := "upstream-" + requestID
+		sessionID := "sess-" + requestID
+		return prepareUsageLogInsert(&service.UsageLog{
+			UserID:            user.ID,
+			APIKeyID:          apiKey.ID,
+			AccountID:         account.ID,
+			RequestID:         requestID,
+			UpstreamRequestID: &upstreamRequestID,
+			SessionID:         &sessionID,
+			Model:             "claude-3",
+			InputTokens:       10 + i,
+			OutputTokens:      20 + i,
+			TotalCost:         0.5,
+			ActualCost:        0.5,
+			CreatedAt:         time.Now().UTC(),
+		}), requestID
+	}
+	requireStoredUpstreamRequestID := func(t *testing.T, requestID string) {
+		t.Helper()
+		var upstreamRequestID, sessionID string
+		require.NoError(t, integrationDB.QueryRowContext(ctx,
+			"SELECT upstream_request_id, session_id FROM usage_logs WHERE request_id = $1 AND api_key_id = $2",
+			requestID, apiKey.ID).Scan(&upstreamRequestID, &sessionID))
+		require.Equal(t, "upstream-"+requestID, upstreamRequestID)
+		require.Equal(t, "sess-"+requestID, sessionID)
+	}
+
+	const rows = 3
+
+	t.Run("bestEffort", func(t *testing.T) {
+		preparedList := make([]usageLogInsertPrepared, 0, rows)
+		requestIDs := make([]string, 0, rows)
+		for i := 0; i < rows; i++ {
+			prepared, requestID := newPrepared("best-effort-multirow", i)
+			preparedList = append(preparedList, prepared)
+			requestIDs = append(requestIDs, requestID)
+		}
+		query, args := buildUsageLogBestEffortInsertQuery(preparedList)
+		res, err := integrationDB.ExecContext(ctx, query, args...)
+		require.NoError(t, err)
+		affected, err := res.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, rows, affected)
+		for _, requestID := range requestIDs {
+			requireStoredUpstreamRequestID(t, requestID)
+		}
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		keys := make([]string, 0, rows)
+		preparedByKey := make(map[string]usageLogInsertPrepared, rows)
+		requestIDs := make([]string, 0, rows)
+		for i := 0; i < rows; i++ {
+			prepared, requestID := newPrepared("batch-multirow", i)
+			key := usageLogBatchKey(requestID, apiKey.ID)
+			keys = append(keys, key)
+			preparedByKey[key] = prepared
+			requestIDs = append(requestIDs, requestID)
+		}
+		insertedMap, stateMap, _, err := repo.batchInsertUsageLogs(integrationDB, keys, preparedByKey)
+		require.NoError(t, err)
+		require.Len(t, stateMap, rows)
+		for _, key := range keys {
+			require.True(t, insertedMap[key], "key %s should be inserted by the batch query", key)
+		}
+		for _, requestID := range requestIDs {
+			requireStoredUpstreamRequestID(t, requestID)
+		}
+	})
+}
+
 func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
