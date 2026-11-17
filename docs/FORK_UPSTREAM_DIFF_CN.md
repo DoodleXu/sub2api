@@ -1401,3 +1401,8 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 
 - fork 聚合 `usage_log_repo.go` 的两条批量写入 SQL 自 `6c720356f`（补齐 `upstream_request_id`）起列清单不一致：best-effort 的 `WITH input (...)` 漏列 `upstream_request_id`，同步批量 `inserted` CTE 的 `SELECT ... FROM input` 也漏选该列。Postgres 每批都报错，best-effort 退回 `execUsageLogInsertNoResult` 逐条写入，同步批量则静默退回 `createSingle`，数据没有丢，但写库次数翻倍，日志也有大量噪音。现已补齐两处列。
 - `usage_log_repo_insert_shape_unit_test.go` 以 `execUsageLogInsertNoResult` 的 INSERT 列为基准，断言两条批量 SQL 的 CTE、INSERT、SELECT 列清单逐项一致，每个 VALUES 行的占位符连续，类型转换与 `usageLogInsertArgTypes` 位置一一对应。集成测试直接执行多行批量 SQL，不经过 flush 的逐条退回逻辑。同步上游或新增 `usage_logs` 列时必须保持这两项测试通过。
+
+### 2026-11-17 v0.2.41 发版安全基线补充
+
+- v0.2.41 首个候选 `0ddceb705` 的 CI 已触发，但 Security Scan 被 11-02 之后新披露的可达漏洞拦下：`GO-2026-6859`（`net/http`，修复版本 go1.27.4）、`GO-2026-6888`（`andybalholm/brotli`，修复版本 v1.2.7）、`GO-2026-6865`（`klauspost/compress`，修复版本 v1.20.2）。
+- 构建基线升级到 Go 1.27.4：`backend/go.mod`、CI、Release、Security Scan 的版本断言和三个 Dockerfile 一起更新；`brotli` 升级到 v1.2.7，`klauspost/compress` 升级到 v1.20.2。同步上游时必须保留这些安全版本下限，不新增扫描豁免。
