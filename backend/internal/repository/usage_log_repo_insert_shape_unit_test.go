@@ -115,6 +115,124 @@ func TestUsageLogStaticInsertShape_PlaceholdersMatchArgTypes(t *testing.T) {
 	})
 }
 
+var (
+	usageLogCTEShapeRe = regexp.MustCompile(
+		`(?s)WITH input \((.*?)\) AS \(VALUES (.*?)\n.*?INSERT INTO usage_logs \((.*?)\)\s*SELECT(.*?)FROM input`)
+	usageLogPlaceholderCastRe = regexp.MustCompile(`^\$(\d+)(?:::([a-z]+))?$`)
+)
+
+// splitSQLColumnList 把逗号分隔的列清单拆成去空白的列名切片。
+func splitSQLColumnList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if c := strings.TrimSpace(p); c != "" {
+			cols = append(cols, c)
+		}
+	}
+	return cols
+}
+
+// captureStaticUsageLogInsertColumns 取 execUsageLogInsertNoResult 实际下发的 INSERT 列清单，
+// 作为所有批量写入路径列顺序的基准。
+func captureStaticUsageLogInsertColumns(t *testing.T, prepared usageLogInsertPrepared) []string {
+	t.Helper()
+	var captured []string
+	db, mock := newSQLCapturingMock(t, &captured)
+	mock.ExpectExec("INSERT INTO usage_logs").
+		WithArgs(anySliceToDriverValues(prepared.args)...).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, execUsageLogInsertNoResult(context.Background(), db, prepared))
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Len(t, captured, 1)
+
+	m := usageLogStaticInsertShapeRe.FindStringSubmatch(captured[0])
+	require.Len(t, m, 3, "unrecognised INSERT shape:\n%s", captured[0])
+	cols := splitSQLColumnList(m[1])
+	require.Len(t, cols, len(usageLogInsertArgTypes))
+	return cols
+}
+
+// requireUsageLogCTEInsertShape 断言 `WITH input (...) AS (VALUES ...) INSERT ... SELECT ... FROM input`
+// 形态的批量 SQL：CTE 列清单（去掉 leadingCTECols 前缀）、INSERT 列清单、SELECT 列清单三者
+// 与基准列完全一致；每个 VALUES 行的占位符数等于 CTE 列数、编号连续，且类型转换与
+// usageLogInsertArgTypes 同位。
+func requireUsageLogCTEInsertShape(t *testing.T, query string, wantCols []string, leadingCTECols []string, rows int) {
+	t.Helper()
+	m := usageLogCTEShapeRe.FindStringSubmatch(query)
+	require.Len(t, m, 5, "unrecognised CTE INSERT shape:\n%s", query)
+
+	cteCols := splitSQLColumnList(m[1])
+	require.Equal(t, leadingCTECols, cteCols[:len(leadingCTECols)], "CTE leading columns")
+	require.Equal(t, wantCols, cteCols[len(leadingCTECols):], "CTE column list must match INSERT column list")
+	require.Equal(t, wantCols, splitSQLColumnList(m[3]), "INSERT column list must match base INSERT")
+	require.Equal(t, wantCols, splitSQLColumnList(m[4]), "SELECT column list must match INSERT column list")
+
+	valuesRaw := strings.TrimSpace(m[2])
+	require.True(t, strings.HasPrefix(valuesRaw, "(") && strings.HasSuffix(valuesRaw, ")"), "VALUES shape: %s", valuesRaw)
+	tuples := strings.Split(valuesRaw[1:len(valuesRaw)-1], "),(")
+	require.Len(t, tuples, rows, "VALUES row count")
+
+	nextPlaceholder := 1
+	for rowIdx, tuple := range tuples {
+		items := splitSQLColumnList(tuple)
+		require.Len(t, items, len(cteCols), "row %d placeholder count must match CTE column count", rowIdx)
+		for i, item := range items {
+			pm := usageLogPlaceholderCastRe.FindStringSubmatch(item)
+			require.NotNil(t, pm, "row %d item %d is not a placeholder: %q", rowIdx, i, item)
+			n, err := strconv.Atoi(pm[1])
+			require.NoError(t, err)
+			require.Equal(t, nextPlaceholder, n, "row %d item %d placeholder out of order", rowIdx, i)
+			nextPlaceholder++
+			if i < len(leadingCTECols) {
+				continue
+			}
+			argIdx := i - len(leadingCTECols)
+			require.Equal(t, usageLogInsertArgTypes[argIdx], pm[2],
+				"row %d column %s cast must match usageLogInsertArgTypes", rowIdx, cteCols[i])
+		}
+	}
+}
+
+// TestUsageLogBatchInsertQueries_CTEColumnsMatchInsertColumns 防止批量写入的 CTE 列清单、
+// INSERT 列清单、SELECT 列清单与 VALUES 占位符之间再次出现漏列/错位（例如 CTE 漏掉
+// upstream_request_id 导致每个批次都在 Postgres 报错后退回逐条写入）。
+func TestUsageLogBatchInsertQueries_CTEColumnsMatchInsertColumns(t *testing.T) {
+	upstreamRequestID := "upstream-req-shape"
+	sessionID := "sess-shape"
+	newLog := func(requestID string) *service.UsageLog {
+		return &service.UsageLog{
+			UserID:            1,
+			APIKeyID:          2,
+			AccountID:         3,
+			RequestID:         requestID,
+			UpstreamRequestID: &upstreamRequestID,
+			SessionID:         &sessionID,
+			Model:             "gpt-5",
+			CreatedAt:         time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC),
+		}
+	}
+	first := prepareUsageLogInsert(newLog("client:cte-shape-1"))
+	second := prepareUsageLogInsert(newLog("client:cte-shape-2"))
+	baseCols := captureStaticUsageLogInsertColumns(t, first)
+	require.Contains(t, baseCols, "upstream_request_id")
+
+	t.Run("bestEffort", func(t *testing.T) {
+		query, args := buildUsageLogBestEffortInsertQuery([]usageLogInsertPrepared{first, second})
+		requireUsageLogCTEInsertShape(t, query, baseCols, []string{}, 2)
+		require.Len(t, args, 2*len(usageLogInsertArgTypes))
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		k1 := usageLogBatchKey(first.requestID, 2)
+		k2 := usageLogBatchKey(second.requestID, 2)
+		query, args := buildUsageLogBatchInsertQuery([]string{k1, k2},
+			map[string]usageLogInsertPrepared{k1: first, k2: second})
+		requireUsageLogCTEInsertShape(t, query, baseCols, []string{"input_idx"}, 2)
+		require.Len(t, args, 2*(len(usageLogInsertArgTypes)+1))
+	})
+}
+
 // TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring 把 upstream_request_id 钉在
 // session_id 之前，与参数类型表保持同位；缺失时落 NULL 而不是空串。
 func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {

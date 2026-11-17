@@ -1396,3 +1396,8 @@ rg -n 'daily_checkin|web_console|image_generation|archived_at|total_cost_cny|Ope
 - 为修复发布安全扫描确认的 Go 标准库与 HTTP/2 可达漏洞，构建基线升级到 Go 1.27.2，`golang.org/x/net` 升级到 v0.60.0；CI、Release、安全扫描版本断言与三个 Dockerfile 同步更新。同步上游时必须保留该安全版本下限。
 - Go 1.27.2 导出数据格式需要 `golang.org/x/tools v0.50.0` 和 `golangci-lint v2.14`，保留 Ent schema 加载与 lint 检查，禁止跳过兼容性失败。
 - HTTP/2 兼容适配暂保留 x/net 的 h2c、独立 PING 保活与 GoAwayError；lint 仅对指定兼容文件中的 http2 弃用告警豁免，其余检查保留。内容审核陈旧管理员缓存回退测试在刷新锁内初始化，避免后台 worker 首次快照与测试设置竞争。
+
+### 2026-11-17 用量日志批量写入列对齐修复
+
+- fork 聚合 `usage_log_repo.go` 的两条批量写入 SQL 自 `6c720356f`（补齐 `upstream_request_id`）起列清单不一致：best-effort 的 `WITH input (...)` 漏列 `upstream_request_id`，同步批量 `inserted` CTE 的 `SELECT ... FROM input` 也漏选该列。Postgres 每批都报错，best-effort 退回 `execUsageLogInsertNoResult` 逐条写入，同步批量则静默退回 `createSingle`，数据没有丢，但写库次数翻倍，日志也有大量噪音。现已补齐两处列。
+- `usage_log_repo_insert_shape_unit_test.go` 以 `execUsageLogInsertNoResult` 的 INSERT 列为基准，断言两条批量 SQL 的 CTE、INSERT、SELECT 列清单逐项一致，每个 VALUES 行的占位符连续，类型转换与 `usageLogInsertArgTypes` 位置一一对应。集成测试直接执行多行批量 SQL，不经过 flush 的逐条退回逻辑。同步上游或新增 `usage_logs` 列时必须保持这两项测试通过。
