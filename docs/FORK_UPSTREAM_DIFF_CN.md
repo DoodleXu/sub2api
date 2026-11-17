@@ -1,5 +1,15 @@
 # Fork 与上游功能差异维护台账
 
+## 2026-11-17 发版 v0.2.41
+
+- annotated tag `v0.2.41` 指向已推送默认分支的 `fd5c8edf728f75af6cdbb7c324755dba7bdbeeb2`，内容为 usage_logs 批量写入列对齐修复（#1）和 Go 1.27.4 / brotli v1.2.7 / klauspost/compress v1.20.2 安全升级（#2），详见文末 2026-11-17 两节；版本源为 `0.2.41`。无数据库迁移和配置变更。
+- 首个版本提交 `0ddceb705` 的 Security Scan 因三个新增可达漏洞（GO-2026-6859/6888/6865）失败，所以没有在该提交上打标签；由 #2 修复后，改在合并提交上发布。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/44054368827)、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/44054368706) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/44056000528) 全部成功；`tools/verify_release_candidate.sh` 核验默认分支祖先关系、版本号和两项检查后，才创建并推送 annotated tag。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.41) 于北京时间 2026-11-17 17:34:11 正式发布，非草稿、非预发布。附件为 `checksums.txt` 和 `sub2api_0.2.41_linux_amd64.tar.gz`；安装包 SHA-256 与校验文件、GitHub asset digest 一致：`3fb073722e8492a5952e381854dd1b9b713ad296193a2987b6a612ff2b1ee689`。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.41`、`:0.2.41-amd64`、`:latest` 均核对为 `sha256:012f8cf9a26af0abdb74a2fafbead6117ace96402de6ed11772bb6e369127681`；实际镜像为 Linux/amd64，version/revision 标签匹配发布版本与提交。
+- 下载包内二进制为 Go 1.27.4 构建的 Linux/amd64 静态 ELF，嵌入 brotli v1.2.7、klauspost/compress v1.20.2 和正确的 vcs.revision；SHA-256 与镜像 `/app/sub2api` 一致：`b5764f8af15cca62ca4db8a6524336ba515fdd5401c149e2f27bbf9020d68343`。隔离网络中经正常 entrypoint 运行 `-version`，报告 0.2.41 和正确提交；`pg_dump --version` / `psql --version` 均正常，为 PostgreSQL 18.7。
+- 本地在 Go 1.27.4 下通过后端全量 unit（58 个包）、真实 PostgreSQL / Redis integration（51 个包）、build、vet、gofmt、govulncheck；golangci-lint 由 CI 验证。本轮未更新生产服务器。
+
 ## 2026-11-02 发版 v0.2.40
 
 - annotated tag `v0.2.40` 指向已推送默认分支的 `e3d5f1a191196c0661c46737a04e09c182351031`，包含官方 v0.2.19 同步及下方审核修复；版本源为 `0.2.40`。
