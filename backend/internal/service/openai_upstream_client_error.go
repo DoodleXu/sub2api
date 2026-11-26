@@ -61,9 +61,3 @@ func writeOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte,
 func WriteOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte, upstreamMsg string) {
 	writeOpenAIUpstreamClientError(c, statusCode, body, sanitizeUpstreamErrorMessage(upstreamMsg))
 }
-
-// SanitizeUpstreamErrorMessage removes credentials and other sensitive URL
-// material before a handler stores or returns an upstream message.
-func SanitizeUpstreamErrorMessage(message string) string {
-	return sanitizeUpstreamErrorMessage(message)
-}

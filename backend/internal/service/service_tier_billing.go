@@ -115,7 +115,7 @@ func ApplyForwardServiceTierBillingResolution(result *ForwardResult) ServiceTier
 
 // logServiceTierBillingDowngrade leaves an audit trail for every request billed
 // below the tier it asked for; unchanged tiers are not logged.
-func logServiceTierBillingDowngrade(component string, account *Account, requestID string, resolution ServiceTierBillingResolution) { //nolint:unused
+func logServiceTierBillingDowngrade(component string, account *Account, requestID string, resolution ServiceTierBillingResolution) {
 	if !resolution.Downgraded {
 		return
 	}

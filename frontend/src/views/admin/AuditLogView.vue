@@ -486,6 +486,7 @@ const authMethodOptions = computed(() => [
   { value: '', label: t('admin.audit.filters.all') },
   { value: 'jwt', label: 'JWT' },
   { value: 'admin_api_key', label: 'Admin API Key' },
+  { value: 'mcp_oauth', label: 'MCP OAuth' },
   { value: 'password', label: t('admin.audit.authMethods.password') },
   { value: 'password_totp', label: t('admin.audit.authMethods.passwordTotp') },
   { value: 'oauth', label: 'OAuth' },

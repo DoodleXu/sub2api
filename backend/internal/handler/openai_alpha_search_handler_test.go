@@ -158,20 +158,20 @@ func (c *alphaSearchCyberCache) DeleteSessionAccountID(context.Context, int64, s
 	return nil
 }
 
-func (c *alphaSearchCyberCache) SetCyberSessionBlocked(_ context.Context, _ string, keys []string, _ time.Duration) error {
+func (c *alphaSearchCyberCache) SetCyberSessionBlocked(_ context.Context, block service.CyberSessionBlock, _ time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.blocked == nil {
 		c.blocked = make(map[string]bool)
 	}
-	for _, key := range keys {
+	for _, key := range block.Keys {
 		c.blocked[key] = true
 	}
 	return nil
 }
 
-func (c *alphaSearchCyberCache) IsCyberSessionScopeActive(context.Context, string) (bool, error) {
-	return true, nil
+func (c *alphaSearchCyberCache) CyberSessionTranscriptLengths(context.Context, int64, string) ([]int, error) {
+	return nil, nil
 }
 func (c *alphaSearchCyberCache) FindCyberSessionBlocked(_ context.Context, keys []string) (string, error) {
 	c.mu.Lock()
@@ -418,7 +418,7 @@ func TestOpenAIGatewayHandlerAlphaSearch_CyberHitBlocksSameSearchID(t *testing.T
 	firstContext, firstRecorder := newContext()
 	h.AlphaSearch(firstContext)
 
-	require.Equal(t, http.StatusBadRequest, firstRecorder.Code)
+	require.Equal(t, http.StatusBadRequest, firstRecorder.Code, firstRecorder.Body.String())
 	require.Equal(t, 1, upstream.callCount())
 	blockKey := service.CyberSessionBlockKeyWithFallback(apiKeyID, firstContext, body, "alpha-session-1")
 	require.True(t, cache.isBlocked(blockKey), "cyber block must be persisted before the first handler call returns")

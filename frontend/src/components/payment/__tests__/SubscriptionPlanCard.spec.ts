@@ -90,6 +90,18 @@ describe('SubscriptionPlanCard', () => {
     expect(text).not.toContain('Imagen')
   })
 
+  // #4607：管理端保存的单位是复数（months/weeks），此前用户侧只匹配单数
+  // 'month'，「1 个月」的套餐卡片被显示成「1天」。按上方测试消息渲染出的
+  // 单位文案断言各分支；fork 统一使用 formatValidityPeriod，单个月显示为「1month」。
+  it('renders plural admin-form validity units instead of mislabeled days (#4607)', () => {
+    const singleMonth = mountPlanCard({ validity_days: 1, validity_unit: 'months' }).text()
+    expect(singleMonth).toContain('/ 1month')
+    expect(singleMonth).not.toContain('day')
+    expect(mountPlanCard({ validity_days: 3, validity_unit: 'months' }).text()).toContain('/ 3months')
+    expect(mountPlanCard({ validity_days: 2, validity_unit: 'weeks' }).text()).toContain('/ 2weeks')
+    expect(mountPlanCard({ validity_days: 30, validity_unit: 'day' }).text()).toContain('/ 30days')
+  })
+
   it('shows model scopes for Antigravity plans', () => {
     const text = mountPlanCard({ group_platform: 'antigravity' }).text()
 

@@ -90,7 +90,10 @@ type RelayOptions struct {
 	BeforeRelayCancel               func(exit RelayExit)
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
-	Now                             func() time.Time
+	// IsFirstTokenEvent decides which upstream event marks the first token.
+	// Nil keeps the built-in delta-based rule.
+	IsFirstTokenEvent func(eventType string, message []byte) bool
+	Now               func() time.Time
 }
 
 type RelayTraceEvent struct {
@@ -121,6 +124,7 @@ type relayState struct {
 	nextTurnSequence        uint64
 	activeTurn              *relayTurnTiming
 	pendingBareError        *observedUpstreamEvent
+	isFirstTokenEvent       func(eventType string, message []byte) bool
 }
 
 type relayExitSignal struct {
@@ -195,7 +199,7 @@ func Relay(
 		firstMessageType = coderws.MessageText
 	}
 	startAt := nowFn()
-	state := &relayState{requestModel: result.RequestModel}
+	state := &relayState{requestModel: result.RequestModel, isFirstTokenEvent: options.IsFirstTokenEvent}
 	onTrace := options.OnTrace
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
@@ -825,7 +829,7 @@ func observeUpstreamMessage(
 		}
 	}
 
-	startsVisibleOutput := isTokenEvent(eventType) || relayImageOutputStartsVisibleOutput(message)
+	startsVisibleOutput := state.startsFirstToken(eventType, message) || relayImageOutputStartsVisibleOutput(message)
 	if state.firstTokenMs == nil && startsVisibleOutput {
 		ms := int(now.Sub(startAt).Milliseconds())
 		if ms >= 0 {
@@ -1459,6 +1463,13 @@ func shouldParseUsage(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *relayState) startsFirstToken(eventType string, message []byte) bool {
+	if s.isFirstTokenEvent != nil {
+		return !isTerminalEvent(eventType) && s.isFirstTokenEvent(eventType, message)
+	}
+	return isTokenEvent(eventType)
 }
 
 func isTokenEvent(eventType string) bool {

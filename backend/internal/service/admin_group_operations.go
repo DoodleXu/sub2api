@@ -27,14 +27,3 @@ func ValidateSimpleModeGroupOperation(cfg *config.Config, operation AdminGroupOp
 	}
 	return nil
 }
-
-func (s *adminServiceImpl) ValidateSimpleModeGroupOperation(operation AdminGroupOperation) error {
-	return ValidateSimpleModeGroupOperation(s.cfg, operation)
-}
-
-func (s *adminServiceImpl) validateSimpleModeGroupAccess(group *Group) error {
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !IsGroupBindableInSimpleMode(group) {
-		return infraerrors.BadRequest("SIMPLE_MODE_GROUP_NOT_BINDABLE", "composite groups are not supported in simple mode")
-	}
-	return nil
-}

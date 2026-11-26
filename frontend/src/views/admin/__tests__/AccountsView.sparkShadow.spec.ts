@@ -343,7 +343,9 @@ describe('admin AccountsView — 账号行展示', () => {
     const tooltip = wrapper.findComponent(HelpTooltip)
     expect(tooltip.props('content')).toBe('https://relay.example.com')
     expect(tooltip.props('widthClass')).toBe('w-max max-w-sm break-all')
-    expect(tooltip.classes()).toEqual(expect.arrayContaining(['self-start']))
+    // 上游 v0.2.25 将名称链接与「同步上游分组」按钮放入同一行居中对齐，不再使用 self-start。
+    expect(tooltip.classes()).toContain('-ml-1')
+    expect([...(tooltip.element.parentElement?.classList ?? [])]).toEqual(expect.arrayContaining(['flex', 'items-center']))
     expect(wrapper.text()).toContain('oauth-account')
     expect(wrapper.text()).toContain('invalid-url')
 
