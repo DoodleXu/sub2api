@@ -31,7 +31,9 @@
 - 配置：保留 fork 的非流式响应体与 SSE 单行默认上限 `128MB`（上游为 8MB / 500MiB），采纳上游 SSE 队列/事件预算、请求体内存预算、读写超时、MCP OAuth 与 OpenAI 传输错误冷却开关。CI / Security Scan / Release 的 Node 跟随上游升到 24，Go 校验 1.27.4。
 - 前端：保留 vue-i18n / message-compiler 11.4.17 安全版本、`onlyBuiltDependencies`、`engines.node >=22`，不恢复无引用的 `xlsx`；锁文件需用 pnpm 9 维护（与 CI 一致）。`GroupsView` 上游新增的 Ultra Fast 开关改用 fork 的内联开关按钮（fork 已移除 `Toggle` 组件）；账号用量刷新中 OpenAI OAuth 保留更新后立即刷新，其他平台用上游可见时加载；`AccountsView` 全局探测开关复用 fork 设置对象。
 - 新增迁移 `249_add_usage_logs_api_key_cost_index_notx.sql`、`249_mcp_oauth.sql`、`250_openai_cache_write_ttl.sql`、`251_group_force_openai_ultrafast.sql`、`251_group_usage_rollup_nonblocking_build.sql`、`252_channel_pricing_ultrafast_multiplier.sql`，与 fork 同号迁移按完整文件名并存，历史文件不改名。
-- 验证（本地 Go 1.27.4）：后端 `go build ./...`、`gofmt`、`go vet -tags unit ./...` 与 `go vet -tags integration ./...` 通过；`TZ=UTC go test -tags=unit -count=1 ./...` 全量 60 个包通过；golangci-lint v2.14.0 为 0 issues；Wire 与 Ent 已重新生成。前端 `pnpm install --frozen-lockfile`、`vue-tsc --noEmit`、全量 ESLint、生产构建通过，Vitest 415 个文件 3413 项全部通过。本机 Docker 未运行，真实 PostgreSQL / Redis 集成测试（含 249–252 新迁移）未在本地执行，须由 CI 验证。本轮仅同步源码，未推送、未发版、未部署。
+- 分组日汇总时区：上游 251 以会话时区重建了 usage_logs 失效触发器函数，覆盖了 fork 227「按持久化 `timezone_name` 计算日期」的修复。新增 fork 迁移 `253_group_usage_rollup_persisted_timezone.sql`，保留 251 的非阻塞重建语义（`expired_before`、`building_until`、`build_dirty_from`、`FOR KEY SHARE`），只把时区来源恢复为状态行的 `timezone_name`；不修改上游 251 文件。
+- 账号成本口径：继续沿用 fork `50ae39476` 规则，`account_cost` 为 `account_stats_cost`（历史行回退 `total_cost`），不再乘 `account_rate_multiplier`；上游新增的按模型统计集成测试已按此调整。
+- 验证（本地 Go 1.27.4）：后端 `go build ./...`、`gofmt`、`go vet -tags unit ./...` 与 `go vet -tags integration ./...` 通过；`TZ=UTC go test -tags=unit -count=1 ./...` 全量 60 个包通过；golangci-lint v2.14.0 为 0 issues；Wire 与 Ent 已重新生成。前端 `pnpm install --frozen-lockfile`、`vue-tsc --noEmit`、全量 ESLint、生产构建通过，Vitest 415 个文件 3413 项全部通过。真实 PostgreSQL / Redis 集成测试（`TZ=UTC go test -tags=integration ./...`，含 249–253 迁移）54 个包全部通过。本轮仅同步源码，未推送、未发版、未部署。
 
 ## 2026-11-17 发版 v0.2.41
 

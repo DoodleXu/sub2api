@@ -79,3 +79,19 @@ func TestMigration251AddsExpiredFloorAndNonBlockingBuildMarks(t *testing.T) {
 	require.Contains(t, sql, "FOR KEY SHARE")
 	require.NotContains(t, sql, "FOR UPDATE;")
 }
+
+// 上游 251 以会话时区重建了触发器函数；fork 253 必须在其后恢复持久化时区，同时保留非阻塞语义。
+func TestMigration253RestoresPersistedTimezoneAfterNonBlockingBuild(t *testing.T) {
+	content, err := FS.ReadFile("253_group_usage_rollup_persisted_timezone.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "CREATE OR REPLACE FUNCTION invalidate_group_usage_rollup_state()")
+	require.Contains(t, sql, "CREATE OR REPLACE FUNCTION invalidate_group_usage_rollup_state_after_insert()")
+	require.Contains(t, sql, "expired_before, timezone_name")
+	require.Contains(t, sql, "AT TIME ZONE configured_timezone")
+	require.Contains(t, sql, "created_at >= state_expired_before")
+	require.Contains(t, sql, "FOR KEY SHARE")
+	require.NotContains(t, sql, "current_setting('TimeZone')")
+	require.NotContains(t, sql, "FOR UPDATE;")
+}

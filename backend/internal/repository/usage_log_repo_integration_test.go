@@ -2295,7 +2295,9 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 	for _, stat := range stats {
 		if stat.Model == "claude-3-opus" {
 			s.Require().InEpsilon(1.0, stat.ActualCost, 0.0001)
-			s.Require().InEpsilon(0.2, stat.AccountCost, 0.0001)
+			// Fork: account cost is account_stats_cost (or total_cost for rows
+			// without it) and is not multiplied by account_rate_multiplier again.
+			s.Require().InEpsilon(0.5, stat.AccountCost, 0.0001)
 		}
 	}
 }
