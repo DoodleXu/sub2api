@@ -1,5 +1,14 @@
 # Fork 与上游功能差异维护台账
 
+## 2026-11-27 发版 v0.2.42
+
+- annotated tag `v0.2.42` 指向已推送默认分支的 `a94ca7764f2fce6b7a18ee64a4ebc3c447fb98ca`，包含下方官方 v0.2.25 同步（PR #3，合并提交 `4e78f1417`）、合并后的 CI 修复（分组日汇总持久化时区迁移 253、账号成本测试口径、创作台蒙版用例竞态）；版本源为 `0.2.42`。
+- 精确发布提交的 [CI](https://github.com/DoodleXu/sub2api/actions/runs/45934687734)、[Security Scan](https://github.com/DoodleXu/sub2api/actions/runs/45934687727) 和 [Release](https://github.com/DoodleXu/sub2api/actions/runs/45951904437) 全部成功；`tools/verify_release_candidate.sh` 核验默认分支祖先关系、版本号和两项检查后，才创建并推送 annotated tag。
+- [GitHub Release](https://github.com/DoodleXu/sub2api/releases/tag/v0.2.42) 于北京时间 2026-11-27 14:31:01 正式发布，非草稿、非预发布，且为仓库 latest，在线更新可直接获取。附件为 `checksums.txt` 和 `sub2api_0.2.42_linux_amd64.tar.gz`；安装包 SHA-256 与校验文件、GitHub asset digest 一致：`abe5f79af9e6bf4af6c3d845eb6b4820b40ba62f7038808c02fff42dd1322fe5`。
+- GHCR `ghcr.io/doodlexu/sub2api` 的 `:0.2.42`、`:0.2.42-amd64`、`:latest` 均核对为 `sha256:d62f8e61234c619c84d1f74ec9d6aac53d26bc7385c6fcd79fb3f7d7f9816dba`；实际镜像为 Linux/amd64，version/revision 标签匹配发布版本与提交。
+- 下载包内二进制为 Go 1.27.4 构建的 Linux/amd64 静态 ELF，嵌入 brotli v1.2.7、klauspost/compress v1.20.2 和正确的 vcs.revision；SHA-256 与镜像 `/app/sub2api` 一致：`f49d2bc9c0ef2860c545cae29cb68e83ed3472fb416d1ae4420df53923ac5296`。隔离网络中经正常 entrypoint 运行 `-version`，报告 0.2.42 和正确提交；`pg_dump --version` / `psql --version` 均正常，为 PostgreSQL 18.7。
+- 升级首次启动会自动执行迁移 249–253。本轮未更新生产服务器。
+
 ## 2026-11-25 合并上游 v0.2.25
 
 本节是当前行为规范；取代下方历史章节中“上游拆分文件保持删除、增量迁入 fork 聚合文件”的要求。
@@ -151,7 +160,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-11-26
+最后更新：2026-11-27
 
 ## 2026-10-15 发版 v0.2.36
 
