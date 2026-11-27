@@ -848,8 +848,11 @@ describe('WebConsoleView', () => {
     const maskFile = new File(['mask-image'], 'mask.png', { type: 'image/png' })
     Object.defineProperty(fileInputs[1].element, 'files', { value: [maskFile], configurable: true })
     await fileInputs[1].trigger('change')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await flushPromises()
+    // jsdom 的 FileReader 读取耗时随运行器负载变化：等蒙版真正载入后再提交，避免 CI 上偶发竞态。
+    await vi.waitFor(async () => {
+      await flushPromises()
+      expect(wrapper.text()).toContain('mask.png')
+    })
 
     await wrapper.get('textarea').setValue('把背景换成海边')
     await wrapper.get('form').trigger('submit')
