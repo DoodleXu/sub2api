@@ -1364,6 +1364,78 @@ func TestHandleClaudeStreamingResponse_NormalComplete(t *testing.T) {
 
 // TestHandleGeminiStreamingResponse_ThoughtsTokenCount
 // 验证：Gemini 流式转发时 thoughtsTokenCount 被计入 OutputTokens
+// 回归：上游事件之间的空分隔行不能再透传，否则下游看到的是 "data: ...\n\n\n"。
+// google-genai Go SDK 按 "\n\n" 切事件，多出的 "\n" 会让第二个事件的前缀变成
+// "\ndata" 而报 invalid stream chunk（Antigravity CLI 每条流都在第二个事件中断）。
+func TestHandleGeminiStreamingResponse_EventSeparatorIsExactlyOneBlankLine(t *testing.T) {
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{StatusCode: http.StatusOK, Body: pr, Header: http.Header{}}
+
+	first := `{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3}}`
+	second := `{"candidates":[{"content":{"role":"model","parts":[{"thoughtSignature":"sig","text":""}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":3,"thoughtsTokenCount":5}}`
+
+	go func() {
+		defer func() { _ = pw.Close() }()
+		// 上游原样：每个 data 行后跟一个空分隔行（第二个事件用 CRLF，覆盖两种换行）
+		fmt.Fprintf(pw, "data: %s\n\n", first)
+		fmt.Fprintf(pw, "data: %s\r\n\r\n", second)
+	}()
+
+	result, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+	_ = pr.Close()
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	body := rec.Body.String()
+	require.Equal(t, "data: "+first+"\n\ndata: "+second+"\n\n", body)
+	require.NotContains(t, body, "\n\n\n", "events must be separated by exactly one blank line")
+
+	// 模拟 google-genai 的切帧方式：按 "\n\n" 切，每个非空 token 都必须以 "data" 为前缀
+	for _, token := range strings.Split(strings.TrimSuffix(body, "\n\n"), "\n\n") {
+		prefix, _, _ := strings.Cut(token, ":")
+		require.Equal(t, "data", prefix, "token %q would be rejected by a \\n\\n-delimited SSE parser", token)
+	}
+}
+
+func TestHandleGeminiStreamingResponse_ForwardedCommentFrames(t *testing.T) {
+	svc := newAntigravityTestService(&config.Config{
+		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+	})
+	const first = `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"first"}]}}]}` + "\n\n"
+	const second = `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"second"}]}}]}` + "\n\n"
+	const comment = ": upstream"
+	const stream = first + comment + "\r\n\r\n" + second
+
+	for _, tc := range []struct {
+		name             string
+		userAgent        string
+		forwardedComment string
+	}{
+		{"js-genai", "google-genai-sdk/3.6.0 gl-node/v26.13.1", comment + "\n\n"},
+		{"go-genai", "google-genai-sdk/1.71.0 gl-go/go1.27.4", ""},
+		{"python-genai", "google-genai-sdk/1.20.0 gl-python/3.12.4", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, rec := newAntigravityCompatContext(http.MethodPost, "/v1beta/models/gemini-2.5-flash:streamGenerateContent", nil)
+			c.Request.Header.Set("User-Agent", tc.userAgent)
+			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(stream)), Header: http.Header{}}
+
+			_, err := svc.handleGeminiStreamingResponse(c, resp, time.Now())
+			require.NoError(t, err)
+			require.Equal(t, first+tc.forwardedComment+second, rec.Body.String())
+		})
+	}
+}
+
 func TestHandleGeminiStreamingResponse_ThoughtsTokenCount(t *testing.T) {
 	svc := newAntigravityTestService(&config.Config{
 		Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
@@ -1704,14 +1776,14 @@ func TestExtractSSEUsage(t *testing.T) {
 		{
 			name:     "top-level usage with all fields",
 			line:     `data: {"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}`,
-			expected: ClaudeUsage{InputTokens: 10, OutputTokens: 20, CacheReadInputTokens: 5, CacheCreationInputTokens: 3},
+			expected: ClaudeUsage{InputTokens: 10, OutputTokens: 20, CacheReadInputTokens: 5, CacheCreationInputTokens: 3, cacheCreationInputTokensPresent: true},
 		},
 		{
 			// Anthropic message_start 把 usage 嵌套在 message.usage 下，
 			// 必须从这里提取输入侧字段（含 cache_read/cache_creation_input_tokens）。
 			name:     "message_start nested usage with input/cache tokens",
 			line:     `data: {"type":"message_start","message":{"id":"msg_01","usage":{"input_tokens":35576,"cache_creation_input_tokens":0,"cache_read_input_tokens":12000,"output_tokens":1}}}`,
-			expected: ClaudeUsage{InputTokens: 35576, OutputTokens: 1, CacheReadInputTokens: 12000},
+			expected: ClaudeUsage{InputTokens: 35576, OutputTokens: 1, CacheReadInputTokens: 12000, cacheCreationInputTokensPresent: true},
 		},
 		{
 			// message_start.message.usage.cache_creation 内的 5m/1h 明细也要解析。

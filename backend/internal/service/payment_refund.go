@@ -669,6 +669,13 @@ func (s *PaymentService) gwRefund(ctx context.Context, p *RefundPlan) (*payment.
 		}
 	}
 	if err != nil {
+		var rejected *payment.RefundRejectedError
+		if errors.As(err, &rejected) {
+			// An explicit rejection has a known outcome: report it as a failed
+			// refund so the deduction is rolled back instead of held pending.
+			slog.Warn("payment refund rejected by provider", "order_id", p.OrderID, "error", err)
+			return &payment.RefundResponse{RefundID: p.ProviderRefundID, Status: payment.ProviderStatusFailed}, nil
+		}
 		return nil, markRefundGatewayOutcomeUnknown(err)
 	}
 	if resp == nil {

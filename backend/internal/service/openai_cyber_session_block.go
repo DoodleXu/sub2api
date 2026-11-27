@@ -16,8 +16,10 @@ import (
 // repository 层 gatewayCache 附带实现（类型断言探测接入，不改 GatewayCache
 // 共享接口）；测试 stub 不实现时屏蔽能力自动降级关闭。
 type CyberSessionBlockStore interface {
-	SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error
-	IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error)
+	SetCyberSessionBlocked(ctx context.Context, block CyberSessionBlock, ttl time.Duration) error
+	// CyberSessionTranscriptLengths returns the recorded transcript block
+	// lengths of the API key, or none when the source scope is inactive.
+	CyberSessionTranscriptLengths(ctx context.Context, apiKeyID int64, scopeKey string) ([]int, error)
 	FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error)
 }
 
@@ -25,6 +27,16 @@ type CyberSessionBlockStore interface {
 // cache contract used by older deployments and test doubles.
 type legacyCyberSessionBlockStore interface {
 	SetCyberSessionBlocked(context.Context, string, time.Duration) error
+}
+
+// CyberSessionBlock is one cyber hit to persist. Keys are exact block keys;
+// TranscriptLengths records the history length of each transcript key among
+// them and, like ScopeKey, is only meaningful for transcript matching.
+type CyberSessionBlock struct {
+	APIKeyID          int64
+	ScopeKey          string
+	Keys              []string
+	TranscriptLengths []int
 }
 
 // CyberSessionBlockKey 派生会话屏蔽 key：仅用显式会话标识（header
@@ -43,11 +55,33 @@ func CyberSessionBlockKeyWithFallback(apiKeyID int64, c *gin.Context, body []byt
 	if raw == "" {
 		raw = strings.TrimSpace(fallback)
 	}
+	return hashCyberSessionBlockKey(apiKeyID, raw)
+}
+
+// CyberSessionExplicitBlockKey returns an inexpensive exact key when the
+// client supplies a stable session signal.
+func CyberSessionExplicitBlockKey(apiKeyID int64, c *gin.Context, body []byte) string {
+	return hashCyberSessionBlockKey(apiKeyID, explicitOpenAISessionID(c, body))
+}
+
+// CyberSessionScopeKey is a coarse, non-blocking fingerprint used only to
+// avoid transcript parsing and MGET for sources that never produced a hit.
+func CyberSessionScopeKey(apiKeyID int64, clientIP, userAgent string) string {
+	if apiKeyID <= 0 {
+		return ""
+	}
+	raw := "cyber-scope:v1|api_key=" + strconv.FormatInt(apiKeyID, 10) +
+		"|ip=" + strings.TrimSpace(clientIP) +
+		"|ua=" + NormalizeSessionUserAgent(userAgent)
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func hashCyberSessionBlockKey(apiKeyID int64, raw string) string {
 	if raw == "" {
 		return ""
 	}
-	isolated := isolateOpenAISessionID(apiKeyID, raw)
-	sum := sha256.Sum256([]byte(isolated))
+	sum := sha256.Sum256([]byte(isolateOpenAISessionID(apiKeyID, raw)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -78,24 +112,17 @@ func (s *OpenAIGatewayService) CyberSessionBlockRuntime(ctx context.Context) (bo
 
 // MarkCyberSessionBlocked 把会话写入屏蔽表（写入点：cyber 命中后），返回是否
 // 已成功写入。开关关闭、key 为空、存储不可用或写入失败时返回 false，调用方可
-// 在异步审计 context 中做一次幂等补写。
-func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, key string, keySets ...[]string) bool {
-	keys := []string{key}
-	scopeKey := ""
-	if len(keySets) > 0 {
-		scopeKey = key
-		keys = keySets[0]
-	}
-	if len(keys) == 0 {
+// 在异步审计 context 中做一次幂等补写。仅实现旧版单 key 契约的存储只写入首个 key。
+func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, block CyberSessionBlock) bool {
+	if s == nil || firstCyberSessionBlockKey(block.Keys) == "" {
 		return false
 	}
 	enabled, ttl := s.CyberSessionBlockRuntime(ctx)
 	if !enabled {
 		return false
 	}
-	store := s.cyberSessionBlockStore()
-	if store != nil {
-		if err := store.SetCyberSessionBlocked(ctx, scopeKey, keys, ttl); err != nil {
+	if store := s.cyberSessionBlockStore(); store != nil {
+		if err := store.SetCyberSessionBlocked(ctx, block, ttl); err != nil {
 			logger.LegacyPrintf("service.openai_gateway", "cyber session block write failed: err=%v", err)
 			return false
 		}
@@ -105,34 +132,16 @@ func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, key 
 	if !ok {
 		return false
 	}
-	if err := legacy.SetCyberSessionBlocked(ctx, firstNonEmptyString(keys), ttl); err != nil {
+	if err := legacy.SetCyberSessionBlocked(ctx, firstCyberSessionBlockKey(block.Keys), ttl); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session block write failed: err=%v", err)
 		return false
 	}
 	return true
 }
 
-const cyberSessionTranscriptLookupOverflowBlockKey = "transcript_lookup_limit_exceeded"
-
-func CyberSessionExplicitBlockKey(apiKeyID int64, c *gin.Context, body []byte) string {
-	return hashCyberSessionBlockKey(apiKeyID, explicitOpenAISessionID(c, body))
-}
-
-func CyberSessionScopeKey(apiKeyID int64, clientIP, userAgent string) string {
-	if apiKeyID <= 0 {
-		return ""
-	}
-	raw := "cyber-scope:v1|api_key=" + strconv.FormatInt(apiKeyID, 10) + "|ip=" + strings.TrimSpace(clientIP) + "|ua=" + NormalizeSessionUserAgent(userAgent)
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
-}
-
-func hashCyberSessionBlockKey(apiKeyID int64, raw string) string {
-	if raw == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(isolateOpenAISessionID(apiKeyID, raw)))
-	return hex.EncodeToString(sum[:])
+// MarkCyberSessionBlockedKey 写入单个显式会话 key（如 Alpha Search 的 body.id）。
+func (s *OpenAIGatewayService) MarkCyberSessionBlockedKey(ctx context.Context, key string) bool {
+	return s.MarkCyberSessionBlocked(ctx, CyberSessionBlock{Keys: []string{key}})
 }
 
 // FindCyberSessionBlockedForRequest applies explicit-first lookup followed by
@@ -156,22 +165,15 @@ func (s *OpenAIGatewayService) FindCyberSessionBlockedForRequest(ctx context.Con
 			return key
 		}
 	}
-	scopeKey := CyberSessionScopeKey(apiKeyID, clientIP, userAgent)
-	active, err := store.IsCyberSessionScopeActive(ctx, scopeKey)
+	lengths, err := store.CyberSessionTranscriptLengths(ctx, apiKeyID, CyberSessionScopeKey(apiKeyID, clientIP, userAgent))
 	if err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session scope read failed: err=%v", err)
 		return ""
 	}
-	if !active {
-		return ""
-	}
-	transcript := deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body)
-	if transcript.lookupKeysTruncated {
-		// Once the coarse scope is active, silently dropping old candidates would
-		// let a blocked client evade prefix matching by appending dummy items.
-		return cyberSessionTranscriptLookupOverflowBlockKey
-	}
-	keys := transcript.lookupKeys
+	// Blocked prefixes are recomputed only at their recorded lengths, so any
+	// number of appended items still reaches them and history length alone
+	// never decides a block.
+	keys := cyberSessionTranscriptKeysAt(apiKeyID, body, lengths)
 	if len(keys) == 0 {
 		return ""
 	}
@@ -200,4 +202,13 @@ func (s *OpenAIGatewayService) FindCyberSessionBlockedKey(ctx context.Context, k
 		return ""
 	}
 	return found
+}
+
+func firstCyberSessionBlockKey(keys []string) string {
+	for _, key := range keys {
+		if key = strings.TrimSpace(key); key != "" {
+			return key
+		}
+	}
+	return ""
 }

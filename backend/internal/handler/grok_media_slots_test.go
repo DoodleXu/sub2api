@@ -234,7 +234,14 @@ func newGrokMediaSlotHandler(t *testing.T, oauth, mismatch bool, platforms ...st
 		_, err := provider.GetAccessToken(context.Background(), &accounts[1])
 		require.NoError(t, err)
 	}
-	gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, bindings, cfg, nil, concurrency, nil, nil, nil, upstream, nil, nil, provider, nil, nil, nil, nil, nil)
+	var rateLimit *service.RateLimitService
+	if grokMediaTestSettingService != nil {
+		// The fork reads the advanced scheduler switch through the rate limit
+		// service's settings; tests that enable it need that wiring.
+		rateLimit = service.NewRateLimitService(repo, nil, cfg, nil, nil)
+		rateLimit.SetSettingService(grokMediaTestSettingService)
+	}
+	gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, bindings, cfg, nil, concurrency, nil, rateLimit, nil, upstream, nil, nil, provider, nil, nil, nil, nil, nil)
 	groupID := int64(24)
 	require.NoError(t, gateway.BindGrokMediaVideoRequestAccount(context.Background(), &groupID, "task", 10, 20, 1))
 	bindings.writes = 0

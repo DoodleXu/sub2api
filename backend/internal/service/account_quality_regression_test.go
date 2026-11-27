@@ -44,6 +44,33 @@ func (r *qualityRefreshRepo) UpdateCredentials(_ context.Context, _ int64, crede
 	return nil
 }
 
+// UpdateOpenAIOAuthCredentialsIfUnchanged models the production compare-and-swap
+// used by OpenAI OAuth refresh persistence.
+func (r *qualityRefreshRepo) UpdateOpenAIOAuthCredentialsIfUnchanged(ctx context.Context, id int64, expected map[string]any, expectedProxyID *int64, credentials map[string]any) (bool, error) {
+	r.mu.Lock()
+	current, err := json.Marshal(r.current.Credentials)
+	if err == nil {
+		var want []byte
+		want, err = json.Marshal(expected)
+		if err == nil && (string(current) != string(want) || !equalOptionalInt64(r.current.ProxyID, expectedProxyID)) {
+			r.mu.Unlock()
+			return false, nil
+		}
+	}
+	r.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	return true, r.UpdateCredentials(ctx, id, credentials)
+}
+
+func equalOptionalInt64(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 type qualityRefreshExecutor struct{}
 
 func (qualityRefreshExecutor) CanRefresh(*Account) bool                  { return true }
@@ -249,9 +276,9 @@ func TestQualityV158PassthroughDebtPrecedesCommit(t *testing.T) {
 		body := []byte(`{"error":{"message":"Insufficient account balance"}}`)
 		resp := &http.Response{StatusCode: 403, Header: http.Header{}}
 		if failoverPath {
-			err = svc.handleFailoverErrorResponsePassthroughV158(context.Background(), resp, c, account, nil, body)
+			err = svc.handleFailoverErrorResponsePassthrough(context.Background(), resp, c, account, nil, body)
 		} else {
-			err = svc.handleErrorResponsePassthroughV158(context.Background(), resp, c, account, nil, body)
+			err = svc.handleErrorResponsePassthrough(context.Background(), resp, c, account, nil, body)
 		}
 		var failure *UpstreamFailoverError
 		require.ErrorAs(t, err, &failure)

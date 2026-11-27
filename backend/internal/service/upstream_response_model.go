@@ -223,6 +223,9 @@ func observedUpstreamResponseServiceTier(c *gin.Context) string {
 // usage time, where the account protocol is available. In particular, the
 // private ChatGPT Codex backend commonly reports default even for effective
 // Fast turns, while public API response tiers remain authoritative.
+// Fork: the upstream-reported tier wins when present so a request is never
+// billed above the tier actually served (see FORK_UPSTREAM_DIFF_CN.md); the
+// billing-time resolution below can then only confirm or lower it.
 func resolvedOpenAIUpstreamServiceTierFromObserver(observer *upstreamResponseModelObserver, outboundBodyTier *string) *string {
 	if observer != nil {
 		if observed := strings.TrimSpace(observer.ServiceTier()); observed != "" {

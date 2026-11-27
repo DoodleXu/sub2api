@@ -110,6 +110,7 @@ vi.mock("@/api", () => ({
       getNotificationConfig,
       updateNotificationConfig,
       testNotificationTransport,
+      getRegistrationEmailBlacklist: vi.fn().mockResolvedValue({ emails: [], max: 20000 }),
     },
     accounts: {
       getUpstreamBillingProbeSettings,

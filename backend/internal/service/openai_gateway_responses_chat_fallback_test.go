@@ -83,8 +83,9 @@ func TestForwardResponses_ForceChatCompletionsRoutesNonStreamingToChatCompletion
 	require.Equal(t, 3, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.OutputTokens)
 	require.Equal(t, 1, result.Usage.CacheReadInputTokens)
+	// Fork: the upstream-reported tier wins over the requested priority tier.
 	require.NotNil(t, result.ServiceTier)
-	require.Equal(t, "priority", *result.ServiceTier)
+	require.Equal(t, "default", *result.ServiceTier)
 	require.Equal(t, "default", result.UpstreamResponseServiceTier)
 	require.False(t, result.Stream)
 }

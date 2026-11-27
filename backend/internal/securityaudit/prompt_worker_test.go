@@ -100,6 +100,7 @@ type fakeJobRepository struct {
 
 	claimQueue   []*Job
 	claimConfigs []int64
+	claims       int
 
 	recordBlockingCalls    int
 	recordBlockingSnapshot PromptSnapshot
@@ -142,6 +143,7 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 func (r *fakeJobRepository) ClaimNextJob(_ context.Context, _ time.Time, configVersion int64) (*Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.claims++
 	if len(r.claimQueue) == 0 {
 		return nil, false, nil
 	}

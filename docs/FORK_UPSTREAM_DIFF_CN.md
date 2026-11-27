@@ -1,5 +1,40 @@
 # Fork 与上游功能差异维护台账
 
+## 2026-11-25 合并上游 v0.2.25
+
+本节是当前行为规范；取代下方历史章节中“上游拆分文件保持删除、增量迁入 fork 聚合文件”的要求。
+
+- 从 fork `1b6300d2d`（v0.2.41 发布记录）在分支 `sync/upstream-v0.2.25` 合并官方最新正式 release `v0.2.25`（`348997267d756eab5729bb6b78a275a15d18796a`，GitHub 发布于 2026-11-24）；完整上游基线由 v0.2.19 升至 v0.2.25，未越过 release 合并 upstream/main。版本源保持 fork 的 `0.2.41`。本地陈旧的 `main`（仍停在 v0.2.15 合并）未使用。
+- 预检共 113 个冲突路径（92 个内容冲突、21 个 modify/delete）。
+- **文件布局回归官方**：21 个上游拆分文件（`admin_account/group/user.go`、`gateway_{anthropic_passthrough,bedrock,claude_oauth_body,count_tokens,forward,upstream_request,upstream_response,usage_billing}.go`、`openai_gateway_{forward,passthrough,request_body,usage}.go`、`setting_public.go`、`repository/usage_log_repo_{insert,query,stats,trend}.go`、`handler/admin/setting_handler_update.go`），以及 fork 曾掏空的 `openai_gateway_response_handling.go`、`openai_gateway_upstream_errors.go`，全部按上游文件重建：逐个顶层声明对 fork 副本、v0.2.19 基线和 v0.2.25 做三方合并后写回官方文件，并从 fork 聚合文件（`gateway_service.go`、`openai_gateway_service.go`、`admin_service.go`、`setting_service.go`、`usage_log_repo.go`、`setting_handler.go`）及 `*_v158.go`、`*_bridge.go` 等扩展文件删除原副本。由此清空的 `admin_account_duplicate.go`、`gateway_cache_storage_billing.go`、`openai_ws_compat_fork_bridge.go`、`openai_fast_service_tier_compat.go`、`openai_request_body_compat.go`、`openai_stream_account_sideeffects_bridge.go`、`openai_gateway_passthrough_v158.go`、`openai_passthrough_failover_bridge.go` 已删除。后续同步上游时，主流程以官方文件为准，fork 扩展只放在独立文件或官方文件内的明确分支，不再把上游拆分文件折回聚合文件。
+- `Forward` 保留 fork 的账号质量/欠费出站包装，原 `gateway_service.go` 中的 `forwardQualityCore` 迁入 `gateway_forward.go`，与上游 `Forward` 主体做三方合并（Claude 5.5 校验、Anthropic speed=fast 计费层、Web Search 模拟、旋转 token 重试等全部合入）。`ForwardImages` / `forwardImagesQualityCore` 同样保留包装。
+- 管理端：`NewAdminService` 改用上游签名（首参 `cfg`、`channelCacheInvalidator`、`userPlatformQuotaRepo`），删除 fork 无用的 `_ DashboardCostSnapshotRefresher` 占位参数。账号复制继续丢弃探测开关、费率同步和探测快照（另加上游的分组同步开关）；账号更新改用上游 `AccountBillingSettingsUpdate`，`AccountBillingSettingsArchiveRepository` 同步改为接收该结构，保持归档与计费设置同事务提交。非 OpenAI 分组同时清除新增的 `ForceOpenAIUltrafast`。
+- 上游计费探测重构为 `fetchBilling` 后，fork 的 New API 使用日志回退只在上游真实返回 404/405 时触发（新增 `errBillingEndpointNotFound`，仍视为 unsupported，官方域直接跳过的路径不回退）；`/v1/usage` 实际花费补充探测复用 `fetchBilling` 解析出的地址、密钥、代理与 TLS 画像。
+- Anthropic 兼容用量：采用上游 `normalizeAnthropicCompatiblePromptUsage`（含 Kimi message_start/delta 语义修复与显式 cache_read 优先），删除 fork 功能重叠的 `normalizeCNProviderUsageAliases`。
+- Cyber 会话屏蔽：采用上游按已屏蔽前缀长度精确匹配 transcript 的修复（#8519，长会话不再因 256 项截断被误拦），`CyberSessionBlockStore`/`CyberSessionBlock` 用上游结构；保留 fork 的旧单 key 存储回退、写入结果 bool 返回、`CyberSessionBlockKeyWithFallback`（Alpha Search `body.id`）与 `FindCyberSessionBlockedKey`，新增 `MarkCyberSessionBlockedKey`。顺带修复 fork 旧回退把 `[]string` 传给 `firstNonEmptyString(...any)` 导致永远写入空 key 的缺陷。
+- Alpha Search 保留 fork 简化的 failover/运维记录结构，接入上游账号副作用判定：401/404/405 与非账号状态类 403（如“Literature search is unavailable.”）只换号、不写账号错误，避免一条请求逐号停掉整个号池。
+- 生图：保留 fork 的真实图片校验、8 张参考图、单件/总量上限，上游新增的 `markup` 上传同样走校验、只允许一次并计入总量；上游 Codex 直连 JSON 回退（stream=true 仍返回整图时转成完成事件，避免已计费图片被丢弃或换号重试）替代 fork 原先的直接忽略，并保留首图 TTFT 统计；保留 Agent Identity 脱敏，接入 `requiresCodexDirectImages`。
+- 生图意图识别采用上游字节预检与单次根遍历结构，但继续不把 Responses Lite `input[].additional_tools` 里的 `image_gen` 视为生图意图（见 2026-07-12 规则）。
+- OpenAI 调度：保留 fork 的布尔资格判断、利润门、代理隔离观测与 Guardian 父账号粘性；移植上游 1K/2K/4K 生图尺寸分档（`selectAccountWithSchedulerBySize`、尺寸否决与溢出绑定）以及“分组隐私要求复用认证快照”。快照服务采用上游“冷却账号保留在快照成员中、读取时再判时间类阻断”的修复（候选查询仍排除归档账号与失效母账号），保留 fork 的设置服务注入与全量重建请求通道。网关调度阈值过滤改用上游原地压缩实现（两个调用方传入的都是独占的新切片）。
+- `previous_response_id` 亲和：高级调度的续链分支改用上游完整资格判断（分组归属、隐私、运行时阻断、渠道限制、能力、生图尺寸否决、fork 利润门、代理隔离），不再只查隐私与传输；legacy 调度去掉 fork 早期“仅 `previousResponseCanMove` 时才走续链层”的门控（无记录原因，与高级调度语义相反），并补上尺寸否决与分组归属检查。上游 `applyLegacySelectionDecision` 依赖 fork 没有的 `stickySessionHit` 字段，未移植。
+- Antigravity：上游“一个请求的无原因 429 最多冷却一个账号”的规则同时接入 fork 的 smart retry 冷却点（fork 该路径原先直接冷却，会让同一个超大请求逐号冷却整个号池）。
+- 账号用量：只有真正拿到额度观测的探测才标记 `active`；探测失败或返回空额度时保持 `passive` 并给出 `quota_refresh_failed`，不再因“尝试过探测”就当作新鲜读取。
+- 支付：EasyPay 在格式正确的响应中明确拒绝退款时返回 `payment.RefundRejectedError`，服务层据此按“已确定失败”处理（原子回补扣减、订单记为 `REFUND_FAILED` 并写 `REFUND_GATEWAY_FAILED` 审计），不再当作结果未知挂起；网络错误、非 JSON、HTTP 错误仍按未知处理，继续走 fork 的未知提交保护。
+- OAuth 刷新：OpenAI OAuth 刷新改走上游 CAS 持久化后，fork 的账号质量授权（只放行发起刷新的请求、并发的管理员恢复/替换/暂停仍拦截）移到 CAS 成功分支执行。
+- 用户请求推理强度：恢复 fork 在早期合并中丢失的 `stampOpenAIRequestedReasoningEffort`（Responses / Messages 两处用量提交），使上游按轮次 `configuration_update` 记录的推理强度真正写入用量日志。
+- Service tier（**待业务确认**）：转发结果继续沿用 fork 规则“上游回报的档位优先”（第 347 行记录的计费口径，宁可漏收不多收），并叠加上游计费阶段的降档解析与降档审计日志。上游的规则是转发结果保留请求档位、只在计费阶段按回报降档，且把 Codex OAuth 私有后端回报的 `default` 视为不可信（实际为 Fast 时仍按 priority 计费）。两条上游测试已按 fork 规则调整。若希望 Codex OAuth 的 Fast 请求按 priority 计费，需要改回上游规则并同步约 8 个 fork 测试。
+- 测试适配：上游新测试中上传的假图片字节改为真实 1×1 PNG（fork 校验真实图片）；按 fork 的 `TestMain` 规则移除测试文件里的 `gin.SetMode`；SSE 单行默认上限断言改为 128MB；计费探测分组同步测试按 fork 的 `/v1/usage` 第二次请求调整；原生 WS 后续轮次在上游断线时 fork 不做同号重连，握手 429 用例改为断言直接关闭且不重放首帧。
+- OpenAI Responses 主链路（`openai_gateway_{forward,passthrough,request_body,usage,response_handling}.go`）：`Forward` 同样保留 fork 包装，`forwardQualityCore` 迁入 `openai_gateway_forward.go`。fork 的裸 `error` 状态机（单个 `response.failed`、保留用量、已输出不重放、cyber_policy）、欠费 `BalanceFailover` 门、Agent Identity 刷新与脱敏、OpenCode UA 继续保留；接入上游 codex 账号身份命名空间（请求体与透传请求头）、`openAIGroupForcedServiceTier`（分组强制 Fast 覆盖客户端显式档位、Ultrafast、缺省档位的 `force_priority`）、OAuth 透传在客户端 `stream=false` 时把 SSE 聚合为 JSON（#7978）、keepalive 直通、非 completed 终态回退、指令回显还原、`invalid_encrypted_content`/上下文窗口错误的结构化错误体，以及容量削减与 OpenAI 空闲 failover。`handleErrorResponsePassthroughV158`、`handleFailoverErrorResponsePassthroughV158` 等 V158 副本并回上游函数名，`handleNonStreamingResponsePassthrough` / `handlePassthroughSSEToJSON` 恢复上游显式签名。
+- 已知差异：WebSocket 透传首 token 时间跟随上游 `openai_ttft_mode` 设置（默认 semantic），HTTP SSE 路径仍用 fork 的可见输出口径；`ClearActualOpenAIUpstreamEndpoint`、`filterOpenAIResponsesNoneReasoningEffortForAccount`、`setCodexToolNameReverse` 在 fork 的 `Forward` 中早已缺席，本轮未恢复（fork 使用自己的客户端工具名还原）。
+- 流式失败：Chat Completions / Messages 兼容路径在非 failover 失败终态前补上上游的账号侧副作用处理；Messages 路径接入上游 held 输出缓冲，没有缓冲内容时仍走 fork 的兼容错误写出，读错误先释放缓冲再返回脱敏错误。
+- 配额与用量：OpenAI 额度头部构建保留 fork 失败即拒绝（重读账号、拒绝归档/无法解析的影子账号），叠加上游受限管理员 key 的账号范围校验；受限 key 读取额度只调额度 API。用量窗口统计采用上游实现并补 nil 防护。
+- 配置：保留 fork 的非流式响应体与 SSE 单行默认上限 `128MB`（上游为 8MB / 500MiB），采纳上游 SSE 队列/事件预算、请求体内存预算、读写超时、MCP OAuth 与 OpenAI 传输错误冷却开关。CI / Security Scan / Release 的 Node 跟随上游升到 24，Go 校验 1.27.4。
+- 前端：保留 vue-i18n / message-compiler 11.4.17 安全版本、`onlyBuiltDependencies`、`engines.node >=22`，不恢复无引用的 `xlsx`；锁文件需用 pnpm 9 维护（与 CI 一致）。`GroupsView` 上游新增的 Ultra Fast 开关改用 fork 的内联开关按钮（fork 已移除 `Toggle` 组件）；账号用量刷新中 OpenAI OAuth 保留更新后立即刷新，其他平台用上游可见时加载；`AccountsView` 全局探测开关复用 fork 设置对象。
+- 新增迁移 `249_add_usage_logs_api_key_cost_index_notx.sql`、`249_mcp_oauth.sql`、`250_openai_cache_write_ttl.sql`、`251_group_force_openai_ultrafast.sql`、`251_group_usage_rollup_nonblocking_build.sql`、`252_channel_pricing_ultrafast_multiplier.sql`，与 fork 同号迁移按完整文件名并存，历史文件不改名。
+- 分组日汇总时区：上游 251 以会话时区重建了 usage_logs 失效触发器函数，覆盖了 fork 227「按持久化 `timezone_name` 计算日期」的修复。新增 fork 迁移 `253_group_usage_rollup_persisted_timezone.sql`，保留 251 的非阻塞重建语义（`expired_before`、`building_until`、`build_dirty_from`、`FOR KEY SHARE`），只把时区来源恢复为状态行的 `timezone_name`；不修改上游 251 文件。
+- 账号成本口径：继续沿用 fork `50ae39476` 规则，`account_cost` 为 `account_stats_cost`（历史行回退 `total_cost`），不再乘 `account_rate_multiplier`；上游新增的按模型统计集成测试已按此调整。
+- 验证（本地 Go 1.27.4）：后端 `go build ./...`、`gofmt`、`go vet -tags unit ./...` 与 `go vet -tags integration ./...` 通过；`TZ=UTC go test -tags=unit -count=1 ./...` 全量 60 个包通过；golangci-lint v2.14.0 为 0 issues；Wire 与 Ent 已重新生成。前端 `pnpm install --frozen-lockfile`、`vue-tsc --noEmit`、全量 ESLint、生产构建通过，Vitest 415 个文件 3413 项全部通过。真实 PostgreSQL / Redis 集成测试（`TZ=UTC go test -tags=integration ./...`，含 249–253 迁移）54 个包全部通过。本轮仅同步源码，未推送、未发版、未部署。
+
 ## 2026-11-17 发版 v0.2.41
 
 - annotated tag `v0.2.41` 指向已推送默认分支的 `fd5c8edf728f75af6cdbb7c324755dba7bdbeeb2`，内容为 usage_logs 批量写入列对齐修复（#1）和 Go 1.27.4 / brotli v1.2.7 / klauspost/compress v1.20.2 安全升级（#2），详见文末 2026-11-17 两节；版本源为 `0.2.41`。无数据库迁移和配置变更。
@@ -116,7 +151,7 @@
 
 本文用于记录 `DoodleXu/sub2api` fork 相对上游官方仓库 `Wei-Shaw/sub2api` 的定制功能差异，方便后续同步上游、迭代和 debug。
 
-最后更新：2026-11-02
+最后更新：2026-11-26
 
 ## 2026-10-15 发版 v0.2.36
 
@@ -358,10 +393,10 @@
 | --- | --- | --- |
 | Fork 远端 | `origin = DoodleXu/sub2api` | 当前工作主线 |
 | 上游远端 | `upstream = Wei-Shaw/sub2api` | 官方原版仓库 |
-| 本轮开发基线 | `be37caca3` | fork v0.2.39 发布记录；同步分支 `codex/sync-upstream-v0.2.19` |
-| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.19` -> `dece26153621959ccd7635814f4b2d08304e681a` | 2026-11-02 完整同步目标 |
-| 已核对的上游最新 release | `refs/tags/upstream/v0.2.19^{}` -> `dece26153621959ccd7635814f4b2d08304e681a` | 2026-10-28 发布；2026-11-02 核对 GitHub Releases latest |
-| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 业务差异继续按能力模块保留；通用/OpenAI 调度已回到官方拆分文件布局，其他模块在必要维护时逐步对齐。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
+| 本轮开发基线 | `1b6300d2d` | fork v0.2.41 发布记录；同步分支 `sync/upstream-v0.2.25` |
+| 当前已合并上游 release 基线 | `refs/tags/upstream/v0.2.25` -> `348997267d756eab5729bb6b78a275a15d18796a` | 2026-11-25 完整同步目标 |
+| 已核对的上游最新 release | `refs/tags/upstream/v0.2.25^{}` -> `348997267d756eab5729bb6b78a275a15d18796a` | 2026-11-24 发布；2026-11-25 核对 GitHub Releases latest |
+| fork 相对上游 release 差异 | fork 仍保留自定义功能差异 | 业务差异继续按能力模块保留；网关、OpenAI、管理端与用量仓储主流程已回到官方拆分文件布局（2026-11-25），fork 扩展放在独立文件或官方文件内的明确分支。继续保留 `linux/amd64 + GHCR` 发布约束、签到、人民币成本、Responses Lite、支付安全与 OpenAI 调度/计费语义 |
 
 ### v0.1.184 合并记录
 
@@ -374,9 +409,9 @@
 
 ```bash
 git fetch origin --prune
-git fetch upstream refs/tags/v0.2.19:refs/tags/upstream/v0.2.19 --force
-git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.2.19^{}...HEAD
-git diff --name-status refs/tags/upstream/v0.2.19^{}..HEAD
+git fetch upstream refs/tags/v0.2.25:refs/tags/upstream/v0.2.25 --force
+git log --oneline --right-only --cherry-pick refs/tags/upstream/v0.2.25^{}...HEAD
+git diff --name-status refs/tags/upstream/v0.2.25^{}..HEAD
 ```
 
 如上游 release tag 更新，先把本节顶部的 release tag 和提交替换为新的官方 release，再更新对应合并说明与验证记录。

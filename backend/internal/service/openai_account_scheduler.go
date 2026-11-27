@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -412,6 +413,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 	if s != nil && s.service != nil && s.service.openAIGroupRequiresPrivacySet(ctx, req.GroupID) {
 		req.RequirePrivacySet = true
 	}
+	ctx = withOpenAIImageSizeStickyAccount(withOpenAIImageSizeStickyAccount(ctx, req.StickyAccountID), req.StickyPreviousAccountID)
 	start := time.Now()
 	// 命名返回值保证 defer 写入的耗时同时返回给调用方。
 	defer func() {
@@ -435,23 +437,16 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			return nil, decision, err
 		}
 		if selection != nil && selection.Account != nil {
-			if s.service.openAIGroupRequiresPrivacySet(ctx, req.GroupID) && !selection.Account.IsPrivacySet() {
-				if selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
-				}
-				selection = nil
+			// Full request compatibility (privacy, runtime block, channel, capability,
+			// image size, profit gate, proxy quarantine) plus scheduling-group match.
+			compatible, _ := s.isAccountRequestCompatibleReason(withOpenAIImageSizeStickyAccount(ctx, selection.Account.ID), selection.Account, req)
+			hasGroupMetadata := len(selection.Account.GroupIDs) > 0 || len(selection.Account.AccountGroups) > 0
+			groupCompatible := !hasGroupMetadata || openAIStickyAccountMatchesGroup(selection.Account, req.GroupID)
+			if hasGroupMetadata && s.service != nil {
+				groupCompatible = s.service.openAIAccountMatchesSchedulingGroup(selection.Account, req.GroupID)
 			}
-		}
-		if selection != nil && selection.Account != nil {
-			if s.service.openAIGroupRequiresPrivacySet(ctx, req.GroupID) && !selection.Account.IsPrivacySet() {
-				if selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
-				}
-				selection = nil
-			}
-		}
-		if selection != nil && selection.Account != nil {
-			if !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport) {
+			if !groupCompatible ||
+				!compatible || !s.isAccountTransportCompatible(selection.Account, req.RequiredTransport) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -563,6 +558,8 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			return nil, false, nil
 		}
 	}
+
+	ctx = withOpenAIImageSizeStickyAccount(ctx, accountID)
 
 	account, err := s.service.getSchedulableAccount(ctx, accountID)
 	if err != nil || account == nil {
@@ -1491,12 +1488,6 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		accounts = modelFiltered
 	}
 
-	// require_privacy_set: 获取分组信息
-	var schedGroup *Group
-	if req.GroupID != nil && s.service.schedulerSnapshot != nil {
-		schedGroup, _ = s.service.schedulerSnapshot.GetGroupByID(ctx, *req.GroupID)
-	}
-
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
@@ -1523,7 +1514,8 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		// require_privacy_set is a group-scoped eligibility gate. Do not mutate the
 		// shared account: another group may intentionally allow accounts whose
 		// upstream privacy setting has not been confirmed.
-		if (req.RequirePrivacySet || (schedGroup != nil && schedGroup.RequirePrivacySet)) && !account.IsPrivacySet() {
+		// Select already resolved the group requirement into req.
+		if req.RequirePrivacySet && !account.IsPrivacySet() {
 			filterStats.exclude("privacy_not_set")
 			continue
 		}
@@ -1878,6 +1870,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	if !accountSupportsOpenAICapabilities(account, req.RequiredCapability, req.RequiredImageCapability) {
 		return false, "capability_mismatch"
+	}
+	if vetoed, reason := openAIImageSizeVetoReason(ctx, account); vetoed {
+		return false, reason
 	}
 	// 分组利润控制：先完成账号级利润资格判断，再观察代理隔离状态，
 	// 避免把本就不满足利润门的账号计入请求级代理隔离降级信号。
@@ -2291,7 +2286,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 	useUpstreamTokenCost bool,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	firstPassCtx, quarantineObservation := withOpenAIProxyStreamQuarantineObservation(ctx)
-	selection, decision, err := s.selectAccountWithSchedulerOnce(firstPassCtx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	selection, decision, err := s.selectAccountWithSchedulerBySize(firstPassCtx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 	if err == nil || openAIProxyStreamQuarantineBypassed(ctx) {
 		return selection, decision, err
 	}
@@ -2307,7 +2302,42 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		return selection, decision, err
 	}
 	s.logOpenAIProxyStreamQuarantineFailOpen(requestedModel, blocked)
-	return s.selectAccountWithSchedulerOnce(withOpenAIProxyStreamQuarantineBypass(firstPassCtx), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	return s.selectAccountWithSchedulerBySize(withOpenAIProxyStreamQuarantineBypass(firstPassCtx), groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+}
+
+// selectAccountWithSchedulerBySize runs selectAccountWithSchedulerOnce once per
+// image size pass recorded by WithOpenAIImageSizeRouting, or once when the
+// request carries no image size. A spillover pass that acquires a slot hands
+// the session binding to bindOpenAIImageSizeSpilloverAccount together with the
+// binding read before the first pass.
+func (s *OpenAIGatewayService) selectAccountWithSchedulerBySize(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	sessionHash string,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredTransport OpenAIUpstreamTransport,
+	requiredCapability OpenAIEndpointCapability,
+	requiredImageCapability OpenAIImagesCapability,
+	requireCompact bool,
+	platform string,
+	previousResponseCanMove bool,
+	useUpstreamTokenCost bool,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	var initialStickyAccountID int64
+	if strings.TrimSpace(sessionHash) != "" && openAIImageSizeRoutingUsesPreference(ctx) {
+		if accountID, err := s.getStickySessionAccountID(ctx, groupID, sessionHash); err == nil {
+			initialStickyAccountID = accountID
+		}
+	}
+	return selectOpenAIAccountByImageSizePasses(ctx, func(passCtx context.Context) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		selection, decision, err := s.selectAccountWithSchedulerOnce(passCtx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+		if err == nil && selection != nil && selection.Acquired && openAIImageSizeSpilloverPass(passCtx) {
+			s.bindOpenAIImageSizeSpilloverAccount(passCtx, groupID, sessionHash, initialStickyAccountID, selection)
+		}
+		return selection, decision, err
+	})
 }
 
 type openAIGroupPrivacyRequirementContextKey struct{}
@@ -2332,7 +2362,14 @@ func (s *OpenAIGatewayService) openAIGroupRequiresPrivacySet(ctx context.Context
 }
 
 func (s *OpenAIGatewayService) loadOpenAIGroupRequiresPrivacySet(ctx context.Context, groupID *int64) bool {
-	if s == nil || groupID == nil || s.schedulerSnapshot == nil {
+	if s == nil || groupID == nil {
+		return false
+	}
+	// 直连请求的被调度分组即认证分组，复用 auth 快照；composite 等 ID 不一致时回源。
+	if ctxGroup, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(ctxGroup) && ctxGroup.ID == *groupID {
+		return ctxGroup.RequirePrivacySet
+	}
+	if s.schedulerSnapshot == nil {
 		return false
 	}
 	group, err := s.schedulerSnapshot.GetGroupByID(ctx, *groupID)
@@ -2370,7 +2407,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	decision := OpenAIAccountScheduleDecision{}
-	preserveGuardianParentBinding := preserveOpenAIGuardianParentBinding(ctx, sessionHash)
+	preserveStickyBinding := preserveOpenAIGuardianParentBinding(ctx, sessionHash) || openAIImageSizeSpilloverPass(ctx)
 	guardianParentAccountID := int64(0)
 	if strings.TrimSpace(previousResponseID) == "" {
 		guardianParentAccountID = s.resolveOpenAIGuardianParentAccountID(ctx, groupID)
@@ -2392,14 +2429,15 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			RequireCompact: requireCompact, ExcludedIDs: excludedIDs,
 			RequirePrivacySet: s.openAIGroupRequiresPrivacySet(ctx, groupID),
 		}
-		if platform == PlatformOpenAI && strings.TrimSpace(previousResponseID) != "" && previousResponseCanMove {
+		if platform == PlatformOpenAI && strings.TrimSpace(previousResponseID) != "" {
 			previousSelection, previousErr := s.selectAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 			if previousErr != nil {
 				return nil, decision, previousErr
 			}
 			if previousSelection != nil && previousSelection.Account != nil {
 				if !stickyScheduler.isAccountTransportCompatible(previousSelection.Account, requiredTransport) ||
-					!stickyScheduler.isAccountRequestCompatible(ctx, previousSelection.Account, stickyReq) {
+					!stickyScheduler.isAccountRequestCompatible(withOpenAIImageSizeStickyAccount(ctx, previousSelection.Account.ID), previousSelection.Account, stickyReq) ||
+					!s.openAIAccountMatchesSchedulingGroup(previousSelection.Account, groupID) {
 					if previousSelection.ReleaseFunc != nil {
 						previousSelection.ReleaseFunc()
 					}
@@ -2442,7 +2480,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 			}
 		}
 		legacySessionHash := sessionHash
-		if preserveGuardianParentBinding || len(excludedIDs) > 0 {
+		if preserveStickyBinding || len(excludedIDs) > 0 {
 			legacySessionHash = ""
 		}
 		if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
@@ -2507,7 +2545,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 
 		effectiveExcludedIDs := cloneExcludedAccountIDs(excludedIDs)
 		legacyStickyAccountID := int64(0)
-		if sessionHash != "" && !preserveGuardianParentBinding && len(excludedIDs) == 0 && s.cache != nil {
+		if sessionHash != "" && !preserveStickyBinding && len(excludedIDs) == 0 && s.cache != nil {
 			legacyStickyAccountID, _ = s.getStickySessionAccountID(ctx, groupID, sessionHash)
 		}
 		for {
@@ -2594,7 +2632,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		StickyPreviousAccountID: stickyPreviousAccountID,
 		StickyWeighted:          stickyWeighted,
 		SubscriptionPriority:    subscriptionPriority,
-		PreserveStickyBinding:   preserveGuardianParentBinding,
+		PreserveStickyBinding:   preserveStickyBinding,
 		RequirePrivacySet:       s.openAIGroupRequiresPrivacySet(ctx, groupID),
 		PreviousResponseID:      previousResponseID,
 		PreviousResponseCanMove: previousResponseCanMove,

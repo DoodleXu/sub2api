@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -235,6 +236,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 		}
+		// 帧内重复字段会让这里 gjson 读到的首个值与后续重编码/上游读到的值分叉
+		// （GHSA-p3r4-jcm3-2hph），在读取任何字段之前拒绝。
+		if field, conflict := requestmodel.ConflictingField("application/json", trimmed); conflict {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, fmt.Sprintf("websocket request payload declares field %.64q more than once", field), nil)
+		}
 
 		values := gjson.GetManyBytes(trimmed, "type", "model", "prompt_cache_key", "previous_response_id")
 		eventType := strings.TrimSpace(values[0].String())
@@ -335,7 +341,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		accountIdentitySourceRaw := append([]byte(nil), normalized...)
-		accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(normalized, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+		accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(normalized, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c))
 		if scopeErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
 		}
@@ -431,7 +437,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = stripped
 			logOpenAIWSModeInfo("ingress_ws_codex_spark_image_tool_stripped account_id=%d", account.ID)
 		}
-		imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
+		// normalized 由 parseClientPayload 中已通过 gjson.ValidBytes 校验的字节派生，
+		// 后续改写只走 sjson 或 decode→json.Marshal，合法性保持，因此跳过重复校验。
+		imageIntent := IsImageGenerationIntentForPlatformValidated(openAIResponsesEndpoint, originalModel, normalized, account.Platform)
 		if imageIntent && !imageGenerationAllowed {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
@@ -752,6 +760,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 			if bridgeErr != nil && isOpenAIWSSessionPreempted(ctx) {
 				return errOpenAIWSSessionPreempted
+			}
+			if result != nil {
+				// The HTTP payload can contain a policy rewrite or replayed configuration from an earlier turn.
+				result.RequestedReasoningEffort = currentBridgePayload.requestedReasoningEffort
 			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, result, bridgeErr)
@@ -1346,7 +1358,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					FirstTokenMs:                  firstTokenMs,
 					ImageFirstOutputMs:            imageFirstOutputMs,
 				}
-				if replayInput := replayCollector.Items(); len(replayInput) > 0 {
+				replayInput := replayCollector.Items()
+				if account.IsOpenAIOAuthLike() && lease.initializedWithoutWebSearch() {
+					// Keep complete output while search activation can require a new socket.
+					replayInput = replayCollector.AllItems()
+				}
+				if len(replayInput) > 0 {
 					result.wsReplayInput = replayInput
 					result.wsReplayInputExists = true
 				}
@@ -1427,6 +1444,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	defer releaseSessionLease()
 
 	turn := 1
+	defer func() {
+		var failoverErr *UpstreamFailoverError
+		var currentTurnErr *openAIWSCurrentTurnFailoverError
+		if turn > 1 && errors.As(returnErr, &failoverErr) && !errors.As(returnErr, &currentTurnErr) {
+			// Native ingress does not retain a complete conversation for account
+			// migration. A nil current-turn payload makes the handler close the
+			// client connection instead of replaying its original first message.
+			// Errors already scoped to the current turn (fork dispatch re-check)
+			// keep their safe retry payload.
+			returnErr = newOpenAIWSCurrentTurnFailoverError(returnErr, nil)
+		}
+	}()
 	rejectedFieldRetryState = newOpenAIResponsesRejectedFieldRetryState(currentPayload)
 	turnRetry := 0
 	turnPrevRecoveryTried := false
@@ -1436,6 +1465,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var lastTurnStrictState *openAIWSIngressPreviousTurnStrictState
 	lastTurnReplayInput := []json.RawMessage(nil)
 	lastTurnReplayInputExists := false
+	lastTurnReplayInputComplete := false
 	currentTurnReplayInput := []json.RawMessage(nil)
 	currentTurnReplayInputExists := false
 	skipBeforeTurn := false
@@ -1590,6 +1620,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			currentPayload,
 			currentPreviousResponseID != "",
 		)
+		currentTurnReplayInputComplete := replayInputErr == nil && (currentPreviousResponseID == "" ||
+			(lastTurnReplayInputComplete && currentPreviousResponseID == lastTurnResponseID))
 		if replayInputErr != nil {
 			logOpenAIWSModeInfo(
 				"ingress_ws_replay_input_skip account_id=%d turn=%d conn_id=%s reason=build_error cause=%s",
@@ -1705,6 +1737,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			} else {
 				unpinSessionConn(sessionConnID)
 			}
+		}
+		if account.IsOpenAIOAuthLike() && sessionLease.initializedWithoutWebSearch() && openAIWSWebSearchDeclared(currentPayload) {
+			fullPayload, safe, err := buildOpenAIWSCurrentTurnRetryPayload(currentPayload, currentTurnReplayInput, currentTurnReplayInputExists, "")
+			if err != nil {
+				return fmt.Errorf("rebuild websocket input for web search activation: %w", err)
+			}
+			if !safe || !currentTurnReplayInputComplete {
+				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "web search activation requires complete input history; please reconnect with full input", nil)
+			}
+			logOpenAIWSModeInfo("ingress_ws_web_search_activation account_id=%d turn=%d action=reconnect", account.ID, turn)
+			resetSessionLease(true)
+			acquiredLease, acquireErr := acquireTurnLease(turn, "", false, true)
+			if acquireErr != nil {
+				return fmt.Errorf("acquire upstream websocket for web search activation: %w", acquireErr)
+			}
+			sessionLease = acquiredLease
+			sessionConnID = strings.TrimSpace(sessionLease.ConnID())
+			pinSessionConn(sessionConnID)
+			currentPayload = fullPayload
+			currentPayloadBytes = len(fullPayload)
+			currentPreviousResponseID = ""
+			forcePreferredConn = false
 		}
 		shouldPreflightPing := turn > 1 && sessionLease != nil && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0
 		if shouldPreflightPing && openAIWSIngressPreflightPingIdle > 0 && !lastTurnFinishedAt.IsZero() {
@@ -1883,6 +1937,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		lastTurnPayload = cloneOpenAIWSPayloadBytes(currentPayload)
 		lastTurnReplayInput = cloneOpenAIWSRawMessages(currentTurnReplayInput)
 		lastTurnReplayInputExists = currentTurnReplayInputExists
+		lastTurnReplayInputComplete = currentTurnReplayInputComplete
 		if result.wsReplayInputExists {
 			lastTurnReplayInput = append(lastTurnReplayInput, cloneOpenAIWSRawMessages(result.wsReplayInput)...)
 			lastTurnReplayInputExists = true

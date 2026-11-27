@@ -63,7 +63,7 @@ func TestScopedAdminAccountListScopesCountAndPageInSQL(t *testing.T) {
 		{Permissions: []string{"accounts.read"}, GroupIDs: []int64{1}, AccountTypes: []string{"oauth"}},
 		{Permissions: []string{"accounts.read"}, GroupIDs: []int64{2}, AccountTypes: []string{"apikey"}},
 	}}}
-	_, total, err := repo.ScopedAdminList(adminaccess.WithPrincipal(context.Background(), principal), pagination.PaginationParams{Page: 1, PageSize: 20}, "", "", "", "")
+	_, total, err := repo.ScopedAdminList(adminaccess.WithPrincipal(context.Background(), principal), pagination.PaginationParams{Page: 1, PageSize: 20}, "", "", "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestScopedAdminAccountListPostgresRulesAndPagination(t *testing.T) {
 	_, err = db.Exec(`CREATE TABLE accounts (
 		id BIGINT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', notes TEXT, platform TEXT NOT NULL,
 		type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', schedulable BOOLEAN NOT NULL DEFAULT true,
-		concurrency INT NOT NULL DEFAULT 1, priority INT NOT NULL DEFAULT 1, credentials JSONB DEFAULT '{}', deleted_at TIMESTAMPTZ, archived_at TIMESTAMPTZ, parent_account_id BIGINT
+		concurrency INT NOT NULL DEFAULT 1, priority INT NOT NULL DEFAULT 1, credentials JSONB DEFAULT '{}', expires_at TIMESTAMPTZ, rate_limit_reset_at TIMESTAMPTZ, overload_until TIMESTAMPTZ, temp_unschedulable_until TIMESTAMPTZ, deleted_at TIMESTAMPTZ, archived_at TIMESTAMPTZ, parent_account_id BIGINT
 	);
 	CREATE TABLE account_groups(account_id BIGINT, group_id BIGINT, priority INT DEFAULT 50, created_at TIMESTAMPTZ DEFAULT NOW());
 	INSERT INTO accounts(id,platform,type) VALUES
@@ -114,7 +114,7 @@ func TestScopedAdminAccountListPostgresRulesAndPagination(t *testing.T) {
 	}}}
 	ctx := adminaccess.WithPrincipal(context.Background(), principal)
 	for page, wantID := range []int64{1, 4} {
-		rows, total, listErr := repo.ScopedAdminList(ctx, pagination.PaginationParams{Page: page + 1, PageSize: 1}, "", "", "", "")
+		rows, total, listErr := repo.ScopedAdminList(ctx, pagination.PaginationParams{Page: page + 1, PageSize: 1}, "", "", "", "", 0)
 		require.NoError(t, listErr)
 		require.EqualValues(t, 2, total)
 		require.Len(t, rows, 1)
@@ -129,7 +129,7 @@ func TestScopedAdminAccountListPostgresRulesAndPagination(t *testing.T) {
 	for _, credentials := range []string{`{}`, `{"model_mapping":null}`, `{"model_mapping":{}}`, `{"model_mapping":[]}`, `{"model_mapping":"invalid"}`, `{"model_mapping":{"bad":{"token":"SECRET"},"number":1},"access_token":"SECRET"}`} {
 		_, err = db.Exec(`UPDATE accounts SET credentials=$1::jsonb WHERE id=4`, credentials)
 		require.NoError(t, err)
-		rows, total, listErr := repo.ScopedAdminList(ctx, pagination.PaginationParams{Page: 2, PageSize: 1}, "", "", "", "")
+		rows, total, listErr := repo.ScopedAdminList(ctx, pagination.PaginationParams{Page: 2, PageSize: 1}, "", "", "", "", 0)
 		require.NoError(t, listErr)
 		require.EqualValues(t, 2, total)
 		require.Len(t, rows, 1)
@@ -137,24 +137,24 @@ func TestScopedAdminAccountListPostgresRulesAndPagination(t *testing.T) {
 		require.Empty(t, rows[0].Credentials)
 	}
 	principal.Policy.Rules = []adminaccess.Rule{{Permissions: []string{"accounts.read"}, AllGroups: true, AccountTypes: []string{"oauth"}}}
-	rows, total, err := repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "")
+	rows, total, err := repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "", 0)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, total, "全部分组不包含无分组账户")
 	require.Len(t, rows, 3)
 	principal.Policy.Rules[0].IncludeUngrouped = true
-	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "")
+	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "", 0)
 	require.NoError(t, err)
 	require.EqualValues(t, 4, total)
 
 	// The fork excludes both archived accounts and children of archived parents.
 	_, err = db.Exec(`UPDATE accounts SET archived_at=NOW() WHERE id=1`)
 	require.NoError(t, err)
-	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "")
+	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "", 0)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, total)
 	_, err = db.Exec(`UPDATE accounts SET archived_at=NULL,parent_account_id=3 WHERE id=1; UPDATE accounts SET archived_at=NOW() WHERE id=3`)
 	require.NoError(t, err)
-	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "")
+	_, total, err = repo.ScopedAdminList(ctx, pagination.DefaultPagination(), "", "", "", "", 0)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, total)
 }

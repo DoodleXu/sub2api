@@ -75,6 +75,25 @@ const (
 	ProviderStatusRefunded = "refunded"
 )
 
+// RefundRejectedError marks a refund that the provider explicitly rejected in
+// a well-formed response. Unlike transport or parsing failures, the outcome is
+// known, so callers may roll back the refund instead of holding it pending.
+type RefundRejectedError struct{ Err error }
+
+func (e *RefundRejectedError) Error() string {
+	if e == nil || e.Err == nil {
+		return "payment refund rejected"
+	}
+	return e.Err.Error()
+}
+
+func (e *RefundRejectedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // DefaultLoadBalanceStrategy is the default load-balancing strategy
 // used when no strategy is configured.
 const DefaultLoadBalanceStrategy = "round-robin"

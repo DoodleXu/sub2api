@@ -109,10 +109,33 @@ func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []by
 // 不被识别，会退化为 "stream closed before response.completed" 盲重连）。
 // 同时标记流内错误，保证挂在 200 流上的失败仍进入 ops 错误看板。
 func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType, message string) {
+	writeOpenAICompactSSEFailureEvent(c, statusCode, errType, errType, message)
+}
+
+// writeOpenAICompactSSEFailureWithCode 同 writeOpenAICompactSSEFailureMessage，
+// 但 response.error.code 使用调用方给出的结构化错误码（如
+// invalid_encrypted_content），供客户端区分确定性请求失败；code 为空时回落
+// upstream_error。ops 侧的错误类型保持 upstream_error 不变。message 由调用方
+// 负责脱敏。
+//
+// 容量降载码（server_is_overloaded / slow_down）不得原样写进 response.failed：
+// Codex 把它们判为致命错误并直接终止会话，所有写 response.failed 的路径都改写为
+// 可重试的 openAICapacityShedRetryableClientCode（见该常量注释）。
+func writeOpenAICompactSSEFailureWithCode(c *gin.Context, statusCode int, code, message string) {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "":
+		code = "upstream_error"
+	case "server_is_overloaded", "slow_down":
+		code = openAICapacityShedRetryableClientCode
+	}
+	writeOpenAICompactSSEFailureEvent(c, statusCode, "upstream_error", code, message)
+}
+
+func writeOpenAICompactSSEFailureEvent(c *gin.Context, statusCode int, opsErrType, code, message string) {
 	if c == nil {
 		return
 	}
-	MarkOpsStreamError(c, errType, message, statusCode)
+	MarkOpsStreamError(c, opsErrType, message, statusCode)
 	payload, err := json.Marshal(map[string]any{
 		"type":            "response.failed",
 		"sequence_number": 0,
@@ -125,7 +148,7 @@ func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType
 			"status":     "failed",
 			"output":     []any{},
 			"error": map[string]any{
-				"code":    errType,
+				"code":    code,
 				"message": message,
 			},
 		},
@@ -230,132 +253,4 @@ func openAICompactUsageParsableByCodex(usage gjson.Result) bool {
 		}
 	}
 	return true
-}
-
-func bodyHasSSEFraming(body []byte) bool {
-	for _, line := range bytes.Split(body, []byte("\n")) {
-		line = bytes.TrimRight(line, "\r")
-		if bytes.HasPrefix(line, []byte("data:")) || bytes.HasPrefix(line, []byte("event:")) {
-			return true
-		}
-	}
-	return false
-}
-
-// collectRawResponsesOutputItemsFromSSE preserves raw output_item.done items.
-// Raw items are the authoritative final Responses shape and can contain compact
-// fields that narrow structs do not know yet.
-func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
-	var items []json.RawMessage
-	seen := make(map[string]struct{})
-	hasCompactionItem := false
-	appendItem := func(item gjson.Result) {
-		if !item.Exists() || !item.IsObject() {
-			return
-		}
-		key := strings.TrimSpace(item.Get("id").String())
-		if key == "" {
-			key = item.Raw
-		}
-		if _, dup := seen[key]; dup {
-			return
-		}
-		seen[key] = struct{}{}
-		if isResponsesCompactionItemType(item.Get("type").String()) {
-			hasCompactionItem = true
-		}
-		items = append(items, json.RawMessage(item.Raw))
-	}
-	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
-		if normalized, changed := normalizeCompletedImageGenerationStatus(data); changed {
-			data = normalized
-		}
-		if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.done" {
-			return
-		}
-		appendItem(gjson.GetBytes(data, "item"))
-	})
-	if !hasCompactionItem {
-		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
-			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.added" {
-				return
-			}
-			item := gjson.GetBytes(data, "item")
-			if !isResponsesCompactionItemType(item.Get("type").String()) {
-				return
-			}
-			appendItem(item)
-		})
-	}
-	if len(items) == 0 {
-		return nil, false
-	}
-	outputJSON, err := json.Marshal(items)
-	if err != nil {
-		return nil, false
-	}
-	return outputJSON, true
-}
-
-func isResponsesCompactionItemType(itemType string) bool {
-	switch strings.TrimSpace(itemType) {
-	case "compaction", "compaction_summary":
-		return true
-	default:
-		return false
-	}
-}
-
-func supplementCompactionItemFromSSE(c *gin.Context, finalResponse []byte, bodyText string) []byte {
-	if !isOpenAIResponsesCompactPath(c) {
-		return finalResponse
-	}
-	if len(gjson.GetBytes(finalResponse, "output").Array()) == 0 {
-		return finalResponse
-	}
-	if responsesOutputHasCompactionItem(finalResponse) {
-		return finalResponse
-	}
-	item, found := findRawCompactionItemFromSSE(bodyText)
-	if !found {
-		return finalResponse
-	}
-	patched, err := sjson.SetRawBytes(finalResponse, "output.-1", item)
-	if err != nil {
-		return finalResponse
-	}
-	return patched
-}
-
-func responsesOutputHasCompactionItem(response []byte) bool {
-	for _, item := range gjson.GetBytes(response, "output").Array() {
-		if isResponsesCompactionItemType(item.Get("type").String()) {
-			return true
-		}
-	}
-	return false
-}
-
-func findRawCompactionItemFromSSE(bodyText string) (json.RawMessage, bool) {
-	var found json.RawMessage
-	pick := func(eventType string) {
-		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
-			if found != nil {
-				return
-			}
-			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != eventType {
-				return
-			}
-			item := gjson.GetBytes(data, "item")
-			if !item.IsObject() || !isResponsesCompactionItemType(item.Get("type").String()) {
-				return
-			}
-			found = json.RawMessage(item.Raw)
-		})
-	}
-	pick("response.output_item.done")
-	if found == nil {
-		pick("response.output_item.added")
-	}
-	return found, found != nil
 }

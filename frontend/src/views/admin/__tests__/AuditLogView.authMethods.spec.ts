@@ -71,6 +71,7 @@ describe('admin AuditLogView auth method filter', () => {
       '',
       'jwt',
       'admin_api_key',
+      'mcp_oauth',
       'password',
       'password_totp',
       'oauth',

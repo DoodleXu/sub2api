@@ -24,6 +24,8 @@ const (
 	AuditAuthMethodOAuth        = "oauth"
 	AuditAuthMethodOAuthTOTP    = "oauth_totp"
 	AuditAuthMethodPasskey      = "passkey"
+	// AuditAuthMethodMCPOAuth 标记管理 MCP 的 OAuth 访问令牌（机器凭证）。
+	AuditAuthMethodMCPOAuth = "mcp_oauth"
 
 	// auditRequestBodyMaxBytes 请求体脱敏后入库的最大长度（字节），超出截断。
 	auditRequestBodyMaxBytes = 16 * 1024
